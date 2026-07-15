@@ -298,8 +298,7 @@ class TradeExecutor:
         # Use relaxed edge threshold during paper trading
         effective_min_edge = self._min_edge_threshold(analysis)
 
-        # Paper mode uses flat contracts -- skip the dollars gate entirely
-        if not self._is_paper and analysis.capped_dollars <= 0:
+        if analysis.capped_dollars <= 0:
             return "capped_dollars=0 (below minimum bet size)"
 
         if abs(analysis.edge) < effective_min_edge:
@@ -415,6 +414,16 @@ class TradeExecutor:
             )
         else:
             trade_cost = analysis.capped_dollars
+        if self._is_paper and trade_cost > analysis.capped_dollars:
+            return (
+                f"paper contract cost ${trade_cost:.2f} exceeds capped dollars "
+                f"${analysis.capped_dollars:.2f}"
+            )
+        if self._is_paper and trade_cost > notional:
+            return (
+                f"paper contract cost ${trade_cost:.2f} exceeds notional bankroll "
+                f"${notional:.2f}"
+            )
         if not self._paper.portfolio.is_concentration_ok(
             ticker=analysis.market.ticker,
             additional_dollars=trade_cost,

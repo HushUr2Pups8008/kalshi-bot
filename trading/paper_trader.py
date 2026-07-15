@@ -1037,19 +1037,47 @@ class PaperTrader:
                 )
                 return ""
 
+        capped_dollars = float(analysis.capped_dollars)
+        if capped_dollars <= 0:
+            log.warning(
+                "[PAPER] Skipping record_trade for %s: capped dollars %.2f "
+                "must be positive",
+                getattr(analysis.market, "ticker", "<unknown>"),
+                capped_dollars,
+            )
+            return ""
+
         trade_id    = str(uuid.uuid4())[:12]
         price_cents = max(1, min(99, int(analysis.executed_price_cents)))
         # kelly_contracts: what Kelly sizes for this trade. Retained as a stored
         # column for analytics (and the §7e flat-vs-Kelly history pre-cutover).
-        kelly_contracts = contracts_from_dollars(analysis.capped_dollars, float(price_cents))
+        kelly_contracts = contracts_from_dollars(capped_dollars, float(price_cents))
         # PROFIT-SIZING-001b: paper now MIRRORS live -- size by Kelly (not flat-5)
         # so the paper cohort predicts live behaviour. With the min-bet floor
         # removed (PROFIT-SIZING-001) trades size down to the natural 1-contract
         # floor in contracts_from_dollars. Both modes now use kelly_contracts.
         contracts    = kelly_contracts
         cost_dollars = contracts * price_cents / 100.0
+        if cost_dollars > capped_dollars:
+            log.warning(
+                "[PAPER] Skipping record_trade for %s: contract cost $%.2f "
+                "exceeds capped dollars $%.2f",
+                getattr(analysis.market, "ticker", "<unknown>"),
+                cost_dollars,
+                capped_dollars,
+            )
+            return ""
 
         bankroll_before = self.get_notional_bankroll()
+        if cost_dollars > bankroll_before:
+            log.warning(
+                "[PAPER] Skipping record_trade for %s: contract cost $%.2f "
+                "exceeds notional bankroll $%.2f",
+                getattr(analysis.market, "ticker", "<unknown>"),
+                cost_dollars,
+                bankroll_before,
+            )
+            return ""
         bankroll_after = bankroll_before - cost_dollars
         if not canonical_identity:
             bankroll_after = self._debit_bankroll(cost_dollars)
@@ -1229,6 +1257,17 @@ class PaperTrader:
                 if bankroll_row is None:
                     raise RuntimeError("notional_bankroll state is missing")
                 bankroll_before = float(bankroll_row[0])
+                if cost_dollars > bankroll_before:
+                    self._conn.rollback()
+                    transaction_started = False
+                    log.warning(
+                        "[PAPER] Skipping canonical record_trade for %s: contract "
+                        "cost $%.2f exceeds current notional bankroll $%.2f",
+                        getattr(analysis.market, "ticker", "<unknown>"),
+                        cost_dollars,
+                        bankroll_before,
+                    )
+                    return ""
                 bankroll_after = bankroll_before - cost_dollars
                 canonical_remaining_values = (
                     *remaining_values[:15],
