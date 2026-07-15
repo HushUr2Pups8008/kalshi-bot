@@ -776,10 +776,13 @@ class TradeLogger:
         *,
         trade_id: str,
         ticker: str,
-        resolved_yes: bool,
+        resolved_yes: bool | None,
         pnl_dollars: float,
         bankroll_delta_dollars: float | None = None,
         venue: str | None = None,
+        terminal_state: str | None = None,
+        outbox_id: str | None = None,
+        ts: str | None = None,
     ) -> None:
         record = {
             "type": "PAPER_RESOLUTION",
@@ -790,6 +793,12 @@ class TradeLogger:
         }
         if venue:
             record["venue"] = venue
+        if terminal_state is not None:
+            record["terminal_state"] = terminal_state
+        if outbox_id is not None:
+            record["outbox_id"] = outbox_id
+        if ts is not None:
+            record["ts"] = ts
         if bankroll_delta_dollars is not None:
             record["bankroll_delta_dollars"] = round(bankroll_delta_dollars, 2)
         self._write(record)
@@ -1585,6 +1594,8 @@ class TradeLogger:
         signal_source: str,
         ts_entry: str,
         ts_resolved: str,
+        outbox_id: str | None = None,
+        ts: str | None = None,
     ) -> None:
         """PROFIT-ALIGN-002 (2026-05-25): per-resolved-trade calibration observation.
 
@@ -1603,7 +1614,7 @@ class TradeLogger:
         Schema is forward-compatible — the aggregator tolerates absent
         magnitude/confidence fields by bucketing them as "unknown".
         """
-        self._write({
+        record = {
             "type": "CALIBRATION_OBSERVATION",
             "trade_id": trade_id,
             "ticker": ticker,
@@ -1621,7 +1632,12 @@ class TradeLogger:
             "signal_source": signal_source,
             "ts_entry": ts_entry,
             "ts_resolved": ts_resolved,
-        })
+        }
+        if outbox_id is not None:
+            record["outbox_id"] = outbox_id
+        if ts is not None:
+            record["ts"] = ts
+        self._write(record)
 
     def log_gate_summary(
         self,
@@ -1783,6 +1799,8 @@ class TradeLogger:
         final_resolution: float,
         error: float,
         venue: str | None = None,
+        outbox_id: str | None = None,
+        ts: str | None = None,
     ) -> None:
         record = {
             "type": "CALIBRATION_CHECK",
@@ -1794,6 +1812,10 @@ class TradeLogger:
         }
         if venue:
             record["venue"] = venue
+        if outbox_id is not None:
+            record["outbox_id"] = outbox_id
+        if ts is not None:
+            record["ts"] = ts
         self._write(record)
 
 

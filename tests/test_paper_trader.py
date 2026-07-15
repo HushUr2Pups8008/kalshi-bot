@@ -290,6 +290,7 @@ class TestKeywordOutcomes:
         )
         analysis.venue = "polymarket_us"
         analysis.market.venue = "polymarket_us"
+        analysis.market.venue_market_id = "8594"
         with patch("dataclasses.asdict", return_value={"series_ticker": "polymarket_us"}):
             trader.record_trade(analysis)
 
@@ -1139,6 +1140,7 @@ class TestCalibrationEmission:
         )
         analysis.venue = "polymarket_us"
         analysis.market.venue = "polymarket_us"
+        analysis.market.venue_market_id = "8594"
         analysis.market.series_ticker = "polymarket_us"
         with patch("dataclasses.asdict", return_value={"series_ticker": "polymarket_us"}):
             trader.record_trade(analysis)

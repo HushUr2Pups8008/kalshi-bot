@@ -12,13 +12,15 @@ Key additions vs. original:
 
 import asyncio
 import dataclasses
+import hashlib
 import json
 import logging
 import os
 import sqlite3
+import threading
 import uuid
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable
 
@@ -30,16 +32,88 @@ from tabulate import tabulate
 import config as config_module
 from analysis import SignalAnalysis
 from analysis.match_feedback import matcher_weights_status
+from kalshi.public_market_data import is_safe_kalshi_identifier
 from tasks.stats.source_credibility import SourceCredibility
 from config import cfg, DATA_DIR
 from trading.portfolio import Portfolio, Position
+from trading.settlement import (
+    MarketOutcome,
+    SettlementDriftError,
+    SettlementObservation,
+    VoidRefundContract,
+    validate_observation_transition,
+)
+from trading.settlement_store import (
+    SETTLEMENT_PAPER_TRADE_COLUMNS,
+    SETTLEMENT_PAPER_TRADE_COLUMNS_SQL,
+    StoreCheck,
+    canonical_entry_schema_ready,
+    enable_and_verify_foreign_keys,
+    initialize_fresh_settlement_schema,
+    paper_trade_settled_outbox_contract,
+    settlement_keyword_directions,
+    settlement_schema_contract_matches,
+)
+from trading.venue import MarketRef, Venue, normalize_venue
 from utils.logger import get_logger, trade_log, TRADE_LOG_FILE
 
 log = get_logger("paper_trader")
 
 DB_PATH = DATA_DIR / "paper_trades.db"
 
-_DDL = """
+
+class _SettlementQuarantineRequired(RuntimeError):
+    def __init__(self, reason_code: str, details: dict[str, object]):
+        super().__init__(reason_code)
+        self.reason_code = reason_code
+        self.details = details
+
+
+class _SettlementObservationAlreadyApplied(RuntimeError):
+    pass
+
+
+def _settlement_json(value: object) -> str:
+    return json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _settlement_sha256(value: object) -> str:
+    return hashlib.sha256(_settlement_json(value).encode("utf-8")).hexdigest()
+
+
+def _settlement_decimal(value: object, field: str) -> Decimal:
+    if value is None or isinstance(value, bool):
+        raise _SettlementQuarantineRequired(
+            "invalid_financial_state",
+            {"field": field, "value": repr(value)},
+        )
+    try:
+        result = Decimal(str(value))
+    except (InvalidOperation, ValueError) as exc:
+        raise _SettlementQuarantineRequired(
+            "invalid_financial_state",
+            {"field": field, "value": repr(value)},
+        ) from exc
+    if not result.is_finite():
+        raise _SettlementQuarantineRequired(
+            "invalid_financial_state",
+            {"field": field, "value": repr(value)},
+        )
+    return result
+
+
+def _settlement_decimal_text(value: Decimal) -> str:
+    if value == 0:
+        return "0"
+    return format(value.normalize(), "f")
+
+_DDL = f"""
 CREATE TABLE IF NOT EXISTS keyword_outcomes (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     trade_id      TEXT    NOT NULL,
@@ -58,7 +132,12 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     ts                      TEXT NOT NULL,
     ticker                  TEXT NOT NULL,
     venue                   TEXT NOT NULL DEFAULT 'kalshi',
-    market_title            TEXT NOT NULL,
+    venue_market_id         TEXT,
+    identity_status         TEXT CHECK (
+        identity_status IS NULL OR identity_status IN ('mapped', 'quarantined')
+    ),
+    quarantine_reason       TEXT,
+{SETTLEMENT_PAPER_TRADE_COLUMNS_SQL}    market_title            TEXT NOT NULL,
     side                    TEXT NOT NULL,
     contracts               INTEGER NOT NULL,
     price_cents             INTEGER NOT NULL,
@@ -143,6 +222,15 @@ _P0_PROVENANCE_COLUMNS: tuple[tuple[str, str], ...] = (
 
 _VENUE_COLUMNS: tuple[tuple[str, str], ...] = (
     ("venue", "TEXT NOT NULL DEFAULT 'kalshi'"),
+)
+
+_SETTLEMENT_SCHEMA_SENTINEL_COLUMNS = frozenset(
+    {
+        "venue_market_id",
+        "identity_status",
+        "quarantine_reason",
+        *(name for name, _definition in SETTLEMENT_PAPER_TRADE_COLUMNS),
+    }
 )
 
 
@@ -340,11 +428,14 @@ class PaperTrader:
         self._db_path = db_path
         self._startup_context = startup_context
         self._initialized = False
+        self._transaction_lock = threading.RLock()
+        self._settlement_schema_present = False
         self._calibration_task = calibration_task
         self._validate_startup_context()
         self._enforce_runtime_guards()
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False, timeout=30.0)
         self._conn.row_factory = sqlite3.Row
+        enable_and_verify_foreign_keys(self._conn)
         self.credibility: SourceCredibility
         self.portfolio: Portfolio
         self.initialize()
@@ -360,11 +451,16 @@ class PaperTrader:
         """
         if self._initialized:
             return
+        fresh_database = self._conn.execute(
+            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='paper_trades'"
+        ).fetchone() is None
         with self._conn:
             for _stmt in _DDL.split(";"):
                 _stmt = _stmt.strip()
                 if _stmt:
                     self._conn.execute(_stmt)
+            if fresh_database:
+                initialize_fresh_settlement_schema(self._conn)
         self._migrate_db()
         self.credibility = SourceCredibility(self._db_path)
         self.portfolio = Portfolio()
@@ -381,6 +477,10 @@ class PaperTrader:
     @property
     def db_path(self) -> Path:
         return self._db_path
+
+    @property
+    def settlement_schema_present(self) -> bool:
+        return self._settlement_schema_present
 
     def _ensure_p0_cohort_sentinel(self) -> None:
         """Idempotent insert of bot_state.p0_price_fix_deployed_ts (P-9 / LD-7).
@@ -570,6 +670,10 @@ class PaperTrader:
         for name, ddl in _P0_PROVENANCE_COLUMNS:
             if name not in cols and self._ensure_paper_trades_column(name, ddl, cols):
                 added_cols.append(name)
+
+        self._settlement_schema_present = (
+            _SETTLEMENT_SCHEMA_SENTINEL_COLUMNS <= cols
+        )
 
         # Backfill series_ticker from market_snapshot JSON for historical rows
         if "series_ticker" in added_cols:
@@ -834,6 +938,10 @@ class PaperTrader:
     # ── Trade recording ───────────────────────────────────────────────────────
 
     def record_trade(self, analysis: SignalAnalysis) -> str:
+        with self._transaction_lock:
+            return self._record_trade_locked(analysis)
+
+    def _record_trade_locked(self, analysis: SignalAnalysis) -> str:
         from analysis.kelly import contracts_from_dollars
 
         # P-6 / LD-2 / CR-C: fail-closed when price_available=False. Past the
@@ -867,6 +975,68 @@ class PaperTrader:
             )
             return ""
 
+        def _venue_string(value: Any) -> str | None:
+            if isinstance(value, str):
+                stripped = value.strip()
+                if stripped:
+                    return stripped
+            return None
+
+        venue = (
+            _venue_string(getattr(analysis, "venue", None))
+            or _venue_string(getattr(analysis.market, "venue", None))
+            or Venue.KALSHI.value
+        )
+        settlement_meta_present = self._conn.execute(
+            """
+            SELECT 1 FROM sqlite_schema
+            WHERE type='table' AND name='paper_settlement_schema_meta'
+            """
+        ).fetchone() is not None
+        canonical_identity = settlement_meta_present
+        venue_market_id: str | None = None
+        if canonical_identity:
+            if not canonical_entry_schema_ready(self._conn):
+                log.error(
+                    "[PAPER] Skipping record_trade for %s: canonical entry "
+                    "schema is incomplete",
+                    getattr(analysis.market, "ticker", "<unknown>"),
+                )
+                return ""
+            try:
+                normalized_venue = normalize_venue(venue)
+            except ValueError:
+                log.error(
+                    "[PAPER] Skipping record_trade for %s: unsupported venue %r",
+                    getattr(analysis.market, "ticker", "<unknown>"),
+                    venue,
+                )
+                return ""
+            venue = normalized_venue.value
+            if normalized_venue is Venue.KALSHI:
+                venue_market_id = str(
+                    getattr(analysis.market, "ticker", "") or ""
+                ).strip()
+                if (
+                    not is_safe_kalshi_identifier(venue_market_id)
+                    or not venue_market_id.startswith("KX")
+                    or len(venue_market_id) <= 2
+                ):
+                    venue_market_id = ""
+            else:
+                raw_market_id = getattr(analysis.market, "venue_market_id", None)
+                venue_market_id = str(raw_market_id or "").strip()
+                if not venue_market_id.isascii() or not venue_market_id.isdigit():
+                    venue_market_id = ""
+            if not venue_market_id:
+                log.error(
+                    "[PAPER] Skipping record_trade for %s: missing canonical "
+                    "market identity for venue=%s",
+                    getattr(analysis.market, "ticker", "<unknown>"),
+                    venue,
+                )
+                return ""
+
         trade_id    = str(uuid.uuid4())[:12]
         price_cents = max(1, min(99, int(analysis.executed_price_cents)))
         # kelly_contracts: what Kelly sizes for this trade. Retained as a stored
@@ -880,7 +1050,9 @@ class PaperTrader:
         cost_dollars = contracts * price_cents / 100.0
 
         bankroll_before = self.get_notional_bankroll()
-        bankroll_after  = self._debit_bankroll(cost_dollars)
+        bankroll_after = bankroll_before - cost_dollars
+        if not canonical_identity:
+            bankroll_after = self._debit_bankroll(cost_dollars)
 
         source_mult = self.credibility.get_multiplier(analysis.news_item.source)
         # P-6 / CR-E: custom encoder routes around the LD-2/CR-C legacy guard
@@ -904,18 +1076,6 @@ class PaperTrader:
             provenance_retrieved_str = None
         provenance_hash = getattr(_market, "raw_payload_hash", None)
 
-        def _venue_string(value: Any) -> str | None:
-            if isinstance(value, str):
-                stripped = value.strip()
-                if stripped:
-                    return stripped
-            return None
-
-        venue = (
-            _venue_string(getattr(analysis, "venue", None))
-            or _venue_string(getattr(analysis.market, "venue", None))
-            or "kalshi"
-        )
         # PROFIT-VENUE-PARITY V12: the 'kalshi' default is correct for legacy
         # pre-venue rows and native Kalshi objects (which carry no venue at all).
         # But a NON-KX ticker landing on the default means a venue-stamped
@@ -989,78 +1149,163 @@ class PaperTrader:
         except Exception:  # noqa: BLE001 — additive join key, never block a trade
             llm_capture_row_id = None
 
-        self._conn.execute(
-            """INSERT INTO paper_trades
-               (trade_id, ts, ticker, venue, market_title, side, contracts, price_cents,
-                 cost_dollars, estimated_prob, entry_price_cents, edge, kelly_dollars,
+        trade_ts = datetime.now(timezone.utc).isoformat()
+        remaining_values = (
+            analysis.market.title,
+            side,
+            contracts,
+            price_cents,
+            cost_dollars,
+            analysis.estimated_probability,
+            float(analysis.executed_price_cents),
+            executed_edge,
+            analysis.kelly_dollars,
+            analysis.capped_dollars,
+            analysis.news_item.headline,
+            analysis.news_item.source,
+            json.dumps(analysis.keywords_matched),
+            analysis.reasoning,
+            source_mult,
+            bankroll_before,
+            bankroll_after,
+            market_snapshot,
+            analysis.market.series_ticker,
+            getattr(analysis, "signal_type", "news"),
+            getattr(analysis, "match_score", None),
+            getattr(analysis, "llm_direction", None),
+            getattr(analysis, "llm_magnitude", None),
+            getattr(analysis, "llm_confidence", None),
+            kelly_contracts,
+            lane_fast_p,
+            lane_fast_conf,
+            lane_acc_p,
+            lane_acc_conf,
+            lane_struct_p,
+            lane_struct_conf,
+            provenance_source,
+            provenance_method,
+            provenance_retrieved_str,
+            provenance_hash,
+            1,
+            cohort_extension,
+            llm_capture_row_id,
+        )
+        if canonical_identity:
+            columns = """
+                (trade_id, ts, ticker, venue, venue_market_id, identity_status,
+                 market_title, side, contracts, price_cents, cost_dollars,
+                 estimated_prob, entry_price_cents, edge, kelly_dollars,
                  capped_dollars, signal_headline, signal_source, keywords_matched,
-                 reasoning, source_multiplier, notional_bankroll_before, notional_bankroll_after,
-                market_snapshot, series_ticker, signal_type, match_score,
-                llm_direction, llm_magnitude, llm_confidence, kelly_contracts,
-                 fast_lane_p, fast_lane_confidence, accumulation_p, accumulation_confidence,
-                 structural_p, structural_confidence,
+                 reasoning, source_multiplier, notional_bankroll_before,
+                 notional_bankroll_after, market_snapshot, series_ticker,
+                 signal_type, match_score, llm_direction, llm_magnitude,
+                 llm_confidence, kelly_contracts, fast_lane_p,
+                 fast_lane_confidence, accumulation_p, accumulation_confidence,
+                 structural_p, structural_confidence, price_source, price_method,
+                 price_retrieved_at, raw_payload_hash, p0_contract_version,
+                  cohort_extension, llm_capture_row_id)
+            """
+            transaction_started = False
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                transaction_started = True
+                settled_identity = self._conn.execute(
+                    """
+                    SELECT 1
+                    FROM paper_settlement_observations
+                    WHERE venue=? AND venue_market_id=?
+                    LIMIT 1
+                    """,
+                    (venue, venue_market_id),
+                ).fetchone()
+                if settled_identity is not None:
+                    raise RuntimeError(
+                        "canonical market already has a durable settlement "
+                        f"observation: {venue}:{venue_market_id}"
+                    )
+                bankroll_row = self._conn.execute(
+                    "SELECT value FROM bot_state WHERE key='notional_bankroll'"
+                ).fetchone()
+                if bankroll_row is None:
+                    raise RuntimeError("notional_bankroll state is missing")
+                bankroll_before = float(bankroll_row[0])
+                bankroll_after = bankroll_before - cost_dollars
+                canonical_remaining_values = (
+                    *remaining_values[:15],
+                    bankroll_before,
+                    bankroll_after,
+                    *remaining_values[17:],
+                )
+                insert_values = (
+                    trade_id,
+                    trade_ts,
+                    analysis.market.ticker,
+                    venue,
+                    venue_market_id,
+                    "mapped",
+                    *canonical_remaining_values,
+                )
+                placeholders = ",".join("?" for _value in insert_values)
+                self._conn.execute(
+                    f"INSERT INTO paper_trades {columns} VALUES ({placeholders})",
+                    insert_values,
+                )
+                bankroll_cursor = self._conn.execute(
+                    "UPDATE bot_state SET value=? WHERE key='notional_bankroll'",
+                    (str(round(bankroll_after, 4)),),
+                )
+                if bankroll_cursor.rowcount != 1:
+                    raise RuntimeError("notional_bankroll update did not affect one row")
+                self._conn.commit()
+            except Exception:  # noqa: BLE001 - canonical entry must fail closed
+                if transaction_started:
+                    self._conn.rollback()
+                log.exception(
+                    "[PAPER] Canonical trade entry failed for %s",
+                    getattr(analysis.market, "ticker", "<unknown>"),
+                )
+                return ""
+        else:
+            columns = """
+                (trade_id, ts, ticker, venue, market_title, side, contracts,
+                 price_cents, cost_dollars, estimated_prob, entry_price_cents,
+                 edge, kelly_dollars, capped_dollars, signal_headline,
+                 signal_source, keywords_matched, reasoning, source_multiplier,
+                 notional_bankroll_before, notional_bankroll_after,
+                 market_snapshot, series_ticker, signal_type, match_score,
+                 llm_direction, llm_magnitude, llm_confidence, kelly_contracts,
+                 fast_lane_p, fast_lane_confidence, accumulation_p,
+                 accumulation_confidence, structural_p, structural_confidence,
                  price_source, price_method, price_retrieved_at, raw_payload_hash,
                  p0_contract_version, cohort_extension, llm_capture_row_id)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (
+            """
+            insert_values = (
                 trade_id,
-                datetime.now(timezone.utc).isoformat(),
+                trade_ts,
                 analysis.market.ticker,
                 venue,
-                analysis.market.title,
-                side,
-                contracts,
-                price_cents,
-                cost_dollars,
-                analysis.estimated_probability,
-                float(analysis.executed_price_cents) if analysis.executed_price_cents is not None else 0.0,
-                executed_edge,
-                analysis.kelly_dollars,
-                analysis.capped_dollars,
-                analysis.news_item.headline,
-                analysis.news_item.source,
-                json.dumps(analysis.keywords_matched),
-                analysis.reasoning,
-                source_mult,
-                bankroll_before,
-                bankroll_after,
-                market_snapshot,
-                analysis.market.series_ticker,
-                getattr(analysis, "signal_type", "news"),
-                getattr(analysis, "match_score", None),
-                getattr(analysis, "llm_direction", None),
-                getattr(analysis, "llm_magnitude", None),
-                getattr(analysis, "llm_confidence", None),
-                kelly_contracts,
-                lane_fast_p,
-                lane_fast_conf,
-                lane_acc_p,
-                lane_acc_conf,
-                lane_struct_p,
-                lane_struct_conf,
-                provenance_source,
-                provenance_method,
-                provenance_retrieved_str,
-                provenance_hash,
-                1,
-                cohort_extension,
-                llm_capture_row_id,
-            ),
-        )
-        self._conn.commit()
+                *remaining_values,
+            )
+            placeholders = ",".join("?" for _value in insert_values)
+            self._conn.execute(
+                f"INSERT INTO paper_trades {columns} VALUES ({placeholders})",
+                insert_values,
+            )
+            self._conn.commit()
 
         # Keep portfolio in sync with DB
         self.portfolio.add(Position(
             trade_id=trade_id,
             ticker=analysis.market.ticker,
             venue=venue,
+            venue_market_id=venue_market_id,
             side=side,
             contracts=contracts,
             cost_dollars=cost_dollars,
             price_cents=price_cents,
             estimated_prob=analysis.estimated_probability,
             entry_price_cents=float(analysis.executed_price_cents) if analysis.executed_price_cents is not None else 0.0,
-            ts=datetime.now(timezone.utc).isoformat(),
+            ts=trade_ts,
             price_source=provenance_source,
             price_method=provenance_method,
         ))
@@ -1101,6 +1346,592 @@ class PaperTrader:
         log.info("        Reasoning: %s", analysis.reasoning[:120])
 
         return trade_id
+
+    def resolve_observation(self, observation: SettlementObservation) -> bool:
+        """Apply one canonical observation without wiring runtime callers."""
+        with self._transaction_lock:
+            return self._resolve_observation_locked(observation)
+
+    def _resolve_observation_locked(
+        self,
+        observation: SettlementObservation,
+    ) -> bool:
+        if not isinstance(observation, SettlementObservation):
+            raise TypeError("observation must be a SettlementObservation")
+        if not settlement_schema_contract_matches(self._conn):
+            raise RuntimeError("settlement schema does not match the durable contract")
+
+        open_row_set_sha256 = _settlement_sha256([])
+        transaction_started = False
+        observation_already_applied = False
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            transaction_started = True
+            candidate_rows = self._canonical_candidate_rows(observation)
+            open_row_set_sha256 = self._canonical_open_row_set_sha256(candidate_rows)
+
+            prior = self._canonical_prior_observation(observation)
+            try:
+                validate_observation_transition(prior, observation)
+            except SettlementDriftError as exc:
+                raise _SettlementQuarantineRequired(
+                    "invalid_supersession",
+                    {
+                        "error": str(exc),
+                        "supersedes_observation_sha256": (
+                            observation.supersedes_observation_sha256
+                        ),
+                    },
+                ) from exc
+
+            duplicate = self._conn.execute(
+                """
+                SELECT 1 FROM paper_settlement_observations
+                WHERE observation_sha256=?
+                """,
+                (observation.observation_sha256,),
+            ).fetchone()
+            if duplicate is not None:
+                raise _SettlementObservationAlreadyApplied
+
+            if prior is not None:
+                raise _SettlementQuarantineRequired(
+                    "terminal_correction",
+                    {
+                        "prior_observation_sha256": prior.observation_sha256,
+                        "supersedes_observation_sha256": (
+                            observation.supersedes_observation_sha256
+                        ),
+                    },
+                )
+
+            legacy_rows = [
+                row
+                for row in candidate_rows
+                if row["identity_status"] != "mapped"
+                or row["venue_market_id"] is None
+                or not str(row["venue_market_id"]).strip()
+            ]
+            if legacy_rows:
+                raise _SettlementQuarantineRequired(
+                    "legacy_null_identity",
+                    {"trade_ids": [str(row["trade_id"]) for row in legacy_rows]},
+                )
+
+            trades = [
+                row
+                for row in candidate_rows
+                if row["identity_status"] == "mapped"
+                and row["venue_market_id"]
+                == observation.market_ref.venue_market_id
+            ]
+            if not trades:
+                self._conn.rollback()
+                return False
+
+            outcomes, total_payout_cents = self._canonical_trade_outcomes(
+                trades,
+                observation,
+            )
+            bankroll_row = self._conn.execute(
+                "SELECT value FROM bot_state WHERE key='notional_bankroll'"
+            ).fetchone()
+            if bankroll_row is None:
+                raise _SettlementQuarantineRequired(
+                    "invalid_financial_state",
+                    {"field": "notional_bankroll", "value": None},
+                )
+            bankroll_before_cents = (
+                _settlement_decimal(bankroll_row[0], "notional_bankroll")
+                * Decimal("100")
+            )
+            bankroll_after_cents = bankroll_before_cents + total_payout_cents
+            applied_at = datetime.now(timezone.utc).isoformat()
+
+            self._insert_canonical_observation(
+                observation,
+                applied_trade_count=len(outcomes),
+                bankroll_before_cents=bankroll_before_cents,
+                total_payout_cents=total_payout_cents,
+                bankroll_after_cents=bankroll_after_cents,
+                applied_at=applied_at,
+            )
+            for outcome in outcomes:
+                cursor = self._conn.execute(
+                    """
+                    UPDATE paper_trades
+                    SET resolved=1, resolved_yes=?, pnl_dollars=?, resolved_ts=?,
+                        terminal_state=?, settlement_observation_sha256=?,
+                        settled_at=?, gross_payout_cents=?, gross_pnl_cents=?
+                    WHERE trade_id=? AND venue=? AND venue_market_id=?
+                      AND identity_status='mapped' AND resolved=0
+                    """,
+                    (
+                        outcome["resolved_yes"],
+                        float(outcome["gross_pnl_cents"] / Decimal("100")),
+                        applied_at,
+                        outcome["terminal_state"],
+                        observation.observation_sha256,
+                        applied_at,
+                        _settlement_decimal_text(outcome["gross_payout_cents"]),
+                        _settlement_decimal_text(outcome["gross_pnl_cents"]),
+                        outcome["trade_id"],
+                        observation.market_ref.venue.value,
+                        observation.market_ref.venue_market_id,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise _SettlementQuarantineRequired(
+                        "trade_row_count_drift",
+                        {
+                            "trade_id": outcome["trade_id"],
+                            "updated_rows": cursor.rowcount,
+                        },
+                    )
+
+            bankroll_cursor = self._conn.execute(
+                """
+                UPDATE bot_state
+                SET value=?
+                WHERE key='notional_bankroll'
+                """,
+                (
+                    _settlement_decimal_text(
+                        bankroll_after_cents / Decimal("100")
+                    ),
+                ),
+            )
+            if bankroll_cursor.rowcount != 1:
+                raise _SettlementQuarantineRequired(
+                    "invalid_financial_state",
+                    {
+                        "field": "notional_bankroll",
+                        "updated_rows": bankroll_cursor.rowcount,
+                    },
+                )
+
+            for outcome in outcomes:
+                self._insert_canonical_outbox(
+                    observation,
+                    outcome,
+                    created_at=applied_at,
+                )
+            self._conn.commit()
+        except _SettlementObservationAlreadyApplied:
+            if transaction_started:
+                self._conn.rollback()
+            observation_already_applied = True
+        except _SettlementQuarantineRequired as exc:
+            if transaction_started:
+                self._conn.rollback()
+            self._append_settlement_quarantine(
+                observation,
+                reason_code=exc.reason_code,
+                details=exc.details,
+                open_row_set_sha256=open_row_set_sha256,
+            )
+            return False
+        except Exception as exc:  # noqa: BLE001 - failures must quarantine after rollback
+            if transaction_started:
+                self._conn.rollback()
+            self._append_settlement_quarantine(
+                observation,
+                reason_code="settlement_transaction_failure",
+                details={"error": type(exc).__name__, "message": str(exc)},
+                open_row_set_sha256=open_row_set_sha256,
+            )
+            return False
+
+        self._synchronize_portfolio_after_canonical_settlement(
+            observation.market_ref
+        )
+        return not observation_already_applied
+
+    def _synchronize_portfolio_after_canonical_settlement(
+        self,
+        market_ref: MarketRef,
+    ) -> None:
+        try:
+            self.portfolio.resolve(market_ref)
+        except Exception as exc:  # noqa: BLE001 - committed DB state is authoritative
+            log.warning(
+                "Canonical settlement committed for %s:%s but portfolio closure "
+                "failed; rebuilding from committed open rows: %s",
+                market_ref.venue.value,
+                market_ref.venue_market_id,
+                exc,
+                exc_info=True,
+            )
+            replacement = Portfolio()
+            try:
+                replacement.load_from_db(self._conn)
+            except Exception as rebuild_exc:
+                raise SettlementDriftError(
+                    "canonical settlement committed but portfolio recovery failed "
+                    f"for {market_ref.venue.value}:{market_ref.venue_market_id}"
+                ) from rebuild_exc
+            self.portfolio = replacement
+            log.warning(
+                "Canonical settlement portfolio recovery completed for %s:%s",
+                market_ref.venue.value,
+                market_ref.venue_market_id,
+            )
+
+    def _canonical_candidate_rows(
+        self,
+        observation: SettlementObservation,
+    ) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            """
+            SELECT *
+            FROM paper_trades
+            WHERE resolved=0 AND venue=?
+              AND (venue_market_id=? OR ticker=?)
+            ORDER BY trade_id
+            """,
+            (
+                observation.market_ref.venue.value,
+                observation.market_ref.venue_market_id,
+                observation.market_ref.alias,
+            ),
+        ).fetchall()
+
+    def _canonical_open_row_set_sha256(
+        self,
+        rows: Iterable[sqlite3.Row],
+    ) -> str:
+        fields = (
+            "trade_id",
+            "ticker",
+            "venue",
+            "venue_market_id",
+            "identity_status",
+            "side",
+            "contracts",
+            "price_cents",
+            "cost_dollars",
+        )
+        payload = [
+            {key: row[key] for key in fields}
+            for row in rows
+        ]
+        return _settlement_sha256(payload)
+
+    def _canonical_prior_observation(
+        self,
+        observation: SettlementObservation,
+    ) -> SettlementObservation | None:
+        row = self._conn.execute(
+            """
+            SELECT *
+            FROM paper_settlement_observations
+            WHERE venue=? AND venue_market_id=?
+            ORDER BY applied_at DESC, observation_sha256 DESC
+            LIMIT 1
+            """,
+            (
+                observation.market_ref.venue.value,
+                observation.market_ref.venue_market_id,
+            ),
+        ).fetchone()
+        if row is None:
+            return None
+
+        refund = None
+        if row["refund_cents_per_contract"] is not None:
+            refund = VoidRefundContract(
+                refund_cents_per_contract=Decimal(
+                    str(row["refund_cents_per_contract"])
+                ),
+                refunds_entry_fee=bool(row["refunds_entry_fee"]),
+            )
+        return SettlementObservation(
+            market_ref=MarketRef(
+                normalize_venue(str(row["venue"])),
+                str(row["venue_market_id"]),
+                str(row["alias"]),
+            ),
+            outcome=MarketOutcome(str(row["outcome"])),
+            authoritative_outcome_json=str(row["authoritative_outcome_json"]),
+            canonical_payload_json=str(row["canonical_payload_json"]),
+            observed_at=datetime.fromisoformat(str(row["observed_at"])),
+            effective_at=datetime.fromisoformat(str(row["effective_at"])),
+            rules_version=str(row["rules_version"]),
+            source_id=str(row["source_id"]),
+            payload_sha256=str(row["payload_sha256"]),
+            observation_sha256=str(row["observation_sha256"]),
+            void_refund=refund,
+            supersedes_observation_sha256=(
+                str(row["supersedes_observation_sha256"])
+                if row["supersedes_observation_sha256"] is not None
+                else None
+            ),
+        )
+
+    def _canonical_trade_outcomes(
+        self,
+        trades: Iterable[sqlite3.Row],
+        observation: SettlementObservation,
+    ) -> tuple[list[dict[str, Any]], Decimal]:
+        outcomes: list[dict[str, Any]] = []
+        total_payout_cents = Decimal("0")
+        for trade in trades:
+            contracts_decimal = _settlement_decimal(
+                trade["contracts"],
+                f"{trade['trade_id']}.contracts",
+            )
+            if (
+                contracts_decimal != contracts_decimal.to_integral_value()
+                or contracts_decimal <= 0
+            ):
+                raise _SettlementQuarantineRequired(
+                    "invalid_financial_state",
+                    {
+                        "field": f"{trade['trade_id']}.contracts",
+                        "value": str(contracts_decimal),
+                    },
+                )
+            contracts = int(contracts_decimal)
+            price_cents = _settlement_decimal(
+                trade["price_cents"],
+                f"{trade['trade_id']}.price_cents",
+            )
+            if (
+                price_cents != price_cents.to_integral_value()
+                or price_cents < 1
+                or price_cents > 99
+            ):
+                raise _SettlementQuarantineRequired(
+                    "invalid_financial_state",
+                    {
+                        "field": f"{trade['trade_id']}.price_cents",
+                        "value": str(price_cents),
+                    },
+                )
+            cost_cents = (
+                _settlement_decimal(
+                    trade["cost_dollars"],
+                    f"{trade['trade_id']}.cost_dollars",
+                )
+                * Decimal("100")
+            )
+            expected_cost_cents = Decimal(contracts) * price_cents
+            if cost_cents != expected_cost_cents:
+                raise _SettlementQuarantineRequired(
+                    "invalid_financial_state",
+                    {
+                        "field": f"{trade['trade_id']}.cost_dollars",
+                        "expected_cents": _settlement_decimal_text(
+                            expected_cost_cents
+                        ),
+                        "value_cents": _settlement_decimal_text(cost_cents),
+                    },
+                )
+
+            side = str(trade["side"]).strip().lower()
+            if side not in {"yes", "no"}:
+                raise _SettlementQuarantineRequired(
+                    "invalid_financial_state",
+                    {"field": f"{trade['trade_id']}.side", "value": side},
+                )
+            if observation.outcome is MarketOutcome.VOID:
+                if observation.void_refund is None:
+                    raise _SettlementQuarantineRequired(
+                        "unsupported_void",
+                        {"observation_sha256": observation.observation_sha256},
+                    )
+                won: bool | None = None
+                resolved_yes: int | None = None
+                terminal_state = "void"
+                gross_payout_cents = (
+                    Decimal(contracts)
+                    * observation.void_refund.refund_cents_per_contract
+                )
+            else:
+                resolved_yes = int(observation.outcome is MarketOutcome.YES)
+                won = (side == "yes") == bool(resolved_yes)
+                terminal_state = "won" if won else "lost"
+                gross_payout_cents = (
+                    Decimal(contracts) * Decimal("100")
+                    if won
+                    else Decimal("0")
+                )
+            gross_pnl_cents = gross_payout_cents - cost_cents
+            total_payout_cents += gross_payout_cents
+            outcomes.append(
+                {
+                    "trade_id": str(trade["trade_id"]),
+                    "ticker": trade["ticker"],
+                    "side": side,
+                    "resolved_yes": resolved_yes,
+                    "won": won,
+                    "terminal_state": terminal_state,
+                    "gross_payout_cents": gross_payout_cents,
+                    "gross_pnl_cents": gross_pnl_cents,
+                    "entry_ts": trade["ts"],
+                    "estimated_prob": trade["estimated_prob"],
+                    "entry_price_cents": trade["entry_price_cents"],
+                    "cost_dollars": trade["cost_dollars"],
+                    "signal_source": trade["signal_source"],
+                    "series_ticker": trade["series_ticker"],
+                    "llm_magnitude": trade["llm_magnitude"],
+                    "llm_confidence": trade["llm_confidence"],
+                    "keywords_matched": trade["keywords_matched"],
+                    "fast_lane_p": trade["fast_lane_p"],
+                    "accumulation_p": trade["accumulation_p"],
+                    "structural_p": trade["structural_p"],
+                }
+            )
+        return outcomes, total_payout_cents
+
+    def _insert_canonical_observation(
+        self,
+        observation: SettlementObservation,
+        *,
+        applied_trade_count: int,
+        bankroll_before_cents: Decimal,
+        total_payout_cents: Decimal,
+        bankroll_after_cents: Decimal,
+        applied_at: str,
+    ) -> None:
+        void_refund = observation.void_refund
+        self._conn.execute(
+            """
+            INSERT INTO paper_settlement_observations (
+                observation_sha256, venue, venue_market_id, alias, outcome,
+                authoritative_outcome_json, canonical_payload_json,
+                payload_sha256, observed_at, effective_at, rules_version,
+                source_id, refund_cents_per_contract, refunds_entry_fee,
+                supersedes_observation_sha256, applied_trade_count,
+                bankroll_before_cents, gross_payout_cents,
+                bankroll_after_cents, applied_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                observation.observation_sha256,
+                observation.market_ref.venue.value,
+                observation.market_ref.venue_market_id,
+                observation.market_ref.alias,
+                observation.outcome.value,
+                observation.authoritative_outcome_json,
+                observation.canonical_payload_json,
+                observation.payload_sha256,
+                observation.observed_at.isoformat(),
+                observation.effective_at.isoformat(),
+                observation.rules_version,
+                observation.source_id,
+                (
+                    _settlement_decimal_text(
+                        void_refund.refund_cents_per_contract
+                    )
+                    if void_refund is not None
+                    else None
+                ),
+                int(void_refund.refunds_entry_fee) if void_refund is not None else None,
+                observation.supersedes_observation_sha256,
+                applied_trade_count,
+                _settlement_decimal_text(bankroll_before_cents),
+                _settlement_decimal_text(total_payout_cents),
+                _settlement_decimal_text(bankroll_after_cents),
+                applied_at,
+            ),
+        )
+
+    def _insert_canonical_outbox(
+        self,
+        observation: SettlementObservation,
+        outcome: dict[str, Any],
+        *,
+        created_at: str,
+    ) -> None:
+        contract = paper_trade_settled_outbox_contract(
+            observation,
+            outcome,
+            created_at=created_at,
+            keyword_directions=settlement_keyword_directions(),
+        )
+        self._conn.execute(
+            """
+            INSERT INTO paper_settlement_outbox (
+                outbox_id, event_version, event_kind, observation_sha256,
+                trade_id, payload_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                contract.outbox_id,
+                contract.event_version,
+                contract.event_kind,
+                contract.observation_sha256,
+                contract.trade_id,
+                contract.payload_json,
+                contract.created_at,
+            ),
+        )
+        for consumer_name in contract.requirements:
+            self._conn.execute(
+                """
+                INSERT INTO paper_settlement_outbox_requirements (
+                    outbox_id, consumer_name
+                ) VALUES (?, ?)
+                """,
+                (contract.outbox_id, consumer_name),
+            )
+
+    def _append_settlement_quarantine(
+        self,
+        observation: SettlementObservation,
+        *,
+        reason_code: str,
+        details: dict[str, object],
+        open_row_set_sha256: str,
+    ) -> None:
+        quarantine_id = _settlement_sha256(
+            {
+                "observation_sha256": observation.observation_sha256,
+                "open_row_set_sha256": open_row_set_sha256,
+                "reason_code": reason_code,
+            }
+        )
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            existing = self._conn.execute(
+                """
+                SELECT 1 FROM paper_settlement_quarantine
+                WHERE observation_sha256=? AND reason_code=?
+                  AND open_row_set_sha256=?
+                """,
+                (
+                    observation.observation_sha256,
+                    reason_code,
+                    open_row_set_sha256,
+                ),
+            ).fetchone()
+            if existing is None:
+                self._conn.execute(
+                    """
+                    INSERT INTO paper_settlement_quarantine (
+                        quarantine_id, observation_sha256, payload_sha256,
+                        venue, venue_market_id, alias, reason_code,
+                        details_json, open_row_set_sha256, detected_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        quarantine_id,
+                        observation.observation_sha256,
+                        observation.payload_sha256,
+                        observation.market_ref.venue.value,
+                        observation.market_ref.venue_market_id,
+                        observation.market_ref.alias,
+                        reason_code,
+                        _settlement_json(details),
+                        open_row_set_sha256,
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
 
     # ── Market resolution ─────────────────────────────────────────────────────
 
@@ -1181,42 +2012,52 @@ class PaperTrader:
         async shell to emit as CALIBRATION_CHECK events. Returns an empty list
         if no trades are resolved or no per-lane estimates are populated.
         """
-        trades = self._conn.execute(
-            "SELECT * FROM paper_trades WHERE ticker = ? AND resolved = 0", (ticker,)
-        ).fetchall()
+        with self._transaction_lock:
+            return self._resolve_market_sync_locked(ticker, resolved_yes)
 
-        if not trades:
-            log.debug("No open paper trades for %s", ticker)
-            return []
-
-        # Pre-calculate all outcomes before any DB writes
-        outcomes: list[tuple] = []
-        total_pnl    = 0.0
-        total_payout = 0.0
-        for t in trades:
-            won    = (t["side"] == "yes" and resolved_yes) or \
-                     (t["side"] == "no"  and not resolved_yes)
-            payout = float(t["contracts"]) if won else 0.0
-            pnl    = payout - t["cost_dollars"]
-            outcomes.append((t, won, payout, pnl))
-            total_pnl    += pnl
-            total_payout += payout
-
-        now_ts = datetime.now(timezone.utc).isoformat()
-        series_ticker = next(
-            (
-                str(t["series_ticker"]).strip()
-                for t, _won, _payout, _pnl in outcomes
-                if "series_ticker" in t.keys()
-                and str(t["series_ticker"] or "").strip()
-            ),
-            ticker.split("-")[0],
-        )
-
-        # Atomically mark all trades resolved and credit bankroll in one transaction.
-        # _credit_bankroll calls _set_state which commits -- both the UPDATE rows and
-        # the bankroll write land in the same commit so a crash between them is impossible.
+    def _resolve_market_sync_locked(
+        self, ticker: str, resolved_yes: bool
+    ) -> list[tuple[str, str, float]]:
         with self._conn:
+            if self.settlement_schema_present:
+                self._conn.execute("BEGIN IMMEDIATE")
+            trades = self._conn.execute(
+                "SELECT * FROM paper_trades WHERE ticker = ? AND resolved = 0",
+                (ticker,),
+            ).fetchall()
+
+            if not trades:
+                log.debug("No open paper trades for %s", ticker)
+                return []
+            if self.settlement_schema_present:
+                self._require_legacy_alias_unique(trades, ticker=ticker)
+
+            # Pre-calculate all outcomes before any DB writes.
+            outcomes: list[tuple] = []
+            total_pnl = 0.0
+            total_payout = 0.0
+            for t in trades:
+                won = (t["side"] == "yes" and resolved_yes) or (
+                    t["side"] == "no" and not resolved_yes
+                )
+                payout = float(t["contracts"]) if won else 0.0
+                pnl = payout - t["cost_dollars"]
+                outcomes.append((t, won, payout, pnl))
+                total_pnl += pnl
+                total_payout += payout
+
+            now_ts = datetime.now(timezone.utc).isoformat()
+            series_ticker = next(
+                (
+                    str(t["series_ticker"]).strip()
+                    for t, _won, _payout, _pnl in outcomes
+                    if "series_ticker" in t.keys()
+                    and str(t["series_ticker"] or "").strip()
+                ),
+                ticker.split("-")[0],
+            )
+
+            # Mark all trades and credit bankroll under the same writer lock.
             for t, won, payout, pnl in outcomes:
                 self._conn.execute(
                     "UPDATE paper_trades SET resolved=1, resolved_yes=?, pnl_dollars=?, "
@@ -1350,6 +2191,18 @@ class PaperTrader:
                 lane_events.append((trade_id, lane_name, float(estimate)))
         return lane_events
 
+    def _require_legacy_alias_unique(
+        self,
+        trades: list[sqlite3.Row],
+        *,
+        ticker: str,
+    ) -> None:
+        market_refs = {self._mapped_market_ref_from_row(row) for row in trades}
+        if len(market_refs) != 1:
+            raise SettlementDriftError(
+                f"legacy settlement alias {ticker!r} maps to multiple identities"
+            )
+
     # ── Report ────────────────────────────────────────────────────────────────
 
     def get_all_open_trades(self, ticker: str) -> list[sqlite3.Row]:
@@ -1359,6 +2212,81 @@ class PaperTrader:
             "ORDER BY ts ASC",
             (ticker,),
         ).fetchall()
+
+    def mapped_open_market_refs(self) -> tuple[MarketRef, ...]:
+        """Return unresolved canonical identities once, failing closed on drift."""
+        market_refs: list[MarketRef] = []
+        seen: set[MarketRef] = set()
+        for row in self._open_settlement_identity_rows():
+            market_ref = self._mapped_market_ref_from_row(row)
+            if market_ref not in seen:
+                seen.add(market_ref)
+                market_refs.append(market_ref)
+        return tuple(market_refs)
+
+    def legacy_settlement_alias_check(self) -> StoreCheck:
+        """Prove alias-only rollback settlement cannot span canonical identities."""
+        refs_by_alias: dict[str, set[tuple[str, str]]] = {}
+        invalid_aliases: list[str] = []
+        for row in self._open_settlement_identity_rows():
+            alias = str(row["ticker"] or "").strip() or "<empty>"
+            try:
+                market_ref = self._mapped_market_ref_from_row(row)
+            except SettlementDriftError:
+                invalid_aliases.append(alias)
+                continue
+            refs_by_alias.setdefault(market_ref.alias, set()).add(
+                (market_ref.venue.value, market_ref.venue_market_id)
+            )
+
+        collisions = sorted(
+            alias for alias, refs in refs_by_alias.items() if len(refs) > 1
+        )
+        failures = tuple(
+            [f"invalid_identity:{alias}" for alias in sorted(set(invalid_aliases))]
+            + [f"alias_collision:{alias}" for alias in collisions]
+        )
+        return StoreCheck(
+            ok=not failures,
+            failures=failures,
+            metrics={
+                "open_alias_count": len(refs_by_alias),
+                "invalid_identity_count": len(invalid_aliases),
+                "alias_collision_count": len(collisions),
+            },
+        )
+
+    def _open_settlement_identity_rows(self) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            """
+            SELECT trade_id, ticker, venue, venue_market_id, identity_status,
+                   quarantine_reason
+            FROM paper_trades
+            WHERE resolved=0
+            ORDER BY ts, trade_id
+            """
+        ).fetchall()
+
+    @staticmethod
+    def _mapped_market_ref_from_row(row: sqlite3.Row) -> MarketRef:
+        alias = str(row["ticker"] or "").strip()
+        venue_market_id = str(row["venue_market_id"] or "").strip()
+        identity_status = str(row["identity_status"] or "").strip()
+        try:
+            venue = normalize_venue(str(row["venue"] or "").strip())
+        except (TypeError, ValueError) as exc:
+            raise SettlementDriftError(
+                f"open trade {row['trade_id']} is not a valid mapped identity"
+            ) from exc
+        if identity_status != "mapped" or not alias or not venue_market_id:
+            raise SettlementDriftError(
+                f"open trade {row['trade_id']} is not a complete mapped identity"
+            )
+        return MarketRef(
+            venue=venue,
+            venue_market_id=venue_market_id,
+            alias=alias,
+        )
 
     def get_all_trades(self) -> list[sqlite3.Row]:
         return self._conn.execute(

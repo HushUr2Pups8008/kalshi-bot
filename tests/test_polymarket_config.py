@@ -56,6 +56,30 @@ def test_polymarket_config_defaults_disabled(monkeypatch):
     assert cfg.polymarket_us_position_valuation_requests_per_minute == 0.5
 
 
+def test_canonical_persisted_settlement_reconciliation_defaults_disabled(
+    monkeypatch,
+):
+    monkeypatch.delenv(
+        "ENABLE_CANONICAL_PERSISTED_SETTLEMENT_RECONCILIATION",
+        raising=False,
+    )
+
+    cfg = _bot_config()
+
+    assert cfg.enable_canonical_persisted_settlement_reconciliation is False
+
+
+def test_canonical_persisted_settlement_reconciliation_parses_true(monkeypatch):
+    monkeypatch.setenv(
+        "ENABLE_CANONICAL_PERSISTED_SETTLEMENT_RECONCILIATION",
+        "true",
+    )
+
+    cfg = _bot_config()
+
+    assert cfg.enable_canonical_persisted_settlement_reconciliation is True
+
+
 def test_polymarket_enabled_requires_credentials(monkeypatch):
     _clear_polymarket_env(monkeypatch)
     monkeypatch.setenv("POLYMARKET_US_ENABLED", "true")

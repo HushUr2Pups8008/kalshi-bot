@@ -50,6 +50,7 @@ from trading.venue import Venue  # noqa: E402
 _DEFAULT_BANKROLL = 500.0
 _SOURCE = "Polymarket Simulation Wire"
 _TICKER = "ewc-usgub-ks-2026-11-03-dem"
+_VENUE_MARKET_ID = "8596"
 
 
 @dataclass(frozen=True)
@@ -132,6 +133,7 @@ def _market() -> PolymarketMarket:
     return PolymarketMarket(
         venue=Venue.POLYMARKET_US,
         market_id=_TICKER,
+        venue_market_id=_VENUE_MARKET_ID,
         title="Democratic Party",
         question="Kansas Governor Election Winner",
         subtitle="2026 race",

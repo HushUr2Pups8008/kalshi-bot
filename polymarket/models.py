@@ -17,6 +17,7 @@ class PolymarketMarket:
     volume_dollars: float
     open_interest_dollars: float
     close_time: str
+    venue_market_id: str | None = None
     is_binary: bool = True
     question: str = ""
     subtitle: str = ""

@@ -30,6 +30,11 @@ class KalshiPublicMarketDataError(ValueError):
     """Raised when public market data cannot be trusted."""
 
 
+def is_safe_kalshi_identifier(value: object) -> bool:
+    """Return whether value matches the public API's identifier grammar."""
+    return isinstance(value, str) and _IDENTIFIER.fullmatch(value) is not None
+
+
 class PublicMarketDataReader(Protocol):
     async def list_active_events(
         self, *, series_ticker: str
@@ -118,7 +123,7 @@ class KalshiPublicMarketDataReader:
 
     @staticmethod
     def _identifier(value: str, label: str) -> str:
-        if not isinstance(value, str) or _IDENTIFIER.fullmatch(value) is None:
+        if not is_safe_kalshi_identifier(value):
             raise KalshiPublicMarketDataError(f"{label} is unsafe")
         return value
 

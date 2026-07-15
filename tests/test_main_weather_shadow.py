@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import builtins
+from collections import Counter
 import importlib
 import os
 import sqlite3
@@ -335,8 +336,11 @@ async def test_run_drains_only_weather_before_existing_cleanup(monkeypatch):
     ):
         setattr(bot, method_name, _idle)
 
+    prewarm_task = FakeRuntimeTask("research_prewarm")
     weather_task = FakeRuntimeTask("weather_shadow_capture")
-    bot._create_research_prewarm_runtime_task = MagicMock(return_value=None)
+    bot._create_research_prewarm_runtime_task = MagicMock(
+        return_value=prewarm_task
+    )
     bot._create_weather_shadow_runtime_task = MagicMock(return_value=weather_task)
 
     async def _cancel_targeted():
@@ -353,16 +357,42 @@ async def test_run_drains_only_weather_before_existing_cleanup(monkeypatch):
     monkeypatch.setattr(main_module, "run_search_news_monitor", _idle)
     monkeypatch.setattr(main_module, "run_gdelt_monitor", _idle)
     monkeypatch.setattr(main_module, "run_runtime_overrides_poll", _idle)
+    monkeypatch.setattr(main_module, "FADE_TWEET_FEED_URLS", ())
     monkeypatch.setattr(main_module.asyncio, "create_task", _create_task)
     monkeypatch.setattr(main_module.asyncio, "gather", _gather)
 
     await bot.run()
 
     assert global_items.count(weather_task) == 1
+    assert global_items.count(prewarm_task) == 1
     assert drain_items == [weather_task]
     assert weather_task.cancelled is True
+    assert prewarm_task.cancelled is True
     assert all(task.cancelled for task in runtime_tasks)
     assert all(task not in drain_items for task in runtime_tasks)
+    assert Counter(task.name for task in global_items) == Counter(
+        {
+            "rss": 1,
+            "reddit": 1,
+            "search": 1,
+            "gdelt": 1,
+            "news_consumer": 1,
+            "websocket": 1,
+            "ws_warm": 1,
+            "market_refresh": 1,
+            "polymarket_market_refresh": 1,
+            "auto_resolve": 1,
+            "sub_discovery": 1,
+            "log_rotation": 1,
+            "log_maint": 1,
+            "runtime_overrides_poll": 1,
+            "accumulation": 1,
+            "blend_consumer": 1,
+            "structural": 1,
+            "research_prewarm": 1,
+            "weather_shadow_capture": 1,
+        }
+    )
     assert events.index("drain:weather_shadow_capture") < events.index(
         "targeted-prewarm-cleanup"
     )

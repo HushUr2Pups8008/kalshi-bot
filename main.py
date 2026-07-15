@@ -58,8 +58,10 @@ import os
 import signal
 import sqlite3
 import time
+import uuid
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from types import ModuleType, SimpleNamespace
 from typing import Any, Awaitable, Callable, Iterable  # noqa: F401 — referenced in string annotations
 from urllib.parse import urlparse
@@ -79,11 +81,14 @@ from tasks.research_paper_admission import (
     ResearchPaperAdmissionBridge,
 )
 from tasks.research_prewarm_task import ResearchPrewarmTask
+from tasks.settlement_outbox_task import SettlementOutboxTask
 from analysis.market_matcher import MarketMatcher, _compute_pre_llm_match_meta
 from analysis.signal_analyzer import estimate_probability
 from polymarket.settlement_reconciler import (
+    PersistedPositionReconciler,
     PolymarketPublicSettlementSource,
     SettlementReconciler,
+    VenueRoutingAuthoritativeSettlementSource,
 )
 from tasks.stats.source_stats import SourceStats
 from config import (cfg, DATA_DIR, PAPER_MIN_EDGE, PAPER_FLAT_CONTRACTS, VERSION,
@@ -111,6 +116,13 @@ from tasks.calibration_task import CalibrationTask
 from tasks.structural_task import StructuralTask
 from trading.executor import TradeExecutor
 from trading.paper_trader import PaperTrader
+from trading.settlement import (
+    MarketOutcome,
+    SettlementObservation,
+    SettlementValidationError,
+    VoidRefundContract,
+)
+from trading.settlement_store import SettlementStore, settlement_schema_contract_matches
 from utils.logger import (
     TRADE_LOG_FILE,
     get_logger,
@@ -326,12 +338,29 @@ def _account_from_rsshub_url(url: str) -> str:
     return parts[0]  # fallback: domain or bare token
 
 
+def _exact_decimal_arg(value: str) -> Decimal:
+    try:
+        return Decimal(value)
+    except (InvalidOperation, ValueError) as exc:
+        raise argparse.ArgumentTypeError("must be an exact decimal value") from exc
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Kalshi Geopolitical Trading Bot")
     p.add_argument("--report",      action="store_true",
                    help="Print paper trading report and exit")
     p.add_argument("--resolve",     nargs=2, metavar=("TICKER", "RESULT"),
-                   help="Resolve a paper trade: --resolve TICKER YES|NO")
+                   help="Resolve a paper trade: --resolve TICKER YES|NO|VOID")
+    p.add_argument(
+        "--void-refund-cents-per-contract",
+        type=_exact_decimal_arg,
+        help="Exact VOID refund per contract in cents (required with --resolve ... VOID)",
+    )
+    p.add_argument(
+        "--void-refunds-entry-fee",
+        choices=("YES", "NO"),
+        help="Whether VOID refunds the entry fee (required with --resolve ... VOID)",
+    )
     p.add_argument("--go-live",     action="store_true",
                    help="Review report then confirm switching to live trading")
     p.add_argument("--credibility", action="store_true",
@@ -430,7 +459,7 @@ class _RuntimeInstanceGuard:
 
     A file lock is used instead of command-line substring matching so we can
     block duplicate launches without depending on psutil or fragile process-name
-    heuristics. The lock is held only for the normal long-running bot path; CLI
+    heuristics. Mutating CLI commands share the runtime lock; read-only CLI
     commands remain unaffected.
     """
 
@@ -787,6 +816,7 @@ class TradingBot:
             startup_context="runtime",
             calibration_task=self._calibration_task,
         )
+        self._settlement_outbox_task: SettlementOutboxTask | None = None
         self.executor      = TradeExecutor(self.rest, self.paper)
         # Wire live loss limit shutdown: executor calls this when the session loss
         # threshold is breached. Uses asyncio.create_task so it's safe from any context.
@@ -2660,6 +2690,10 @@ class TradingBot:
         and a result is present, resolves all open trades for that ticker.
         """
         _RESOLVE_INTERVAL = 1800  # 30 minutes
+        try:
+            await self._drain_persisted_settlement_outbox()
+        except Exception as exc:
+            log.warning("Settlement outbox drain failed: %s", exc)
         while True:
             await asyncio.sleep(_RESOLVE_INTERVAL)
             try:
@@ -2669,6 +2703,45 @@ class TradingBot:
 
     async def _check_and_resolve(self) -> None:
         """Single pass: check all open paper trade tickers for settlement."""
+        try:
+            await self._drain_persisted_settlement_outbox()
+        except Exception as exc:
+            log.warning("Settlement outbox drain failed: %s", exc)
+        if cfg.enable_canonical_persisted_settlement_reconciliation:
+            worker = getattr(self, "_persisted_position_reconciler", None)
+            if worker is None:
+                source = getattr(self, "_canonical_settlement_source", None)
+                if source is None:
+                    source = VenueRoutingAuthoritativeSettlementSource(
+                        kalshi_source=self.rest,
+                        polymarket_source=PolymarketPublicSettlementSource(),
+                    )
+                    self._canonical_settlement_source = source
+                worker = PersistedPositionReconciler(
+                    source=source,
+                    resolver=self.paper,
+                )
+                self._persisted_position_reconciler = worker
+            result = await asyncio.to_thread(worker.reconcile)
+            if result.checked:
+                log.info(
+                    "Canonical settlement: checked=%d resolved=%d not_found=%d "
+                    "errors=%d",
+                    result.checked,
+                    result.resolved,
+                    result.not_found,
+                    result.errors,
+                )
+            return
+
+        if bool(getattr(self.paper, "settlement_schema_present", False)):
+            alias_check = await self._legacy_settlement_alias_preflight()
+            if not alias_check.ok:
+                log.error(
+                    "Legacy settlement paused by alias preflight: %s",
+                    ",".join(alias_check.failures),
+                )
+                return
         self.source_stats.flush()
         open_trades = await asyncio.to_thread(
             lambda: self.paper._conn.execute(
@@ -2775,6 +2848,53 @@ class TradingBot:
                 resolved_count, len(rows),
                 bankroll,
             )
+
+    async def _drain_persisted_settlement_outbox(self) -> None:
+        if not bool(getattr(self.paper, "settlement_schema_present", False)):
+            return
+        try:
+            schema_matches = await asyncio.to_thread(
+                settlement_schema_contract_matches,
+                self.paper._conn,
+            )
+        except Exception as exc:
+            log.warning("Settlement schema verification failed: %s", exc)
+            return
+        if not schema_matches:
+            return
+        worker = getattr(self, "_settlement_outbox_task", None)
+        if worker is None:
+            worker = SettlementOutboxTask(
+                db_path=self.paper._db_path,
+                calibration_task=self._calibration_task,
+                trade_logger=trade_log,
+                clock=lambda: datetime.now(timezone.utc),
+                token_factory=lambda: uuid.uuid4().hex,
+                lease_seconds=300,
+            )
+            self._settlement_outbox_task = worker
+        await worker.run_once(limit=100)
+
+    async def _canonical_settlement_preflight(self) -> None:
+        def _check() -> None:
+            with SettlementStore(self.paper._db_path) as store:
+                readiness = store.readiness(pre_cutover=True)
+                if not readiness.ok:
+                    raise RuntimeError(
+                        "canonical settlement readiness failed: "
+                        + ",".join(readiness.failures)
+                    )
+                conservation = store.conservation(now=datetime.now(timezone.utc))
+                if not conservation.ok:
+                    raise RuntimeError(
+                        "canonical settlement conservation failed: "
+                        + ",".join(conservation.failures)
+                    )
+
+        await asyncio.to_thread(_check)
+
+    async def _legacy_settlement_alias_preflight(self):
+        return await asyncio.to_thread(self.paper.legacy_settlement_alias_check)
 
     async def _refresh_market_cache_once(self, *, initial: bool = False) -> None:
         async with self._market_refresh_lock:
@@ -3417,6 +3537,8 @@ class TradingBot:
                 await asyncio.sleep(60)
 
     async def run(self) -> None:
+        if cfg.enable_canonical_persisted_settlement_reconciliation:
+            await self._canonical_settlement_preflight()
         notional = self.paper.get_notional_bankroll()
         max_bet  = cfg.dynamic_max_bet(notional)
 
@@ -3534,8 +3656,120 @@ class TradingBot:
 
 # ── CLI handlers ──────────────────────────────────────────────────────────────
 
+
+def _manual_settlement_outcome(
+    result: str,
+    *,
+    allow_void: bool,
+) -> MarketOutcome:
+    allowed = {"YES", "NO", "VOID"} if allow_void else {"YES", "NO"}
+    if result not in allowed:
+        expected = "YES, NO, or VOID" if allow_void else "YES or NO"
+        raise SystemExit(f"--resolve RESULT must be exactly {expected}")
+    return MarketOutcome(result.lower())
+
+
+def _manual_void_refund_contract(
+    outcome: MarketOutcome,
+    *,
+    refund_cents_per_contract: object,
+    refunds_entry_fee: object,
+) -> VoidRefundContract | None:
+    supplied_refund_arg = (
+        refund_cents_per_contract is not None or refunds_entry_fee is not None
+    )
+    if outcome is not MarketOutcome.VOID:
+        if supplied_refund_arg:
+            raise SystemExit(
+                "VOID refund arguments are only valid with --resolve TICKER VOID"
+            )
+        return None
+
+    if refund_cents_per_contract is None or refunds_entry_fee is None:
+        raise SystemExit(
+            "--resolve TICKER VOID requires both "
+            "--void-refund-cents-per-contract and --void-refunds-entry-fee"
+        )
+    if not isinstance(refund_cents_per_contract, Decimal):
+        raise SystemExit(
+            "--resolve TICKER VOID refund cents must be supplied as an exact Decimal"
+        )
+    if refunds_entry_fee not in {"YES", "NO"}:
+        raise SystemExit(
+            "--resolve TICKER VOID --void-refunds-entry-fee must be exactly YES or NO"
+        )
+    try:
+        return VoidRefundContract(
+            refund_cents_per_contract=refund_cents_per_contract,
+            refunds_entry_fee=refunds_entry_fee == "YES",
+        )
+    except SettlementValidationError as exc:
+        raise SystemExit(f"invalid --resolve TICKER VOID refund contract: {exc}") from exc
+
+
+async def _resolve_paper_market_from_cli(
+    paper: PaperTrader,
+    *,
+    ticker: str,
+    requested_outcome: MarketOutcome,
+    void_refund: VoidRefundContract | None,
+) -> MarketOutcome:
+    if not cfg.enable_canonical_persisted_settlement_reconciliation:
+        await paper.resolve_market(ticker, requested_outcome is MarketOutcome.YES)
+        return requested_outcome
+
+    market_refs = await asyncio.to_thread(paper.mapped_open_market_refs)
+    matching_refs = tuple(ref for ref in market_refs if ref.alias == ticker)
+    if len(matching_refs) != 1:
+        raise SystemExit(
+            f"--resolve {ticker} requires exactly one mapped market; "
+            f"found {len(matching_refs)}"
+        )
+
+    market_ref = matching_refs[0]
+    source_kwargs: dict[str, object] = {
+        "kalshi_source": KalshiRestClient(),
+        "polymarket_source": PolymarketPublicSettlementSource(),
+    }
+    if void_refund is not None:
+        source_kwargs["void_refunds_by_market_ref"] = {market_ref: void_refund}
+    source = VenueRoutingAuthoritativeSettlementSource(**source_kwargs)
+    observation = await asyncio.to_thread(source.get_settlement, market_ref)
+    if observation is None:
+        raise SystemExit(
+            f"--resolve {ticker} has no authoritative terminal settlement"
+        )
+    if not isinstance(observation, SettlementObservation):
+        raise SystemExit(
+            f"--resolve {ticker} authority returned an invalid observation"
+        )
+    if observation.market_ref != market_ref:
+        raise SystemExit(
+            f"--resolve {ticker} authority returned a different market identity"
+        )
+    if observation.outcome is not requested_outcome:
+        raise SystemExit(
+            f"--resolve {ticker} requested {requested_outcome.value.upper()} "
+            f"but disagrees with authoritative {observation.outcome.value.upper()}"
+        )
+
+    applied = await asyncio.to_thread(paper.resolve_observation, observation)
+    if not applied:
+        raise SystemExit(
+            f"--resolve {ticker} found no matching open canonical position"
+        )
+    return observation.outcome
+
+
 async def async_main() -> None:
     args = parse_args()
+    if args.resolve is None and (
+        getattr(args, "void_refund_cents_per_contract", None) is not None
+        or getattr(args, "void_refunds_entry_fee", None) is not None
+    ):
+        raise SystemExit(
+            "VOID refund arguments require --resolve TICKER VOID"
+        )
     startup_context = "cli" if _is_cli_only_command(args) else "runtime"
     _log_boot_summary(startup_context)
 
@@ -3544,24 +3778,59 @@ async def async_main() -> None:
             rotated = rotate_logs()
             log.info("[BOOT] manual_log_rotation_complete=true files=%s", ", ".join(str(path) for path in rotated))
             return
-        paper = PaperTrader(startup_context="cli")
-        if args.report:
-            print(paper.generate_report())
-            return
-        if args.credibility:
-            print("\nSOURCE CREDIBILITY TABLE")
-            print(paper.credibility.format_table())
-            return
+        requested_outcome: MarketOutcome | None = None
+        void_refund: VoidRefundContract | None = None
         if args.resolve:
             ticker, result_str = args.resolve
-            resolved_yes = result_str.upper() == "YES"
-            # resolve_market is async as of v0.29.47 (PROFIT-CAL-001).
-            asyncio.run(paper.resolve_market(ticker, resolved_yes))
-            log.info("Resolved %s as %s", ticker, "YES" if resolved_yes else "NO")
-            return
-        if args.go_live:
-            _handle_go_live(paper)
-            return
+            requested_outcome = _manual_settlement_outcome(
+                result_str,
+                allow_void=cfg.enable_canonical_persisted_settlement_reconciliation,
+            )
+            void_refund = _manual_void_refund_contract(
+                requested_outcome,
+                refund_cents_per_contract=getattr(
+                    args,
+                    "void_refund_cents_per_contract",
+                    None,
+                ),
+                refunds_entry_fee=getattr(args, "void_refunds_entry_fee", None),
+            )
+
+        cli_guard: _RuntimeInstanceGuard | None = None
+        mutating_command = "--resolve" if args.resolve else "--go-live" if args.go_live else None
+        if mutating_command is not None:
+            cli_guard = _RuntimeInstanceGuard(_BOT_RUNTIME_LOCK)
+            if not cli_guard.acquire():
+                raise SystemExit(
+                    f"{mutating_command} cannot run while the bot runtime owns "
+                    f"{_BOT_RUNTIME_LOCK}. Stop the runtime, run {mutating_command}, "
+                    f"then restart it. owner={cli_guard.describe_owner()}"
+                )
+        try:
+            paper = PaperTrader(startup_context="cli")
+            if args.report:
+                print(paper.generate_report())
+                return
+            if args.credibility:
+                print("\nSOURCE CREDIBILITY TABLE")
+                print(paper.credibility.format_table())
+                return
+            if args.resolve:
+                assert requested_outcome is not None
+                outcome = await _resolve_paper_market_from_cli(
+                    paper,
+                    ticker=ticker,
+                    requested_outcome=requested_outcome,
+                    void_refund=void_refund,
+                )
+                log.info("Resolved %s as %s", ticker, outcome.value.upper())
+                return
+            if args.go_live:
+                _handle_go_live(paper)
+                return
+        finally:
+            if cli_guard is not None:
+                cli_guard.release()
 
     runtime_guard = _RuntimeInstanceGuard(_BOT_RUNTIME_LOCK)
     if not runtime_guard.acquire():

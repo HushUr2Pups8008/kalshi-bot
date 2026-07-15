@@ -1185,6 +1185,13 @@ class BotConfig:
     )
     kalshi_env: str = field(default_factory=lambda: os.getenv("KALSHI_ENV", "demo"))
 
+    enable_canonical_persisted_settlement_reconciliation: bool = field(
+        default_factory=lambda: _parse_bool_env(
+            "ENABLE_CANONICAL_PERSISTED_SETTLEMENT_RECONCILIATION",
+            "false",
+        )
+    )
+
     # Polymarket US credentials and endpoints. Disabled until explicitly enabled.
     polymarket_us_enabled: bool = field(
         default_factory=lambda: _parse_bool_env("POLYMARKET_US_ENABLED", "false")

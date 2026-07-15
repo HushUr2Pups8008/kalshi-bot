@@ -12,7 +12,10 @@ from unittest.mock import patch
 
 import pytest
 
-from tasks.stats.source_credibility import SourceCredibility
+from tasks.stats.source_credibility import (
+    SourceCredibility,
+    record_outcome_in_transaction,
+)
 
 _REAL_SQLITE_CONNECT = sqlite3.connect
 
@@ -132,3 +135,33 @@ class TestSourceCredibilityWrites:
         accuracy, n = credibility._time_decayed_accuracy(source)
         assert n == 1
         assert 0.0 <= accuracy <= 1.0
+
+
+def test_transactional_outcomes_are_order_independent_and_keep_latest_timestamp(
+    tmp_path,
+):
+    older = (False, "2026-07-14T20:00:00+00:00")
+    newer = (True, "2026-07-14T22:00:00+00:00")
+
+    def apply_events(db_path: Path, events: tuple[tuple[bool, str], ...]) -> tuple:
+        tracker = SourceCredibility(db_path=db_path)
+        for was_correct, settled_at in events:
+            record_outcome_in_transaction(
+                tracker._conn,
+                source="wire:test-source",
+                was_correct=was_correct,
+                updated_at=settled_at,
+            )
+        tracker._conn.commit()
+        row = tracker._conn.execute(
+            "SELECT * FROM source_credibility WHERE source='wire:test-source'"
+        ).fetchone()
+        result = tuple(row)
+        tracker._conn.close()
+        return result
+
+    chronological = apply_events(tmp_path / "chronological.db", (older, newer))
+    reverse_delivery = apply_events(tmp_path / "reverse.db", (newer, older))
+
+    assert chronological == reverse_delivery
+    assert chronological[-1] == newer[1]

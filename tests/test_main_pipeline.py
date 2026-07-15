@@ -9,7 +9,7 @@ from collections import defaultdict, deque
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
 import pytest
 
@@ -30,9 +30,21 @@ from kalshi import KalshiMarket
 from kalshi.series_metadata import SettlementSource
 from kalshi.source_hints import MarketSourceHintDiagnostics, MarketSourceTargetPlan
 from main import TradingBot, _signal_to_evidence, _source_class_for_evidence
-from polymarket.settlement_reconciler import SettlementReconcileResult
+from polymarket.settlement_reconciler import (
+    SettlementReconciler,
+    SettlementReconcileResult,
+)
+from tasks.settlement_outbox_task import SettlementOutboxTask
 from tests._helpers import write_jsonl
 from trading.portfolio import Position
+from trading.settlement_store import SettlementStore, StoreCheck
+from trading.venue import MarketRef
+from utils.logger import TradeLogger
+
+
+class _VenueRoutingAuthoritativeSettlementSource:
+    def get_settlement(self, market_ref: MarketRef) -> object:
+        raise NotImplementedError
 
 
 @pytest.fixture(autouse=True)
@@ -3683,6 +3695,582 @@ class TestMainAsyncBlocking:
         bot.paper.resolve_market.return_value = None
         bot.paper.get_notional_bankroll.return_value = 490.0
         return bot
+
+    @pytest.mark.asyncio
+    async def test_auto_resolve_false_schema_absent_preserves_legacy_noop(
+        self,
+        monkeypatch,
+    ):
+        bot = self._make_bot()
+        events = []
+        expected_sql = (
+            "SELECT DISTINCT ticker, COALESCE(venue, 'kalshi') AS venue "
+            "FROM paper_trades WHERE resolved = 0"
+        )
+        cursor = MagicMock()
+        cursor.fetchall.return_value = []
+
+        def execute(sql):
+            events.append(("execute", sql))
+            return cursor
+
+        bot.source_stats.flush.side_effect = lambda: events.append("flush")
+        bot.paper._conn.execute.side_effect = execute
+        settlement_store = MagicMock(name="SettlementStore")
+        outbox_task = create_autospec(SettlementOutboxTask, spec_set=True)
+        monkeypatch.setattr(
+            _cfg_module.cfg,
+            "enable_canonical_persisted_settlement_reconciliation",
+            False,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            main_module,
+            "settlement_schema_contract_matches",
+            MagicMock(return_value=False),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            main_module,
+            "SettlementStore",
+            settlement_store,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            main_module,
+            "SettlementOutboxTask",
+            outbox_task,
+            raising=False,
+        )
+
+        await bot._check_and_resolve()
+
+        assert events == ["flush", ("execute", expected_sql)]
+        settlement_store.assert_not_called()
+        outbox_task.assert_not_called()
+        bot.rest.get_market.assert_not_called()
+        bot.paper.resolve_market.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_auto_resolve_false_schema_present_drains_existing_outbox(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        bot = self._make_bot()
+        bot._calibration_task = main_module.CalibrationTask()
+        bot.paper._db_path = tmp_path / "paper-trades.db"
+        bot.paper._conn.execute.return_value.fetchall.return_value = []
+        bot.paper.resolve_observation = MagicMock()
+        outbox_task = create_autospec(
+            SettlementOutboxTask,
+            spec_set=True,
+        )
+        worker = outbox_task.return_value
+        drain = worker.run_once
+        drain.return_value = 2
+        schema_matches = MagicMock(return_value=True)
+        monkeypatch.setattr(
+            _cfg_module.cfg,
+            "enable_canonical_persisted_settlement_reconciliation",
+            False,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            main_module,
+            "settlement_schema_contract_matches",
+            schema_matches,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            main_module,
+            "SettlementOutboxTask",
+            outbox_task,
+            raising=False,
+        )
+
+        await bot._check_and_resolve()
+        await bot._check_and_resolve()
+
+        assert schema_matches.call_count == 2
+        assert all(
+            probe.args == (bot.paper._conn,)
+            for probe in schema_matches.call_args_list
+        )
+        outbox_task.assert_called_once()
+        constructor = outbox_task.call_args
+        assert constructor.args == ()
+        kwargs = constructor.kwargs
+        assert kwargs["db_path"] == bot.paper._db_path
+        assert kwargs["calibration_task"] is bot._calibration_task
+        assert isinstance(kwargs["calibration_task"], main_module.CalibrationTask)
+        assert kwargs["trade_logger"] is main_module.trade_log
+        assert isinstance(kwargs["trade_logger"], TradeLogger)
+        assert callable(kwargs["clock"])
+        assert callable(kwargs["token_factory"])
+        assert isinstance(kwargs["lease_seconds"], int)
+        assert kwargs["lease_seconds"] > 0
+        assert drain.await_count == 2
+        for drain_call in drain.await_args_list:
+            assert drain_call.args == ()
+            assert drain_call.kwargs in ({}, {"limit": 100})
+        bot.paper.resolve_observation.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("legacy_failure", ("flush", "open_trades_query"))
+    async def test_auto_resolve_schema_present_drains_before_legacy_failure(
+        self,
+        monkeypatch,
+        tmp_path,
+        legacy_failure,
+    ):
+        bot = self._make_bot()
+        bot._calibration_task = main_module.CalibrationTask()
+        bot.paper._db_path = tmp_path / "paper-trades.db"
+        bot.paper.settlement_schema_present = True
+        bot.paper.resolve_observation = MagicMock()
+        events = []
+        failure = RuntimeError(f"legacy {legacy_failure} failed")
+
+        outbox_task = create_autospec(SettlementOutboxTask, spec_set=True)
+        worker = outbox_task.return_value
+        worker.run_once.side_effect = lambda **_kwargs: events.append("drain")
+        monkeypatch.setattr(
+            main_module,
+            "settlement_schema_contract_matches",
+            MagicMock(return_value=True),
+        )
+        monkeypatch.setattr(main_module, "SettlementOutboxTask", outbox_task)
+
+        if legacy_failure == "flush":
+            bot.source_stats.flush.side_effect = failure
+        else:
+            bot.source_stats.flush.side_effect = lambda: events.append("flush")
+            bot.paper._conn.execute.side_effect = failure
+
+        with pytest.raises(RuntimeError, match=f"legacy {legacy_failure} failed"):
+            await bot._check_and_resolve()
+
+        assert events[:1] == ["drain"]
+        worker.run_once.assert_awaited_once_with(limit=100)
+        assert bot._settlement_outbox_task is worker
+        bot.paper.resolve_observation.assert_not_called()
+        if legacy_failure == "flush":
+            bot.paper._conn.execute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_auto_resolve_drains_schema_present_outbox_before_initial_sleep(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        bot = self._make_bot()
+        bot._calibration_task = main_module.CalibrationTask()
+        bot.paper._db_path = tmp_path / "paper-trades.db"
+        bot.paper.settlement_schema_present = True
+        bot.paper.resolve_observation = MagicMock()
+        events = []
+
+        outbox_task = create_autospec(SettlementOutboxTask, spec_set=True)
+        worker = outbox_task.return_value
+        worker.run_once.side_effect = lambda **_kwargs: events.append("drain")
+        monkeypatch.setattr(
+            main_module,
+            "settlement_schema_contract_matches",
+            MagicMock(return_value=True),
+        )
+        monkeypatch.setattr(main_module, "SettlementOutboxTask", outbox_task)
+
+        async def cancel_at_initial_sleep(delay):
+            events.append(("sleep", delay))
+            raise asyncio.CancelledError
+
+        monkeypatch.setattr(main_module.asyncio, "sleep", cancel_at_initial_sleep)
+
+        with pytest.raises(asyncio.CancelledError):
+            await bot._auto_resolve_task()
+
+        assert events == ["drain", ("sleep", 1800)]
+        worker.run_once.assert_awaited_once_with(limit=100)
+        assert bot._settlement_outbox_task is worker
+        bot.source_stats.flush.assert_not_called()
+        bot.paper._conn.execute.assert_not_called()
+        bot.rest.get_market.assert_not_called()
+        bot.paper.resolve_market.assert_not_awaited()
+        bot.paper.resolve_observation.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_auto_resolve_outbox_drain_ignores_polymarket_entry_flag(
+        self,
+        monkeypatch,
+    ):
+        bot = self._make_bot()
+        bot._calibration_task = MagicMock()
+        bot.paper._db_path = MagicMock()
+        bot.paper._conn.execute.return_value.fetchall.return_value = [
+            ("ewc-usgub-ks-2026-11-03-dem", "polymarket_us"),
+        ]
+        bot.paper.resolve_observation = MagicMock()
+        outbox_task = create_autospec(
+            SettlementOutboxTask,
+            spec_set=True,
+        )
+        drain = outbox_task.return_value.run_once
+        drain.return_value = 1
+        legacy_polymarket_reconciler = MagicMock(name="SettlementReconciler")
+        monkeypatch.setattr(
+            _cfg_module.cfg,
+            "enable_canonical_persisted_settlement_reconciliation",
+            False,
+            raising=False,
+        )
+        monkeypatch.setattr(_cfg_module.cfg, "polymarket_us_enabled", False)
+        monkeypatch.setattr(
+            main_module,
+            "settlement_schema_contract_matches",
+            MagicMock(return_value=True),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            main_module,
+            "SettlementOutboxTask",
+            outbox_task,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            main_module,
+            "SettlementReconciler",
+            legacy_polymarket_reconciler,
+        )
+
+        await bot._check_and_resolve()
+
+        outbox_task.assert_called_once()
+        assert drain.await_count == 1
+        assert drain.await_args.args == ()
+        assert drain.await_args.kwargs in ({}, {"limit": 100})
+        legacy_polymarket_reconciler.assert_not_called()
+        bot.paper.resolve_observation.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_true_cutover_reuses_one_shared_two_venue_reconciler(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        bot = self._make_bot()
+        bot.paper._db_path = tmp_path / "paper-trades.db"
+        bot.paper.settlement_schema_present = True
+        bot.paper._conn.execute.return_value.fetchall.side_effect = [
+            [("KXGDP-26JUL31", "kalshi")],
+            [("will-us-gdp-grow-in-q2", "polymarket_us")],
+        ]
+        bot.paper.resolve_observation = MagicMock()
+        bot._drain_persisted_settlement_outbox = AsyncMock()
+        authoritative_source = create_autospec(
+            _VenueRoutingAuthoritativeSettlementSource,
+            instance=True,
+            spec_set=True,
+        )
+        bot._canonical_settlement_source = authoritative_source
+
+        shared_reconciler = create_autospec(SettlementReconciler, spec_set=True)
+        shared_worker = shared_reconciler.return_value
+        shared_worker.reconcile.return_value = SettlementReconcileResult(
+            checked=2,
+            resolved=0,
+            not_found=2,
+            errors=0,
+            lane_events=(),
+        )
+        legacy_polymarket_reconciler = create_autospec(
+            SettlementReconciler,
+            spec_set=True,
+        )
+        monkeypatch.setattr(
+            _cfg_module.cfg,
+            "enable_canonical_persisted_settlement_reconciliation",
+            True,
+            raising=False,
+        )
+        monkeypatch.setattr(_cfg_module.cfg, "polymarket_us_enabled", False)
+        monkeypatch.setattr(
+            main_module,
+            "PersistedPositionReconciler",
+            shared_reconciler,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            main_module,
+            "SettlementReconciler",
+            legacy_polymarket_reconciler,
+        )
+
+        await bot._check_and_resolve()
+        await bot._check_and_resolve()
+
+        shared_reconciler.assert_called_once()
+        constructor = shared_reconciler.call_args
+        assert constructor.args == ()
+        assert constructor.kwargs["resolver"] is bot.paper
+        assert constructor.kwargs["source"] is authoritative_source
+        assert shared_worker.reconcile.call_count == 2
+        assert all(
+            reconcile_call.args == () and reconcile_call.kwargs == {}
+            for reconcile_call in shared_worker.reconcile.call_args_list
+        )
+        legacy_polymarket_reconciler.assert_not_called()
+        bot.rest.get_market.assert_not_called()
+        bot.paper.resolve_market.assert_not_awaited()
+        bot.paper.resolve_observation.assert_not_called()
+        assert bot._drain_persisted_settlement_outbox.await_count == 2
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        (
+            "readiness",
+            "conservation",
+            "expected_failure",
+            "expect_conservation",
+        ),
+        (
+            pytest.param(
+                StoreCheck(False, ("schema_objects",), {"schema_objects_ok": False}),
+                StoreCheck(True, (), {}),
+                "schema_objects",
+                False,
+                id="schema-readiness",
+            ),
+            pytest.param(
+                StoreCheck(False, ("open_rows_mapped",), {"unmapped_open_rows": 1}),
+                StoreCheck(True, (), {}),
+                "open_rows_mapped",
+                False,
+                id="mapped-backlog",
+            ),
+            pytest.param(
+                StoreCheck(True, (), {"unmapped_open_rows": 0}),
+                StoreCheck(False, ("trade_count:observation-1",), {}),
+                "trade_count:observation-1",
+                True,
+                id="settlement-conservation",
+            ),
+            pytest.param(
+                StoreCheck(
+                    False,
+                    ("pre_cutover_pending_outbox",),
+                    {"pending_requirements": 1},
+                ),
+                StoreCheck(True, (), {}),
+                "pre_cutover_pending_outbox",
+                False,
+                id="pre-cutover-outbox",
+            ),
+        ),
+    )
+    async def test_true_cutover_preflight_fails_closed_without_financial_mutation(
+        self,
+        monkeypatch,
+        tmp_path,
+        readiness,
+        conservation,
+        expected_failure,
+        expect_conservation,
+    ):
+        bot = self._make_bot()
+        bot.paper._db_path = tmp_path / "paper-trades.db"
+        bot.paper.settlement_schema_present = True
+        bot.paper.resolve_observation = MagicMock()
+        bot.paper.record_trade = MagicMock()
+
+        store_constructor = create_autospec(SettlementStore, spec_set=True)
+        store = store_constructor.return_value.__enter__.return_value
+        store.readiness.return_value = readiness
+        store.conservation.return_value = conservation
+        shared_reconciler = create_autospec(SettlementReconciler, spec_set=True)
+        outbox_task = create_autospec(SettlementOutboxTask, spec_set=True)
+        monkeypatch.setattr(
+            _cfg_module.cfg,
+            "enable_canonical_persisted_settlement_reconciliation",
+            True,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            main_module,
+            "SettlementStore",
+            store_constructor,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            main_module,
+            "PersistedPositionReconciler",
+            shared_reconciler,
+            raising=False,
+        )
+        monkeypatch.setattr(main_module, "SettlementOutboxTask", outbox_task)
+
+        error = None
+        try:
+            await bot._canonical_settlement_preflight()
+        except Exception as exc:  # noqa: BLE001 - assert exact fail-closed type below
+            error = exc
+
+        bot.paper._conn.execute.assert_not_called()
+        bot.paper.record_trade.assert_not_called()
+        bot.paper.resolve_market.assert_not_awaited()
+        bot.paper.resolve_observation.assert_not_called()
+        shared_reconciler.assert_not_called()
+        outbox_task.assert_not_called()
+        assert isinstance(error, RuntimeError), repr(error)
+        assert expected_failure in str(error)
+        store_constructor.assert_called_once_with(bot.paper._db_path)
+        store.readiness.assert_called_once_with(pre_cutover=True)
+        if expect_conservation:
+            store.conservation.assert_called_once()
+            now = store.conservation.call_args.kwargs["now"]
+            assert now.tzinfo is not None
+        else:
+            store.conservation.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_true_cutover_preflight_failure_precedes_runtime_task_launch(
+        self,
+        monkeypatch,
+    ):
+        bot = self._make_bot()
+        bot.paper.resolve_observation = MagicMock()
+        bot.paper.record_trade = MagicMock()
+        preflight = AsyncMock(side_effect=RuntimeError("schema_objects"))
+        bot._canonical_settlement_preflight = preflight
+        bot._check_llm_health = AsyncMock()
+        bot._run_startup_observability_probe = AsyncMock()
+        bot._warm_polymarket_paper_runtime_cache = AsyncMock()
+        created_task_names = []
+
+        def reject_runtime_task(coro, *, name):
+            coro.close()
+            created_task_names.append(name)
+            raise AssertionError(f"runtime task launched before preflight: {name}")
+
+        monkeypatch.setattr(
+            _cfg_module.cfg,
+            "enable_canonical_persisted_settlement_reconciliation",
+            True,
+            raising=False,
+        )
+        monkeypatch.setattr(_cfg_module.cfg, "polymarket_us_enabled", False)
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        monkeypatch.setattr(main_module, "emit_startup_banner", MagicMock())
+        monkeypatch.setattr(main_module, "_log_bankroll_summary", MagicMock())
+        monkeypatch.setattr(main_module.asyncio, "create_task", reject_runtime_task)
+
+        error = None
+        try:
+            await bot.run()
+        except Exception as exc:  # noqa: BLE001 - assert exact ordering below
+            error = exc
+
+        assert created_task_names == []
+        assert isinstance(error, RuntimeError), repr(error)
+        assert "schema_objects" in str(error)
+        preflight.assert_awaited_once_with()
+        bot.paper._conn.execute.assert_not_called()
+        bot.paper.record_trade.assert_not_called()
+        bot.paper.resolve_market.assert_not_awaited()
+        bot.paper.resolve_observation.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("alias_check", "legacy_allowed"),
+        (
+            pytest.param(
+                StoreCheck(True, (), {"alias_collision_count": 0}),
+                True,
+                id="unique-aliases",
+            ),
+            pytest.param(
+                StoreCheck(
+                    False,
+                    ("alias_collision:shared-alias",),
+                    {"alias_collision_count": 1},
+                ),
+                False,
+                id="global-alias-collision",
+            ),
+        ),
+    )
+    async def test_false_schema_present_guards_legacy_routing_by_alias_uniqueness(
+        self,
+        monkeypatch,
+        alias_check,
+        legacy_allowed,
+    ):
+        bot = self._make_bot()
+        bot.paper.settlement_schema_present = True
+        bot.paper._conn.execute.return_value.fetchall.return_value = [
+            ("KXGDP-26JUL31", "kalshi"),
+            ("will-us-gdp-grow-in-q2", "polymarket_us"),
+        ]
+        bot.paper.resolve_observation = MagicMock()
+        events = []
+        bot.rest.get_market.return_value = SimpleNamespace(
+            status="settled",
+            result="yes",
+        )
+        bot._drain_persisted_settlement_outbox = AsyncMock(
+            side_effect=lambda: events.append("drain")
+        )
+
+        async def run_alias_preflight():
+            events.append("alias-preflight")
+            return alias_check
+
+        alias_preflight = AsyncMock(side_effect=run_alias_preflight)
+        bot._legacy_settlement_alias_preflight = alias_preflight
+
+        legacy_polymarket_reconciler = create_autospec(
+            SettlementReconciler,
+            spec_set=True,
+        )
+        legacy_polymarket_reconciler.return_value.reconcile.return_value = (
+            SettlementReconcileResult(
+                checked=1,
+                resolved=0,
+                not_found=1,
+                errors=0,
+                lane_events=(),
+            )
+        )
+        monkeypatch.setattr(
+            _cfg_module.cfg,
+            "enable_canonical_persisted_settlement_reconciliation",
+            False,
+            raising=False,
+        )
+        monkeypatch.setattr(_cfg_module.cfg, "polymarket_us_enabled", True)
+        monkeypatch.setattr(
+            main_module,
+            "SettlementReconciler",
+            legacy_polymarket_reconciler,
+        )
+
+        await bot._check_and_resolve()
+
+        assert events[:2] == ["drain", "alias-preflight"]
+        alias_preflight.assert_awaited_once_with()
+        bot._drain_persisted_settlement_outbox.assert_awaited_once_with()
+        bot.paper.resolve_observation.assert_not_called()
+        if legacy_allowed:
+            bot.rest.get_market.assert_called_once_with("KXGDP-26JUL31")
+            bot.paper.resolve_market.assert_awaited_once_with(
+                "KXGDP-26JUL31",
+                True,
+            )
+            legacy_polymarket_reconciler.assert_called_once()
+        else:
+            bot.rest.get_market.assert_not_called()
+            bot.paper.resolve_market.assert_not_awaited()
+            legacy_polymarket_reconciler.assert_not_called()
 
     def test_operator_reports_are_not_generated_from_bot_runtime_loop(self):
         assert not hasattr(TradingBot, "_daily_report_task")

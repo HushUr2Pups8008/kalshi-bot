@@ -115,3 +115,89 @@ async def test_concurrent_records_do_not_corrupt_state():
     ])
     summary = task.get_calibration_summary()
     assert summary["fast"]["sample_count"] == 20
+
+
+@pytest.mark.asyncio
+async def test_outbox_lineage_deduplicates_each_lane():
+    task = CalibrationTask()
+    common = {
+        "market_ticker": "MKT-SETTLED",
+        "lane_estimate": 0.7,
+        "final_resolution": 1.0,
+        "error": 0.3,
+        "outbox_id": "a" * 64,
+    }
+
+    await task.record_calibration_check(lane="fast", **common)
+    await task.record_calibration_check(lane="fast", **common)
+    await task.record_calibration_check(lane="accumulation", **common)
+    await task.record_calibration_check(
+        lane="fast",
+        **{**common, "outbox_id": "b" * 64},
+    )
+
+    summary = task.get_calibration_summary()
+    assert summary["fast"]["sample_count"] == 2
+    assert summary["accumulation"]["sample_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_durable_replace_restores_drift_silently_but_live_updates_warn(caplog):
+    checks = [
+        {
+            "market_ticker": f"FAST-{index}",
+            "lane": "fast",
+            "lane_estimate": 0.6,
+            "final_resolution": 0.7,
+            "error": 0.1,
+            "outbox_id": f"{index:064x}",
+        }
+        for index in range(_MIN_BASELINE_SAMPLES)
+    ] + [
+        {
+            "market_ticker": f"ACC-{index}",
+            "lane": "accumulation",
+            "lane_estimate": 0.5,
+            "final_resolution": 0.7,
+            "error": 0.2,
+            "outbox_id": f"{index + _MIN_BASELINE_SAMPLES:064x}",
+        }
+        for index in range(_MIN_LANE_SAMPLES)
+    ]
+    replay = CalibrationTask()
+
+    with caplog.at_level(logging.WARNING, logger="calibration_task"):
+        await replay.replace_calibration_checks(checks)
+    first_summary = replay.get_calibration_summary()
+    first_warnings = [
+        record for record in caplog.records if "CALIBRATION_DRIFT" in record.message
+    ]
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="calibration_task"):
+        await replay.replace_calibration_checks(checks)
+    second_warnings = [
+        record for record in caplog.records if "CALIBRATION_DRIFT" in record.message
+    ]
+
+    assert first_summary["accumulation"]["drift_detected"] is True
+    assert replay.get_calibration_summary() == first_summary
+    assert first_warnings == []
+    assert second_warnings == []
+
+    live = CalibrationTask()
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="calibration_task"):
+        for check in checks:
+            await live.record_calibration_check(
+                market_ticker=str(check["market_ticker"]),
+                lane=str(check["lane"]),
+                lane_estimate=float(check["lane_estimate"]),
+                final_resolution=float(check["final_resolution"]),
+                error=float(check["error"]),
+            )
+    live_warnings = [
+        record for record in caplog.records if "CALIBRATION_DRIFT" in record.message
+    ]
+    assert len(live_warnings) == 1
+    assert "accumulation" in live_warnings[0].message

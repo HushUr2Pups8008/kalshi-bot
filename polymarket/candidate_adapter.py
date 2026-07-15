@@ -24,6 +24,7 @@ class PolymarketExecutionMarket:
     volume_dollars: float
     open_interest_dollars: float
     close_time: str
+    venue_market_id: str | None = None
     price_source: str = "polymarket_us_rest"
     price_method: str = "binary_ask"
     price_retrieved_at: str | None = None
@@ -70,6 +71,7 @@ def adapt_polymarket_analysis(
     adapted.market = PolymarketExecutionMarket(
         venue=Venue.POLYMARKET_US,
         ticker=market.market_id,
+        venue_market_id=market.venue_market_id,
         # PROFIT-VENUE-PARITY V03: carry the market's per-family series_ticker
         # (pm_domain_key-derived) onto the execution market, NOT the venue
         # constant -- so record_trade persists a per-family prefix and

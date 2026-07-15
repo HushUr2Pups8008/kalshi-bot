@@ -2,10 +2,20 @@ from __future__ import annotations
 
 import math
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Mapping, Protocol
 
-from trading.venue import Venue
+from kalshi.settlement import normalize_kalshi_settlement
+from polymarket.settlement import normalize_polymarket_settlement
+from trading.settlement import (
+    SettlementDriftError,
+    SettlementObservation,
+    UnsupportedVoidError,
+    VoidRefundContract,
+)
+from trading.venue import MarketRef, Venue
 from utils.logger import get_logger
 
 log = get_logger("polymarket_settlement")
@@ -13,10 +23,6 @@ log = get_logger("polymarket_settlement")
 
 class SettlementNotFound(Exception):
     """Raised by a settlement source when the market has not settled yet."""
-
-
-class SettlementDriftError(RuntimeError):
-    """Raised when Polymarket settlement payload shape violates expectations."""
 
 
 class SettlementSource(Protocol):
@@ -31,6 +37,27 @@ class SettlementResolver(Protocol):
         self, ticker: str, resolved_yes: bool
     ) -> list[tuple[str, str, float]]:
         """Resolve open paper trades using PaperTrader atomicity semantics."""
+
+
+class PersistedSettlementSource(Protocol):
+    def get_settlement(
+        self,
+        market_ref: MarketRef,
+    ) -> SettlementObservation | None:
+        """Return an exact canonical observation or report no settlement."""
+
+
+class PersistedPositionResolver(Protocol):
+    def mapped_open_market_refs(self) -> tuple[MarketRef, ...]:
+        """Return exact mapped identities for every unresolved persisted position."""
+
+    def resolve_observation(self, observation: SettlementObservation) -> bool:
+        """Apply one canonical observation atomically."""
+
+
+class KalshiSettlementSource(Protocol):
+    def get_market(self, market_id: str) -> Any | None:
+        """Return one market by exact canonical ticker."""
 
 
 class PolymarketPublicSettlementSource:
@@ -59,6 +86,88 @@ class PolymarketPublicSettlementSource:
                 ) from exc
             raise
         return payload
+
+
+class VenueRoutingAuthoritativeSettlementSource:
+    """Fetch and normalize settlement by exact venue-qualified identity."""
+
+    def __init__(
+        self,
+        *,
+        kalshi_source: KalshiSettlementSource,
+        polymarket_source: SettlementSource,
+        void_refunds_by_market_ref: Mapping[MarketRef, VoidRefundContract] | None = None,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        self._kalshi_source = kalshi_source
+        self._polymarket_source = polymarket_source
+        self._void_refunds_by_market_ref = dict(void_refunds_by_market_ref or {})
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
+
+    def get_settlement(
+        self,
+        market_ref: MarketRef,
+    ) -> SettlementObservation | None:
+        observed_at = self._clock()
+        if market_ref.venue is Venue.KALSHI:
+            market = self._kalshi_source.get_market(market_ref.venue_market_id)
+            if market is None:
+                return None
+            if str(getattr(market, "status", "")).strip().lower() not in {
+                "finalized",
+                "settled",
+            }:
+                return None
+            effective_at = getattr(market, "updated_time", None) or observed_at
+            return self._normalize_with_configured_void_refund(
+                normalize_kalshi_settlement,
+                market_ref,
+                market,
+                observed_at=observed_at,
+                effective_at=effective_at,
+                rules_version="kalshi-settlement-v1",
+                source_id="kalshi-market-api",
+            )
+
+        if market_ref.venue is Venue.POLYMARKET_US:
+            payload = self._polymarket_source.get_settlement(
+                market_ref.venue_market_id
+            )
+            if payload is None:
+                return None
+            return self._normalize_with_configured_void_refund(
+                normalize_polymarket_settlement,
+                market_ref,
+                payload,
+                observed_at=observed_at,
+                effective_at=observed_at,
+                rules_version="polymarket-us-settlement-v1",
+                source_id="polymarket-us-public-api",
+            )
+
+        raise SettlementDriftError(
+            f"unsupported settlement venue: {market_ref.venue!r}"
+        )
+
+    def _normalize_with_configured_void_refund(
+        self,
+        normalizer: Callable[..., SettlementObservation],
+        market_ref: MarketRef,
+        authoritative_value: Any,
+        **kwargs: Any,
+    ) -> SettlementObservation:
+        try:
+            return normalizer(market_ref, authoritative_value, **kwargs)
+        except UnsupportedVoidError:
+            void_refund = self._void_refunds_by_market_ref.get(market_ref)
+            if void_refund is None:
+                raise
+            return normalizer(
+                market_ref,
+                authoritative_value,
+                void_refund=void_refund,
+                **kwargs,
+            )
 
 
 @dataclass(frozen=True)
@@ -157,6 +266,117 @@ class SettlementReconciler:
             params.append(limit)
         rows = self._resolver._conn.execute(sql, params).fetchall()
         return [str(row["ticker"]) for row in rows]
+
+
+class PersistedPositionReconciler:
+    """Reconcile mapped persisted positions without alias-based authority."""
+
+    def __init__(
+        self,
+        *,
+        source: PersistedSettlementSource,
+        resolver: PersistedPositionResolver,
+    ) -> None:
+        self._source = source
+        self._resolver = resolver
+
+    def reconcile(self, *, limit: int | None = None) -> SettlementReconcileResult:
+        if limit is not None and (isinstance(limit, bool) or limit < 0):
+            raise ValueError("limit must be a nonnegative integer or None")
+
+        market_refs = tuple(dict.fromkeys(self._resolver.mapped_open_market_refs()))
+        if limit is not None:
+            market_refs = market_refs[:limit]
+
+        checked = 0
+        resolved = 0
+        not_found = 0
+        errors = 0
+        for market_ref in market_refs:
+            if not isinstance(market_ref, MarketRef):
+                raise SettlementDriftError(
+                    "persisted settlement identity must be a MarketRef"
+                )
+            checked += 1
+            try:
+                observation = self._source.get_settlement(market_ref)
+            except SettlementNotFound:
+                not_found += 1
+                continue
+            except UnsupportedVoidError as exc:
+                errors += 1
+                log.error(
+                    "MANUAL ACTION REQUIRED: persisted settlement %s:%s has an "
+                    "authoritative VOID without explicit refund economics; "
+                    "isolating this exact market and continuing: %s",
+                    market_ref.venue.value,
+                    market_ref.venue_market_id,
+                    exc,
+                    exc_info=True,
+                )
+                continue
+            except SettlementDriftError:
+                raise
+            except Exception as exc:
+                errors += 1
+                log.error(
+                    "Persisted settlement reconcile: isolating failed market %s:%s "
+                    "at FETCH stage: %s",
+                    market_ref.venue.value,
+                    market_ref.venue_market_id,
+                    exc,
+                    exc_info=True,
+                )
+                continue
+
+            if observation is None:
+                not_found += 1
+                continue
+            if not isinstance(observation, SettlementObservation):
+                raise SettlementDriftError(
+                    "authoritative settlement must return a SettlementObservation"
+                )
+            if observation.market_ref != market_ref:
+                raise SettlementDriftError(
+                    "authoritative settlement identity does not match persisted identity"
+                )
+
+            try:
+                applied = self._resolver.resolve_observation(observation)
+            except UnsupportedVoidError as exc:
+                errors += 1
+                log.error(
+                    "MANUAL ACTION REQUIRED: persisted settlement %s:%s rejected "
+                    "VOID economics at RESOLUTION stage; isolating this exact "
+                    "market and continuing: %s",
+                    market_ref.venue.value,
+                    market_ref.venue_market_id,
+                    exc,
+                    exc_info=True,
+                )
+                continue
+            except SettlementDriftError:
+                raise
+            except Exception as exc:
+                errors += 1
+                log.error(
+                    "Persisted settlement reconcile: isolating failed market %s:%s "
+                    "at RESOLUTION stage: %s",
+                    market_ref.venue.value,
+                    market_ref.venue_market_id,
+                    exc,
+                    exc_info=True,
+                )
+                continue
+            if applied:
+                resolved += 1
+
+        return SettlementReconcileResult(
+            checked=checked,
+            resolved=resolved,
+            not_found=not_found,
+            errors=errors,
+        )
 
 
 def _resolved_yes_from_settlement_value(market_id: str, raw: Any) -> bool:

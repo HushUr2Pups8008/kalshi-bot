@@ -203,7 +203,7 @@ def test_get_market_falls_back_to_slug_lookup_on_404():
     # filter MUST NOT send a closed= param -- it crosses the closed boundary by
     # itself (live-probed), which is what settlement needs at resolution.
     second_params = client._session.request.call_args_list[1].kwargs["params"]
-    assert second_params == {"slug": slug, "limit": 5}
+    assert second_params == {"slug": slug, "limit": 200}
     assert "closed" not in second_params
     # The held side is now priceable for mark-to-market (was unpriced before).
     assert market.yes_ask_cents is not None and market.yes_ask_cents > 0
@@ -228,7 +228,7 @@ def test_get_market_payload_falls_back_to_open_market_slug_lookup_on_404():
     assert payload["slug"] == "m2"
     # FIX-1: exact-match ?slug= filter on the listing surface, no closed= param.
     second_params = client._session.request.call_args_list[1].kwargs["params"]
-    assert second_params == {"slug": "m2", "limit": 5}
+    assert second_params == {"slug": "m2", "limit": 200}
     assert "closed" not in second_params
 
 
@@ -260,7 +260,7 @@ def test_get_market_payload_falls_back_to_closed_market_slug_lookup_for_settleme
     assert payload["slug"] == "m2"
     assert payload["resolvedOutcome"] == "YES"
     second_params = client._session.request.call_args_list[1].kwargs["params"]
-    assert second_params == {"slug": "m2", "limit": 5}
+    assert second_params == {"slug": "m2", "limit": 200}
     assert "closed" not in second_params
 
 
@@ -293,7 +293,7 @@ def test_find_market_payload_filter_returns_high_id_closed_market():
     # One filtered call, ?slug=, no closed= param.
     assert client._session.request.call_count == 1
     params = client._session.request.call_args.kwargs["params"]
-    assert params == {"slug": "us-pres-2026-some-contest-dem", "limit": 5}
+    assert params == {"slug": "us-pres-2026-some-contest-dem", "limit": 200}
     assert "closed" not in params
 
 
@@ -321,8 +321,8 @@ def test_find_market_payload_id_filter_fallback():
     # First call ?slug=, second ?id= -- both exact-match filters, no closed param.
     first = client._session.request.call_args_list[0].kwargs["params"]
     second = client._session.request.call_args_list[1].kwargs["params"]
-    assert first == {"slug": "8594", "limit": 5}
-    assert second == {"id": "8594", "limit": 5}
+    assert first == {"slug": "8594", "limit": 200}
+    assert second == {"id": "8594", "limit": 200}
     assert "closed" not in first and "closed" not in second
 
 
@@ -353,7 +353,7 @@ def test_find_market_payload_still_raises_not_found_when_absent():
     assert client._session.request.call_count == 1
     assert client._session.request.call_args.kwargs["params"] == {
         "slug": "ewc-usse-me-2026-11-03-dem",
-        "limit": 5,
+        "limit": 200,
     }
 
 

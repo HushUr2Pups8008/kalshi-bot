@@ -147,6 +147,18 @@ def _status(payload: dict[str, Any]) -> str:
     return ""
 
 
+def _venue_market_id(payload: dict[str, Any]) -> str | None:
+    raw_id = payload.get("id")
+    if raw_id is None:
+        return None
+    canonical_id = str(raw_id).strip()
+    if not canonical_id:
+        return None
+    if not canonical_id.isascii() or not canonical_id.isdigit():
+        raise ValueError("Polymarket canonical id must be numeric")
+    return canonical_id
+
+
 def normalize_polymarket_market(payload: dict[str, Any]) -> PolymarketMarket:
     outcomes = _outcome_dicts(payload)
     if len(outcomes) != 2:
@@ -197,6 +209,7 @@ def normalize_polymarket_market(payload: dict[str, Any]) -> PolymarketMarket:
             or payload.get("endDate")
             or ""
         ),
+        venue_market_id=_venue_market_id(payload),
         is_binary=True,
         question=str(payload.get("question") or "").strip(),
         subtitle=str(payload.get("subtitle") or "").strip(),
