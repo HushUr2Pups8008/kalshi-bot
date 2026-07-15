@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -35,6 +36,9 @@ _WINDOW_KEYS: Final = frozenset({"start_utc", "end_utc"})
 _UNIVERSE_POLICY_KEYS: Final = frozenset({"type", "market_families"})
 _ID_RE: Final = re.compile(r"^[a-z0-9][a-z0-9._-]{2,127}$")
 _HASH_RE: Final = re.compile(r"^[0-9a-f]{64}$")
+_GIT_OBJECT_RE: Final = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+_MARKET_FAMILY_RE: Final = re.compile(r"^[A-Z0-9][A-Z0-9_:-]{1,127}$")
+_TRUSTED_REF_RE: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$")
 
 
 class OOSRegistryError(ValueError):
@@ -59,6 +63,18 @@ class OOSRegistration:
     market_families: tuple[str, ...]
     exclude_contamination: bool
     registration_hash: str
+
+
+@dataclass(frozen=True)
+class OOSRegistrationAttestation:
+    """Protected-history evidence for a prospective OOS registration."""
+
+    registration_id: str
+    registration_hash: str
+    trusted_ref: str
+    commit: str
+    committed_at_utc: str
+    registry_path: str
 
 
 def _parse_canonical_utc(value: object, *, field_name: str) -> datetime:
@@ -154,14 +170,20 @@ def _validate_registration(raw: object) -> OOSRegistration:
             "universe_policy.market_families must be a non-empty list"
         )
     if any(
-        not isinstance(family, str)
-        or not family.strip()
-        or family != family.strip()
+        not isinstance(family, str) or not _MARKET_FAMILY_RE.fullmatch(family)
         for family in families
     ):
-        raise OOSRegistryError("market_families must contain clean non-empty strings")
+        raise OOSRegistryError(
+            "market_families must contain canonical uppercase family tokens"
+        )
     if len(set(families)) != len(families):
         raise OOSRegistryError("market_families must not contain duplicates")
+    for index, family in enumerate(families):
+        for other in families[index + 1 :]:
+            if family.startswith(other) or other.startswith(family):
+                raise OOSRegistryError(
+                    "market_families must not contain prefix-overlapping tokens"
+                )
 
     if raw["exclude_contamination"] is not True:
         raise OOSRegistryError("exclude_contamination must be true")
@@ -190,16 +212,7 @@ def _validate_registration(raw: object) -> OOSRegistration:
     )
 
 
-def load_oos_registry(
-    path: Path | str = DEFAULT_REGISTRY_PATH,
-) -> dict[str, OOSRegistration]:
-    target = Path(path)
-    try:
-        raw = json.loads(target.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise OOSRegistryError(f"OOS registry not found: {target}") from exc
-    except json.JSONDecodeError as exc:
-        raise OOSRegistryError(f"OOS registry is not valid JSON: {target}") from exc
+def _parse_registry_document(raw: object) -> dict[str, OOSRegistration]:
     if not isinstance(raw, dict):
         raise OOSRegistryError("OOS registry root must be an object")
     _exact_keys(raw, _ROOT_KEYS, label="registry root")
@@ -222,6 +235,19 @@ def load_oos_registry(
     return registrations
 
 
+def load_oos_registry(
+    path: Path | str = DEFAULT_REGISTRY_PATH,
+) -> dict[str, OOSRegistration]:
+    target = Path(path)
+    try:
+        raw = json.loads(target.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise OOSRegistryError(f"OOS registry not found: {target}") from exc
+    except json.JSONDecodeError as exc:
+        raise OOSRegistryError(f"OOS registry is not valid JSON: {target}") from exc
+    return _parse_registry_document(raw)
+
+
 def get_oos_registration(
     registration_id: str,
     path: Path | str = DEFAULT_REGISTRY_PATH,
@@ -233,6 +259,180 @@ def get_oos_registration(
         raise OOSRegistrationNotFoundError(
             f"OOS registration not found: {registration_id!r}"
         ) from exc
+
+
+def _run_git(repo_root: Path, *args: str, error: str) -> str:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(repo_root), *args],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise OOSRegistryError(error) from exc
+    if completed.returncode != 0:
+        raise OOSRegistryError(error)
+    return completed.stdout.strip()
+
+
+def _git_object_exists(repo_root: Path, object_name: str) -> bool:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(repo_root), "cat-file", "-e", object_name],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise OOSRegistryError("trusted commit is not readable") from exc
+    return completed.returncode == 0
+
+
+def _parse_git_committer_utc(value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise OOSRegistryError("trusted commit timestamp is not readable") from exc
+    if parsed.tzinfo is None:
+        raise OOSRegistryError("trusted commit timestamp is not timezone-aware")
+    return parsed.astimezone(timezone.utc)
+
+
+def attest_oos_registration_history(
+    registration: OOSRegistration,
+    *,
+    registry_path: Path | str = DEFAULT_REGISTRY_PATH,
+    trusted_ref: str = "origin/main",
+    repo_root: Path | str | None = None,
+) -> OOSRegistrationAttestation:
+    """Prove an exact registration existed on trusted history before its window.
+
+    The trusted commit's committer timestamp is used as the practical protected-
+    history declaration time. The self-declared ``declared_at_utc`` field cannot
+    satisfy this attestation by itself.
+    """
+    if (
+        not _TRUSTED_REF_RE.fullmatch(trusted_ref)
+        or ".." in trusted_ref
+        or "@{" in trusted_ref
+        or trusted_ref.endswith(("/", ".", ".lock"))
+    ):
+        raise OOSRegistryError("trusted ref has invalid format")
+
+    target = Path(registry_path).resolve(strict=False)
+    probe = Path(repo_root).resolve() if repo_root is not None else target.parent
+    top_level = _run_git(
+        probe,
+        "rev-parse",
+        "--show-toplevel",
+        error="registry path is not inside a readable git repository",
+    )
+    resolved_root = Path(top_level).resolve()
+    try:
+        relative_path = target.relative_to(resolved_root)
+    except ValueError as exc:
+        raise OOSRegistryError("registry path must be inside the git repository") from exc
+    registry_tree_path = relative_path.as_posix()
+
+    trusted_commit = _run_git(
+        resolved_root,
+        "rev-parse",
+        "--verify",
+        "--end-of-options",
+        f"{trusted_ref}^{{commit}}",
+        error=f"trusted ref is not readable: {trusted_ref!r}",
+    )
+    if not _GIT_OBJECT_RE.fullmatch(trusted_commit):
+        raise OOSRegistryError(f"trusted ref is not readable: {trusted_ref!r}")
+
+    history = _run_git(
+        resolved_root,
+        "rev-list",
+        "--reverse",
+        trusted_commit,
+        "--",
+        registry_tree_path,
+        error="trusted registry history is not readable",
+    ).splitlines()
+    if not history:
+        raise OOSRegistryError(
+            f"registry path is absent from trusted ref: {registry_tree_path}"
+        )
+
+    saw_registry_blob = False
+    matching_commits: list[tuple[datetime, str]] = []
+    for commit in history:
+        if not _GIT_OBJECT_RE.fullmatch(commit) or not _git_object_exists(
+            resolved_root, f"{commit}^{{commit}}"
+        ):
+            raise OOSRegistryError("trusted commit is not readable")
+        blob_name = f"{commit}:{registry_tree_path}"
+        if not _git_object_exists(resolved_root, blob_name):
+            continue
+        saw_registry_blob = True
+        registry_text = _run_git(
+            resolved_root,
+            "cat-file",
+            "blob",
+            blob_name,
+            error="trusted registry blob is not readable",
+        )
+        try:
+            historical = _parse_registry_document(json.loads(registry_text))
+        except (json.JSONDecodeError, OOSRegistryError):
+            continue
+        historical_registration = historical.get(registration.id)
+        if (
+            historical_registration is None
+            or historical_registration.registration_hash
+            != registration.registration_hash
+        ):
+            continue
+        committed_at = _parse_git_committer_utc(
+            _run_git(
+                resolved_root,
+                "show",
+                "-s",
+                "--format=%cI",
+                commit,
+                error="trusted commit timestamp is not readable",
+            )
+        )
+        matching_commits.append((committed_at, commit))
+
+    if not saw_registry_blob:
+        raise OOSRegistryError(
+            f"registry path is absent from trusted ref: {registry_tree_path}"
+        )
+    if not matching_commits:
+        raise OOSRegistryError(
+            f"exact id/hash for registration {registration.id!r} "
+            f"does not exist on trusted ref {trusted_ref!r}"
+        )
+
+    committed_at, commit = min(matching_commits)
+    window_start = _parse_canonical_utc(
+        registration.window_start_utc,
+        field_name="window.start_utc",
+    )
+    committed_at_utc = committed_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+    if committed_at >= window_start:
+        raise OOSRegistryError(
+            f"trusted commit {commit} must be before window.start_utc; "
+            f"committed_at={committed_at_utc}, "
+            f"window_start={registration.window_start_utc}"
+        )
+    return OOSRegistrationAttestation(
+        registration_id=registration.id,
+        registration_hash=registration.registration_hash,
+        trusted_ref=trusted_ref,
+        commit=commit,
+        committed_at_utc=committed_at_utc,
+        registry_path=registry_tree_path,
+    )
 
 
 def assert_materializable(
