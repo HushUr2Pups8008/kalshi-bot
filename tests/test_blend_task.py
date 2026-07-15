@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
+import tasks.blend_task as blend_task_module
 from analysis import SignalAnalysis
 from analysis.decision_blender import BlendResult
 from config import cfg
@@ -84,6 +85,41 @@ class SpyLogger:
 class FailingQueue(asyncio.Queue):
     async def put(self, item):  # noqa: ANN001
         raise RuntimeError("queue closed")
+
+
+class SpyCapitalGuardCaptureSink:
+    def __init__(self, *, failure: BaseException | None = None, events=None) -> None:
+        self.failure = failure
+        self.events = events
+        self.envelopes = []
+
+    async def capture(self, envelope):  # noqa: ANN001
+        if self.events is not None:
+            self.events.append("capture")
+        self.envelopes.append(envelope)
+        if self.failure is not None:
+            raise self.failure
+
+
+class NonProcessControlCaptureFailure(BaseException):
+    pass
+
+
+class OrderedCaptureLogger(SpyLogger):
+    def __init__(self, events: list[str], *, fail_skipped: bool = False) -> None:
+        super().__init__()
+        self.events = events
+        self.fail_skipped = fail_skipped
+
+    def log_blend_decision(self, **kwargs) -> None:
+        self.events.append("blend")
+        super().log_blend_decision(**kwargs)
+
+    def log_skipped(self, **kwargs) -> None:
+        self.events.append("skipped")
+        if self.fail_skipped:
+            raise RuntimeError("skipped logger failed")
+        super().log_skipped(**kwargs)
 
 
 def _market(
@@ -349,6 +385,202 @@ async def test_readiness_input_carries_open_exposure_drawdown_from_provider():
 
     assert captured["open_exposure_drawdown_pct"] == pytest.approx(0.21)
     assert result.trade_blocked_reason == "G7_open_exposure_drawdown"
+
+
+@pytest.mark.asyncio
+async def test_capital_guard_capture_runs_after_blend_and_skipped_telemetry():
+    events: list[str] = []
+    logger = OrderedCaptureLogger(events)
+    sink = SpyCapitalGuardCaptureSink(events=events)
+    now = datetime(2026, 7, 15, 12, 30, tzinfo=UTC)
+    task = BlendTask(
+        trading_queue=asyncio.Queue(),
+        store=FakeStore(),
+        logger=logger,
+        open_exposure_drawdown_provider=lambda: 0.21,
+        capital_guard_capture_sink=sink,
+        is_paper_mode=True,
+        now=lambda: now,
+    )
+
+    result = await task.process_fast_lane_result(_analysis())
+
+    assert result.trade_blocked_reason == "G7_open_exposure_drawdown"
+    assert events == ["blend", "skipped", "capture"]
+    assert len(sink.envelopes) == 1
+    envelope = sink.envelopes[0]
+    assert envelope.decision_at == now
+    assert envelope.readiness_decision is result.readiness_decision
+    assert envelope.blend_result is result.blend_result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [None, RuntimeError("sqlite locked"), asyncio.CancelledError()],
+)
+async def test_capital_guard_capture_failure_cannot_change_decision_or_telemetry(
+    failure: BaseException | None,
+):
+    now = datetime(2026, 7, 15, 12, 30, tzinfo=UTC)
+    baseline_logger = SpyLogger()
+    baseline = await BlendTask(
+        trading_queue=asyncio.Queue(),
+        store=FakeStore(),
+        logger=baseline_logger,
+        open_exposure_drawdown_provider=lambda: 0.21,
+        is_paper_mode=True,
+        now=lambda: now,
+    ).process_fast_lane_result(_analysis())
+    logger = SpyLogger()
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    sink = SpyCapitalGuardCaptureSink(failure=failure)
+
+    actual = await BlendTask(
+        trading_queue=queue,
+        store=FakeStore(),
+        logger=logger,
+        open_exposure_drawdown_provider=lambda: 0.21,
+        capital_guard_capture_sink=sink,
+        is_paper_mode=True,
+        now=lambda: now,
+    ).process_fast_lane_result(_analysis())
+
+    assert actual == baseline
+    assert queue.empty()
+    assert len(logger.records) == len(baseline_logger.records) == 1
+    assert len(logger.skipped_records) == len(baseline_logger.skipped_records) == 1
+    assert logger.records == baseline_logger.records
+    assert logger.skipped_records == baseline_logger.skipped_records
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [
+        RuntimeError("sqlite locked"),
+        asyncio.CancelledError(),
+        NonProcessControlCaptureFailure("opaque capture failure"),
+    ],
+)
+async def test_capital_guard_capture_diagnostic_failure_is_also_isolated(
+    failure: BaseException,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 7, 15, 12, 30, tzinfo=UTC)
+    baseline_logger = SpyLogger()
+    baseline_queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    baseline = await BlendTask(
+        trading_queue=baseline_queue,
+        store=FakeStore(),
+        logger=baseline_logger,
+        open_exposure_drawdown_provider=lambda: 0.21,
+        is_paper_mode=True,
+        now=lambda: now,
+    ).process_fast_lane_result(_analysis())
+    logger = SpyLogger()
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+
+    def _diagnostic_failure(*args, **kwargs) -> None:  # noqa: ANN002, ANN003
+        raise RuntimeError("warning logger unavailable")
+
+    monkeypatch.setattr(blend_task_module.log, "warning", _diagnostic_failure)
+    actual = await BlendTask(
+        trading_queue=queue,
+        store=FakeStore(),
+        logger=logger,
+        open_exposure_drawdown_provider=lambda: 0.21,
+        capital_guard_capture_sink=SpyCapitalGuardCaptureSink(failure=failure),
+        is_paper_mode=True,
+        now=lambda: now,
+    ).process_fast_lane_result(_analysis())
+
+    assert actual == baseline
+    assert queue.qsize() == baseline_queue.qsize() == 0
+    assert logger.records == baseline_logger.records
+    assert logger.skipped_records == baseline_logger.skipped_records
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure_type",
+    [KeyboardInterrupt, SystemExit, GeneratorExit],
+)
+async def test_capital_guard_capture_process_control_exceptions_propagate(
+    failure_type: type[BaseException],
+) -> None:
+    task = BlendTask(
+        trading_queue=asyncio.Queue(),
+        store=FakeStore(),
+        logger=SpyLogger(),
+        open_exposure_drawdown_provider=lambda: 0.21,
+        capital_guard_capture_sink=SpyCapitalGuardCaptureSink(
+            failure=failure_type("stop")
+        ),
+        is_paper_mode=True,
+    )
+
+    with pytest.raises(failure_type, match="stop"):
+        await task.process_fast_lane_result(_analysis())
+
+
+@pytest.mark.asyncio
+async def test_capital_guard_capture_does_not_run_before_skipped_logger_succeeds():
+    events: list[str] = []
+    sink = SpyCapitalGuardCaptureSink(events=events)
+    task = BlendTask(
+        trading_queue=asyncio.Queue(),
+        store=FakeStore(),
+        logger=OrderedCaptureLogger(events, fail_skipped=True),
+        open_exposure_drawdown_provider=lambda: 0.21,
+        capital_guard_capture_sink=sink,
+        is_paper_mode=True,
+    )
+
+    with pytest.raises(RuntimeError, match="skipped logger failed"):
+        await task.process_fast_lane_result(_analysis())
+
+    assert events == ["blend", "skipped"]
+    assert sink.envelopes == []
+
+
+@pytest.mark.asyncio
+async def test_capital_guard_capture_ignores_non_targeted_blocks():
+    sink = SpyCapitalGuardCaptureSink()
+    task = BlendTask(
+        trading_queue=asyncio.Queue(),
+        store=FakeStore(),
+        logger=SpyLogger(),
+        capital_guard_capture_sink=sink,
+        is_paper_mode=True,
+    )
+
+    result = await task.process_fast_lane_result(
+        _analysis(market=_market(liquidity_dollars=Decimal("0")))
+    )
+
+    assert result.trade_blocked_reason == "G7_zero_liquidity"
+    assert sink.envelopes == []
+
+
+@pytest.mark.asyncio
+async def test_capital_guard_capture_uses_normalized_report_venue():
+    market = _market()
+    market.report_venue = "polymarket_us"
+    market.report_venue_market_id = "pm-market-1"
+    sink = SpyCapitalGuardCaptureSink()
+    task = BlendTask(
+        trading_queue=asyncio.Queue(),
+        store=FakeStore(),
+        logger=SpyLogger(),
+        open_exposure_drawdown_provider=lambda: 0.21,
+        capital_guard_capture_sink=sink,
+        is_paper_mode=True,
+    )
+
+    await task.process_fast_lane_result(_analysis(market=market))
+
+    assert sink.envelopes[0].venue == "polymarket_us"
 
 
 @pytest.mark.asyncio

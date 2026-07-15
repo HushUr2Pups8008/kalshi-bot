@@ -14,6 +14,9 @@ CENT = Decimal("0.01")
 CENTICENT = Decimal("0.0001")
 DIRECT_ACCOUNT_PRECISION = CENTICENT
 NON_DIRECT_ACCOUNT_PRECISION = CENT
+# A shadow candidate represents a newly created hypothetical order. Later
+# partial fills carry the returned accumulator forward during replay.
+INITIAL_ORDER_FEE_ACCUMULATOR = Decimal("0")
 
 
 class FeeUnscorableError(ValueError):

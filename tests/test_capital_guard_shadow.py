@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+import hashlib
 import json
 import sqlite3
 from pathlib import Path
@@ -137,6 +138,24 @@ def candidate(
             for gate in (f"G{i}" for i in range(1, 8))
         },
     }
+    fee_schedule_json = serialize_fee_schedule(KALSHI_GENERAL_2026_07_07)
+    fee_provenance_json = _json(
+        {
+            "account_precision_dollars": "0.0001",
+            "accumulator_dollars": "0",
+            "coefficient": _dtext(
+                fee_coefficient_for(KALSHI_GENERAL_2026_07_07, FeeRole.TAKER)
+            ),
+            "effective_at": KALSHI_GENERAL_2026_07_07.effective_from.isoformat(),
+            "fee_multiplier": "1",
+            "fee_role": "taker",
+            "fee_schedule": json.loads(fee_schedule_json),
+            "fee_type": fee_type_for_schedule(KALSHI_GENERAL_2026_07_07),
+            "schema_version": 1,
+            "source_payload_sha256": "c" * 64,
+            "venue": "kalshi",
+        }
+    )
     return CapitalGuardCandidate(
         decision_key=decision_key,
         lifecycle_id=lifecycle_id,
@@ -176,6 +195,7 @@ def candidate(
         ),
         book_observed_at=NOW - timedelta(milliseconds=100),
         book_source="kalshi-orderbook-v2",
+        book_method="fixed-point-depth-complement-v1",
         book_payload_sha256="a" * 64,
         expected_probability=D("0.55"),
         executable_price=price,
@@ -185,8 +205,13 @@ def candidate(
             {
                 "bankroll_dollars": "8.76",
                 "capital_at_risk_dollars": _dtext(price * D("5")),
+                "capped_dollars": _dtext(price * D("5")),
+                "kelly_dollars": "3",
+                "kelly_fraction": "0.3424657534246575342465753425",
                 "max_position_dollars": "5",
                 "max_ticker_exposure_dollars": "5",
+                "quantity_method": "floor_to_step",
+                "quantity_step": "1",
                 "requested_quantity": "5",
                 "schema_version": 1,
             }
@@ -206,7 +231,7 @@ def candidate(
                 "time_in_force": "immediate_or_cancel",
             }
         ),
-        fee_schedule_json=serialize_fee_schedule(KALSHI_GENERAL_2026_07_07),
+        fee_schedule_json=fee_schedule_json,
         fee_formula_type=fee_type_for_schedule(KALSHI_GENERAL_2026_07_07),
         fee_role=FeeRole.TAKER,
         fee_multiplier=D("1"),
@@ -215,6 +240,10 @@ def candidate(
         ),
         fee_account_precision=D("0.0001"),
         fee_accumulator=D("0"),
+        fee_provenance_json=fee_provenance_json,
+        fee_provenance_sha256=hashlib.sha256(
+            fee_provenance_json.encode("utf-8")
+        ).hexdigest(),
     )
 
 
@@ -235,6 +264,8 @@ def capture_attempt(
         venue_market_id=record.venue_market_id,
         market_family=record.market_family,
         side=record.side,
+        ordered_failures=record.ordered_failures,
+        non_gate_blocker=record.non_gate_blocker,
         target_gate="G7",
         target_failure="G7_open_exposure_drawdown",
         scorable=scorable,
@@ -495,6 +526,7 @@ def test_capture_attempt_retains_unscorable_denominator_evidence(
     assert _rows(
         store.db_path,
         "SELECT claim_identity_json, gate_identity_json, scorable, "
+        "ordered_failures_json, non_gate_blocker, "
         "ordered_unscorable_reasons_json, "
         "requested_stake_dollars, partial_artifacts_json "
         "FROM capital_guard_shadow_capture_attempts",
@@ -514,10 +546,14 @@ def test_capture_attempt_retains_unscorable_denominator_evidence(
                 {
                     "failure_reason": "G7_open_exposure_drawdown",
                     "gate": "G7",
+                    "non_gate_blocker": None,
+                    "ordered_failures": ["G7_open_exposure_drawdown"],
                     "schema_version": 1,
                 }
             ),
             0,
+            _json(["G7_open_exposure_drawdown"]),
+            None,
             _json(["missing_executable_book", "fee_schedule_unavailable"]),
             "2.1",
             partial_artifacts,
@@ -645,6 +681,7 @@ def test_fast_lane_empty_g2_and_optional_g7_market_inputs_remain_scorable(
         ("gate_inputs_json", '{"G2":{},"G1":{}}', "canonical JSON"),
         ("executable_price", D("NaN"), "finite Decimal"),
         ("book_payload_sha256", "not-a-hash", "SHA-256"),
+        ("fee_provenance_sha256", "not-a-hash", "SHA-256"),
     ],
 )
 def test_candidate_contract_rejects_unscorable_values(
@@ -652,6 +689,40 @@ def test_candidate_contract_rejects_unscorable_values(
 ) -> None:
     with pytest.raises(ValueError, match=error):
         replace(candidate(), **{field: value})
+
+
+def test_capture_attempt_requires_target_failure_and_typed_blocker() -> None:
+    record = candidate()
+    attempt = capture_attempt(
+        record,
+        scorable=False,
+        unscorable_reasons=("missing",),
+    )
+
+    with pytest.raises(ValueError, match="target failure"):
+        replace(attempt, ordered_failures=("G3_disagreement_score",))
+    with pytest.raises(ValueError, match="non_gate_blocker"):
+        replace(attempt, non_gate_blocker="G7_open_exposure_drawdown")
+
+
+def test_fee_provenance_hash_binds_persisted_canonical_artifact() -> None:
+    record = candidate()
+    provenance = json.loads(record.fee_provenance_json)
+    provenance["source_payload_sha256"] = "d" * 64
+    changed_json = _json(provenance)
+
+    with pytest.raises(ValueError, match="does not bind"):
+        replace(record, fee_provenance_json=changed_json)
+
+    provenance["venue"] = "polymarket_us"
+    wrong_venue_json = _json(provenance)
+    wrong_venue_hash = hashlib.sha256(wrong_venue_json.encode("utf-8")).hexdigest()
+    with pytest.raises(ValueError, match="venue does not match"):
+        replace(
+            record,
+            fee_provenance_json=wrong_venue_json,
+            fee_provenance_sha256=wrong_venue_hash,
+        )
 
 
 def test_observation_corrections_append_and_link_by_hash(tmp_path: Path) -> None:
@@ -751,6 +822,11 @@ def test_state_dependent_money_lives_only_in_settlement_and_evaluation(tmp_path:
         "gross_pnl_dollars",
         "settlement_fee_dollars",
     } & candidate_columns
+    assert {
+        "book_method",
+        "fee_provenance_json",
+        "fee_provenance_sha256",
+    } <= candidate_columns
     assert {"outcome", "settlement_fee_dollars"} <= settlement_columns
     assert {"entry_fee_dollars", "fee_net_pnl_dollars"} <= evaluation_columns
 

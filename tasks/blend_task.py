@@ -24,6 +24,7 @@ from config import PAPER_MIN_EDGE, cfg
 from kalshi import KalshiMarket
 from polymarket.domain_key import pm_domain_key
 from tasks import evidence_store
+from tasks.capital_guard_shadow_capture import CapitalGuardShadowCaptureEnvelope
 from tasks.evidence_store import DossierState, EvidenceRecord, StructuralPriorRecord
 from tasks.trade_readiness_gate import (
     G1_CONFIDENCE_THRESHOLD,
@@ -37,6 +38,19 @@ from utils.lifecycle import strict_optional_bool
 
 
 log = get_logger("blend_task")
+_PROCESS_CONTROL_EXCEPTIONS = (KeyboardInterrupt, SystemExit, GeneratorExit)
+
+
+def _log_capital_guard_capture_diagnostic_noexcept(
+    message: str,
+    *args: object,
+) -> None:
+    try:
+        log.warning(message, *args)
+    except _PROCESS_CONTROL_EXCEPTIONS:
+        raise
+    except BaseException:
+        return
 
 
 class BlendTaskError(Exception):
@@ -151,6 +165,10 @@ StructuralStabilityResolver = Callable[[str], bool | Awaitable[bool]]
 OpenExposureDrawdownProvider = Callable[[], float | None | Awaitable[float | None]]
 
 
+class CapitalGuardCaptureSinkLike(Protocol):
+    async def capture(self, envelope: CapitalGuardShadowCaptureEnvelope) -> object: ...
+
+
 class BlendTask:
     """Read lane context, blend, gate, log, and enqueue approved candidates."""
 
@@ -170,6 +188,7 @@ class BlendTask:
         is_paper_mode: bool | None = None,
         now: Callable[[], datetime] | None = None,
         calibration: CalibrationLike | None = None,
+        capital_guard_capture_sink: CapitalGuardCaptureSinkLike | None = None,
     ) -> None:
         self._trading_queue = trading_queue
         self._store = store if store is not None else evidence_store.default_store()
@@ -179,6 +198,7 @@ class BlendTask:
         self._structural_stability_resolver = structural_stability_resolver
         self._open_exposure_drawdown_provider = open_exposure_drawdown_provider
         self._calibration = calibration
+        self._capital_guard_capture_sink = capital_guard_capture_sink
         self._is_paper_mode = (
             cfg.is_paper_trading if is_paper_mode is None else is_paper_mode
         )
@@ -217,6 +237,7 @@ class BlendTask:
             structural_prior=structural_prior,
         )
 
+        decision_at = self._now()
         readiness_input = _readiness_input(
             blend_result=blend_result,
             dossier=dossier,
@@ -225,7 +246,7 @@ class BlendTask:
             market=market,
             analysis=fast_lane_result,
             default_min_edge=default_min_edge,
-            now=self._now(),
+            now=decision_at,
             open_exposure_drawdown_pct=await self._open_exposure_drawdown_pct(),
         )
         try:
@@ -268,6 +289,7 @@ class BlendTask:
         venue = _venue_string(
             getattr(fast_lane_result, "venue", None)
             or getattr(fast_lane_result.market, "venue", None)
+            or getattr(fast_lane_result.market, "report_venue", None)
         ) or "kalshi"
         source_meta = (
             fast_lane_result.signal_meta
@@ -304,6 +326,20 @@ class BlendTask:
                 trade_blocked_reason=trade_blocked_reason,
                 fast_lane_result=fast_lane_result,
                 venue=venue,
+            )
+            await self._capture_capital_guard_shadow(
+                fast_lane_result=fast_lane_result,
+                blend_result=blend_result,
+                readiness=readiness,
+                readiness_input=readiness_input,
+                regime_weights=regime_weights,
+                regime_confidence=regime_confidence,
+                trade_blocked_reason=trade_blocked_reason,
+                venue=venue,
+                market_family=series_prefix,
+                lifecycle_id=lifecycle_id,
+                decision_at=decision_at,
+                default_min_edge=default_min_edge,
             )
             return BlendTaskResult(
                 market_ticker=ticker,
@@ -349,6 +385,55 @@ class BlendTask:
             candidate=candidate,
             enqueued=True,
         )
+
+    async def _capture_capital_guard_shadow(
+        self,
+        *,
+        fast_lane_result: SignalAnalysis,
+        blend_result: BlendResult,
+        readiness: ReadinessDecision,
+        readiness_input: dict[str, Any],
+        regime_weights: dict[str, float],
+        regime_confidence: float,
+        trade_blocked_reason: str,
+        venue: str,
+        market_family: str,
+        lifecycle_id: str | None,
+        decision_at: datetime,
+        default_min_edge: float,
+    ) -> None:
+        sink = self._capital_guard_capture_sink
+        if sink is None or "G7_open_exposure_drawdown" not in readiness.failure_reasons:
+            return
+        envelope = CapitalGuardShadowCaptureEnvelope(
+            analysis=fast_lane_result,
+            blend_result=blend_result,
+            readiness_decision=readiness,
+            readiness_input=readiness_input,
+            regime_weights=regime_weights,
+            regime_confidence=regime_confidence,
+            trade_blocked_reason=trade_blocked_reason,
+            venue=venue,
+            market_family=market_family,
+            lifecycle_id=lifecycle_id,
+            decision_at=decision_at,
+            default_min_edge=default_min_edge,
+        )
+        try:
+            await sink.capture(envelope)
+        except _PROCESS_CONTROL_EXCEPTIONS:
+            raise
+        except asyncio.CancelledError:
+            _log_capital_guard_capture_diagnostic_noexcept(
+                "capital guard shadow capture cancelled for %s",
+                fast_lane_result.market.ticker,
+            )
+        except BaseException as exc:
+            _log_capital_guard_capture_diagnostic_noexcept(
+                "capital guard shadow capture failed for %s: %s",
+                fast_lane_result.market.ticker,
+                exc,
+            )
 
     async def _read_lane_context(
         self,

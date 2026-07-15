@@ -114,6 +114,8 @@ _TABLE_STATEMENTS: tuple[tuple[str, str], ...] = (
             venue_market_id TEXT NOT NULL,
             market_family TEXT NOT NULL,
             side TEXT NOT NULL CHECK (side IN ('yes','no')),
+            ordered_failures_json TEXT NOT NULL,
+            non_gate_blocker TEXT,
             claim_identity_json TEXT NOT NULL,
             gate_identity_json TEXT NOT NULL,
             target_gate TEXT NOT NULL CHECK (target_gate = 'G7'),
@@ -154,6 +156,7 @@ _TABLE_STATEMENTS: tuple[tuple[str, str], ...] = (
             executable_book_json TEXT NOT NULL,
             book_observed_at TEXT NOT NULL,
             book_source TEXT NOT NULL,
+            book_method TEXT NOT NULL,
             book_payload_sha256 TEXT NOT NULL,
             expected_probability TEXT NOT NULL,
             executable_price_dollars TEXT NOT NULL,
@@ -162,6 +165,8 @@ _TABLE_STATEMENTS: tuple[tuple[str, str], ...] = (
             sizing_json TEXT NOT NULL,
             fill_policy_json TEXT NOT NULL,
             fee_schedule_json TEXT NOT NULL,
+            fee_provenance_json TEXT NOT NULL,
+            fee_provenance_sha256 TEXT NOT NULL,
             fee_formula_type TEXT NOT NULL,
             fee_role TEXT NOT NULL CHECK (fee_role IN ('maker','taker')),
             fee_multiplier TEXT NOT NULL,
@@ -174,6 +179,7 @@ _TABLE_STATEMENTS: tuple[tuple[str, str], ...] = (
             CHECK (length(candidate_id) = 64),
             CHECK (length(payload_sha256) = 64),
             CHECK (length(book_payload_sha256) = 64),
+            CHECK (length(fee_provenance_sha256) = 64),
             UNIQUE (venue, venue_market_id, side, lifecycle_id, decision_at)
         )
         """,
@@ -369,6 +375,8 @@ class CapitalGuardCaptureAttempt:
     venue_market_id: str
     market_family: str
     side: Literal["yes", "no"]
+    ordered_failures: tuple[str, ...]
+    non_gate_blocker: str | None
     target_gate: Literal["G7"]
     target_failure: Literal["G7_open_exposure_drawdown"]
     scorable: bool
@@ -392,8 +400,15 @@ class CapitalGuardCaptureAttempt:
             _require_text(name, getattr(self, name))
         if self.side not in ("yes", "no"):
             raise ValueError("side must be yes or no")
+        _validate_failures(self.ordered_failures)
         if self.target_gate != "G7" or self.target_failure != _ELIGIBLE_FAILURE:
             raise ValueError("capture attempt must identify the capital guard gate")
+        if self.target_failure not in self.ordered_failures:
+            raise ValueError("capture attempt ordered_failures must include target failure")
+        if self.non_gate_blocker is not None:
+            _require_text("non_gate_blocker", self.non_gate_blocker)
+            if self.non_gate_blocker in self.ordered_failures:
+                raise ValueError("non_gate_blocker must not duplicate a gate failure")
         if not isinstance(self.scorable, bool):
             raise ValueError("scorable must be bool")
         _validate_unscorable_reasons(self.ordered_unscorable_reasons)
@@ -427,6 +442,7 @@ class CapitalGuardCandidate:
     executable_book_json: str
     book_observed_at: datetime
     book_source: str
+    book_method: str
     book_payload_sha256: str
     expected_probability: Decimal
     executable_price: Decimal
@@ -435,6 +451,8 @@ class CapitalGuardCandidate:
     sizing_json: str
     fill_policy_json: str
     fee_schedule_json: str
+    fee_provenance_json: str
+    fee_provenance_sha256: str
     fee_formula_type: str
     fee_role: FeeRole
     fee_multiplier: Decimal
@@ -457,7 +475,7 @@ class CapitalGuardCandidate:
             raise ValueError("book_observed_at must not follow decision_at")
         if not isinstance(self.venue, Venue):
             raise ValueError("venue must be a supported Venue")
-        for name in ("venue_market_id", "market_family", "book_source"):
+        for name in ("venue_market_id", "market_family", "book_source", "book_method"):
             _require_text(name, getattr(self, name))
         if self.side not in ("yes", "no"):
             raise ValueError("side must be yes or no")
@@ -485,6 +503,7 @@ class CapitalGuardCandidate:
         _validate_identity_json(self)
         _validate_book_json(self)
         _require_sha256("book_payload_sha256", self.book_payload_sha256)
+        _require_sha256("fee_provenance_sha256", self.fee_provenance_sha256)
         _validate_sizing_json(self)
         _validate_fill_policy_json(self)
 
@@ -527,6 +546,7 @@ class CapitalGuardCandidate:
             self.fee_multiplier != 1 or self.fee_accumulator != 0
         ):
             raise ValueError("Polymarket fee provenance requires multiplier=1 and accumulator=0")
+        _validate_fee_provenance_json(self)
         _entry_accounting(self)
 
     @property
@@ -949,11 +969,12 @@ class CapitalGuardShadowStore:
                     capture_attempt_id, capture_version, payload_sha256,
                     decision_key, lifecycle_id, decision_at, captured_at,
                     venue, venue_market_id, market_family, side,
+                    ordered_failures_json, non_gate_blocker,
                     claim_identity_json, gate_identity_json,
                     target_gate, target_failure, scorable,
                     ordered_unscorable_reasons_json, requested_stake_dollars,
                     partial_artifacts_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     capture_attempt_id,
@@ -967,6 +988,8 @@ class CapitalGuardShadowStore:
                     record.venue_market_id,
                     record.market_family,
                     record.side,
+                    values["ordered_failures_json"],
+                    record.non_gate_blocker,
                     values["claim_identity_json"],
                     values["gate_identity_json"],
                     record.target_gate,
@@ -1012,7 +1035,8 @@ class CapitalGuardShadowStore:
         attempt = conn.execute(
             """
             SELECT decision_key, lifecycle_id, decision_at, captured_at,
-                   venue, venue_market_id, market_family, side, scorable,
+                   venue, venue_market_id, market_family, side,
+                   ordered_failures_json, non_gate_blocker, scorable,
                    ordered_unscorable_reasons_json, requested_stake_dollars
             FROM capital_guard_shadow_capture_attempts
             WHERE capture_attempt_id = ?
@@ -1033,12 +1057,16 @@ class CapitalGuardShadowStore:
         )
         if tuple(attempt[0:8]) != expected_identity:
             raise ValueError("candidate identity does not match capture attempt")
-        if int(attempt[8]) != 1 or str(attempt[9]) != canonical_json([]):
+        if str(attempt[8]) != canonical_json(list(record.ordered_failures)):
+            raise ValueError("candidate failures do not match capture attempt")
+        if attempt[9] != record.non_gate_blocker:
+            raise ValueError("candidate blocker does not match capture attempt")
+        if int(attempt[10]) != 1 or str(attempt[11]) != canonical_json([]):
             raise ValueError("candidate requires a scorable capture attempt")
-        if attempt[10] is not None:
+        if attempt[12] is not None:
             requested_stake = _parse_decimal(
                 "capture_attempt.requested_stake",
-                str(attempt[10]),
+                str(attempt[12]),
             )
             gross_entry_debit, _entry_fee, _net_entry_debit = _entry_accounting(record)
             if requested_stake != gross_entry_debit:
@@ -1061,14 +1089,15 @@ class CapitalGuardShadowStore:
                 venue, venue_market_id, market_family, side, ordered_failures_json,
                 non_gate_blocker, replay_eligible, gate_inputs_json, gate_results_json,
                 identity_json, executable_book_json, book_observed_at, book_source,
-                book_payload_sha256, expected_probability, executable_price_dollars,
+                book_method, book_payload_sha256, expected_probability, executable_price_dollars,
                 executable_quantity, gross_edge, sizing_json, fill_policy_json,
-                fee_schedule_json, fee_formula_type, fee_role, fee_multiplier,
+                fee_schedule_json, fee_provenance_json, fee_provenance_sha256,
+                fee_formula_type, fee_role, fee_multiplier,
                 fee_coefficient, fee_account_precision_dollars, fee_accumulator_dollars,
                 gross_entry_debit_dollars, entry_fee_dollars, net_entry_debit_dollars
             ) VALUES (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
             )
             """,
             (
@@ -1093,6 +1122,7 @@ class CapitalGuardShadowStore:
                 record.executable_book_json,
                 values["book_observed_at"],
                 record.book_source,
+                record.book_method,
                 record.book_payload_sha256,
                 values["expected_probability"],
                 values["executable_price_dollars"],
@@ -1101,6 +1131,8 @@ class CapitalGuardShadowStore:
                 record.sizing_json,
                 record.fill_policy_json,
                 record.fee_schedule_json,
+                record.fee_provenance_json,
+                record.fee_provenance_sha256,
                 record.fee_formula_type,
                 record.fee_role.value,
                 values["fee_multiplier"],
@@ -1540,11 +1572,15 @@ def _capture_attempt_payload(
             {
                 "failure_reason": record.target_failure,
                 "gate": record.target_gate,
+                "non_gate_blocker": record.non_gate_blocker,
+                "ordered_failures": list(record.ordered_failures),
                 "schema_version": 1,
             }
         ),
         "lifecycle_id": record.lifecycle_id,
         "market_family": record.market_family,
+        "non_gate_blocker": record.non_gate_blocker,
+        "ordered_failures_json": canonical_json(list(record.ordered_failures)),
         "ordered_unscorable_reasons_json": canonical_json(
             list(record.ordered_unscorable_reasons)
         ),
@@ -1563,6 +1599,7 @@ def _candidate_payload(record: CapitalGuardCandidate) -> dict[str, object]:
     gross_entry_debit, entry_fee, net_entry_debit = _entry_accounting(record)
     return {
         "book_observed_at": _timestamp(record.book_observed_at),
+        "book_method": record.book_method,
         "book_payload_sha256": record.book_payload_sha256,
         "book_source": record.book_source,
         "captured_at": _timestamp(record.captured_at),
@@ -1581,6 +1618,8 @@ def _candidate_payload(record: CapitalGuardCandidate) -> dict[str, object]:
         "fee_multiplier": _decimal_text(record.fee_multiplier),
         "fee_role": record.fee_role.value,
         "fee_schedule_json": record.fee_schedule_json,
+        "fee_provenance_json": record.fee_provenance_json,
+        "fee_provenance_sha256": record.fee_provenance_sha256,
         "fill_policy_json": record.fill_policy_json,
         "gate_inputs_json": record.gate_inputs_json,
         "gate_results_json": record.gate_results_json,
@@ -2109,8 +2148,13 @@ def _validate_sizing_json(record: CapitalGuardCandidate) -> None:
         {
             "bankroll_dollars",
             "capital_at_risk_dollars",
+            "capped_dollars",
+            "kelly_dollars",
+            "kelly_fraction",
             "max_position_dollars",
             "max_ticker_exposure_dollars",
+            "quantity_method",
+            "quantity_step",
             "requested_quantity",
             "schema_version",
         },
@@ -2121,8 +2165,12 @@ def _validate_sizing_json(record: CapitalGuardCandidate) -> None:
         for name in (
             "bankroll_dollars",
             "capital_at_risk_dollars",
+            "capped_dollars",
+            "kelly_dollars",
+            "kelly_fraction",
             "max_position_dollars",
             "max_ticker_exposure_dollars",
+            "quantity_step",
             "requested_quantity",
         )
     }
@@ -2135,10 +2183,95 @@ def _validate_sizing_json(record: CapitalGuardCandidate) -> None:
         raise ValueError("sizing_json requested_quantity does not match candidate")
     if values["capital_at_risk_dollars"] != gross_debit:
         raise ValueError("sizing_json capital_at_risk does not match entry cost")
+    if not D0 <= values["kelly_fraction"] <= D1:
+        raise ValueError("sizing_json kelly_fraction must be in [0, 1]")
+    if values["kelly_dollars"] > values["bankroll_dollars"]:
+        raise ValueError("sizing_json kelly_dollars exceeds bankroll")
+    if values["capped_dollars"] > values["kelly_dollars"]:
+        raise ValueError("sizing_json capped_dollars exceeds Kelly stake")
+    if values["capped_dollars"] < gross_debit:
+        raise ValueError("sizing_json capped_dollars cannot fund the candidate")
     if min(
         values["max_position_dollars"], values["max_ticker_exposure_dollars"]
     ) < gross_debit:
         raise ValueError("sizing_json caps cannot fund the candidate")
+    if sizing["quantity_method"] != "floor_to_step":
+        raise ValueError("sizing_json quantity_method is unsupported")
+    if values["quantity_step"] <= 0:
+        raise ValueError("sizing_json quantity_step must be positive")
+    if values["requested_quantity"] % values["quantity_step"] != 0:
+        raise ValueError("sizing_json requested_quantity is not aligned to quantity_step")
+
+
+def _validate_fee_provenance_json(record: CapitalGuardCandidate) -> None:
+    provenance = _require_canonical_object(
+        "fee_provenance_json", record.fee_provenance_json
+    )
+    _require_exact_keys(
+        "fee_provenance_json",
+        provenance,
+        {
+            "account_precision_dollars",
+            "accumulator_dollars",
+            "coefficient",
+            "effective_at",
+            "fee_multiplier",
+            "fee_role",
+            "fee_schedule",
+            "fee_type",
+            "schema_version",
+            "source_payload_sha256",
+            "venue",
+        },
+    )
+    _require_schema_version("fee_provenance_json", provenance)
+    if _sha256(record.fee_provenance_json) != record.fee_provenance_sha256:
+        raise ValueError("fee_provenance_sha256 does not bind fee_provenance_json")
+    if provenance["venue"] != record.venue.value:
+        raise ValueError("fee provenance venue does not match candidate")
+    if provenance["fee_schedule"] != json.loads(record.fee_schedule_json):
+        raise ValueError("fee provenance schedule does not match pinned schedule")
+    if provenance["fee_type"] != record.fee_formula_type:
+        raise ValueError("fee provenance type does not match candidate")
+    if provenance["fee_role"] != record.fee_role.value:
+        raise ValueError("fee provenance role does not match candidate")
+    if _require_decimal_text_value(
+        "fee_provenance_json.fee_multiplier", provenance["fee_multiplier"]
+    ) != record.fee_multiplier:
+        raise ValueError("fee provenance multiplier does not match candidate")
+    if _require_decimal_text_value(
+        "fee_provenance_json.coefficient", provenance["coefficient"]
+    ) != record.fee_coefficient:
+        raise ValueError("fee provenance coefficient does not match candidate")
+    if _require_decimal_text_value(
+        "fee_provenance_json.accumulator_dollars",
+        provenance["accumulator_dollars"],
+    ) != record.fee_accumulator:
+        raise ValueError("fee provenance accumulator does not match candidate")
+    account_precision = provenance["account_precision_dollars"]
+    if account_precision is None:
+        parsed_precision = None
+    else:
+        parsed_precision = _require_decimal_text_value(
+            "fee_provenance_json.account_precision_dollars", account_precision
+        )
+    if parsed_precision != record.fee_account_precision:
+        raise ValueError("fee provenance account precision does not match candidate")
+    effective_at_text = provenance["effective_at"]
+    _require_text("fee_provenance_json.effective_at", effective_at_text)
+    try:
+        effective_at = datetime.fromisoformat(effective_at_text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("fee provenance effective_at is not an ISO timestamp") from exc
+    if effective_at.tzinfo is None or effective_at.utcoffset() is None:
+        raise ValueError("fee provenance effective_at must be timezone-aware")
+    schedule = deserialize_fee_schedule(record.fee_schedule_json)
+    if effective_at != schedule.effective_from or effective_at > record.decision_at:
+        raise ValueError("fee provenance effective_at does not identify pinned schedule")
+    _require_sha256(
+        "fee_provenance_json.source_payload_sha256",
+        provenance["source_payload_sha256"],
+    )
 
 
 def _validate_fill_policy_json(record: CapitalGuardCandidate) -> None:

@@ -66,7 +66,7 @@ from types import ModuleType, SimpleNamespace
 from typing import Any, Awaitable, Callable, Iterable  # noqa: F401 — referenced in string annotations
 from urllib.parse import urlparse
 
-from analysis import SignalAnalysis
+from analysis import DecisionFinancialProvenance, SignalAnalysis
 from analysis.evidence_scorer import source_quality
 from analysis.kelly import kelly_bet
 from analysis.research_gate import (
@@ -115,6 +115,7 @@ from tasks.blend_task import BlendTask, TradeCandidate
 from tasks.calibration_task import CalibrationTask
 from tasks.structural_task import StructuralTask
 from trading.executor import TradeExecutor
+from trading.fees import DIRECT_ACCOUNT_PRECISION, INITIAL_ORDER_FEE_ACCUMULATOR
 from trading.paper_trader import PaperTrader
 from trading.settlement import (
     MarketOutcome,
@@ -803,6 +804,23 @@ def _signal_to_evidence(analysis: SignalAnalysis) -> Evidence:
     )
 
 
+def _build_capital_guard_shadow_capture_sink(
+    enabled: bool,
+    *,
+    db_path: os.PathLike[str] | str | None = None,
+) -> object | None:
+    """Build and initialize the isolated store only after explicit opt-in."""
+    if not enabled:
+        return None
+    from tasks.capital_guard_shadow_capture import CapitalGuardShadowCaptureSink
+    from trading.capital_guard_shadow import CapitalGuardShadowStore
+
+    path = DATA_DIR / "capital_guard_shadow.db" if db_path is None else db_path
+    store = CapitalGuardShadowStore(db_path=path)
+    store.initialize(applied_at=datetime.now(timezone.utc))
+    return CapitalGuardShadowCaptureSink(store)
+
+
 class TradingBot:
     def __init__(self):
         self.rest          = KalshiRestClient()
@@ -869,12 +887,18 @@ class TradingBot:
         # evidence queue feeds AccumulationTask independently of the fast lane.
         self._trading_queue: asyncio.Queue[TradeCandidate] = asyncio.Queue(maxsize=500)
         self._evidence_queue: asyncio.Queue[Evidence | None] = asyncio.Queue(maxsize=2000)
+        self._capital_guard_shadow_capture_sink = (
+            _build_capital_guard_shadow_capture_sink(
+                cfg.enable_capital_guard_shadow_capture
+            )
+        )
         self._blend_task = BlendTask(
             trading_queue=self._trading_queue,
             calibration=self._calibration_task,
             open_exposure_drawdown_provider=lambda: _paper_open_exposure_drawdown_pct(
                 self.paper
             ),
+            capital_guard_capture_sink=self._capital_guard_shadow_capture_sink,
         )
         self._research_paper_admission_bridge = ResearchPaperAdmissionBridge(
             research_store=default_research_dossier_store(),
@@ -2250,6 +2274,16 @@ class TradingBot:
             llm_magnitude=llm_mag,
             llm_confidence=llm_conf,
             signal_meta=signal_meta or None,
+            decision_financial_provenance=DecisionFinancialProvenance(
+                sizing_bankroll_dollars=Decimal(str(notional)),
+                max_position_dollars=Decimal(str(max_bet)),
+                max_ticker_exposure_dollars=(
+                    Decimal(str(cfg.max_ticker_exposure_pct))
+                    * Decimal(str(notional))
+                ),
+                fee_account_precision_dollars=DIRECT_ACCOUNT_PRECISION,
+                fee_accumulator_dollars=INITIAL_ORDER_FEE_ACCUMULATOR,
+            ),
         )
 
         log.debug(
@@ -2323,6 +2357,11 @@ class TradingBot:
             is_paper_mode=True,
             open_exposure_drawdown_provider=lambda: _paper_open_exposure_drawdown_pct(
                 self.paper
+            ),
+            capital_guard_capture_sink=getattr(
+                self,
+                "_capital_guard_shadow_capture_sink",
+                None,
             ),
         )
         return await self._route_analysis_through_blend(
