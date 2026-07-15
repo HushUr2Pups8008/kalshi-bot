@@ -2025,42 +2025,46 @@ class PaperTrader:
         async shell to emit as CALIBRATION_CHECK events. Returns an empty list
         if no trades are resolved or no per-lane estimates are populated.
         """
-        trades = self._conn.execute(
-            "SELECT * FROM paper_trades WHERE ticker = ? AND resolved = 0", (ticker,)
-        ).fetchall()
-
-        if not trades:
-            log.debug("No open paper trades for %s", ticker)
-            return []
-
-        # Pre-calculate all outcomes before any DB writes
-        outcomes: list[tuple] = []
-        total_pnl    = 0.0
-        total_payout = 0.0
-        for t in trades:
-            won    = (t["side"] == "yes" and resolved_yes) or \
-                     (t["side"] == "no"  and not resolved_yes)
-            payout = float(t["contracts"]) if won else 0.0
-            pnl    = payout - t["cost_dollars"]
-            outcomes.append((t, won, payout, pnl))
-            total_pnl    += pnl
-            total_payout += payout
-
-        now_ts = datetime.now(timezone.utc).isoformat()
-        series_ticker = next(
-            (
-                str(t["series_ticker"]).strip()
-                for t, _won, _payout, _pnl in outcomes
-                if "series_ticker" in t.keys()
-                and str(t["series_ticker"] or "").strip()
-            ),
-            ticker.split("-")[0],
-        )
-
-        # Atomically mark all trades resolved and credit bankroll in one transaction.
-        # _credit_bankroll calls _set_state which commits -- both the UPDATE rows and
-        # the bankroll write land in the same commit so a crash between them is impossible.
         with self._conn:
+            if self.settlement_schema_present:
+                self._conn.execute("BEGIN IMMEDIATE")
+            trades = self._conn.execute(
+                "SELECT * FROM paper_trades WHERE ticker = ? AND resolved = 0",
+                (ticker,),
+            ).fetchall()
+
+            if not trades:
+                log.debug("No open paper trades for %s", ticker)
+                return []
+            if self.settlement_schema_present:
+                self._require_legacy_alias_unique(trades, ticker=ticker)
+
+            # Pre-calculate all outcomes before any DB writes.
+            outcomes: list[tuple] = []
+            total_pnl = 0.0
+            total_payout = 0.0
+            for t in trades:
+                won = (t["side"] == "yes" and resolved_yes) or (
+                    t["side"] == "no" and not resolved_yes
+                )
+                payout = float(t["contracts"]) if won else 0.0
+                pnl = payout - t["cost_dollars"]
+                outcomes.append((t, won, payout, pnl))
+                total_pnl += pnl
+                total_payout += payout
+
+            now_ts = datetime.now(timezone.utc).isoformat()
+            series_ticker = next(
+                (
+                    str(t["series_ticker"]).strip()
+                    for t, _won, _payout, _pnl in outcomes
+                    if "series_ticker" in t.keys()
+                    and str(t["series_ticker"] or "").strip()
+                ),
+                ticker.split("-")[0],
+            )
+
+            # Mark all trades and credit bankroll under the same writer lock.
             for t, won, payout, pnl in outcomes:
                 self._conn.execute(
                     "UPDATE paper_trades SET resolved=1, resolved_yes=?, pnl_dollars=?, "
@@ -2193,6 +2197,18 @@ class PaperTrader:
                     continue
                 lane_events.append((trade_id, lane_name, float(estimate)))
         return lane_events
+
+    def _require_legacy_alias_unique(
+        self,
+        trades: list[sqlite3.Row],
+        *,
+        ticker: str,
+    ) -> None:
+        market_refs = {self._mapped_market_ref_from_row(row) for row in trades}
+        if len(market_refs) != 1:
+            raise SettlementDriftError(
+                f"legacy settlement alias {ticker!r} maps to multiple identities"
+            )
 
     # ── Report ────────────────────────────────────────────────────────────────
 
