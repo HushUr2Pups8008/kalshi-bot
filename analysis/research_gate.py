@@ -3639,7 +3639,7 @@ async def _fetch_bounded_https_ipv4(
                     headers={"User-Agent": user_agent},
                 ) as session:
                     async with session.get(url, allow_redirects=False) as response:
-                        if response.status != 200:
+                        if not 200 <= response.status < 300:
                             raise urllib.error.HTTPError(
                                 url,
                                 response.status,

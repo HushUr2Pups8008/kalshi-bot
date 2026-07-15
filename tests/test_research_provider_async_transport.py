@@ -478,6 +478,44 @@ async def test_canonical_host_is_pinned_without_redirects_and_body_is_bounded() 
 
 
 @pytest.mark.asyncio
+async def test_duckduckgo_202_is_success_and_body_remains_parseable(
+    monkeypatch,
+) -> None:
+    response = _Response(body=_DUCK_HTML, status=202, reason="Accepted")
+    connectors, sessions, connector_factory, session_factory = _transport_factories(response)
+
+    raw = await research_gate._fetch_duckduckgo_lite_ipv4(
+        "https://lite.duckduckgo.com/lite/?q=current+evidence",
+        timeout=0.5,
+        max_bytes=300_000,
+        resolver_factory=lambda: _Resolver(),
+        connector_factory=connector_factory,
+        session_factory=session_factory,
+    )
+
+    async def fetch(*_args, **_kwargs) -> bytes:
+        return raw
+
+    monkeypatch.setattr(research_gate, "_fetch_duckduckgo_lite_ipv4", fetch)
+    evidence = await research_gate._duckduckgo_lite_search(
+        research_gate.ResearchQuery(
+            query="current evidence",
+            query_intent="supporting",
+            source_class="reputable_secondary",
+        )
+    )
+
+    assert raw == _DUCK_HTML
+    assert [item.source_url for item in evidence] == [
+        "https://example.com/current-result"
+    ]
+    assert sessions[0].get_calls[0]["allow_redirects"] is False
+    assert response.closed
+    assert sessions[0].closed
+    assert connectors[0].closed
+
+
+@pytest.mark.asyncio
 async def test_redirect_is_refused_with_existing_http_error_taxonomy() -> None:
     response = _Response(status=302, reason="Found")
     connectors, sessions, connector_factory, session_factory = _transport_factories(response)
