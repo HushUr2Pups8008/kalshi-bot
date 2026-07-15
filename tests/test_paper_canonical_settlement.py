@@ -18,6 +18,7 @@ from tests.test_paper_trader import _cfg_module, _make_mock_analysis
 from trading.portfolio import Portfolio, Position
 from trading.settlement import (
     MarketOutcome,
+    SettlementDriftError,
     SettlementObservation,
     VoidRefundContract,
     build_settlement_observation,
@@ -188,6 +189,67 @@ def _bankroll_cents(trader) -> Decimal:
         "SELECT value FROM bot_state WHERE key='notional_bankroll'"
     ).fetchone()[0]
     return Decimal(str(value)) * Decimal("100")
+
+
+def test_mapped_open_market_refs_deduplicate_exact_two_venue_identities(trader_factory):
+    trader = trader_factory("mapped-open-refs")
+    kalshi = MarketRef(Venue.KALSHI, "KXGDP-26JUL31", "shared-alias")
+    polymarket = MarketRef(Venue.POLYMARKET_US, "104982", "shared-alias")
+    _record_mapped_trade(trader, kalshi, trade_id="mapref000001")
+    _record_mapped_trade(trader, kalshi, trade_id="mapref000002")
+    _record_mapped_trade(trader, polymarket, trade_id="mapref000003")
+
+    market_refs = trader.mapped_open_market_refs()
+
+    assert market_refs == (kalshi, polymarket)
+
+
+def test_mapped_open_market_refs_fail_closed_on_invalid_identity(trader_factory):
+    trader = trader_factory("invalid-open-ref")
+    market_ref = MarketRef(Venue.KALSHI, "KXGDP-26JUL31", "gdp")
+    trade_id = _record_mapped_trade(
+        trader,
+        market_ref,
+        trade_id="badref000001",
+    )
+    trader._conn.execute(
+        """
+        UPDATE paper_trades
+        SET identity_status='quarantined', quarantine_reason='identity_drift'
+        WHERE trade_id=?
+        """,
+        (trade_id,),
+    )
+    trader._conn.commit()
+
+    with pytest.raises(SettlementDriftError, match="mapped"):
+        trader.mapped_open_market_refs()
+
+    alias_check = trader.legacy_settlement_alias_check()
+    assert not alias_check.ok
+    assert alias_check.metrics["invalid_identity_count"] == 1
+
+
+def test_legacy_alias_check_allows_same_ref_duplicates_and_blocks_cross_ref_alias(
+    trader_factory,
+):
+    trader = trader_factory("legacy-alias-check")
+    first = MarketRef(Venue.KALSHI, "KXGDP-26JUL31", "shared-alias")
+    second = MarketRef(Venue.POLYMARKET_US, "104982", "shared-alias")
+    _record_mapped_trade(trader, first, trade_id="alias0000001")
+    _record_mapped_trade(trader, first, trade_id="alias0000002")
+
+    allowed = trader.legacy_settlement_alias_check()
+
+    assert allowed.ok
+    assert allowed.metrics["alias_collision_count"] == 0
+
+    _record_mapped_trade(trader, second, trade_id="alias0000003")
+
+    blocked = trader.legacy_settlement_alias_check()
+    assert not blocked.ok
+    assert blocked.failures == ("alias_collision:shared-alias",)
+    assert blocked.metrics["alias_collision_count"] == 1
 
 
 def _financial_snapshot(trader) -> dict[str, object]:
