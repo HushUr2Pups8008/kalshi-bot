@@ -17,17 +17,18 @@ Behavior summary
 
     - **T0**: pass immediately. No corpus, no cache check, no scenarios.
       Rule 2 explicitly exempts T0 from EV-on-resolved-markets gating.
-    - **T1** / **T2**: require (a) scenario suite passing, (b) LLM cache
-      coverage at or above ``gate_spec.coverage_threshold``, (c) at least
-      one corpus is NOT IN_PERIOD_VALIDATION_ONLY unless
-      ``gate_spec.allow_in_period_only=True``. T2 additionally flags a
-      memo-required note (T2 operator-approval is out of scope for I-4).
+    - **T1** / **T2**: require (a) scenario suite passing, (b) verified LLM
+      cache coverage at or above ``gate_spec.coverage_threshold``, and
+      (c) prospectively registered OOS evidence with exact provenance.
+      T2 additionally flags a memo-required note (T2 operator-approval is
+      out of scope for I-4).
     - **T3**: full Rule 1 — ``trade_count >= gate_spec.min_trades`` and
       ``ev_ci_95_lo > gate_spec.min_ev_ci_95_lo``.
 
-* **Default ``corpora="all_diverse"``** auto-discovers every
-  ``logs/edge_replay/corpus_*.jsonl`` that contains rows from at least two
-  distinct ``market_families`` (per blocker C / safeguard D anti-gaming).
+* **Default ``corpora="all_diverse"``** auto-discovers every candidate
+  ``logs/edge_replay/corpus_*.jsonl`` with at least two actual market
+  families, then requires every selected corpus to match the prospective
+  OOS registry exactly (per blocker C / safeguard D anti-gaming).
   An explicit ``corpora=[paths]`` override triggers a notes-entry warning
   if no operator memo file exists in ``docs/governance/``.
 
@@ -49,18 +50,27 @@ import dataclasses
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Literal, Sequence
+from typing import Any, Callable, Iterable, Literal, Mapping, Sequence
 
 from scripts.edge_replay.llm_cache import (
     CoverageReport,
     LLMReplayCache,
     compute_cache_coverage,
+)
+from scripts.edge_replay.oos_registry import (
+    DEFAULT_REGISTRY_PATH,
+    OOSRegistration,
+    OOSRegistryError,
+    attest_oos_registration_history,
+    load_oos_registry,
 )
 from scripts.edge_replay.tier_classifier import classify_tier
 
@@ -85,6 +95,8 @@ _MIN_TRADES_DEFAULT: int = 30
 # t-distribution adjustments do not materially change the verdict at
 # n>=30 (CLT regime) and the gate spec is decision-grade not academic.
 _Z_95: float = 1.96
+_MONEY_TEXT_RE = re.compile(r"-?(?:0|[1-9]\d*)(?:\.\d+)?\Z")
+_MONEY_TEXT_MAX_LENGTH = 64
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +145,7 @@ class ScenarioFailureError(GateError):
 class Rule4Table:
     """IC §16 Rule 4 schema — required EV evidence per behavioral deploy.
 
-    All dollar / unit values reflect the paper_trades.pnl_dollars column.
+    All dollar / unit values reflect persisted fee-net settled PnL.
     ``sharpe`` is None when trade_count < 2 (variance undefined). The
     Sharpe ratio is NOT annualized for paper-mode replay (the window
     timescale is the experiment's window, not a year); operators reading
@@ -228,6 +240,10 @@ def _scan_corpus_diversity(corpus_path: Path) -> tuple[int, bool]:
                 raise GateError(
                     f"corpus {corpus_path} line {line_no} is not valid JSON: {exc}"
                 ) from exc
+            if not isinstance(row, dict):
+                raise GateError(
+                    f"corpus {corpus_path} line {line_no} must be a JSON object"
+                )
             row_count += 1
             fams = row.get("market_families") or []
             if isinstance(fams, list):
@@ -261,11 +277,7 @@ def _discover_all_diverse_corpora(
         notes.append(f"corpus_dir {corpus_dir} does not exist")
         return diverse, in_period_only, notes
     for candidate in sorted(corpus_dir.glob("corpus_*.jsonl")):
-        try:
-            _row_count, is_in_period = _scan_corpus_diversity(candidate)
-        except GateError as exc:
-            notes.append(f"skipping {candidate}: {exc}")
-            continue
+        _row_count, is_in_period = _scan_corpus_diversity(candidate)
         if is_in_period:
             in_period_only.append(candidate)
         else:
@@ -288,34 +300,169 @@ def _load_corpus_rows(corpus_paths: Sequence[Path]) -> list[dict[str, Any]]:
                 if not line:
                     continue
                 try:
-                    rows.append(json.loads(line))
+                    row = json.loads(line)
                 except json.JSONDecodeError as exc:
                     raise GateError(
                         f"corpus {path} line {line_no} is not valid JSON: {exc}"
                     ) from exc
+                if not isinstance(row, dict):
+                    raise GateError(
+                        f"corpus {path} line {line_no} must be a JSON object"
+                    )
+                rows.append(row)
     return rows
 
 
-def _resolved_pnls(rows: Iterable[dict[str, Any]]) -> list[float]:
-    """Extract pnl_dollars from rows that are resolved AND have a PnL value.
+def _parse_corpus_utc(value: object, *, field_name: str) -> datetime:
+    if not isinstance(value, str):
+        raise GateError(f"{field_name} must be canonical UTC text")
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc
+        )
+    except ValueError as exc:
+        raise GateError(
+            f"{field_name} must use YYYY-MM-DDTHH:MM:SSZ"
+        ) from exc
 
-    The repo convention (per ``scripts/performance_analysis.py``) is that
-    ``pnl_dollars`` is non-NULL exactly on resolved trades, and that the
-    canonical resolved-trade selector is ``pnl_dollars IS NOT NULL``. We
-    also tolerate ``resolved`` flag schemas as a backstop.
+
+def _validate_registered_oos_corpus(
+    corpus_path: Path,
+    registry: Mapping[str, OOSRegistration],
+) -> tuple[set[str], OOSRegistration]:
+    rows = _load_corpus_rows([corpus_path])
+    if not rows:
+        raise GateError(f"corpus {corpus_path} is empty")
+
+    registration_values = [row.get("oos_registration_id") for row in rows]
+    if any(not isinstance(value, str) or not value for value in registration_values):
+        raise GateError(
+            f"corpus {corpus_path} has an invalid OOS registration id"
+        )
+    registration_ids = set(registration_values)
+    if len(registration_ids) != 1:
+        raise GateError(
+            f"corpus {corpus_path} must bind exactly one OOS registration"
+        )
+    registration_id = next(iter(registration_ids))
+    if not isinstance(registration_id, str) or registration_id not in registry:
+        raise GateError(
+            f"corpus {corpus_path} references unknown OOS registration "
+            f"{registration_id!r}"
+        )
+
+    registration = registry[registration_id]
+    registered_families = set(registration.market_families)
+    actual_families: set[str] = set()
+    trade_ids: set[str] = set()
+    window_end = _parse_corpus_utc(
+        registration.window_end_utc,
+        field_name="registration.window.end_utc",
+    )
+
+    for line_no, row in enumerate(rows, start=1):
+        prefix = f"corpus {corpus_path} row {line_no}"
+        trade_id = row.get("trade_id")
+        if not isinstance(trade_id, str) or not trade_id:
+            raise GateError(f"{prefix} trade_id must be a non-empty string")
+        if trade_id in trade_ids:
+            raise GateError(f"{prefix} has duplicate trade_id {trade_id!r}")
+        trade_ids.add(trade_id)
+        if row.get("evidence_class") != "registered_oos":
+            raise GateError(f"{prefix} evidence_class must be registered_oos")
+        if row.get("oos_registration_id") != registration.id:
+            raise GateError(f"{prefix} OOS registration id mismatch")
+        if row.get("registration_hash") != registration.registration_hash:
+            raise GateError(f"{prefix} registration_hash mismatch")
+        if (
+            row.get("corpus_window_start_utc") != registration.window_start_utc
+            or row.get("corpus_window_end_utc") != registration.window_end_utc
+        ):
+            raise GateError(f"{prefix} corpus window does not match registration")
+        if row.get("regime_label") != registration.regime_label:
+            raise GateError(f"{prefix} regime_label does not match registration")
+        if row.get("contamination_window") is not False:
+            raise GateError(f"{prefix} contamination is not excluded")
+        if row.get("in_period_validation_only") is not False:
+            raise GateError(f"{prefix} is not registered OOS evidence")
+
+        built_at = _parse_corpus_utc(
+            row.get("built_at_utc"),
+            field_name=f"{prefix} built_at_utc",
+        )
+        if built_at < window_end:
+            raise GateError(f"{prefix} was materialized before the window closed")
+
+        max_age = row.get("llm_capture_max_age_seconds")
+        if isinstance(max_age, bool) or not isinstance(max_age, int) or max_age <= 0:
+            raise GateError(
+                f"{prefix} llm_capture_max_age_seconds must be a positive integer"
+            )
+
+        families = row.get("market_families")
+        if (
+            not isinstance(families, list)
+            or not families
+            or any(not isinstance(family, str) or not family for family in families)
+        ):
+            raise GateError(f"{prefix} market_families must be non-empty strings")
+        row_families = set(families)
+        if len(row_families) != len(families):
+            raise GateError(f"{prefix} market_families contains duplicates")
+        if not row_families <= registered_families:
+            raise GateError(f"{prefix} contains an unregistered market family")
+        actual_families.update(row_families)
+
+    if actual_families != registered_families:
+        raise GateError(
+            f"corpus {corpus_path} actual market-family diversity does not "
+            "match its registration"
+        )
+    return trade_ids, registration
+
+
+def _resolved_pnls(rows: Iterable[dict[str, Any]]) -> list[Decimal]:
+    """Extract persisted fee-net PnL from resolved corpus rows.
+
+    Gross ``pnl_dollars`` is deliberately ignored: it cannot establish
+    deployable expectancy after venue fees. Missing fee-net settlement is
+    uncovered evidence and therefore cannot contribute to Rule 4.
     """
-    out: list[float] = []
+    out: list[Decimal] = []
     for row in rows:
-        pnl = row.get("pnl_dollars")
-        if pnl is None:
-            # Backstop: some rows may carry resolved=1 with a separately
-            # computable payoff. We do NOT synthesize one here; surface a
-            # miss rather than fabricate evidence.
+        trade_id = row.get("trade_id")
+        resolved = row.get("resolved")
+        if type(resolved) not in (bool, int) or resolved not in (0, 1):
+            raise GateError(
+                f"trade {trade_id!r} resolved must be explicit boolean/0/1"
+            )
+        pnl = row.get("fee_net_pnl_dollars")
+        if not bool(resolved):
+            if pnl is not None:
+                raise GateError(
+                    f"unsettled trade {trade_id!r} carries fee_net_pnl_dollars"
+                )
             continue
+        if (
+            not isinstance(pnl, str)
+            or len(pnl) > _MONEY_TEXT_MAX_LENGTH
+            or not _MONEY_TEXT_RE.fullmatch(pnl)
+        ):
+            raise GateError(
+                f"settled trade {trade_id!r} requires exact decimal-text "
+                "fee_net_pnl_dollars"
+            )
         try:
-            out.append(float(pnl))
-        except (TypeError, ValueError):
-            continue
+            exact_pnl = Decimal(pnl)
+        except InvalidOperation as exc:
+            raise GateError(
+                f"settled trade {trade_id!r} has invalid fee_net_pnl_dollars"
+            ) from exc
+        if not exact_pnl.is_finite():
+            raise GateError(
+                f"settled trade {trade_id!r} has non-finite fee_net_pnl_dollars"
+            )
+        out.append(exact_pnl)
     return out
 
 
@@ -348,12 +495,18 @@ def _build_rule4_table(
     window_start_utc: str,
     window_end_utc: str,
 ) -> Rule4Table:
-    pnls = _resolved_pnls(rows)
-    n = len(pnls)
-    wins = sum(1 for p in pnls if p > 0)
+    exact_pnls = _resolved_pnls(rows)
+    pnls = [float(pnl) for pnl in exact_pnls]
+    n = len(exact_pnls)
+    wins = sum(1 for pnl in exact_pnls if pnl > 0)
     win_rate = (wins / n) if n > 0 else 0.0
-    realized_pnl = sum(pnls)
+    realized_pnl = float(sum(exact_pnls, start=Decimal("0")))
     mean, ci_lo, ci_hi, sharpe = _normal_approx_ci(pnls)
+    statistics = [realized_pnl, mean, ci_lo, ci_hi]
+    if sharpe is not None:
+        statistics.append(sharpe)
+    if any(not math.isfinite(value) for value in statistics):
+        raise GateError("fee-net Rule 4 statistics are non-finite")
     return Rule4Table(
         trade_count=n,
         win_rate=win_rate,
@@ -592,6 +745,9 @@ def run_replay_gate(
     corpus_dir: Path = DEFAULT_CORPUS_DIR,
     ci_run_dir: Path = DEFAULT_CI_RUN_DIR,
     governance_dir: Path = DEFAULT_GOVERNANCE_DIR,
+    oos_registry_path: Path | None = None,
+    trusted_registry_ref: str = "origin/main",
+    registration_attestor: Callable[..., Any] | None = None,
     scenario_path: Path = DEFAULT_SCENARIO_SUITE,
     scenario_runner: Sequence[str] | None = None,
     cache_factory: Any | None = None,
@@ -615,12 +771,19 @@ def run_replay_gate(
         corpus_dir: Where ``corpora="all_diverse"`` looks for files.
         ci_run_dir: Parent dir for the per-commit output folder.
         governance_dir: Where corpus-override memos live.
+        oos_registry_path: Prospective OOS registry. Defaults to
+            ``governance_dir / oos-corpus-registry.json``.
+        trusted_registry_ref: Protected Git ref used to prove the exact
+            registration existed before its OOS window opened.
+        registration_attestor: Test injection point for protected-history
+            attestation. Production defaults to
+            ``attest_oos_registration_history``.
         scenario_path: Path to the scenario-suite test file.
         scenario_runner: Override for the subprocess command list.
             Tests inject a no-op echo runner.
         cache_factory: Test injection point — a callable that returns
-            an object satisfying the ``LLMReplayCache`` read API
-            (``count``, ``has``, ``get``). Defaults to
+            an object satisfying the verified ``LLMReplayCache`` status API.
+            Defaults to
             ``lambda: LLMReplayCache(cache_db_path)``.
 
     Returns:
@@ -669,66 +832,44 @@ def run_replay_gate(
         )
         return verdict
 
-    # ----- Corpus-absent bootstrap pass-through (PROFIT-PHASE3-002) -----
-    # CI environments may not have a corpus checked in (the production
-    # corpus lives under logs/edge_replay/ which is gitignored). When
-    # `corpus_dir` literally does not exist, treat as a bootstrap
-    # condition: emit a WARNING + pass-through with explicit notes for
-    # operator review. Operator gate still applies to T1/T2/T3 PRs via
-    # the existing approval workflow. This narrowly handles the
-    # gitignored-corpus scenario without weakening real EV evaluation.
-    #
-    # When `corpus_dir` exists but contains 0 diverse corpora, that's
-    # a REAL failure (corpus was built but is empty/in-period-only) and
-    # the gate must continue to fail per IC §16.7 Rule 2.
-    if corpora == "all_diverse" and not corpus_dir.exists():
-        notes.append(
-            f"PROFIT-PHASE3-002: corpus_dir {corpus_dir} does not exist on "
-            "this CI runner — treating as bootstrap state. Operator gate "
-            "remains authoritative for T1/T2/T3 changes; this pass-through "
-            "only suppresses the gitignored-corpus failure mode, not real "
-            "EV evaluation against present-but-empty corpora."
-        )
-        verdict = GateVerdict(
-            pass_=True,
-            tier=tier,
-            rule4=None,
-            coverage_report_path=output_dir / "coverage_report.json",
-            rule4_table_path=output_dir / "rule4_table.json",
-            scenario_report_path=output_dir / "scenario_report.txt",
-            notes=notes,
-            failure_reason=None,
-            output_dir=output_dir,
-        )
-        _write_outputs(
-            output_dir, verdict, rule4=None, coverage=None,
-            scenario_output="corpus_dir absent: scenarios not executed. "
-                            "Operator gate remains authoritative.\n",
-            notes=notes,
-        )
-        return verdict
-
     # ----- Corpus selection -----
+    selection_failure: str | None = None
     if corpora == "all_diverse":
-        diverse, in_period_only, disc_notes = _discover_all_diverse_corpora(
-            corpus_dir
-        )
+        try:
+            diverse, in_period_only, disc_notes = _discover_all_diverse_corpora(
+                corpus_dir
+            )
+        except GateError as exc:
+            reason = f"corpus discovery failed: {exc}"
+            notes.append(reason)
+            return _fail(
+                output_dir,
+                tier,
+                notes,
+                failure_reason=reason,
+                coverage=None,
+                rule4=None,
+                scenario_output="",
+            )
         notes.extend(disc_notes)
         if spec.allow_in_period_only:
             selected_corpora = diverse + in_period_only
         else:
             selected_corpora = diverse
+        provenance_corpora = diverse + in_period_only
         if not selected_corpora:
             notes.append(
                 f"InsufficientCorpusError: 0 usable corpora "
                 f"(diverse={len(diverse)}, in_period_only={len(in_period_only)}, "
                 f"allow_in_period_only={spec.allow_in_period_only})"
             )
-            return _fail(
-                output_dir, tier, notes,
-                failure_reason="insufficient corpus",
-                coverage=None, rule4=None, scenario_output="",
-            )
+            if not provenance_corpora:
+                return _fail(
+                    output_dir, tier, notes,
+                    failure_reason="insufficient corpus",
+                    coverage=None, rule4=None, scenario_output="",
+                )
+            selection_failure = "insufficient corpus"
         notes.append(
             f"corpora=all_diverse: selected {len(selected_corpora)} corpus file(s) "
             f"({len(diverse)} diverse, {len(in_period_only)} in_period_only)"
@@ -763,13 +904,31 @@ def run_replay_gate(
         explicit_in_period: list[Path] = []
         for path in explicit_paths:
             if not path.exists():
-                notes.append(f"explicit corpus {path} does not exist; skipping")
-                continue
+                reason = f"explicit corpus {path} does not exist"
+                notes.append(reason)
+                return _fail(
+                    output_dir,
+                    tier,
+                    notes,
+                    failure_reason=reason,
+                    coverage=None,
+                    rule4=None,
+                    scenario_output="",
+                )
             try:
                 _row_count, is_in_period = _scan_corpus_diversity(path)
             except GateError as exc:
-                notes.append(f"explicit corpus {path}: {exc}")
-                continue
+                reason = f"explicit corpus validation failed: {exc}"
+                notes.append(reason)
+                return _fail(
+                    output_dir,
+                    tier,
+                    notes,
+                    failure_reason=reason,
+                    coverage=None,
+                    rule4=None,
+                    scenario_output="",
+                )
             if is_in_period:
                 explicit_in_period.append(path)
                 if spec.allow_in_period_only:
@@ -782,12 +941,72 @@ def run_replay_gate(
                 f"(in_period_only={len(explicit_in_period)}, "
                 f"allow_in_period_only={spec.allow_in_period_only})"
             )
-            return _fail(
-                output_dir, tier, notes,
-                failure_reason="insufficient corpus",
-                coverage=None, rule4=None, scenario_output="",
-            )
+            selection_failure = "insufficient corpus"
         selected_corpora = usable
+        provenance_corpora = explicit_paths
+
+    # ----- Prospective OOS provenance validation -----
+    registry_path = oos_registry_path or (
+        governance_dir / DEFAULT_REGISTRY_PATH.name
+    )
+    try:
+        registry = load_oos_registry(registry_path)
+        corpus_trade_ids: set[str] = set()
+        attested_registration_hashes: set[str] = set()
+        attestor = registration_attestor or attest_oos_registration_history
+        for path in provenance_corpora:
+            trade_ids, registration = _validate_registered_oos_corpus(
+                path, registry
+            )
+            if registration.registration_hash not in attested_registration_hashes:
+                attestation = attestor(
+                    registration,
+                    registry_path=registry_path,
+                    trusted_ref=trusted_registry_ref,
+                )
+                if attestation is not None:
+                    notes.append(
+                        "registration attested: "
+                        f"id={registration.id} "
+                        f"commit={getattr(attestation, 'commit', 'unknown')} "
+                        "integrated_at_utc="
+                        f"{getattr(attestation, 'integrated_at_utc', 'unknown')} "
+                        f"trusted_ref={trusted_registry_ref}"
+                    )
+                attested_registration_hashes.add(registration.registration_hash)
+            duplicate_ids = corpus_trade_ids & trade_ids
+            if duplicate_ids:
+                duplicate = sorted(duplicate_ids)[0]
+                raise GateError(
+                    f"duplicate trade_id {duplicate!r} across selected corpora"
+                )
+            corpus_trade_ids.update(trade_ids)
+    except (GateError, OOSRegistryError) as exc:
+        reason = f"registered OOS corpus validation failed: {exc}"
+        notes.append(reason)
+        return _fail(
+            output_dir,
+            tier,
+            notes,
+            failure_reason=reason,
+            coverage=None,
+            rule4=None,
+            scenario_output="",
+        )
+    notes.append(
+        f"validated {len(provenance_corpora)} registered OOS corpus file(s) "
+        f"against {registry_path}"
+    )
+    if selection_failure is not None:
+        return _fail(
+            output_dir,
+            tier,
+            notes,
+            failure_reason=selection_failure,
+            coverage=None,
+            rule4=None,
+            scenario_output="",
+        )
 
     # ----- Load corpus rows once for both coverage + EV -----
     try:
@@ -855,9 +1074,22 @@ def run_replay_gate(
 
     # ----- Rule 4 EV computation -----
     window_start, window_end = _corpus_window(all_rows)
-    rule4 = _build_rule4_table(
-        all_rows, selected_corpora, window_start, window_end,
-    )
+    try:
+        rule4 = _build_rule4_table(
+            all_rows, selected_corpora, window_start, window_end,
+        )
+    except GateError as exc:
+        reason = f"fee-net settlement validation failed: {exc}"
+        notes.append(reason)
+        return _fail(
+            output_dir,
+            tier,
+            notes,
+            failure_reason=reason,
+            coverage=coverage,
+            rule4=None,
+            scenario_output=scenario_output,
+        )
 
     # ----- Tier-specific gating on Rule 4 -----
     if rule4.trade_count < spec.min_trades:
@@ -976,7 +1208,10 @@ def _build_argparser() -> argparse.ArgumentParser:
     p.add_argument(
         "--allow-in-period-only",
         action="store_true",
-        help="Permit IN_PERIOD_VALIDATION_ONLY corpora (T1/T2 relaxation).",
+        help=(
+            "Include IN_PERIOD candidates in discovery; prospective OOS "
+            "registration validation still applies."
+        ),
     )
     p.add_argument("--config-diff", action="store_true")
     p.add_argument("--prompt-template-diff", action="store_true")

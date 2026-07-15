@@ -23,13 +23,35 @@ from typing import Any, Sequence
 import pytest
 
 from scripts.edge_replay.llm_cache import CacheKey
+from scripts.edge_replay.oos_registry import (
+    OOSRegistryError,
+    canonical_registration_hash,
+)
 from scripts.edge_replay.replay_gate import (
+    GateError,
     GateSpec,
     _build_rule4_table,
     _scan_corpus_diversity,
     main,
     run_replay_gate,
 )
+
+
+_TEST_REGISTRATION = {
+    "id": "test-oos-window",
+    "declared_at_utc": "2026-04-01T00:00:00Z",
+    "window": {
+        "start_utc": "2026-05-01T00:00:00Z",
+        "end_utc": "2026-05-08T00:00:00Z",
+    },
+    "regime_label": "test-oos-regime",
+    "universe_policy": {
+        "type": "market_families",
+        "market_families": ["KXFAMA", "KXFAMB"],
+    },
+    "exclude_contamination": True,
+}
+_TEST_REGISTRATION_HASH = canonical_registration_hash(_TEST_REGISTRATION)
 
 
 # ---------------------------------------------------------------------------
@@ -40,8 +62,8 @@ from scripts.edge_replay.replay_gate import (
 class _StubCache:
     """In-memory stand-in for ``LLMReplayCache`` used by ``compute_cache_coverage``.
 
-    Only needs ``has`` (called per row). We default to "always hit" and
-    override per test to drive a coverage miss.
+    Exposes the verified-only status used by the replay gate. We default to
+    "verified" and override per test to drive a coverage miss.
     """
 
     def __init__(self, hit_predicate=lambda key: True) -> None:
@@ -49,6 +71,9 @@ class _StubCache:
 
     def has(self, key: CacheKey) -> bool:
         return bool(self._predicate(key))
+
+    def verified_status(self, key: CacheKey) -> str:
+        return "verified" if self._predicate(key) else "missing"
 
     def is_poisoned(self, key: CacheKey) -> bool:
         # All misses are "absent" not "poisoned" in this stub. The gate's
@@ -68,6 +93,7 @@ def _row_with_keys(**overrides: Any) -> dict[str, Any]:
     """
     base = {
         "row_id": "r1",
+        "trade_id": "r1",
         "prompt_template_hash": "tpl-h",
         "prompt_filled_hash": "filled-h",
         "model_id": "m",
@@ -83,9 +109,25 @@ def _row_with_keys(**overrides: Any) -> dict[str, Any]:
         "market_families": ["KXFAMA"],
         "corpus_window_start_utc": "2026-05-01T00:00:00Z",
         "corpus_window_end_utc": "2026-05-08T00:00:00Z",
+        "regime_label": "test-oos-regime",
+        "built_at_utc": "2026-05-09T00:00:00Z",
+        "evidence_class": "registered_oos",
+        "oos_registration_id": "test-oos-window",
+        "registration_hash": _TEST_REGISTRATION_HASH,
+        "in_period_validation_only": False,
+        "contamination_window": False,
+        "llm_capture_max_age_seconds": 3600,
         "pnl_dollars": None,
+        "fee_net_pnl_dollars": None,
+        "resolved": 0,
     }
     base.update(overrides)
+    if "trade_id" not in overrides:
+        base["trade_id"] = str(base["row_id"])
+    if "pnl_dollars" in overrides and "fee_net_pnl_dollars" not in overrides:
+        base["fee_net_pnl_dollars"] = str(overrides["pnl_dollars"])
+    if "resolved" not in overrides:
+        base["resolved"] = int(base["fee_net_pnl_dollars"] is not None)
     return base
 
 
@@ -127,6 +169,12 @@ def tmp_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     corpus_dir.mkdir(parents=True)
     (tmp_path / "logs" / "edge_replay" / "ci_runs").mkdir()
     (tmp_path / "docs" / "governance").mkdir(parents=True)
+    registration = dict(_TEST_REGISTRATION)
+    registration["registration_hash"] = _TEST_REGISTRATION_HASH
+    (tmp_path / "docs" / "governance" / "oos-corpus-registry.json").write_text(
+        json.dumps({"schema_version": 1, "registrations": [registration]}),
+        encoding="utf-8",
+    )
     monkeypatch.chdir(tmp_path)
     return tmp_path
 
@@ -149,6 +197,7 @@ def _common_kwargs(
         "corpus_dir": tmp_workspace / "logs" / "edge_replay",
         "ci_run_dir": tmp_workspace / "logs" / "edge_replay" / "ci_runs",
         "governance_dir": tmp_workspace / "docs" / "governance",
+        "registration_attestor": lambda registration, **kwargs: None,
         "scenario_runner": ["unused"],  # exercised only when no fake passed
         "cache_factory": factory,
         "commit_sha": "deadbeef",
@@ -206,6 +255,22 @@ def test_t1_with_no_corpora_fails_insufficient(
     assert "insufficient corpus" in (verdict.failure_reason or "")
 
 
+def test_t1_with_absent_corpus_directory_fails_closed(tmp_path: Path) -> None:
+    corpus_dir = tmp_path / "logs" / "edge_replay"
+    verdict = run_replay_gate(
+        changed_files=[Path("analysis/signal_analyzer.py")],
+        corpus_dir=corpus_dir,
+        ci_run_dir=tmp_path / "ci_runs",
+        governance_dir=tmp_path / "governance",
+        commit_sha="absent-corpus",
+        cache_factory=lambda: _StubCache(),
+    )
+
+    assert verdict.pass_ is False
+    assert verdict.rule4 is None
+    assert "insufficient corpus" in (verdict.failure_reason or "")
+
+
 def test_t1_in_period_only_fails_without_allow_flag(
     tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -221,7 +286,141 @@ def test_t1_in_period_only_fails_without_allow_flag(
         **_common_kwargs(tmp_workspace),
     )
     assert verdict.pass_ is False
-    assert "insufficient corpus" in (verdict.failure_reason or "")
+    assert "actual market-family diversity" in (verdict.failure_reason or "")
+
+
+@pytest.mark.parametrize(
+    ("row_override", "expected"),
+    [
+        ({"evidence_class": "historical_diagnostic"}, "evidence_class"),
+        ({"registration_hash": "0" * 64}, "registration_hash"),
+        ({"contamination_window": True}, "contamination"),
+        ({"oos_registration_id": []}, "registration"),
+        ({"market_families": ["KXFAMC"]}, "market family"),
+        (
+            {"corpus_window_start_utc": "2026-05-02T00:00:00Z"},
+            "window",
+        ),
+    ],
+)
+def test_registered_oos_corpus_provenance_mismatch_fails_closed(
+    tmp_workspace: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    row_override: dict[str, Any],
+    expected: str,
+) -> None:
+    _patch_scenario_runner(monkeypatch, 0)
+    corpus_path = (
+        tmp_workspace
+        / "logs"
+        / "edge_replay"
+        / "corpus_test_oos_2026-05-01_2026-05-08.jsonl"
+    )
+    rows = [
+        _row_with_keys(row_id="a", market_families=["KXFAMA"], pnl_dollars=1.0),
+        _row_with_keys(row_id="b", market_families=["KXFAMB"], pnl_dollars=1.0),
+    ]
+    rows[0].update(row_override)
+    _write_corpus(corpus_path, rows)
+
+    verdict = run_replay_gate(
+        changed_files=[Path("analysis/signal_analyzer.py")],
+        gate_spec=GateSpec(min_trades=1),
+        **_common_kwargs(tmp_workspace),
+    )
+
+    assert verdict.pass_ is False
+    assert "registered OOS corpus validation failed" in (verdict.failure_reason or "")
+    assert expected in (verdict.failure_reason or "")
+
+
+def test_registered_oos_corpus_rejects_duplicate_trade_rows(
+    tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_scenario_runner(monkeypatch, 0)
+    corpus_path = (
+        tmp_workspace
+        / "logs"
+        / "edge_replay"
+        / "corpus_duplicate_2026-05-01_2026-05-08.jsonl"
+    )
+    _write_corpus(
+        corpus_path,
+        [
+            _row_with_keys(
+                row_id="cache-a",
+                trade_id="duplicate",
+                market_families=["KXFAMA"],
+                pnl_dollars=1.0,
+            ),
+            _row_with_keys(
+                row_id="cache-b",
+                trade_id="duplicate",
+                market_families=["KXFAMB"],
+                pnl_dollars=1.0,
+            ),
+        ],
+    )
+
+    verdict = run_replay_gate(
+        changed_files=[Path("analysis/signal_analyzer.py")],
+        gate_spec=GateSpec(min_trades=1),
+        **_common_kwargs(tmp_workspace),
+    )
+
+    assert verdict.pass_ is False
+    assert "duplicate trade_id" in (verdict.failure_reason or "")
+
+
+def test_corrupt_discovered_corpus_blocks_valid_corpus(
+    tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_scenario_runner(monkeypatch, 0)
+    corpus_dir = tmp_workspace / "logs" / "edge_replay"
+    _build_diverse_corpus(
+        corpus_dir / "corpus_valid_2026-05-01_2026-05-08.jsonl",
+        n_per_family=20,
+        pnl_each=1.0,
+    )
+    (corpus_dir / "corpus_corrupt_2026-05-01_2026-05-08.jsonl").write_text(
+        "{not-json}\n",
+        encoding="utf-8",
+    )
+
+    verdict = run_replay_gate(
+        changed_files=[Path("analysis/signal_analyzer.py")],
+        gate_spec=GateSpec(min_trades=10),
+        **_common_kwargs(tmp_workspace),
+    )
+
+    assert verdict.pass_ is False
+    assert "corpus discovery failed" in (verdict.failure_reason or "")
+
+
+def test_unattested_registration_blocks_registered_corpus(
+    tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_scenario_runner(monkeypatch, 0)
+    corpus_dir = tmp_workspace / "logs" / "edge_replay"
+    _build_diverse_corpus(
+        corpus_dir / "corpus_unattested_2026-05-01_2026-05-08.jsonl",
+        n_per_family=20,
+        pnl_each=1.0,
+    )
+
+    def reject_attestation(registration, **kwargs):
+        raise OOSRegistryError("registration did not exist on protected history")
+
+    kwargs = _common_kwargs(tmp_workspace)
+    kwargs["registration_attestor"] = reject_attestation
+    verdict = run_replay_gate(
+        changed_files=[Path("analysis/signal_analyzer.py")],
+        gate_spec=GateSpec(min_trades=10),
+        **kwargs,
+    )
+
+    assert verdict.pass_ is False
+    assert "protected history" in (verdict.failure_reason or "")
 
 
 # ---------------------------------------------------------------------------
@@ -376,6 +575,129 @@ def test_t3_negative_ev_ci_fails(
     assert "EV CI" in (verdict.failure_reason or "")
 
 
+def test_t3_rule4_uses_fee_net_pnl_not_positive_gross_pnl(
+    tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_scenario_runner(monkeypatch, 0)
+    corpus_path = (
+        tmp_workspace
+        / "logs"
+        / "edge_replay"
+        / "corpus_fee_net_2026-05-01_2026-05-08.jsonl"
+    )
+    rows = []
+    for i in range(20):
+        rows.append(
+            _row_with_keys(
+                row_id=f"a{i}",
+                market_families=["KXFAMA"],
+                pnl_dollars=2.0,
+                fee_net_pnl_dollars="-1.0",
+            )
+        )
+        rows.append(
+            _row_with_keys(
+                row_id=f"b{i}",
+                market_families=["KXFAMB"],
+                pnl_dollars=2.0,
+                fee_net_pnl_dollars="-1.0",
+            )
+        )
+    _write_corpus(corpus_path, rows)
+
+    verdict = run_replay_gate(
+        changed_files=[Path("analysis/signal_analyzer.py")],
+        gate_spec=GateSpec(min_trades=30, min_ev_ci_95_lo=0.0),
+        config_diff=True,
+        **_common_kwargs(tmp_workspace),
+    )
+
+    assert verdict.tier == "T3"
+    assert verdict.pass_ is False
+    assert verdict.rule4 is not None
+    assert verdict.rule4.realized_pnl == pytest.approx(-40.0)
+    assert "EV CI" in (verdict.failure_reason or "")
+
+
+@pytest.mark.parametrize(
+    "bad_fee_net",
+    [None, "NaN", "Infinity", 1.0, "01.00", "1e0", "9" * 400],
+)
+def test_settled_row_requires_exact_finite_fee_net_pnl(
+    tmp_workspace: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    bad_fee_net: Any,
+) -> None:
+    _patch_scenario_runner(monkeypatch, 0)
+    corpus_path = (
+        tmp_workspace
+        / "logs"
+        / "edge_replay"
+        / "corpus_invalid_fee_net_2026-05-01_2026-05-08.jsonl"
+    )
+    rows = [
+        _row_with_keys(
+            row_id="a",
+            market_families=["KXFAMA"],
+            resolved=1,
+            pnl_dollars=1.0,
+            fee_net_pnl_dollars=bad_fee_net,
+        ),
+        _row_with_keys(
+            row_id="b",
+            market_families=["KXFAMB"],
+            resolved=1,
+            pnl_dollars=1.0,
+            fee_net_pnl_dollars="1.00",
+        ),
+    ]
+    _write_corpus(corpus_path, rows)
+
+    verdict = run_replay_gate(
+        changed_files=[Path("analysis/signal_analyzer.py")],
+        gate_spec=GateSpec(min_trades=1),
+        **_common_kwargs(tmp_workspace),
+    )
+
+    assert verdict.pass_ is False
+    assert "fee-net settlement validation failed" in (verdict.failure_reason or "")
+
+
+def test_unsettled_row_cannot_carry_fee_net_pnl(
+    tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_scenario_runner(monkeypatch, 0)
+    corpus_path = (
+        tmp_workspace
+        / "logs"
+        / "edge_replay"
+        / "corpus_unsettled_fee_net_2026-05-01_2026-05-08.jsonl"
+    )
+    _write_corpus(
+        corpus_path,
+        [
+            _row_with_keys(
+                row_id="a",
+                market_families=["KXFAMA"],
+                resolved=0,
+                fee_net_pnl_dollars="1.00",
+            ),
+            _row_with_keys(
+                row_id="b", market_families=["KXFAMB"], pnl_dollars=1.0
+            ),
+        ],
+    )
+
+    verdict = run_replay_gate(
+        changed_files=[Path("analysis/signal_analyzer.py")],
+        gate_spec=GateSpec(min_trades=1),
+        **_common_kwargs(tmp_workspace),
+    )
+
+    assert verdict.pass_ is False
+    assert "fee-net settlement validation failed" in (verdict.failure_reason or "")
+
+
 # ---------------------------------------------------------------------------
 # Rule4 fixture computation
 # ---------------------------------------------------------------------------
@@ -423,6 +745,7 @@ def test_output_files_written_for_pass(
         ci_run_dir=tmp_workspace / "logs" / "edge_replay" / "ci_runs",
         corpus_dir=corpus_dir,
         governance_dir=tmp_workspace / "docs" / "governance",
+        registration_attestor=lambda registration, **kwargs: None,
         cache_factory=lambda: _StubCache(),
     )
     out = verdict.output_dir
@@ -559,6 +882,14 @@ def test_scan_corpus_diversity_two_families_is_diverse(tmp_path: Path) -> None:
     n, in_period = _scan_corpus_diversity(p)
     assert n == 2
     assert in_period is False
+
+
+def test_scan_corpus_diversity_rejects_non_object_rows(tmp_path: Path) -> None:
+    corpus_path = tmp_path / "non-object.jsonl"
+    corpus_path.write_text("[]\n", encoding="utf-8")
+
+    with pytest.raises(GateError, match="JSON object"):
+        _scan_corpus_diversity(corpus_path)
 
 
 # ---------------------------------------------------------------------------

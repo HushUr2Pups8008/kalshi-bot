@@ -210,6 +210,30 @@ def test_has_returns_false_on_miss_true_on_hit(tmp_path):
         assert cache.has(missing) is False
 
 
+def test_has_verified_excludes_skipped_without_changing_raw_lookup(tmp_path):
+    from scripts.edge_replay.llm_cache import LLMReplayCache
+
+    db_path = tmp_path / "cache.sqlite"
+    jsonl_path = tmp_path / "cap.jsonl"
+    verified = _sample_record(row_id="signal::KX::verified")
+    skipped = _sample_record(
+        row_id="signal::KX::skipped",
+        repeat_verification="skipped",
+    )
+    _populate_db(jsonl_path, db_path, [verified, skipped])
+
+    verified_key = _record_to_cache_key(verified)
+    skipped_key = _record_to_cache_key(skipped)
+    with LLMReplayCache(db_path=db_path) as cache:
+        assert cache.has(verified_key) is True
+        assert cache.has(skipped_key) is True
+        assert cache.get(skipped_key).repeat_verification == "skipped"
+        assert cache.has_verified(verified_key) is True
+        assert cache.verified_status(verified_key) == "verified"
+        assert cache.has_verified(skipped_key) is False
+        assert cache.verified_status(skipped_key) == "repeat_verification=skipped"
+
+
 # ---------------------------------------------------------------------------
 # Integrity check
 # ---------------------------------------------------------------------------
@@ -358,6 +382,45 @@ def test_compute_cache_coverage_missing_row_ids_capped_at_twenty(tmp_path):
     assert report.coverage_ratio == 0.0
     assert report.passes_threshold is False
     assert len(report.missing_row_ids) == 20
+
+
+def test_compute_cache_coverage_counts_only_verified_non_poisoned_rows(tmp_path):
+    from scripts.edge_replay.llm_cache import (
+        LLMReplayCache,
+        compute_cache_coverage,
+    )
+
+    db_path = tmp_path / "cache.sqlite"
+    jsonl_path = tmp_path / "cap.jsonl"
+    verified = _sample_record(row_id="signal::KX::verified")
+    skipped = _sample_record(
+        row_id="signal::KX::skipped",
+        repeat_verification="skipped",
+    )
+    nondeterministic = _sample_record(
+        row_id="signal::KX::nondeterministic",
+        repeat_verification="nondeterministic",
+    )
+    poisoned_verified = _sample_record(row_id="signal::KX::poisoned-verified")
+    absent = _sample_record(row_id="signal::KX::absent")
+    cached = [verified, skipped, nondeterministic, poisoned_verified]
+    _populate_db(jsonl_path, db_path, cached)
+    _force_poison(db_path, poisoned_verified["row_id"], reason="manual")
+
+    with LLMReplayCache(db_path=db_path) as cache:
+        report = compute_cache_coverage(cached + [absent], cache, threshold=0.95)
+
+    assert report.total_rows == 5
+    assert report.cache_hits == 1
+    assert report.cache_misses == 4
+    assert report.coverage_ratio == 0.2
+    assert report.passes_threshold is False
+    assert report.missing_row_ids == [
+        "signal::KX::skipped [repeat_verification=skipped]",
+        "signal::KX::nondeterministic [repeat_verification=nondeterministic]",
+        "signal::KX::poisoned-verified [poisoned]",
+        "signal::KX::absent",
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -714,12 +777,10 @@ def test_get_raises_cache_poisoned_error_on_poisoned_row(tmp_path):
 
 
 def test_has_returns_false_on_poisoned_row(tmp_path):
-    """``has`` excludes poisoned rows so the gate cannot inadvertently pass.
+    """``has`` excludes poisoned rows from raw presence checks.
 
-    This is the structural plug behind ``compute_cache_coverage``: a
-    quarantined row must not contribute to coverage. Without this, the
-    operator would silently re-promote a known-bad row by re-running the
-    gate.
+    ``compute_cache_coverage`` uses the stricter ``verified_status`` boundary,
+    but raw presence must still never report a quarantined row as healthy.
     """
     from scripts.edge_replay.llm_cache import LLMReplayCache
 

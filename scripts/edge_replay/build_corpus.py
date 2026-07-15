@@ -3,9 +3,10 @@
 Third Phase 1 deliverable of the paper-mode rapid-learning framework v3
 (see `docs/superpowers/specs/2026-05-23-paper-mode-rapid-learning-framework-design.md`
 §3 I-1 + §4 §16.7). Addresses Codex blocker C: calendar-only diversity is
-not OOS. A corpus is treated as IN_PERIOD (downstream gates refuse to gate
-T1 deploys with only IN_PERIOD inputs) unless the operator declares the
-regime AND filters across at least two distinct market families.
+not OOS. Only a corpus bound to a prospectively declared structured registry
+entry can carry ``evidence_class=registered_oos``. The legacy regime/family
+API remains available for historical diagnostics, but always stamps
+``evidence_class=historical_diagnostic`` and ``in_period_validation_only``.
 
 This module REPLACES the lineage of:
 
@@ -34,6 +35,7 @@ Public API::
         regime_label="post_v030_2_oos_seed",
         output_path=Path(...) | None,
         paper_trades_db=Path(...),
+        oos_registration_id="profit-oos-...",  # optional; omitted = diagnostic
     )
 
 Each emitted JSONL row carries the source columns from ``paper_trades``
@@ -59,17 +61,25 @@ import sqlite3
 import sys
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from scripts.edge_replay.llm_capture import (
     CAPTURE_CACHE_KEY_FIELDS,
     index_captures_by_row_id,
+    select_capture_for_trade,
+)
+from scripts.edge_replay.oos_registry import (
+    DEFAULT_REGISTRY_PATH,
+    OOSRegistration,
+    assert_materializable,
+    get_oos_registration,
 )
 
 
-CORPUS_BUILDER_VERSION = 1
+CORPUS_BUILDER_VERSION = 2
+DEFAULT_CAPTURE_MAX_AGE_SECONDS = 900
 
 # I-10 (framework v3, closes Codex blocker E). Mirrors
 # scripts.edge_replay.contamination_corpus_manager.CONTAMINATION_PREFIX.
@@ -91,6 +101,9 @@ CORPUS_STAMP_FIELDS = (
     "market_families",
     "corpus_builder_version",
     "built_at_utc",
+    "evidence_class",
+    "in_period_validation_only",
+    "llm_capture_max_age_seconds",
 )
 
 
@@ -108,6 +121,8 @@ class BuildResult:
     cohort_tag: str
     regime_label: str
     in_period_validation_only: bool
+    evidence_class: str
+    registration_hash: str | None
     notes: list[str] = field(default_factory=list)
 
 
@@ -223,6 +238,9 @@ def _stamp_row(
     regime_label: str,
     market_families: list[str],
     built_at_utc: str,
+    registration: OOSRegistration | None,
+    in_period_validation_only: bool,
+    llm_capture_max_age_seconds: int,
 ) -> dict[str, Any]:
     stamped = dict(row)
     stamped["corpus_window_start_utc"] = window_start
@@ -232,6 +250,14 @@ def _stamp_row(
     stamped["market_families"] = list(market_families)
     stamped["corpus_builder_version"] = CORPUS_BUILDER_VERSION
     stamped["built_at_utc"] = built_at_utc
+    stamped["in_period_validation_only"] = in_period_validation_only
+    stamped["llm_capture_max_age_seconds"] = llm_capture_max_age_seconds
+    if registration is None:
+        stamped["evidence_class"] = "historical_diagnostic"
+    else:
+        stamped["evidence_class"] = "registered_oos"
+        stamped["oos_registration_id"] = registration.id
+        stamped["registration_hash"] = registration.registration_hash
     # I-10: surface contamination membership on every row so consumers
     # that read JSONL (replay runners, retrospective scripts) do not
     # have to reparse the cohort_extension string themselves.
@@ -244,7 +270,9 @@ def _stamp_row(
 
 def _apply_capture_cache_keys(
     row: dict[str, Any],
-    capture_index: dict[str, dict[str, Any]],
+    capture_index: dict[str, Any],
+    *,
+    max_age: timedelta,
 ) -> dict[str, Any]:
     """Stamp the 13-field LLM cache key onto a corpus row by joining the trade's
     persisted ``llm_capture_row_id`` to the capture index (PROFIT-PHASE3 I-1).
@@ -258,7 +286,21 @@ def _apply_capture_cache_keys(
     join_key = row.get("llm_capture_row_id")
     if not join_key:
         return row
-    captured = capture_index.get(str(join_key))
+    trade_ts_raw = row.get("ts")
+    if not isinstance(trade_ts_raw, str):
+        return row
+    try:
+        trade_ts = datetime.fromisoformat(trade_ts_raw.replace("Z", "+00:00"))
+    except ValueError:
+        return row
+    if trade_ts.tzinfo is None:
+        return row
+    captured = select_capture_for_trade(
+        capture_index,
+        row_id=str(join_key),
+        trade_ts=trade_ts,
+        max_age=max_age,
+    )
     if not captured:
         return row
     enriched = dict(row)
@@ -298,8 +340,11 @@ def build_corpus(
     built_at_utc: str | None = None,
     include_contamination: bool = False,
     llm_capture_path: Path | None = None,
+    llm_capture_max_age_seconds: int = DEFAULT_CAPTURE_MAX_AGE_SECONDS,
+    oos_registration_id: str | None = None,
+    oos_registry_path: Path | None = None,
 ) -> BuildResult:
-    """Build a replay corpus from ``paper_trades.db`` for one window+regime.
+    """Build a registered OOS corpus or an explicit historical diagnostic.
 
     See module docstring for the OOS standard, blocker-C rationale, and
     the JSONL row contract. Raises :class:`UnregisteredRegimeError` if
@@ -319,6 +364,8 @@ def build_corpus(
     """
     if not market_families:
         raise ValueError("market_families must be a non-empty list")
+    if llm_capture_max_age_seconds <= 0:
+        raise ValueError("llm_capture_max_age_seconds must be positive")
 
     db_path = paper_trades_db or DEFAULT_DB
     doc_path = regimes_doc_path or DEFAULT_REGIMES_DOC
@@ -344,6 +391,44 @@ def build_corpus(
     window_end = _to_iso_z(end_utc)
     stamp_built_at = built_at_utc or _now_iso_z()
 
+    registration: OOSRegistration | None = None
+    if oos_registration_id is not None:
+        registration = get_oos_registration(
+            oos_registration_id,
+            oos_registry_path or DEFAULT_REGISTRY_PATH,
+        )
+        if registration.window_start_utc != window_start:
+            raise ValueError(
+                "start_utc does not match registered window.start_utc"
+            )
+        if registration.window_end_utc != window_end:
+            raise ValueError("end_utc does not match registered window.end_utc")
+        if registration.regime_label != regime_label:
+            raise ValueError("regime_label does not match OOS registration")
+        if set(registration.market_families) != set(market_families) or len(
+            registration.market_families
+        ) != len(market_families):
+            raise ValueError("market_families do not match OOS registration")
+        if include_contamination:
+            raise ValueError(
+                "registered OOS requires include_contamination=False"
+            )
+        try:
+            materialized_at = datetime.strptime(
+                stamp_built_at,
+                "%Y-%m-%dT%H:%M:%SZ",
+            ).replace(tzinfo=timezone.utc)
+        except ValueError as exc:
+            raise ValueError(
+                "registered OOS built_at_utc must use canonical UTC "
+                "YYYY-MM-DDTHH:MM:SSZ"
+            ) from exc
+        assert_materializable(registration, as_of_utc=materialized_at)
+        assert_materializable(
+            registration,
+            as_of_utc=datetime.now(timezone.utc),
+        )
+
     resolved_output = output_path or _default_output_path(
         regime_label=regime_label,
         cohort_tag=cohort_tag,
@@ -368,10 +453,15 @@ def build_corpus(
 
         # I-10 contamination filter: only apply the LIKE exclusion when
         # both (a) the caller wants the default exclusion and (b) the
-        # cohort_extension column actually exists. Pre-migration DBs
-        # must continue to build corpora cleanly — every row is
-        # implicitly non-contamination there.
+        # cohort_extension column actually exists. Legacy diagnostics retain
+        # pre-migration compatibility; registered evidence requires explicit
+        # provenance and fails closed when the column is absent.
         cohort_extension_present = "cohort_extension" in cols
+        if registration is not None and not cohort_extension_present:
+            raise RuntimeError(
+                "paper_trades table missing required 'cohort_extension' column "
+                "for registered OOS contamination provenance"
+            )
         if include_contamination or not cohort_extension_present:
             rows = conn.execute(
                 "SELECT * FROM paper_trades "
@@ -404,7 +494,19 @@ def build_corpus(
     contamination_row_count = 0
     for raw in rows:
         row_dict = _row_to_dict(raw)
+        trade_id = row_dict.get("trade_id")
+        if registration is not None and (
+            not isinstance(trade_id, str) or not trade_id.strip()
+        ):
+            raise ValueError(
+                "registered OOS row requires a non-empty stable trade_id"
+            )
         matches = _row_families(row_dict, market_families)
+        if registration is not None and len(matches) != 1:
+            raise ValueError(
+                f"registered OOS row trade_id={trade_id!r} matched "
+                f"{len(matches)} registered families; expected exactly 1"
+            )
         if matches:
             matched_rows.append((row_dict, matches))
             distinct_families_present.update(matches)
@@ -414,9 +516,15 @@ def build_corpus(
             ):
                 contamination_row_count += 1
 
-    in_period = len(distinct_families_present) < 2
+    in_period = registration is None or len(distinct_families_present) < 2
     notes: list[str] = []
-    if in_period:
+    if registration is None:
+        notes.append(
+            "evidence_class=historical_diagnostic and "
+            "in_period_validation_only=True: no prospective OOS registration; "
+            "this corpus cannot satisfy registered-OOS gates."
+        )
+    if registration is not None and in_period:
         notes.append(
             "in_period_validation_only=True: fewer than 2 distinct market "
             "families filtered through; downstream I-4 must refuse to gate "
@@ -445,17 +553,24 @@ def build_corpus(
     # Write JSONL atomically by writing then renaming.
     tmp_path = resolved_output.with_name(resolved_output.name + ".tmp")
     with tmp_path.open("w", encoding="utf-8") as out:
-        for row_dict, _matches in matched_rows:
+        for row_dict, matches in matched_rows:
             stamped = _stamp_row(
                 row_dict,
                 window_start=window_start,
                 window_end=window_end,
                 cohort_tag=cohort_tag,
                 regime_label=regime_label,
-                market_families=list(market_families),
+                market_families=list(matches),
                 built_at_utc=stamp_built_at,
+                registration=registration,
+                in_period_validation_only=in_period,
+                llm_capture_max_age_seconds=llm_capture_max_age_seconds,
             )
-            stamped = _apply_capture_cache_keys(stamped, capture_index)
+            stamped = _apply_capture_cache_keys(
+                stamped,
+                capture_index,
+                max_age=timedelta(seconds=llm_capture_max_age_seconds),
+            )
             out.write(json.dumps(stamped, sort_keys=True))
             out.write("\n")
     tmp_path.replace(resolved_output)
@@ -468,6 +583,12 @@ def build_corpus(
         cohort_tag=cohort_tag,
         regime_label=regime_label,
         in_period_validation_only=in_period,
+        evidence_class=(
+            "registered_oos" if registration is not None else "historical_diagnostic"
+        ),
+        registration_hash=(
+            registration.registration_hash if registration is not None else None
+        ),
         notes=notes,
     )
 
@@ -480,8 +601,8 @@ def build_corpus(
 def _build_argparser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Build an OOS replay corpus from paper_trades.db with regime "
-            "and market-family filtering (framework v3 I-1)."
+            "Build a registered OOS replay corpus, or an explicitly labeled "
+            "historical diagnostic, from paper_trades.db."
         ),
     )
     parser.add_argument("--start-ts", type=str, required=True, help="ISO-8601 inclusive start (e.g. 2026-05-23T21:22:16Z)")
@@ -527,6 +648,18 @@ def _build_argparser() -> argparse.ArgumentParser:
             "polluted. Enable for the I-11 T1 retrospective."
         ),
     )
+    parser.add_argument(
+        "--oos-registration-id",
+        type=str,
+        default=None,
+        help="Prospectively declared registration id; omitted means historical diagnostic.",
+    )
+    parser.add_argument(
+        "--oos-registry",
+        type=Path,
+        default=DEFAULT_REGISTRY_PATH,
+        help=f"Structured OOS registry (default: {DEFAULT_REGISTRY_PATH})",
+    )
     return parser
 
 
@@ -557,6 +690,8 @@ def main(argv: list[str] | None = None) -> int:
             paper_trades_db=args.db,
             regimes_doc_path=args.regimes_doc,
             include_contamination=args.include_contamination,
+            oos_registration_id=args.oos_registration_id,
+            oos_registry_path=args.oos_registry,
         )
     except FileNotFoundError as exc:
         print(f"[build_corpus] {exc}", file=sys.stderr)
@@ -576,6 +711,8 @@ def main(argv: list[str] | None = None) -> int:
         "cohort_tag": result.cohort_tag,
         "regime_label": result.regime_label,
         "in_period_validation_only": result.in_period_validation_only,
+        "evidence_class": result.evidence_class,
+        "registration_hash": result.registration_hash,
         "notes": result.notes,
     }
     print(json.dumps(summary, sort_keys=True, indent=2))
