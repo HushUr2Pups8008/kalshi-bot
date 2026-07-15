@@ -290,6 +290,43 @@ def test_duplicate_observation_retry_recovers_post_commit_portfolio_sync(
     assert resolve_calls == 2
 
 
+def test_schema_present_legacy_resolution_rechecks_alias_under_write_lock(
+    trader_factory,
+):
+    trader = trader_factory("legacy-alias-transaction")
+    kalshi = MarketRef(Venue.KALSHI, "KXGDP-26JUL31", "KXGDP-26JUL31")
+    polymarket = MarketRef(Venue.POLYMARKET_US, "104982", "KXGDP-26JUL31")
+    first_trade = _record_mapped_trade(
+        trader,
+        kalshi,
+        trade_id="guard0000001",
+    )
+    second_trade = _record_mapped_trade(
+        trader,
+        polymarket,
+        trade_id="guard0000002",
+    )
+    bankroll_before = _bankroll_cents(trader)
+
+    with pytest.raises(SettlementDriftError, match="alias"):
+        asyncio.run(trader.resolve_market(kalshi.alias, True))
+
+    rows = trader._conn.execute(
+        """
+        SELECT trade_id, resolved, pnl_dollars
+        FROM paper_trades
+        WHERE trade_id IN (?, ?)
+        ORDER BY trade_id
+        """,
+        (first_trade, second_trade),
+    ).fetchall()
+    assert [tuple(row) for row in rows] == [
+        (first_trade, 0, None),
+        (second_trade, 0, None),
+    ]
+    assert _bankroll_cents(trader) == bankroll_before
+
+
 def _financial_snapshot(trader) -> dict[str, object]:
     trades = trader._conn.execute(
         """
