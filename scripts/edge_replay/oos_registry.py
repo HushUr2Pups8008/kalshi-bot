@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Callable, Final
 
 SCHEMA_VERSION: Final = 1
 DEFAULT_REGISTRY_PATH: Final[Path] = (
@@ -39,6 +39,10 @@ _HASH_RE: Final = re.compile(r"^[0-9a-f]{64}$")
 _GIT_OBJECT_RE: Final = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _MARKET_FAMILY_RE: Final = re.compile(r"^[A-Z0-9][A-Z0-9_:-]{1,127}$")
 _TRUSTED_REF_RE: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$")
+_GITHUB_REMOTE_RE: Final = re.compile(
+    r"^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
+    r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$"
+)
 
 
 class OOSRegistryError(ValueError):
@@ -73,7 +77,7 @@ class OOSRegistrationAttestation:
     registration_hash: str
     trusted_ref: str
     commit: str
-    committed_at_utc: str
+    integrated_at_utc: str
     registry_path: str
 
 
@@ -291,14 +295,75 @@ def _git_object_exists(repo_root: Path, object_name: str) -> bool:
     return completed.returncode == 0
 
 
-def _parse_git_committer_utc(value: str) -> datetime:
+def _parse_integration_utc(value: str) -> datetime:
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as exc:
-        raise OOSRegistryError("trusted commit timestamp is not readable") from exc
+        raise OOSRegistryError("trusted integration timestamp is not readable") from exc
     if parsed.tzinfo is None:
-        raise OOSRegistryError("trusted commit timestamp is not timezone-aware")
+        raise OOSRegistryError("trusted integration timestamp is not timezone-aware")
     return parsed.astimezone(timezone.utc)
+
+
+def _github_merge_integration_time(repo_root: Path, commit: str) -> datetime:
+    remote = _run_git(
+        repo_root,
+        "remote",
+        "get-url",
+        "origin",
+        error="GitHub origin remote is not readable",
+    )
+    match = _GITHUB_REMOTE_RE.fullmatch(remote)
+    if match is None:
+        raise OOSRegistryError("origin must be a canonical GitHub repository URL")
+    repo_slug = match.group(1)
+    endpoint = f"repos/{repo_slug}/commits/{commit}/pulls"
+    try:
+        completed = subprocess.run(
+            [
+                "gh",
+                "api",
+                "--method",
+                "GET",
+                "-H",
+                "Accept: application/vnd.github+json",
+                endpoint,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise OOSRegistryError("GitHub merge metadata is not readable") from exc
+    if completed.returncode != 0:
+        raise OOSRegistryError("GitHub merge metadata is not readable")
+    try:
+        pull_requests = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise OOSRegistryError("GitHub merge metadata is not valid JSON") from exc
+    if not isinstance(pull_requests, list):
+        raise OOSRegistryError("GitHub merge metadata must be a list")
+
+    integrations: set[datetime] = set()
+    for pull_request in pull_requests:
+        if not isinstance(pull_request, dict):
+            continue
+        merge_commit_sha = pull_request.get("merge_commit_sha")
+        merged_at = pull_request.get("merged_at")
+        if (
+            not isinstance(merge_commit_sha, str)
+            or merge_commit_sha.lower() != commit.lower()
+            or not isinstance(merged_at, str)
+        ):
+            continue
+        integrations.add(_parse_integration_utc(merged_at))
+    if len(integrations) != 1:
+        raise OOSRegistryError(
+            "trusted first-parent commit must have exactly one GitHub PR "
+            "merge integration timestamp"
+        )
+    return next(iter(integrations))
 
 
 def attest_oos_registration_history(
@@ -307,12 +372,15 @@ def attest_oos_registration_history(
     registry_path: Path | str = DEFAULT_REGISTRY_PATH,
     trusted_ref: str = "origin/main",
     repo_root: Path | str | None = None,
+    integration_time_resolver: Callable[[Path, str], datetime] | None = None,
 ) -> OOSRegistrationAttestation:
     """Prove an exact registration existed on trusted history before its window.
 
-    The trusted commit's committer timestamp is used as the practical protected-
-    history declaration time. The self-declared ``declared_at_utc`` field cannot
-    satisfy this attestation by itself.
+    The first protected-ref, first-parent commit whose tree contains the exact
+    registration is the integration point. GitHub PR ``merged_at`` metadata is
+    the trusted declaration time; a backdated topic/merge commit or self-declared
+    ``declared_at_utc`` cannot satisfy the attestation. Tests may inject a
+    resolver, but production fails closed if GitHub metadata is unavailable.
     """
     if (
         not _TRUSTED_REF_RE.fullmatch(trusted_ref)
@@ -352,7 +420,7 @@ def attest_oos_registration_history(
         resolved_root,
         "rev-list",
         "--reverse",
-        "--topo-order",
+        "--first-parent",
         trusted_commit,
         "--",
         registry_tree_path,
@@ -364,7 +432,7 @@ def attest_oos_registration_history(
         )
 
     saw_registry_blob = False
-    matching_commits: list[tuple[datetime, str]] = []
+    matching_commits: list[str] = []
     for commit in history:
         if not _GIT_OBJECT_RE.fullmatch(commit) or not _git_object_exists(
             resolved_root, f"{commit}^{{commit}}"
@@ -392,17 +460,7 @@ def attest_oos_registration_history(
             != registration.registration_hash
         ):
             continue
-        committed_at = _parse_git_committer_utc(
-            _run_git(
-                resolved_root,
-                "show",
-                "-s",
-                "--format=%cI",
-                commit,
-                error="trusted commit timestamp is not readable",
-            )
-        )
-        matching_commits.append((committed_at, commit))
+        matching_commits.append(commit)
 
     if not saw_registry_blob:
         raise OOSRegistryError(
@@ -414,16 +472,27 @@ def attest_oos_registration_history(
             f"does not exist on trusted ref {trusted_ref!r}"
         )
 
-    committed_at, commit = matching_commits[0]
+    commit = matching_commits[0]
+    resolver = integration_time_resolver or _github_merge_integration_time
+    try:
+        integrated_at = resolver(resolved_root, commit)
+    except OOSRegistryError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - injected resolver is untrusted
+        raise OOSRegistryError("trusted integration timestamp is not readable") from exc
+    if integrated_at.tzinfo is None:
+        raise OOSRegistryError("trusted integration timestamp is not timezone-aware")
+    integrated_at = integrated_at.astimezone(timezone.utc)
     window_start = _parse_canonical_utc(
         registration.window_start_utc,
         field_name="window.start_utc",
     )
-    committed_at_utc = committed_at.strftime("%Y-%m-%dT%H:%M:%SZ")
-    if committed_at >= window_start:
+    integrated_at_utc = integrated_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+    if integrated_at >= window_start:
         raise OOSRegistryError(
-            f"trusted commit {commit} must be before window.start_utc; "
-            f"committed_at={committed_at_utc}, "
+            f"trusted commit {commit} integration must be before "
+            "window.start_utc; "
+            f"integrated_at={integrated_at_utc}, "
             f"window_start={registration.window_start_utc}"
         )
     return OOSRegistrationAttestation(
@@ -431,7 +500,7 @@ def attest_oos_registration_history(
         registration_hash=registration.registration_hash,
         trusted_ref=trusted_ref,
         commit=commit,
-        committed_at_utc=committed_at_utc,
+        integrated_at_utc=integrated_at_utc,
         registry_path=registry_tree_path,
     )
 

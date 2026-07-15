@@ -223,13 +223,58 @@ def test_attest_registration_history_accepts_pre_window_trusted_commit(
     attestation = oos_registry.attest_oos_registration_history(
         registration,
         registry_path=registry_path,
+        integration_time_resolver=lambda repo, commit: datetime(
+            2026, 7, 16, 1, 2, 3, tzinfo=timezone.utc
+        ),
     )
 
     assert attestation.trusted_ref == "origin/main"
     assert attestation.commit == commit
-    assert attestation.committed_at_utc == "2026-07-16T01:02:03Z"
+    assert attestation.integrated_at_utc == "2026-07-16T01:02:03Z"
     assert attestation.registry_path == "docs/governance/oos-corpus-registry.json"
     assert attestation.registration_hash == registration.registration_hash
+
+
+def test_attestation_default_resolver_uses_github_pr_merge_time(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = _init_repo(tmp_path / "repo")
+    registry_path, commit = _commit_registry(
+        repo,
+        _registration_payload(),
+        author_date="2026-07-01T00:00:00Z",
+        committer_date="2026-07-01T00:00:00Z",
+    )
+    _git(repo, "remote", "add", "origin", "https://github.com/example/repo.git")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    gh = fake_bin / "gh"
+    response = json.dumps(
+        [
+            {
+                "merge_commit_sha": commit,
+                "merged_at": "2026-07-16T01:02:03Z",
+            }
+        ]
+    )
+    gh.write_text(
+        f"#!/bin/sh\nprintf '%s\\n' '{response}'\n",
+        encoding="utf-8",
+    )
+    gh.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake_bin}{os.pathsep}{os.environ['PATH']}")
+    registration = oos_registry.get_oos_registration(
+        "profit-oos-2026-08-a", registry_path
+    )
+
+    attestation = oos_registry.attest_oos_registration_history(
+        registration,
+        registry_path=registry_path,
+    )
+
+    assert attestation.commit == commit
+    assert attestation.integrated_at_utc == "2026-07-16T01:02:03Z"
 
 
 def test_attestation_uses_first_topological_appearance_not_backdated_child(
@@ -269,13 +314,84 @@ def test_attestation_uses_first_topological_appearance_not_backdated_child(
     attestation = oos_registry.attest_oos_registration_history(
         registration,
         registry_path=registry_path,
+        integration_time_resolver=lambda repo, commit: (
+            datetime(2026, 7, 16, tzinfo=timezone.utc)
+            if commit == first_commit
+            else datetime(2026, 7, 15, tzinfo=timezone.utc)
+        ),
     )
 
     assert attestation.commit == first_commit
-    assert attestation.committed_at_utc == "2026-07-16T00:00:00Z"
+    assert attestation.integrated_at_utc == "2026-07-16T00:00:00Z"
 
 
-def test_attest_registration_history_uses_committer_date_not_backdated_declaration(
+def test_attestation_uses_protected_first_parent_integration_time(
+    tmp_path: Path,
+) -> None:
+    repo = _init_repo(tmp_path / "repo")
+    registry_path = repo / "docs" / "governance" / "oos-corpus-registry.json"
+    registry_path.parent.mkdir(parents=True)
+    registry_path.write_text(
+        json.dumps({"schema_version": 1, "registrations": []}),
+        encoding="utf-8",
+    )
+    _git(repo, "add", str(registry_path.relative_to(repo)))
+    initial_env = {
+        **os.environ,
+        "GIT_AUTHOR_DATE": "2025-11-01T00:00:00Z",
+        "GIT_COMMITTER_DATE": "2025-11-01T00:00:00Z",
+    }
+    _git(repo, "commit", "-m", "add empty registry", env=initial_env)
+    _git(repo, "checkout", "-b", "late-registration")
+    payload = _registration_payload(
+        declared_at_utc="2025-12-01T00:00:00Z",
+        window={
+            "start_utc": "2026-01-01T00:00:00Z",
+            "end_utc": "2026-01-08T00:00:00Z",
+        },
+    )
+    _write_registry(registry_path, payload)
+    _git(repo, "add", str(registry_path.relative_to(repo)))
+    topic_env = {
+        **os.environ,
+        "GIT_AUTHOR_DATE": "2025-12-02T00:00:00Z",
+        "GIT_COMMITTER_DATE": "2025-12-02T00:00:00Z",
+    }
+    _git(repo, "commit", "-m", "backdated registration", env=topic_env)
+    _git(repo, "checkout", "main")
+    merge_env = {
+        **os.environ,
+        "GIT_AUTHOR_DATE": "2026-02-01T00:00:00Z",
+        "GIT_COMMITTER_DATE": "2026-02-01T00:00:00Z",
+    }
+    _git(
+        repo,
+        "merge",
+        "--no-ff",
+        "late-registration",
+        "-m",
+        "merge registration after window opened",
+        env=merge_env,
+    )
+    merge_commit = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    registration = oos_registry.get_oos_registration(
+        "profit-oos-2026-08-a", registry_path
+    )
+
+    def resolve_integration_time(repo_root: Path, commit: str) -> datetime:
+        assert commit == merge_commit
+        return datetime(2026, 2, 1, tzinfo=timezone.utc)
+
+    with pytest.raises(oos_registry.OOSRegistryError, match="trusted commit.*before"):
+        oos_registry.attest_oos_registration_history(
+            registration,
+            registry_path=registry_path,
+            integration_time_resolver=resolve_integration_time,
+        )
+
+
+def test_attestation_uses_trusted_integration_time_not_backdated_declaration(
     tmp_path: Path,
 ) -> None:
     repo = _init_repo(tmp_path / "repo")
@@ -293,6 +409,9 @@ def test_attest_registration_history_uses_committer_date_not_backdated_declarati
         oos_registry.attest_oos_registration_history(
             registration,
             registry_path=registry_path,
+            integration_time_resolver=lambda repo, commit: datetime(
+                2026, 8, 2, tzinfo=timezone.utc
+            ),
         )
 
 

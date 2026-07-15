@@ -969,8 +969,8 @@ def run_replay_gate(
                         "registration attested: "
                         f"id={registration.id} "
                         f"commit={getattr(attestation, 'commit', 'unknown')} "
-                        "committed_at_utc="
-                        f"{getattr(attestation, 'committed_at_utc', 'unknown')} "
+                        "integrated_at_utc="
+                        f"{getattr(attestation, 'integrated_at_utc', 'unknown')} "
                         f"trusted_ref={trusted_registry_ref}"
                     )
                 attested_registration_hashes.add(registration.registration_hash)
