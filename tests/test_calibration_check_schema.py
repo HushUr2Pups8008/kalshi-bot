@@ -1,6 +1,7 @@
 """Tests for the CALIBRATION_CHECK log schema (S1.6)."""
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -131,7 +132,7 @@ def test_missing_required_field_raises(tmp_path, drop_field):
 
 def test_settlement_lineage_is_optional_on_calibration_rows(tmp_path):
     logger = _make_logger(tmp_path)
-    settled_at = "2026-07-14T22:00:00+00:00"
+    settled_at = datetime.now(timezone.utc).isoformat()
     outbox_id = "a" * 64
     logger.log_calibration_check(
         **_valid_kwargs(),
@@ -173,7 +174,7 @@ def test_paper_resolution_accepts_void_lineage_and_preserves_legacy_callers(tmp_
         resolved_yes=True,
         pnl_dollars=5.0,
     )
-    settled_at = "2026-07-14T22:00:00+00:00"
+    settled_at = datetime.now(timezone.utc).isoformat()
     outbox_id = "b" * 64
     logger.log_paper_resolution(
         trade_id="void-trade",
