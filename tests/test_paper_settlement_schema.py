@@ -24,6 +24,7 @@ from trading.settlement_store import (
     SETTLEMENT_PAPER_TRADE_COLUMNS_SQL,
     SETTLEMENT_SCHEMA_VERSION,
     SettlementStore,
+    settlement_result_sha256,
 )
 
 
@@ -58,13 +59,15 @@ def _create_legacy_db(path: Path) -> None:
             ticker TEXT NOT NULL,
             venue TEXT NOT NULL DEFAULT 'kalshi',
             resolved INTEGER NOT NULL DEFAULT 0,
+            resolved_yes INTEGER,
             venue_market_id TEXT,
             identity_status TEXT,
             quarantine_reason TEXT,
             side TEXT,
             contracts INTEGER,
             price_cents INTEGER,
-            cost_dollars REAL
+            cost_dollars REAL,
+            pnl_dollars REAL
         )
         """
     )
@@ -138,10 +141,13 @@ def _insert_observation(
     conn: sqlite3.Connection,
     *,
     observation_sha256: str = OBSERVATION_SHA,
+    outcome: str = "yes",
     applied_trade_count: int = 1,
     bankroll_before: str = "1000",
     payout: str = "100",
     bankroll_after: str = "1100",
+    refund_cents_per_contract: str | None = None,
+    refunds_entry_fee: int | None = None,
 ) -> None:
     conn.execute(
         """
@@ -153,15 +159,18 @@ def _insert_observation(
             supersedes_observation_sha256, applied_trade_count,
             bankroll_before_cents, gross_payout_cents, bankroll_after_cents,
             applied_at
-        ) VALUES (?, 'kalshi', 'KX-t1', 'KX-t1', 'yes',
+        ) VALUES (?, 'kalshi', 'KX-t1', 'KX-t1', ?,
                   '{"outcome":"yes"}', '{"settled":true}', ?,
-                  ?, ?, 'v1', 'kalshi-api', NULL, NULL, NULL, ?, ?, ?, ?, ?)
+                  ?, ?, 'v1', 'kalshi-api', ?, ?, NULL, ?, ?, ?, ?, ?)
         """,
         (
             observation_sha256,
+            outcome,
             PAYLOAD_SHA,
             NOW.isoformat(),
             (NOW - timedelta(minutes=1)).isoformat(),
+            refund_cents_per_contract,
+            refunds_entry_fee,
             applied_trade_count,
             bankroll_before,
             payout,
@@ -177,6 +186,13 @@ def _seed_settled_trade(
     payout: str = "100",
     gross_pnl: str = "60",
     observation_sha256: str | None = OBSERVATION_SHA,
+    side: str = "yes",
+    terminal_state: str = "won",
+    resolved_yes: int | None = 1,
+    contracts: int | float = 1,
+    price_cents: int | float = 40,
+    cost_dollars: float = 0.4,
+    pnl_dollars: float | None = 0.6,
 ) -> None:
     conn.execute(
         """
@@ -184,11 +200,23 @@ def _seed_settled_trade(
             trade_id, ticker, venue, resolved, venue_market_id, identity_status,
             side, contracts, price_cents, cost_dollars, terminal_state,
             settlement_observation_sha256, settled_at, gross_payout_cents,
-            gross_pnl_cents
+            gross_pnl_cents, resolved_yes, pnl_dollars
         ) VALUES ('t1', 'KX-t1', 'kalshi', 1, 'KX-t1', 'mapped',
-                  'yes', 1, 40, 0.4, 'won', ?, ?, ?, ?)
+                  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (observation_sha256, NOW.isoformat(), payout, gross_pnl),
+        (
+            side,
+            contracts,
+            price_cents,
+            cost_dollars,
+            terminal_state,
+            observation_sha256,
+            NOW.isoformat(),
+            payout,
+            gross_pnl,
+            resolved_yes,
+            pnl_dollars,
+        ),
     )
 
 
@@ -500,7 +528,12 @@ def test_settlement_history_tables_are_append_only(
     )
     conn.execute(
         "INSERT INTO paper_settlement_consumer_receipts VALUES (?, ?, ?, ?)",
-        ("consumer-a", OUTBOX_ID, NOW.isoformat(), "f" * 64),
+        (
+            "consumer-a",
+            OUTBOX_ID,
+            NOW.isoformat(),
+            settlement_result_sha256(OUTBOX_ID, "consumer-a"),
+        ),
     )
     conn.commit()
 
@@ -591,7 +624,7 @@ def test_receipts_drain_multi_consumer_event(tmp_path):
                 OUTBOX_ID,
                 claim_token=token,
                 processed_at=NOW,
-                result_sha256=str(index) * 64,
+                result_sha256=settlement_result_sha256(OUTBOX_ID, consumer),
             )
             assert store.is_outbox_drained(OUTBOX_ID) is (index == 2)
 
@@ -635,7 +668,7 @@ def test_complete_claim_commits_consumer_effect_and_receipt_together(tmp_path):
             OUTBOX_ID,
             claim_token="token-1",
             processed_at=NOW + timedelta(seconds=1),
-            result_sha256="a" * 64,
+            result_sha256=settlement_result_sha256(OUTBOX_ID, "consumer-a"),
             apply=apply_effect,
         )
         assert tuple(
@@ -648,7 +681,11 @@ def test_complete_claim_commits_consumer_effect_and_receipt_together(tmp_path):
                 "SELECT consumer_name, outbox_id, result_sha256 "
                 "FROM paper_settlement_consumer_receipts"
             ).fetchone()
-        ) == ("consumer-a", OUTBOX_ID, "a" * 64)
+        ) == (
+            "consumer-a",
+            OUTBOX_ID,
+            settlement_result_sha256(OUTBOX_ID, "consumer-a"),
+        )
         assert store.claim_state("consumer-a", OUTBOX_ID, now=NOW) is None
 
 
@@ -689,7 +726,7 @@ def test_complete_claim_rolls_back_effect_and_receipt_on_callback_failure(tmp_pa
                 OUTBOX_ID,
                 claim_token="token-1",
                 processed_at=NOW + timedelta(seconds=1),
-                result_sha256="b" * 64,
+                result_sha256=settlement_result_sha256(OUTBOX_ID, "consumer-a"),
                 apply=fail_after_effect,
             )
 
@@ -750,7 +787,7 @@ def test_complete_claim_rolls_back_effect_when_receipt_insert_fails(tmp_path):
                 OUTBOX_ID,
                 claim_token="token-1",
                 processed_at=NOW + timedelta(seconds=1),
-                result_sha256="c" * 64,
+                result_sha256=settlement_result_sha256(OUTBOX_ID, "consumer-a"),
                 apply=apply_effect,
             )
 
@@ -786,7 +823,7 @@ def test_complete_claim_validates_ownership_and_retry_before_callback(tmp_path):
                 OUTBOX_ID,
                 claim_token="missing",
                 processed_at=NOW,
-                result_sha256="d" * 64,
+                result_sha256=settlement_result_sha256(OUTBOX_ID, "consumer-a"),
                 apply=apply_effect,
             )
         assert callback_calls == []
@@ -804,7 +841,7 @@ def test_complete_claim_validates_ownership_and_retry_before_callback(tmp_path):
                 OUTBOX_ID,
                 claim_token="wrong-token",
                 processed_at=NOW + timedelta(seconds=1),
-                result_sha256="d" * 64,
+                result_sha256=settlement_result_sha256(OUTBOX_ID, "consumer-a"),
                 apply=apply_effect,
             )
         with pytest.raises(RuntimeError, match="claim lease expired"):
@@ -813,7 +850,7 @@ def test_complete_claim_validates_ownership_and_retry_before_callback(tmp_path):
                 OUTBOX_ID,
                 claim_token="token-1",
                 processed_at=NOW + timedelta(seconds=60),
-                result_sha256="d" * 64,
+                result_sha256=settlement_result_sha256(OUTBOX_ID, "consumer-a"),
                 apply=apply_effect,
             )
         assert callback_calls == []
@@ -830,7 +867,7 @@ def test_complete_claim_validates_ownership_and_retry_before_callback(tmp_path):
             OUTBOX_ID,
             claim_token="token-2",
             processed_at=NOW + timedelta(seconds=62),
-            result_sha256="d" * 64,
+            result_sha256=settlement_result_sha256(OUTBOX_ID, "consumer-a"),
             apply=apply_effect,
         )
         assert callback_calls == [OUTBOX_ID]
@@ -840,7 +877,7 @@ def test_complete_claim_validates_ownership_and_retry_before_callback(tmp_path):
             OUTBOX_ID,
             claim_token="no-longer-relevant",
             processed_at=NOW + timedelta(seconds=63),
-            result_sha256="d" * 64,
+            result_sha256=settlement_result_sha256(OUTBOX_ID, "consumer-a"),
             apply=apply_effect,
         )
         with pytest.raises(RuntimeError, match="receipt result drift"):
@@ -880,7 +917,7 @@ def test_complete_claim_rejects_awaitable_callback_before_receipt(tmp_path):
                 OUTBOX_ID,
                 claim_token="token-1",
                 processed_at=NOW + timedelta(seconds=1),
-                result_sha256="f" * 64,
+                result_sha256=settlement_result_sha256(OUTBOX_ID, "consumer-a"),
                 apply=apply_effect,
             )
         assert not callback_entered
@@ -941,7 +978,7 @@ def test_complete_claim_blocks_callback_transaction_control(
                 OUTBOX_ID,
                 claim_token="token-1",
                 processed_at=NOW + timedelta(seconds=1),
-                result_sha256="f" * 64,
+                result_sha256=settlement_result_sha256(OUTBOX_ID, "consumer-a"),
                 apply=apply_effect,
             )
         assert (
@@ -995,7 +1032,7 @@ def test_complete_claim_public_connection_cannot_escape_callback_guard(tmp_path)
                 OUTBOX_ID,
                 claim_token="token-1",
                 processed_at=NOW + timedelta(seconds=1),
-                result_sha256="f" * 64,
+                result_sha256=settlement_result_sha256(OUTBOX_ID, "consumer-a"),
                 apply=apply_effect,
             )
         assert (
@@ -1033,6 +1070,38 @@ def test_readiness_reports_valid_and_invalid_schema_state(tmp_path):
         result = store.readiness(pre_cutover=True)
         assert not result.ok
         assert "open_rows_mapped" in result.failures
+
+
+def test_preflight_rejects_foreign_key_violations_in_migrated_database(tmp_path):
+    db = tmp_path / "orphaned-settlement.db"
+    _create_legacy_db(db)
+    _migrate(db)
+
+    conn = sqlite3.connect(db)
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute(
+        """
+        INSERT INTO paper_settlement_outbox (
+            outbox_id, event_version, event_kind, observation_sha256,
+            trade_id, payload_json, created_at
+        ) VALUES (?, 1, 'paper_trade_settled', ?, 'missing-trade', '{}', ?)
+        """,
+        (OUTBOX_ID, "d" * 64, NOW.isoformat()),
+    )
+    conn.commit()
+    assert len(conn.execute("PRAGMA foreign_key_check").fetchall()) == 2
+    conn.close()
+
+    with SettlementStore(db) as store:
+        readiness = store.readiness(pre_cutover=True)
+        assert not readiness.ok
+        assert "foreign_keys" in readiness.failures
+        assert readiness.metrics["foreign_key_violations"] == 2
+
+        conservation = store.conservation(now=NOW)
+        assert not conservation.ok
+        assert "foreign_keys" in conservation.failures
+        assert conservation.metrics["foreign_key_violations"] == 2
 
 
 def test_readiness_rejects_missing_schema_object(tmp_path):
@@ -1260,13 +1329,376 @@ def test_conservation_reports_accounting_and_lease_violations(tmp_path, invalid)
         assert result.failures
 
 
+@pytest.mark.parametrize(
+    ("mutation", "expected_failure", "metric"),
+    [
+        (
+            "UPDATE paper_trades SET gross_pnl_cents='999999999999999999' "
+            "WHERE trade_id='t1'",
+            f"trade_financials:{OBSERVATION_SHA}:t1",
+            "invalid_linked_trade_financials",
+        ),
+        (
+            "UPDATE paper_trades SET pnl_dollars=999999999 WHERE trade_id='t1'",
+            f"trade_financials:{OBSERVATION_SHA}:t1",
+            "invalid_linked_trade_financials",
+        ),
+        (
+            "UPDATE paper_trades SET contracts=0 WHERE trade_id='t1'",
+            f"trade_financials:{OBSERVATION_SHA}:t1",
+            "invalid_linked_trade_financials",
+        ),
+        (
+            "UPDATE paper_trades SET contracts=1.5 WHERE trade_id='t1'",
+            f"trade_financials:{OBSERVATION_SHA}:t1",
+            "invalid_linked_trade_financials",
+        ),
+        (
+            "UPDATE paper_trades SET price_cents=0 WHERE trade_id='t1'",
+            f"trade_financials:{OBSERVATION_SHA}:t1",
+            "invalid_linked_trade_financials",
+        ),
+        (
+            "UPDATE paper_trades SET price_cents=100 WHERE trade_id='t1'",
+            f"trade_financials:{OBSERVATION_SHA}:t1",
+            "invalid_linked_trade_financials",
+        ),
+        (
+            "UPDATE paper_trades SET price_cents=40.5 WHERE trade_id='t1'",
+            f"trade_financials:{OBSERVATION_SHA}:t1",
+            "invalid_linked_trade_financials",
+        ),
+        (
+            "UPDATE paper_trades SET cost_dollars=0.5, gross_pnl_cents='50', "
+            "pnl_dollars=0.5 WHERE trade_id='t1'",
+            f"trade_financials:{OBSERVATION_SHA}:t1",
+            "invalid_linked_trade_financials",
+        ),
+        (
+            "UPDATE paper_trades SET venue_market_id='KX-WRONG' "
+            "WHERE trade_id='t1'",
+            f"trade_identity:{OBSERVATION_SHA}:t1",
+            "invalid_linked_trade_identity",
+        ),
+        (
+            "UPDATE paper_trades SET terminal_state='lost', resolved_yes=0 "
+            "WHERE trade_id='t1'",
+            f"trade_outcome:{OBSERVATION_SHA}:t1",
+            "invalid_linked_trade_outcomes",
+        ),
+    ],
+    ids=[
+        "gross-pnl",
+        "legacy-pnl",
+        "zero-contracts",
+        "fractional-contracts",
+        "zero-price",
+        "hundred-price",
+        "fractional-price",
+        "entry-cost",
+        "venue-market-id",
+        "outcome",
+    ],
+)
+def test_conservation_rejects_linked_trade_mutations(
+    tmp_path,
+    mutation,
+    expected_failure,
+    metric,
+):
+    db = tmp_path / "mutated-linked-trade.db"
+    _create_legacy_db(db)
+    _migrate(db)
+    _seed_valid_accounting(db)
+
+    conn = sqlite3.connect(db)
+    conn.execute(mutation)
+    conn.commit()
+    conn.close()
+
+    with SettlementStore(db) as store:
+        result = store.conservation(now=NOW)
+        assert not result.ok
+        assert expected_failure in result.failures
+        assert result.metrics[metric] == 1
+
+
+def test_conservation_rejects_internally_balanced_fabricated_yes_payout(tmp_path):
+    db = tmp_path / "fabricated-yes-payout.db"
+    _create_legacy_db(db)
+    _migrate(db)
+    conn = sqlite3.connect(db)
+    conn.execute("PRAGMA foreign_keys=ON")
+    _insert_observation(conn, payout="90", bankroll_after="1090")
+    _seed_settled_trade(
+        conn,
+        payout="90",
+        gross_pnl="50",
+        pnl_dollars=0.5,
+    )
+    conn.commit()
+    conn.close()
+
+    with SettlementStore(db) as store:
+        result = store.conservation(now=NOW)
+        assert not result.ok
+        assert f"trade_financials:{OBSERVATION_SHA}:t1" in result.failures
+        assert result.metrics["invalid_linked_trade_financials"] == 1
+
+
+def test_conservation_rejects_internally_balanced_fabricated_void_refund(tmp_path):
+    db = tmp_path / "fabricated-void-refund.db"
+    _create_legacy_db(db)
+    _migrate(db)
+    conn = sqlite3.connect(db)
+    conn.execute("PRAGMA foreign_keys=ON")
+    _insert_observation(
+        conn,
+        outcome="void",
+        payout="40",
+        bankroll_after="1040",
+        refund_cents_per_contract="50",
+        refunds_entry_fee=0,
+    )
+    _seed_settled_trade(
+        conn,
+        payout="40",
+        gross_pnl="0",
+        terminal_state="void",
+        resolved_yes=None,
+        pnl_dollars=0.0,
+    )
+    conn.commit()
+    conn.close()
+
+    with SettlementStore(db) as store:
+        result = store.conservation(now=NOW)
+        assert not result.ok
+        assert f"trade_financials:{OBSERVATION_SHA}:t1" in result.failures
+        assert result.metrics["invalid_linked_trade_financials"] == 1
+
+
+@pytest.mark.parametrize(
+    (
+        "outcome",
+        "refund_cents_per_contract",
+        "refunds_entry_fee",
+        "payout",
+        "gross_pnl",
+        "pnl_dollars",
+        "bankroll_after",
+        "terminal_state",
+        "resolved_yes",
+    ),
+    [
+        ("void", "50", None, "50", "10", 0.1, "1050", "void", None),
+        ("yes", None, 0, "100", "60", 0.6, "1100", "won", 1),
+    ],
+    ids=["void-null-fee-flag", "directional-stray-fee-flag"],
+)
+def test_conservation_rejects_incoherent_observation_refund_fields(
+    tmp_path,
+    outcome,
+    refund_cents_per_contract,
+    refunds_entry_fee,
+    payout,
+    gross_pnl,
+    pnl_dollars,
+    bankroll_after,
+    terminal_state,
+    resolved_yes,
+):
+    db = tmp_path / "incoherent-observation-refund.db"
+    _create_legacy_db(db)
+    _migrate(db)
+    conn = sqlite3.connect(db)
+    conn.execute("PRAGMA foreign_keys=ON")
+    _insert_observation(
+        conn,
+        outcome=outcome,
+        payout=payout,
+        bankroll_after=bankroll_after,
+        refund_cents_per_contract=refund_cents_per_contract,
+        refunds_entry_fee=refunds_entry_fee,
+    )
+    _seed_settled_trade(
+        conn,
+        payout=payout,
+        gross_pnl=gross_pnl,
+        terminal_state=terminal_state,
+        resolved_yes=resolved_yes,
+        pnl_dollars=pnl_dollars,
+    )
+    conn.commit()
+    conn.close()
+
+    with SettlementStore(db) as store:
+        result = store.conservation(now=NOW)
+        assert not result.ok
+        assert f"trade_financials:{OBSERVATION_SHA}:t1" in result.failures
+        assert result.metrics["invalid_linked_trade_financials"] == 1
+
+
+def test_conservation_accepts_observation_alias_drift(tmp_path):
+    db = tmp_path / "linked-trade-alias-drift.db"
+    _create_legacy_db(db)
+    _migrate(db)
+    _seed_valid_accounting(db)
+
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE paper_trades SET ticker='older-alias' WHERE trade_id='t1'")
+    conn.commit()
+    conn.close()
+
+    with SettlementStore(db) as store:
+        result = store.conservation(now=NOW)
+        assert result.ok
+        assert result.metrics["invalid_linked_trade_identity"] == 0
+        assert result.metrics["linked_trade_alias_drifts"] == 1
+
+
+@pytest.mark.parametrize(
+    (
+        "outcome",
+        "side",
+        "terminal_state",
+        "resolved_yes",
+        "payout",
+        "gross_pnl",
+        "pnl_dollars",
+        "refund_cents_per_contract",
+        "bankroll_after",
+    ),
+    [
+        ("yes", "yes", "won", 1, "100", "60", 0.6, None, "1100"),
+        ("yes", "no", "lost", 1, "0", "-40", -0.4, None, "1000"),
+        ("no", "yes", "lost", 0, "0", "-40", -0.4, None, "1000"),
+        ("no", "no", "won", 0, "100", "60", 0.6, None, "1100"),
+        ("void", "yes", "void", None, "50", "10", 0.1, "50", "1050"),
+    ],
+)
+def test_conservation_accepts_coherent_trade_outcomes(
+    tmp_path,
+    outcome,
+    side,
+    terminal_state,
+    resolved_yes,
+    payout,
+    gross_pnl,
+    pnl_dollars,
+    refund_cents_per_contract,
+    bankroll_after,
+):
+    db = tmp_path / "coherent-outcome.db"
+    _create_legacy_db(db)
+    _migrate(db)
+    conn = sqlite3.connect(db)
+    conn.execute("PRAGMA foreign_keys=ON")
+    _insert_observation(
+        conn,
+        outcome=outcome,
+        payout=payout,
+        bankroll_after=bankroll_after,
+        refund_cents_per_contract=refund_cents_per_contract,
+        refunds_entry_fee=(0 if outcome == "void" else None),
+    )
+    _seed_settled_trade(
+        conn,
+        payout=payout,
+        gross_pnl=gross_pnl,
+        side=side,
+        terminal_state=terminal_state,
+        resolved_yes=resolved_yes,
+        pnl_dollars=pnl_dollars,
+    )
+    conn.commit()
+    conn.close()
+
+    with SettlementStore(db) as store:
+        result = store.conservation(now=NOW)
+        assert result.ok
+        assert result.metrics["invalid_linked_trade_outcomes"] == 0
+        assert result.metrics["invalid_linked_trade_financials"] == 0
+
+
+@pytest.mark.parametrize(
+    ("processed_at", "result_sha256", "expected_failure"),
+    [
+        (
+            "not-a-time",
+            settlement_result_sha256(OUTBOX_ID, "consumer-a"),
+            f"receipt_processed_at:consumer-a:{OUTBOX_ID}",
+        ),
+        (
+            NOW.replace(tzinfo=None).isoformat(),
+            settlement_result_sha256(OUTBOX_ID, "consumer-a"),
+            f"receipt_processed_at:consumer-a:{OUTBOX_ID}",
+        ),
+        (
+            NOW.isoformat(),
+            "f" * 64,
+            f"receipt_result_sha256:consumer-a:{OUTBOX_ID}",
+        ),
+    ],
+    ids=["malformed-timestamp", "naive-timestamp", "forged-result-hash"],
+)
+def test_conservation_rejects_forged_consumer_receipts(
+    tmp_path,
+    processed_at,
+    result_sha256,
+    expected_failure,
+):
+    db = tmp_path / "forged-receipt.db"
+    _create_legacy_db(db)
+    _migrate(db)
+    _seed_valid_accounting(db, consumers=("consumer-a",))
+
+    conn = sqlite3.connect(db)
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute(
+        "INSERT INTO paper_settlement_consumer_receipts VALUES (?, ?, ?, ?)",
+        ("consumer-a", OUTBOX_ID, processed_at, result_sha256),
+    )
+    conn.commit()
+    conn.close()
+
+    with SettlementStore(db) as store:
+        assert store.pending_requirements() == ()
+        result = store.conservation(now=NOW)
+        assert not result.ok
+        assert expected_failure in result.failures
+        assert result.metrics["consumer_receipts"] == 1
+        assert result.metrics["invalid_consumer_receipts"] == 1
+
+
 def test_conservation_accepts_exact_valid_accounting(tmp_path):
     db = tmp_path / "paper.db"
     _create_legacy_db(db)
     _migrate(db)
-    _seed_valid_accounting(db)
+    _seed_valid_accounting(db, consumers=("consumer-a",))
+    conn = sqlite3.connect(db)
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute(
+        "INSERT INTO paper_settlement_consumer_receipts VALUES (?, ?, ?, ?)",
+        (
+            "consumer-a",
+            OUTBOX_ID,
+            NOW.isoformat(),
+            settlement_result_sha256(OUTBOX_ID, "consumer-a"),
+        ),
+    )
+    conn.commit()
+    conn.close()
 
     with SettlementStore(db) as store:
         result = store.conservation(now=NOW)
         assert result.ok
         assert result.failures == ()
+        assert result.metrics["foreign_key_violations"] == 0
+        assert result.metrics["consumer_receipts"] == 1
+        assert result.metrics["invalid_consumer_receipts"] == 0
+        assert result.metrics["linked_trades"] == 1
+        assert result.metrics["invalid_linked_trade_identity"] == 0
+        assert result.metrics["linked_trade_alias_drifts"] == 0
+        assert result.metrics["invalid_linked_trade_financials"] == 0
+        assert result.metrics["invalid_linked_trade_outcomes"] == 0

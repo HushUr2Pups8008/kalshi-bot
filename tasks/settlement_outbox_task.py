@@ -14,7 +14,11 @@ from pathlib import Path
 from typing import Any
 
 from tasks.stats.source_credibility import record_outcome_in_transaction
-from trading.settlement_store import PendingRequirement, SettlementStore
+from trading.settlement_store import (
+    PendingRequirement,
+    SettlementStore,
+    settlement_result_sha256,
+)
 
 
 log = logging.getLogger(__name__)
@@ -93,10 +97,6 @@ def _event_outbox_id(
         }
     ).encode()
     return hashlib.sha256(encoded).hexdigest()
-
-
-def _result_sha256(outbox_id: str, consumer_name: str) -> str:
-    return hashlib.sha256(f"{outbox_id}:{consumer_name}".encode()).hexdigest()
 
 
 def _require_string(payload: dict[str, Any], field: str) -> str:
@@ -601,7 +601,7 @@ class SettlementOutboxTask:
                         requirement.outbox_id,
                         claim_token=claim_token,
                         processed_at=now,
-                        result_sha256=_result_sha256(
+                        result_sha256=settlement_result_sha256(
                             requirement.outbox_id,
                             requirement.consumer_name,
                         ),

@@ -24,7 +24,7 @@ from tests.test_paper_canonical_settlement import (
 )
 from tests.test_paper_trader import _cfg_module, _make_mock_analysis
 from trading.settlement import MarketOutcome, VoidRefundContract
-from trading.settlement_store import SettlementStore
+from trading.settlement_store import SettlementStore, settlement_result_sha256
 from trading.venue import MarketRef, Venue
 from utils.logger import TradeLogger
 
@@ -182,10 +182,6 @@ def _seed_directional_event(
     return seed
 
 
-def _result_sha256(outbox_id: str, consumer_name: str) -> str:
-    return hashlib.sha256(f"{outbox_id}:{consumer_name}".encode()).hexdigest()
-
-
 def _record_receipts(
     seed: SeededEvent,
     consumers: tuple[str, ...],
@@ -214,7 +210,9 @@ def _record_receipts(
                 seed.outbox_id,
                 claim_token=claim_token,
                 processed_at=processed_at,
-                result_sha256=_result_sha256(seed.outbox_id, consumer_name),
+                result_sha256=settlement_result_sha256(
+                    seed.outbox_id, consumer_name
+                ),
             )
             receipt = store.connection.execute(
                 """

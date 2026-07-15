@@ -415,6 +415,11 @@ class StoreCheck:
     metrics: dict[str, int | str | bool]
 
 
+def settlement_result_sha256(outbox_id: str, consumer_name: str) -> str:
+    """Return the deterministic result identity for one consumer requirement."""
+    return hashlib.sha256(f"{outbox_id}:{consumer_name}".encode()).hexdigest()
+
+
 def enable_and_verify_foreign_keys(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA foreign_keys=ON")
     row = conn.execute("PRAGMA foreign_keys").fetchone()
@@ -1040,6 +1045,11 @@ class SettlementStore:
             failures.append("schema_objects")
             return StoreCheck(False, tuple(failures), metrics)
 
+        foreign_key_violations = _foreign_key_violation_count(self._conn)
+        metrics["foreign_key_violations"] = foreign_key_violations
+        if foreign_key_violations:
+            failures.append("foreign_keys")
+
         meta = self._conn.execute(
             """
             SELECT schema_version, ddl_sha256, migration_plan_sha256
@@ -1096,20 +1106,34 @@ class SettlementStore:
         metrics: dict[str, int | str | bool] = {}
         if not _schema_objects_ready(self._conn):
             return StoreCheck(False, ("schema_objects",), {"schema_objects_ok": False})
+        foreign_key_violations = _foreign_key_violation_count(self._conn)
+        metrics["foreign_key_violations"] = foreign_key_violations
+        if foreign_key_violations:
+            failures.append("foreign_keys")
         observations = self._conn.execute(
             """
-            SELECT observation_sha256, applied_trade_count,
+            SELECT observation_sha256, venue, venue_market_id, alias, outcome,
+                   refund_cents_per_contract, refunds_entry_fee,
+                   applied_trade_count,
                    bankroll_before_cents, gross_payout_cents,
                    bankroll_after_cents
             FROM paper_settlement_observations
             ORDER BY observation_sha256
             """
         ).fetchall()
+        linked_trades = 0
+        invalid_trade_identity = 0
+        linked_trade_alias_drifts = 0
+        invalid_trade_financials = 0
+        invalid_trade_outcomes = 0
         for observation in observations:
             observation_id = observation["observation_sha256"]
             trades = self._conn.execute(
                 """
-                SELECT gross_payout_cents, gross_pnl_cents, resolved,
+                SELECT trade_id, ticker, venue, venue_market_id, side,
+                       contracts, price_cents, cost_dollars, pnl_dollars,
+                       gross_payout_cents,
+                       gross_pnl_cents, resolved, resolved_yes,
                        identity_status, terminal_state, settled_at
                 FROM paper_trades
                 WHERE settlement_observation_sha256=?
@@ -1117,15 +1141,102 @@ class SettlementStore:
                 """,
                 (observation_id,),
             ).fetchall()
+            linked_trades += len(trades)
             if len(trades) != observation["applied_trade_count"]:
                 failures.append(f"trade_count:{observation_id}")
+
+            trade_payout = Decimal("0")
+            noncanonical_amount = False
+            for row in trades:
+                trade_key = f"{observation_id}:{row['trade_id']}"
+                if (
+                    row["venue"] != observation["venue"]
+                    or row["venue_market_id"] != observation["venue_market_id"]
+                ):
+                    failures.append(f"trade_identity:{trade_key}")
+                    invalid_trade_identity += 1
+                if row["ticker"] != observation["alias"]:
+                    linked_trade_alias_drifts += 1
+
+                financials_invalid = False
+                try:
+                    contracts = _parse_legacy_decimal(row["contracts"])
+                    price_cents = _parse_legacy_decimal(row["price_cents"])
+                    gross_payout = _parse_decimal(row["gross_payout_cents"])
+                    gross_pnl = _parse_decimal(row["gross_pnl_cents"])
+                    cost_cents = _parse_legacy_decimal(row["cost_dollars"]) * 100
+                    if (
+                        contracts != contracts.to_integral_value()
+                        or contracts <= 0
+                    ):
+                        financials_invalid = True
+                    if (
+                        price_cents != price_cents.to_integral_value()
+                        or price_cents < 1
+                        or price_cents > 99
+                    ):
+                        financials_invalid = True
+                    if cost_cents != contracts * price_cents:
+                        financials_invalid = True
+
+                    if observation["outcome"] == "void":
+                        refund_cents = _parse_decimal(
+                            observation["refund_cents_per_contract"]
+                        )
+                        if (
+                            refund_cents < 0
+                            or refund_cents > 100
+                            or observation["refunds_entry_fee"] not in {0, 1}
+                        ):
+                            financials_invalid = True
+                        expected_payout = contracts * refund_cents
+                    else:
+                        if (
+                            observation["refund_cents_per_contract"] is not None
+                            or observation["refunds_entry_fee"] is not None
+                        ):
+                            financials_invalid = True
+                        expected_payout = (
+                            contracts * 100
+                            if row["side"] == observation["outcome"]
+                            else Decimal("0")
+                        )
+                    if gross_payout != expected_payout:
+                        financials_invalid = True
+                    if gross_pnl != gross_payout - cost_cents:
+                        financials_invalid = True
+                    if row["pnl_dollars"] is not None and (
+                        _parse_legacy_decimal(row["pnl_dollars"]) * 100
+                        != gross_pnl
+                    ):
+                        financials_invalid = True
+                    trade_payout += gross_payout
+                except ValueError:
+                    financials_invalid = True
+                    noncanonical_amount = True
+                if financials_invalid:
+                    failures.append(f"trade_financials:{trade_key}")
+                    invalid_trade_financials += 1
+
+                expected_resolved_yes: int | None
+                if observation["outcome"] == "void":
+                    expected_resolved_yes = None
+                    expected_terminal_state = "void"
+                else:
+                    expected_resolved_yes = int(observation["outcome"] == "yes")
+                    expected_terminal_state = (
+                        "won" if row["side"] == observation["outcome"] else "lost"
+                    )
+                if (
+                    row["resolved"] != 1
+                    or row["resolved_yes"] != expected_resolved_yes
+                    or row["side"] not in {"yes", "no"}
+                    or row["terminal_state"] != expected_terminal_state
+                ):
+                    failures.append(f"trade_outcome:{trade_key}")
+                    invalid_trade_outcomes += 1
+
             try:
-                for row in trades:
-                    _parse_decimal(row["gross_pnl_cents"])
-                trade_payout = sum(
-                    (_parse_decimal(row["gross_payout_cents"]) for row in trades),
-                    Decimal("0"),
-                )
                 observation_payout = _parse_decimal(
                     observation["gross_payout_cents"]
                 )
@@ -1136,8 +1247,14 @@ class SettlementStore:
                     observation["bankroll_after_cents"]
                 )
             except ValueError:
+                noncanonical_amount = True
+            if noncanonical_amount:
                 failures.append(f"noncanonical_amount:{observation_id}")
-                continue
+            else:
+                if trade_payout != observation_payout:
+                    failures.append(f"trade_payout:{observation_id}")
+                if bankroll_before + observation_payout != bankroll_after:
+                    failures.append(f"bankroll:{observation_id}")
             if any(
                 row["resolved"] != 1
                 or row["identity_status"] != "mapped"
@@ -1146,10 +1263,12 @@ class SettlementStore:
                 for row in trades
             ):
                 failures.append(f"linked_trade_state:{observation_id}")
-            if trade_payout != observation_payout:
-                failures.append(f"trade_payout:{observation_id}")
-            if bankroll_before + observation_payout != bankroll_after:
-                failures.append(f"bankroll:{observation_id}")
+
+        metrics["linked_trades"] = linked_trades
+        metrics["invalid_linked_trade_identity"] = invalid_trade_identity
+        metrics["linked_trade_alias_drifts"] = linked_trade_alias_drifts
+        metrics["invalid_linked_trade_financials"] = invalid_trade_financials
+        metrics["invalid_linked_trade_outcomes"] = invalid_trade_outcomes
 
         unresolved_links = self._conn.execute(
             """
@@ -1188,6 +1307,32 @@ class SettlementStore:
             failures.append("duplicate_receipts")
         if duplicate_claims:
             failures.append("duplicate_claims")
+
+        receipts = self._conn.execute(
+            """
+            SELECT consumer_name, outbox_id, processed_at, result_sha256
+            FROM paper_settlement_consumer_receipts
+            ORDER BY consumer_name, outbox_id
+            """
+        ).fetchall()
+        invalid_receipts = 0
+        for receipt in receipts:
+            receipt_invalid = False
+            receipt_key = f"{receipt['consumer_name']}:{receipt['outbox_id']}"
+            try:
+                _parse_datetime(receipt["processed_at"])
+            except ValueError:
+                failures.append(f"receipt_processed_at:{receipt_key}")
+                receipt_invalid = True
+            if receipt["result_sha256"] != settlement_result_sha256(
+                receipt["outbox_id"], receipt["consumer_name"]
+            ):
+                failures.append(f"receipt_result_sha256:{receipt_key}")
+                receipt_invalid = True
+            if receipt_invalid:
+                invalid_receipts += 1
+        metrics["consumer_receipts"] = len(receipts)
+        metrics["invalid_consumer_receipts"] = invalid_receipts
 
         claims = self._conn.execute(
             """
@@ -1230,6 +1375,10 @@ def _schema_objects_ready(conn: sqlite3.Connection) -> bool:
     return settlement_schema_contract_matches(conn)
 
 
+def _foreign_key_violation_count(conn: sqlite3.Connection) -> int:
+    return len(conn.execute("PRAGMA foreign_key_check").fetchall())
+
+
 def _parse_datetime(value: object) -> datetime:
     if not isinstance(value, str):
         raise ValueError("timestamp must be text")
@@ -1250,4 +1399,16 @@ def _parse_decimal(value: object) -> Decimal:
         raise ValueError("amount must be canonical Decimal text") from exc
     if not parsed.is_finite():
         raise ValueError("amount must be finite")
+    return parsed
+
+
+def _parse_legacy_decimal(value: object) -> Decimal:
+    if value is None or isinstance(value, bool):
+        raise ValueError("legacy amount must be numeric")
+    try:
+        parsed = Decimal(str(value))
+    except InvalidOperation as exc:
+        raise ValueError("legacy amount must be numeric") from exc
+    if not parsed.is_finite():
+        raise ValueError("legacy amount must be finite")
     return parsed
