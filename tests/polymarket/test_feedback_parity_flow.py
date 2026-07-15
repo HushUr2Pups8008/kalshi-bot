@@ -47,6 +47,7 @@ def _market() -> PolymarketMarket:
     return PolymarketMarket(
         venue=Venue.POLYMARKET_US,
         market_id="ewc-usgub-ks-2026-11-03-dem",
+        venue_market_id="8595",
         title="Democratic Party",
         question="Kansas Governor Election Winner",
         subtitle="2026 race",
@@ -107,10 +108,13 @@ async def test_polymarket_candidate_closes_shared_feedback_loop(tmp_path, monkey
     source_stats.flush()
 
     trade = paper._conn.execute(
-        "SELECT ticker, venue, series_ticker, resolved FROM paper_trades"
+        "SELECT ticker, venue, venue_market_id, identity_status, series_ticker, "
+        "resolved FROM paper_trades"
     ).fetchone()
     assert trade["ticker"] == "ewc-usgub-ks-2026-11-03-dem"
     assert trade["venue"] == "polymarket_us"
+    assert trade["venue_market_id"] == "8595"
+    assert trade["identity_status"] == "mapped"
     # PROFIT-VENUE-PARITY V03/V15: persisted series_ticker is now per-family
     # (so calibration/keyword_outcomes key per-family); venue stays the venue.
     assert trade["series_ticker"] == "polymarket_us:ewc-usgub-ks"
