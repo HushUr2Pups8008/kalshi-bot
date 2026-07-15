@@ -136,6 +136,7 @@ git commit -m "refactor: add shared bounded HTTPS transport"
 **Files:**
 - Modify: `analysis/research_gate.py:3425-3689`
 - Test: `tests/test_research_provider_async_transport.py`
+- Test: `tests/test_research_provider_transport.py`
 - Test: `tests/test_bounded_https.py`
 
 **Interfaces:**
@@ -237,17 +238,19 @@ git commit -m "refactor: share research HTTPS transport"
 - Review: `utils/bounded_https.py`
 - Review: `analysis/research_gate.py`
 - Review: `tests/test_bounded_https.py`
+- Review: `tests/test_research_provider_transport.py`
 
 **Interfaces:**
 - Consumes: Tasks 1-2 exact branch head.
 - Produces: shared transport merged on `main`; no runtime configuration transition.
 
-- [ ] **Step 1: Run focused static verification**
+- [x] **Step 1: Run focused static verification**
 
 ```bash
 .venv/bin/python -m ruff check \
   utils/bounded_https.py analysis/research_gate.py \
-  tests/test_bounded_https.py tests/test_research_provider_async_transport.py
+  tests/test_bounded_https.py tests/test_research_provider_async_transport.py \
+  tests/test_research_provider_transport.py
 .venv/bin/python -m py_compile \
   utils/bounded_https.py analysis/research_gate.py tests/test_bounded_https.py
 git diff --check origin/main...HEAD
@@ -255,11 +258,11 @@ git diff --check origin/main...HEAD
 
 Expected: all commands pass.
 
-- [ ] **Step 2: Run the CI-equivalent full suite**
+- [x] **Step 2: Run the CI-equivalent full suite**
 
 Create temporary `.venv` and `.env` symlinks in the isolated worktree only if required. Set `RESEARCH_PREWARM_INTERVAL_SECONDS=900`, run the repository's full pytest command, and remove both symlinks in `finally` cleanup. Deselect only the already reproduced installed-LaunchAgent plist drift test; do not hide any new failure.
 
-- [ ] **Step 3: Obtain independent high-risk review**
+- [x] **Step 3: Obtain independent high-risk review**
 
 Reviewer must check canonical-host validation, global-IP rejection, deadline placement before admission, pinned TLS hostname behavior, cancellation/resource cleanup, unchanged research exception taxonomy, unchanged provider 2xx handling, and absence of duplicate implementations. Fix any Critical or Important finding with a RED regression first.
 
