@@ -35,6 +35,16 @@ from analysis.match_feedback import matcher_weights_status
 from kalshi.public_market_data import is_safe_kalshi_identifier
 from tasks.stats.source_credibility import SourceCredibility
 from config import cfg, DATA_DIR
+from trading.fees import FeeUnscorableError, fee_schedule_at
+from trading.paper_accounting import (
+    PAPER_ACCOUNTING_FRESH_PLAN_SHA256,
+    PAPER_ACCOUNTING_VERSION,
+    PaperAccountingAdmissionError,
+    PaperAccountingHandlers,
+    initialize_fresh_paper_accounting_schema,
+    paper_accounting_schema_contract_matches,
+    require_paper_accounting_admission,
+)
 from trading.portfolio import Portfolio, Position
 from trading.settlement import (
     MarketOutcome,
@@ -424,12 +434,15 @@ class PaperTrader:
         *,
         startup_context: str = "runtime",
         calibration_task: "CalibrationTask | None" = None,
+        paper_accounting_handlers: PaperAccountingHandlers | None = None,
     ):
         self._db_path = db_path
         self._startup_context = startup_context
         self._initialized = False
         self._transaction_lock = threading.RLock()
         self._settlement_schema_present = False
+        self._paper_accounting_schema_present = False
+        self._paper_accounting_handlers = paper_accounting_handlers
         self._calibration_task = calibration_task
         self._validate_startup_context()
         self._enforce_runtime_guards()
@@ -438,7 +451,11 @@ class PaperTrader:
         enable_and_verify_foreign_keys(self._conn)
         self.credibility: SourceCredibility
         self.portfolio: Portfolio
-        self.initialize()
+        try:
+            self.initialize()
+        except BaseException:
+            self._conn.close()
+            raise
 
     def initialize(self) -> None:
         """Explicit bootstrap hook kept idempotent for repeated construction safety.
@@ -461,7 +478,15 @@ class PaperTrader:
                     self._conn.execute(_stmt)
             if fresh_database:
                 initialize_fresh_settlement_schema(self._conn)
+                initialize_fresh_paper_accounting_schema(
+                    self._conn,
+                    migration_plan_sha256=PAPER_ACCOUNTING_FRESH_PLAN_SHA256,
+                )
         self._migrate_db()
+        self._paper_accounting_schema_present = (
+            paper_accounting_schema_contract_matches(self._conn)
+        )
+        self._validate_paper_accounting_startup()
         self.credibility = SourceCredibility(self._db_path)
         self.portfolio = Portfolio()
         self.portfolio.load_from_db(self._conn)
@@ -481,6 +506,26 @@ class PaperTrader:
     @property
     def settlement_schema_present(self) -> bool:
         return self._settlement_schema_present
+
+    @property
+    def paper_accounting_schema_present(self) -> bool:
+        return self._paper_accounting_schema_present
+
+    def _validate_paper_accounting_startup(self) -> None:
+        if not config_module.cfg.enable_fee_net_paper_accounting:
+            return
+        if not self._paper_accounting_schema_present:
+            raise PaperAccountingAdmissionError(
+                "fee-net paper accounting requires the exact migrated schema"
+            )
+        if (
+            self._paper_accounting_handlers is None
+            or not self._paper_accounting_handlers.supports(PAPER_ACCOUNTING_VERSION)
+        ):
+            raise PaperAccountingAdmissionError(
+                "fee-net paper accounting requires both entry and settlement "
+                f"handlers for version {PAPER_ACCOUNTING_VERSION}"
+            )
 
     def _ensure_p0_cohort_sentinel(self) -> None:
         """Idempotent insert of bot_state.p0_price_fix_deployed_ts (P-9 / LD-7).
@@ -937,9 +982,46 @@ class PaperTrader:
 
     # ── Trade recording ───────────────────────────────────────────────────────
 
-    def record_trade(self, analysis: SignalAnalysis) -> str:
+    def record_trade(
+        self,
+        analysis: SignalAnalysis,
+        *,
+        entry_request_id: str | None = None,
+    ) -> str:
+        if config_module.cfg.enable_fee_net_paper_accounting:
+            self._require_fee_net_entry_contract(analysis, entry_request_id)
+            raise PaperAccountingAdmissionError(
+                "fee-net paper entry execution is not installed"
+            )
         with self._transaction_lock:
             return self._record_trade_locked(analysis)
+
+    def _require_fee_net_entry_contract(
+        self,
+        analysis: SignalAnalysis,
+        entry_request_id: str | None,
+    ) -> None:
+        venue_value = (
+            getattr(analysis, "venue", None)
+            or getattr(analysis.market, "venue", None)
+            or Venue.KALSHI.value
+        )
+        try:
+            venue = normalize_venue(venue_value)
+            schedule_id = fee_schedule_at(
+                venue=venue,
+                timestamp=datetime.now(timezone.utc),
+            )
+        except (ValueError, FeeUnscorableError) as exc:
+            raise PaperAccountingAdmissionError(
+                "fee-net paper entry requires a pinned effective fee schedule"
+            ) from exc
+        require_paper_accounting_admission(
+            self._conn,
+            self._paper_accounting_handlers,
+            entry_request_id,
+            schedule_id,
+        )
 
     def _record_trade_locked(self, analysis: SignalAnalysis) -> str:
         from analysis.kelly import contracts_from_dollars

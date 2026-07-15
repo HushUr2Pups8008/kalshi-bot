@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_EVEN
 from enum import StrEnum
+from typing import Mapping
 
 from trading.venue import Venue
 
@@ -69,6 +71,76 @@ _SCHEDULE_COEFFICIENTS = {
         FeeRole.MAKER: Decimal("-0.0125"),
     },
 }
+
+
+def fee_schedule_at(*, venue: Venue, timestamp: datetime) -> FeeScheduleId:
+    """Return the sole pinned schedule effective for a venue and timestamp."""
+    if not isinstance(venue, Venue):
+        raise FeeUnscorableError("venue must be a supported Venue")
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        raise FeeUnscorableError("timestamp must be timezone-aware")
+
+    matches = tuple(
+        schedule
+        for schedule in _SUPPORTED_SCHEDULES
+        if schedule.venue is venue
+        and timestamp >= schedule.effective_from
+        and (
+            schedule.effective_to is None
+            or timestamp < schedule.effective_to
+        )
+    )
+    if not matches:
+        raise FeeUnscorableError("no pinned fee schedule is effective at timestamp")
+    if len(matches) != 1:
+        raise FeeUnscorableError("ambiguous pinned fee schedules at timestamp")
+    return matches[0]
+
+
+def fee_schedule_record(schedule_id: FeeScheduleId) -> dict[str, object]:
+    """Return the canonical persistence record for an exact pinned schedule."""
+    if schedule_id not in _SUPPORTED_SCHEDULES:
+        raise FeeUnscorableError("unknown or unpinned fee schedule")
+    return {
+        "artifact_sha256": schedule_id.artifact_sha256,
+        "effective_from": schedule_id.effective_from.isoformat(),
+        "effective_to": (
+            schedule_id.effective_to.isoformat()
+            if schedule_id.effective_to is not None
+            else None
+        ),
+        "name": schedule_id.name,
+        "supporting_artifact_sha256": list(
+            schedule_id.supporting_artifact_sha256
+        ),
+        "venue": schedule_id.venue.value,
+    }
+
+
+def serialize_fee_schedule(schedule_id: FeeScheduleId) -> str:
+    return json.dumps(
+        fee_schedule_record(schedule_id),
+        allow_nan=False,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def deserialize_fee_schedule(
+    value: str | Mapping[str, object],
+) -> FeeScheduleId:
+    """Resolve persisted schedule provenance to an exact supported schedule."""
+    try:
+        record = json.loads(value) if isinstance(value, str) else dict(value)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise FeeUnscorableError("invalid fee schedule record") from exc
+    if not isinstance(record, dict):
+        raise FeeUnscorableError("invalid fee schedule record")
+    for schedule in _SUPPORTED_SCHEDULES:
+        if record == fee_schedule_record(schedule):
+            return schedule
+    raise FeeUnscorableError("unknown or unpinned fee schedule")
 
 
 def fee_coefficient_for(schedule_id: FeeScheduleId, role: FeeRole) -> Decimal:

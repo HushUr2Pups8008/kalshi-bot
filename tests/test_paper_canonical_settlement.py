@@ -17,6 +17,11 @@ import pytest
 
 from polymarket.settlement_reconciler import PersistedPositionReconciler
 from tests.test_paper_trader import _cfg_module, _make_mock_analysis
+from trading.paper_accounting import (
+    PAPER_ACCOUNTING_VERSION,
+    PaperAccountingAdmissionError,
+    PaperAccountingHandlers,
+)
 from trading.portfolio import Portfolio, Position
 from trading.settlement import (
     MarketOutcome,
@@ -25,6 +30,7 @@ from trading.settlement import (
     VoidRefundContract,
     build_settlement_observation,
 )
+from trading.settlement_store import settlement_schema_contract_matches
 from trading.venue import MarketRef, Venue
 
 
@@ -40,6 +46,11 @@ def trader_factory(monkeypatch, tmp_path):
     monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
     monkeypatch.setattr(_cfg_module.cfg, "max_ticker_exposure_pct", 0.25)
     monkeypatch.setattr(_cfg_module.cfg, "kelly_fraction", 0.5)
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "enable_fee_net_paper_accounting",
+        False,
+    )
 
     import trading.paper_trader as paper_trader_module
 
@@ -51,10 +62,11 @@ def trader_factory(monkeypatch, tmp_path):
 
     traders = []
 
-    def _make(name: str):
+    def _make(name: str, **kwargs):
         trader = paper_trader_module.PaperTrader(
             db_path=tmp_path / f"{name}.db",
             startup_context="test",
+            **kwargs,
         )
         trader._set_state("notional_bankroll", "500.0")
         traders.append(trader)
@@ -127,6 +139,104 @@ def _record_analysis(trader, analysis, *, trade_id: str) -> str:
         patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}),
     ):
         return trader.record_trade(analysis)
+
+
+def test_fresh_database_installs_disabled_accounting_beside_unchanged_gross_v1(
+    trader_factory,
+):
+    trader = trader_factory("accounting-fresh")
+
+    assert trader.paper_accounting_schema_present is True
+    assert settlement_schema_contract_matches(trader._conn) is True
+    meta = trader._conn.execute(
+        """
+        SELECT schema_version, accounting_version
+        FROM paper_accounting_schema_meta
+        """
+    ).fetchone()
+    assert tuple(meta) == (1, PAPER_ACCOUNTING_VERSION)
+
+
+def test_false_mode_keeps_gross_entry_and_leaves_accounting_table_empty(
+    trader_factory,
+):
+    trader = trader_factory("accounting-false-parity")
+    market_ref = MarketRef(Venue.KALSHI, "KX-ACCT-FALSE", "KX-ACCT-FALSE")
+
+    trade_id = _record_trade(trader, market_ref, trade_id="acctfalse001")
+
+    assert trade_id == "acctfalse001"
+    assert trader.get_notional_bankroll() == pytest.approx(490.0)
+    assert trader._conn.execute(
+        "SELECT COUNT(*) FROM paper_trade_accounting"
+    ).fetchone()[0] == 0
+
+
+def test_false_mode_existing_database_does_not_auto_install_accounting_schema(
+    trader_factory,
+):
+    first = trader_factory("accounting-legacy")
+    with first._conn:
+        first._conn.execute("DROP TABLE paper_trade_accounting")
+        first._conn.execute("DROP TABLE paper_accounting_schema_meta")
+    first._conn.close()
+
+    reopened = trader_factory("accounting-legacy")
+
+    assert reopened.paper_accounting_schema_present is False
+    assert reopened._conn.execute(
+        """
+        SELECT COUNT(*) FROM sqlite_schema
+        WHERE name IN ('paper_trade_accounting', 'paper_accounting_schema_meta')
+        """
+    ).fetchone()[0] == 0
+    assert settlement_schema_contract_matches(reopened._conn) is True
+
+
+def test_enabled_accounting_fails_closed_before_gross_entry_until_task10(
+    trader_factory,
+    monkeypatch,
+):
+    seeded = trader_factory("accounting-enabled")
+    seeded._conn.close()
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "enable_fee_net_paper_accounting",
+        True,
+    )
+
+    with pytest.raises(PaperAccountingAdmissionError, match="both entry and settlement"):
+        trader_factory("accounting-enabled")
+
+    noop = lambda _record: None
+    handlers = PaperAccountingHandlers(
+        entry={PAPER_ACCOUNTING_VERSION: noop},
+        settlement={PAPER_ACCOUNTING_VERSION: noop},
+    )
+    trader = trader_factory(
+        "accounting-enabled",
+        paper_accounting_handlers=handlers,
+    )
+    analysis = _make_mock_analysis(ticker="KX-ACCT-ENABLED")
+    analysis.venue = Venue.KALSHI.value
+    analysis.market.venue = Venue.KALSHI.value
+    before_bankroll = trader.get_notional_bankroll()
+    before_positions = trader.portfolio.open_positions()
+
+    with pytest.raises(PaperAccountingAdmissionError, match="entry_request_id"):
+        trader.record_trade(analysis)
+    with pytest.raises(PaperAccountingAdmissionError, match="execution is not installed"):
+        trader.record_trade(analysis, entry_request_id="candidate-stable-request-1")
+
+    assert trader.get_notional_bankroll() == before_bankroll
+    assert trader.portfolio.open_positions() == before_positions
+    assert trader._conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 0
+    assert trader._conn.execute(
+        "SELECT COUNT(*) FROM paper_trade_accounting"
+    ).fetchone()[0] == 0
+    assert trader._conn.execute(
+        "SELECT COUNT(*) FROM paper_settlement_outbox"
+    ).fetchone()[0] == 0
 
 
 def _attempt_record_trade(

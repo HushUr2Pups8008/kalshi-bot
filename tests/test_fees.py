@@ -15,9 +15,14 @@ from trading.fees import (
     POLYMARKET_US_2026_07_01,
     FeeContext,
     FeeRole,
+    FeeScheduleId,
     FeeUnscorableError,
+    deserialize_fee_schedule,
+    fee_schedule_at,
+    fee_schedule_record,
     quote_fee,
     quote_kalshi_rounding,
+    serialize_fee_schedule,
 )
 from trading.venue import Venue
 
@@ -70,6 +75,90 @@ def test_pinned_manifest_matches_implemented_schedule_ids():
     assert by_id[POLYMARKET_US_2026_07_01.name]["artifact_sha256"] == (
         POLYMARKET_US_2026_07_01.artifact_sha256
     )
+
+
+@pytest.mark.parametrize(
+    ("venue", "expected"),
+    [
+        (Venue.KALSHI, KALSHI_GENERAL_2026_07_07),
+        (Venue.POLYMARKET_US, POLYMARKET_US_2026_07_01),
+    ],
+)
+def test_fee_schedule_at_returns_exact_pinned_effective_schedule(venue, expected):
+    assert fee_schedule_at(
+        venue=venue,
+        timestamp=datetime(2026, 7, 14, 12, tzinfo=UTC),
+    ) is expected
+
+
+def test_fee_schedule_at_rejects_naive_time_gap_and_overlap(monkeypatch):
+    with pytest.raises(FeeUnscorableError, match="timezone-aware"):
+        fee_schedule_at(
+            venue=Venue.KALSHI,
+            timestamp=datetime(2026, 7, 14, 12),
+        )
+
+    with pytest.raises(FeeUnscorableError, match="no pinned fee schedule"):
+        fee_schedule_at(
+            venue=Venue.KALSHI,
+            timestamp=datetime(2026, 7, 1, 12, tzinfo=UTC),
+        )
+
+    overlapping = replace(
+        KALSHI_GENERAL_2026_07_07,
+        name="kalshi-overlap-test",
+        artifact_sha256="a" * 64,
+    )
+    monkeypatch.setattr(
+        "trading.fees._SUPPORTED_SCHEDULES",
+        frozenset((KALSHI_GENERAL_2026_07_07, overlapping)),
+    )
+    with pytest.raises(FeeUnscorableError, match="ambiguous pinned fee schedules"):
+        fee_schedule_at(
+            venue=Venue.KALSHI,
+            timestamp=datetime(2026, 7, 14, 12, tzinfo=UTC),
+        )
+
+
+def test_fee_schedule_serialization_round_trips_only_exact_supported_schedule():
+    record = fee_schedule_record(KALSHI_GENERAL_2026_07_07)
+    serialized = serialize_fee_schedule(KALSHI_GENERAL_2026_07_07)
+
+    assert serialized == json.dumps(
+        record,
+        allow_nan=False,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    assert deserialize_fee_schedule(serialized) is KALSHI_GENERAL_2026_07_07
+    assert record == {
+        "artifact_sha256": KALSHI_GENERAL_2026_07_07.artifact_sha256,
+        "effective_from": "2026-07-07T00:00:00-04:00",
+        "effective_to": None,
+        "name": "kalshi-general-2026-07-07",
+        "supporting_artifact_sha256": list(
+            KALSHI_GENERAL_2026_07_07.supporting_artifact_sha256
+        ),
+        "venue": Venue.KALSHI.value,
+    }
+
+    tampered = dict(record, artifact_sha256="0" * 64)
+    with pytest.raises(FeeUnscorableError, match="unknown or unpinned fee schedule"):
+        deserialize_fee_schedule(tampered)
+
+
+def test_fee_schedule_serialization_rejects_unsupported_descriptor():
+    unsupported = FeeScheduleId(
+        name="unsupported",
+        venue=Venue.KALSHI,
+        effective_from=datetime(2026, 7, 7, tzinfo=UTC),
+        effective_to=None,
+        artifact_sha256="f" * 64,
+    )
+
+    with pytest.raises(FeeUnscorableError, match="unknown or unpinned fee schedule"):
+        fee_schedule_record(unsupported)
 
 
 def test_kalshi_general_taker_fee_uses_decimal_formula_and_direct_precision():
