@@ -45,6 +45,9 @@ from utils.research_prewarm_targets import (
 )
 from utils.research_evidence_quality import research_evidence_temporally_valid
 from scripts.research_activation_status import evaluate_activation_profile
+from trading.capital_guard_shadow import (
+    capital_guard_shadow_schema_contract_matches,
+)
 from trading.settlement_store import settlement_schema_contract_matches
 
 
@@ -81,6 +84,17 @@ WEATHER_SHADOW_TABLES = {
     "research_weather_shadow_outcomes": "outcomes",
     "research_weather_shadow_conflicts": "conflicts",
     "research_weather_shadow_outcome_checks": "checks",
+}
+CAPITAL_GUARD_SHADOW_ROW_COUNT_LIMIT = 10_000
+CAPITAL_GUARD_SHADOW_TABLES = {
+    "capital_guard_shadow_schema_meta": "meta",
+    "capital_guard_shadow_capture_attempts": "attempts",
+    "capital_guard_shadow_candidates": "candidates",
+    "capital_guard_shadow_conflicts": "conflicts",
+    "capital_guard_shadow_observations": "observations",
+    "capital_guard_shadow_candidate_observations": "links",
+    "capital_guard_shadow_settlements": "settlements",
+    "capital_guard_shadow_evaluations": "evaluations",
 }
 
 
@@ -1038,6 +1052,99 @@ def print_weather_shadow_status(
     )
 
 
+def print_capital_guard_shadow_status(
+    repo_root: Path,
+    *,
+    current_proc: ProcessInfo | None = None,
+) -> None:
+    flag_names = (
+        "ENABLE_CAPITAL_GUARD_SHADOW_CAPTURE",
+        "ENABLE_CAPITAL_GUARD_SHADOW_SETTLEMENT_COLLECTION",
+    )
+    if current_proc is not None:
+        runtime_flags = tuple(
+            _running_process_env_value(current_proc, flag_name)
+            for flag_name in flag_names
+        )
+        if not all(readable for _, readable in runtime_flags):
+            print("capital_guard_shadow: unknown (runtime-process-env-unreadable)")
+            return
+        values = tuple(value or "false" for value, _ in runtime_flags)
+        sources = ("runtime-process-env", "runtime-process-env")
+    else:
+        configured_flags = tuple(
+            _research_env_value(repo_root, flag_name, "false")
+            for flag_name in flag_names
+        )
+        values = tuple(value for value, _ in configured_flags)
+        sources = tuple(source for _, source in configured_flags)
+
+    capture_enabled, collection_enabled = map(_env_bool, values)
+    capture_summary = f"capture={'on' if capture_enabled else 'off'} ({sources[0]})"
+    collection_summary = (
+        f"collection={'on' if collection_enabled else 'off'} ({sources[1]})"
+    )
+    prefix = f"capital_guard_shadow: {capture_summary} {collection_summary}"
+    if not capture_enabled and not collection_enabled:
+        print(prefix)
+        return
+
+    db_path = repo_root / "data" / "capital_guard_shadow.db"
+    if not db_path.is_file():
+        print(f"{prefix} db=missing")
+        return
+
+    try:
+        db_uri = f"{db_path.resolve().as_uri()}?mode=ro"
+        with sqlite3.connect(db_uri, uri=True) as conn:
+            integrity_row = conn.execute("PRAGMA integrity_check").fetchone()
+            integrity = str(integrity_row[0]) if integrity_row else "unknown"
+            application_tables = {
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_schema "
+                    "WHERE type = 'table' "
+                    "AND name GLOB 'capital_guard_shadow_*'"
+                )
+            }
+            expected_tables = set(CAPITAL_GUARD_SHADOW_TABLES)
+            present_tables = application_tables & expected_tables
+            missing_tables = expected_tables - application_tables
+            unexpected_tables = application_tables - expected_tables
+            counts: dict[str, int | None] = {}
+            for table_name, label in CAPITAL_GUARD_SHADOW_TABLES.items():
+                if table_name not in present_tables:
+                    counts[label] = None
+                    continue
+                row = conn.execute(
+                    f'SELECT COUNT(*) FROM (SELECT 1 FROM "{table_name}" LIMIT ?)',
+                    (CAPITAL_GUARD_SHADOW_ROW_COUNT_LIMIT + 1,),
+                ).fetchone()
+                counts[label] = int(row[0]) if row else 0
+            exact_schema_contract = capital_guard_shadow_schema_contract_matches(conn)
+    except (OSError, sqlite3.Error) as exc:
+        print(f"{prefix} db=error:{type(exc).__name__}")
+        return
+
+    row_summary = ",".join(
+        f"{label}:{count if count is not None else 'missing'}"
+        for label, count in counts.items()
+    )
+    missing_summary = ",".join(sorted(missing_tables)) or "none"
+    unexpected_summary = ",".join(sorted(unexpected_tables)) or "none"
+    schema_status = (
+        "ok"
+        if not missing_tables and not unexpected_tables and exact_schema_contract
+        else "mismatch"
+    )
+    print(
+        f"{prefix} integrity={integrity} "
+        f"tables={len(present_tables)}/{len(CAPITAL_GUARD_SHADOW_TABLES)} "
+        f"schema={schema_status} missing={missing_summary} "
+        f"unexpected={unexpected_summary} rows={row_summary}"
+    )
+
+
 def summarize_research_prewarm_backlog(path: Path, *, since: datetime) -> list[str]:
     return _target_tickers_from_trade_log(
         path,
@@ -1826,6 +1933,7 @@ def main() -> int:
         dossier_stats=research_dossiers,
     )
     print_weather_shadow_status(args.home, current_proc=current_proc)
+    print_capital_guard_shadow_status(args.home, current_proc=current_proc)
     print_canonical_settlement_status(args.home)
     print_kalshi_drift_section(now=now)
     print_history(sessions=sessions, current_proc=current_proc, now=now)

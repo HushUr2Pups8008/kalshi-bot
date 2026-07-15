@@ -1197,6 +1197,18 @@ class BotConfig:
             "false",
         )
     )
+    enable_capital_guard_shadow_capture: bool = field(
+        default_factory=lambda: _parse_bool_env(
+            "ENABLE_CAPITAL_GUARD_SHADOW_CAPTURE",
+            "false",
+        )
+    )
+    enable_capital_guard_shadow_settlement_collection: bool = field(
+        default_factory=lambda: _parse_bool_env(
+            "ENABLE_CAPITAL_GUARD_SHADOW_SETTLEMENT_COLLECTION",
+            "false",
+        )
+    )
 
     # Polymarket US credentials and endpoints. Disabled until explicitly enabled.
     polymarket_us_enabled: bool = field(
