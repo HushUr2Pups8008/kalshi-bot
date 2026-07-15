@@ -25,6 +25,11 @@ from pathlib import Path
 from typing import Any
 
 from polymarket.domain_key import pm_domain_key
+from scripts.mark_open_positions import (
+    MarketProvider,
+    PublicMarketProvider,
+    compute_open_position_marks,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -385,9 +390,16 @@ def report_series_key(trade: dict[str, Any]) -> str:
     return series or "(unknown)"
 
 
-def summarize(path: Path, exclude_test: bool = False, *, now: datetime | None = None) -> dict[str, Any]:
+def summarize(
+    path: Path,
+    exclude_test: bool = False,
+    *,
+    now: datetime | None = None,
+    mark_provider: MarketProvider | None = None,
+    as_of: datetime | None = None,
+) -> dict[str, Any]:
     trades, columns = load_trades(path)
-    now = now or datetime.now(timezone.utc)
+    now = now or as_of or datetime.now(timezone.utc)
     if exclude_test:
         trades = [trade for trade in trades if not is_test_trade(trade)]
     stats: dict[str, Any] = {
@@ -420,7 +432,15 @@ def summarize(path: Path, exclude_test: bool = False, *, now: datetime | None = 
             "marked_kalshi_unrealized_pnl_dollars": 0.0,
             "unknown_mark_cost_dollars": 0.0,
         },
+        "executable_liquidation": None,
     }
+
+    if mark_provider is not None:
+        stats["executable_liquidation"] = compute_open_position_marks(
+            path,
+            provider=mark_provider,
+            as_of=as_of or now,
+        )
 
     if not trades:
         return stats
@@ -519,6 +539,36 @@ def print_summary(stats: dict[str, Any], top: int) -> None:
     print(f"  Avg win           : {fmt_money(stats['avg_win'])}")
     print(f"  Avg loss          : {fmt_money(stats['avg_loss'])}")
 
+    liquidation = stats.get("executable_liquidation")
+    if liquidation:
+        print()
+        print("Report-Only Executable Liquidation (not a G7 input)")
+        print(f"  As of                    : {liquidation['as_of']}")
+        print(
+            "  Gross executable value   : "
+            f"{fmt_money(liquidation['gross_bid_value'])}"
+        )
+        print(
+            "  Estimated exit fees      : "
+            f"{fmt_money(liquidation['estimated_exit_fees'])}"
+        )
+        print(
+            "  Fee-net liquidation value: "
+            f"{fmt_money(liquidation['report_net_liquidation_value'])}"
+        )
+        print(
+            "  Unscorable open cost     : "
+            f"{fmt_money(liquidation['unscorable_cost'])}"
+        )
+        for row in liquidation.get("by_venue") or []:
+            print(
+                f"  {row['venue']}: "
+                f"gross={fmt_money(row['gross_bid_value'])} "
+                f"fees={fmt_money(row['estimated_exit_fees'])} "
+                f"net={fmt_money(row['report_net_liquidation_value'])} "
+                f"unscorable={fmt_money(row['unscorable_cost'])}"
+            )
+
     print()
     print("Holding Period")
     if stats["holding_period_count"] > 0:
@@ -591,7 +641,14 @@ def print_summary(stats: dict[str, Any], top: int) -> None:
 
 def main() -> int:
     args = parse_args()
-    stats = summarize(Path(args.path), exclude_test=args.exclude_test)
+    as_of = datetime.now(timezone.utc)
+    stats = summarize(
+        Path(args.path),
+        exclude_test=args.exclude_test,
+        now=as_of,
+        mark_provider=PublicMarketProvider(),
+        as_of=as_of,
+    )
     print_summary(stats, top=max(1, args.top))
     return 0
 

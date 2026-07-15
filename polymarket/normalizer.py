@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from polymarket.models import PolymarketMarket
@@ -42,6 +45,64 @@ def _quote_cents(quote: Any) -> int | None:
 
 def _price_cents(outcome: dict[str, Any]) -> int | None:
     return _quote_cents(outcome.get("bestAsk"))
+
+
+def _bid_cents(outcome: dict[str, Any]) -> int | None:
+    return _quote_cents(outcome.get("bestBid"))
+
+
+def _quote_size(quote: Any) -> Decimal | None:
+    if not isinstance(quote, dict):
+        return None
+    value = quote.get("quantity", quote.get("size"))
+    if isinstance(value, dict):
+        value = value.get("value")
+    return _optional_decimal(value)
+
+
+def _bid_size(outcome: dict[str, Any]) -> Decimal | None:
+    return _quote_size(outcome.get("bestBid"))
+
+
+def _token_id(outcome: dict[str, Any]) -> str | None:
+    value = outcome.get("tokenId") or outcome.get("token_id")
+    token_id = str(value).strip() if value is not None else ""
+    return token_id or None
+
+
+def _optional_decimal(value: Any) -> Decimal | None:
+    if value is None or value == "":
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _optional_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _payload_hash(payload: dict[str, Any]) -> str:
+    def json_safe(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {str(key): json_safe(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [json_safe(item) for item in value]
+        if isinstance(value, int) and not isinstance(value, bool) and value.bit_length() > 12_000:
+            sign = "-" if value < 0 else ""
+            return {"__oversized_int_hex__": f"{sign}{abs(value):x}"}
+        return value
+
+    canonical = json.dumps(
+        json_safe(payload), sort_keys=True, separators=(",", ":"), default=str
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _parse_json_list(value: Any) -> list[Any]:
@@ -111,7 +172,17 @@ def _oriented_market_sides(payload: dict[str, Any]) -> tuple[dict[str, Any], dic
     return long_sides[0], short_sides[0]
 
 
-def _long_book_prices(payload: dict[str, Any]) -> tuple[int, int, str] | None:
+def _long_book_prices(
+    payload: dict[str, Any],
+) -> tuple[
+    int | None,
+    int,
+    int | None,
+    int,
+    Decimal | None,
+    Decimal | None,
+    str,
+] | None:
     sides = _oriented_market_sides(payload)
     if sides is None:
         return None
@@ -126,14 +197,22 @@ def _long_book_prices(payload: dict[str, Any]) -> tuple[int, int, str] | None:
         yes_ask = _quote_cents(top_ask)
         if yes_bid is None or yes_ask is None or yes_bid > yes_ask:
             return None
-        return yes_ask, 100 - yes_bid, "pm_long_book_v1"
+        return (
+            yes_bid,
+            yes_ask,
+            100 - yes_ask,
+            100 - yes_bid,
+            _quote_size(top_bid),
+            _quote_size(top_ask),
+            "pm_long_book_v1",
+        )
 
     long_side, short_side = sides
     yes_ask = _quote_cents(long_side.get("quote"))
     no_ask = _quote_cents(short_side.get("quote"))
     if yes_ask is None or no_ask is None:
         return None
-    return yes_ask, no_ask, "pm_named_sides_v1"
+    return None, yes_ask, None, no_ask, None, None, "pm_named_sides_v1"
 
 
 def _status(payload: dict[str, Any]) -> str:
@@ -159,7 +238,11 @@ def _venue_market_id(payload: dict[str, Any]) -> str | None:
     return canonical_id
 
 
-def normalize_polymarket_market(payload: dict[str, Any]) -> PolymarketMarket:
+def normalize_polymarket_market(
+    payload: dict[str, Any],
+    *,
+    snapshot_at: datetime | None = None,
+) -> PolymarketMarket:
     outcomes = _outcome_dicts(payload)
     if len(outcomes) != 2:
         raise ValueError("Polymarket integration supports binary markets only")
@@ -175,16 +258,32 @@ def normalize_polymarket_market(payload: dict[str, Any]) -> PolymarketMarket:
     if "marketSides" in payload or "bestBidQuote" in payload or "bestAskQuote" in payload:
         long_book_prices = _long_book_prices(payload)
         if long_book_prices is None:
+            yes_bid_cents = None
             yes_ask_cents = None
+            no_bid_cents = None
             no_ask_cents = None
+            yes_bid_size = None
+            no_bid_size = None
             price_source = ""
             price_method = ""
         else:
-            yes_ask_cents, no_ask_cents, price_method = long_book_prices
+            (
+                yes_bid_cents,
+                yes_ask_cents,
+                no_bid_cents,
+                no_ask_cents,
+                yes_bid_size,
+                no_bid_size,
+                price_method,
+            ) = long_book_prices
             price_source = "polymarket_public"
     else:
+        yes_bid_cents = _bid_cents(by_name["yes"])
         yes_ask_cents = _price_cents(by_name["yes"])
+        no_bid_cents = _bid_cents(by_name["no"])
         no_ask_cents = _price_cents(by_name["no"])
+        yes_bid_size = _bid_size(by_name["yes"])
+        no_bid_size = _bid_size(by_name["no"])
         if yes_ask_cents is None or no_ask_cents is None:
             yes_ask_cents = None
             no_ask_cents = None
@@ -201,6 +300,10 @@ def normalize_polymarket_market(payload: dict[str, Any]) -> PolymarketMarket:
         status=_status(payload),
         yes_ask_cents=yes_ask_cents,
         no_ask_cents=no_ask_cents,
+        yes_bid_cents=yes_bid_cents,
+        no_bid_cents=no_bid_cents,
+        yes_bid_size=yes_bid_size,
+        no_bid_size=no_bid_size,
         volume_dollars=_money_value(payload.get("volume")),
         open_interest_dollars=_money_value(payload.get("openInterest")),
         close_time=str(
@@ -228,4 +331,13 @@ def normalize_polymarket_market(payload: dict[str, Any]) -> PolymarketMarket:
         public_comments=_text_tuple(payload.get("comments"), "body", "text", "comment"),
         price_source=price_source,
         price_method=price_method,
+        yes_token_id=_token_id(by_name["yes"]),
+        no_token_id=_token_id(by_name["no"]),
+        fee_coefficient=_optional_decimal(payload.get("feeCoefficient")),
+        fee_effective_at=_optional_datetime(payload.get("feeEffectiveAt")),
+        quantity_step=_optional_decimal(payload.get("quantityStep")),
+        price_tick=_optional_decimal(payload.get("priceTick")),
+        fill_role=str(payload.get("fillRole") or "") or None,
+        source_payload_hash=_payload_hash(payload),
+        snapshot_at=snapshot_at or datetime.now(timezone.utc),
     )

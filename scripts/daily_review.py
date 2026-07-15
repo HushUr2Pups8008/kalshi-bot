@@ -18,6 +18,7 @@ import urllib.error
 import urllib.request
 from collections import Counter
 from datetime import datetime, timedelta, time as dt_time, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -164,7 +165,7 @@ def fmt_prob(value: Any) -> str:
 
 
 def fmt_money(value: Any) -> str:
-    if not isinstance(value, (int, float)):
+    if not isinstance(value, (int, float, Decimal)):
         return "n/a"
     sign = "+" if float(value) >= 0 else ""
     return f"{sign}${float(value):.2f}"
@@ -900,6 +901,8 @@ def build_daily_review(
     show_progress: bool = False,
     show_profile: bool = False,
     tier_state_path: Path | None = None,
+    mark_provider: paper_performance_drilldown.MarketProvider | None = None,
+    mark_as_of: datetime | None = None,
 ) -> list[str]:
     _t0 = time.perf_counter()
 
@@ -934,7 +937,10 @@ def build_daily_review(
         )
     with stage_timer("paper performance", enabled=show_profile):
         paper_stats = paper_performance_drilldown.summarize(
-            paper_db_path, exclude_test=exclude_test
+            paper_db_path,
+            exclude_test=exclude_test,
+            mark_provider=mark_provider,
+            as_of=mark_as_of,
         )
     with stage_timer("matcher weight status", enabled=show_profile):
         matcher_weight_status = _matcher_weight_runtime_status()
@@ -1364,21 +1370,73 @@ def build_daily_review(
         lines.append(f"    Win rate: {paper_performance_drilldown.fmt_pct(paper_stats.get('win_rate'))}")
         lines.append(f"    Total P&L: {fmt_money(paper_stats.get('total_pnl'))}")
         open_mark = paper_stats.get("open_mark_summary") or {}
+        liquidation = paper_stats.get("executable_liquidation") or {}
         if open_mark:
             lines.append(
                 f"    Open cost                        : {fmt_money(open_mark.get('open_cost_dollars'))}"
             )
-            lines.append(
-                "    Marked Kalshi bid value          : "
-                f"{fmt_money(open_mark.get('marked_kalshi_bid_value_dollars'))}"
-            )
-            lines.append(
-                "    Marked Kalshi unrealized P&L     : "
-                f"{fmt_money(open_mark.get('marked_kalshi_unrealized_pnl_dollars'))}"
-            )
-            lines.append(
-                f"    Unknown mark cost                : {fmt_money(open_mark.get('unknown_mark_cost_dollars'))}"
-            )
+            if liquidation:
+                lines.append(
+                    "    Gross executable bid value       : "
+                    f"{fmt_money(liquidation.get('gross_bid_value'))}"
+                )
+                lines.append(
+                    "    Estimated exit fees              : "
+                    f"{fmt_money(liquidation.get('estimated_exit_fees'))}"
+                )
+                lines.append(
+                    "    Fee-net liquidation value        : "
+                    f"{fmt_money(liquidation.get('report_net_liquidation_value'))}"
+                )
+                lines.append(
+                    "    Unrealized fee-net P&L           : "
+                    f"{fmt_money(liquidation.get('unrealized_fee_net_pnl'))}"
+                )
+                lines.append(
+                    "    Unscorable liquidation cost      : "
+                    f"{fmt_money(liquidation.get('unscorable_cost'))}"
+                )
+                reasons = liquidation.get("unscorable_reasons") or {}
+                if reasons:
+                    lines.append(
+                        "    Unscorable reasons                : "
+                        + ", ".join(
+                            f"{reason}={count}"
+                            for reason, count in sorted(reasons.items())
+                        )
+                    )
+                lines.append(
+                    "    Executable snapshot as of         : "
+                    f"{liquidation.get('as_of') or 'n/a'}"
+                )
+                for row in liquidation.get("by_venue") or []:
+                    lines.append(
+                        f"    {row.get('venue') or 'unknown'} "
+                        f"gross={fmt_money(row.get('gross_bid_value'))} "
+                        f"fees={fmt_money(row.get('estimated_exit_fees'))} "
+                        f"net={fmt_money(row.get('report_net_liquidation_value'))} "
+                        f"unscorable={fmt_money(row.get('unscorable_cost'))}"
+                    )
+                schedules = liquidation.get("fee_schedule_hashes") or {}
+                for venue, schedule in sorted(schedules.items()):
+                    lines.append(
+                        f"    Fee schedule {venue}: "
+                        f"{schedule.get('name') or 'unknown'} "
+                        f"sha256={schedule.get('artifact_sha256') or 'unknown'}"
+                    )
+            else:
+                lines.append(
+                    "    Marked Kalshi bid value          : "
+                    f"{fmt_money(open_mark.get('marked_kalshi_bid_value_dollars'))}"
+                )
+                lines.append(
+                    "    Marked Kalshi unrealized P&L     : "
+                    f"{fmt_money(open_mark.get('marked_kalshi_unrealized_pnl_dollars'))}"
+                )
+                lines.append(
+                    "    Unknown mark cost                : "
+                    f"{fmt_money(open_mark.get('unknown_mark_cost_dollars'))}"
+                )
         venue_rows = paper_stats.get("venues") or []
         if len(venue_rows) > 1 or any(
             str(row.get("name") or "") != "kalshi" for row in venue_rows
@@ -1674,6 +1732,7 @@ def main() -> int:
 
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     report_path = DEFAULT_REPORT_PATH
+    mark_as_of = datetime.now(timezone.utc)
     lines = build_daily_review(
         trades_path=Path(args.path),
         paper_db_path=DEFAULT_PAPER_DB_PATH,
@@ -1684,6 +1743,8 @@ def main() -> int:
         show_progress=args.progress,
         show_profile=args.profile,
         tier_state_path=SOURCE_TIER_STATE_PATH,
+        mark_provider=paper_performance_drilldown.PublicMarketProvider(),
+        mark_as_of=mark_as_of,
     )
 
     write_report(report_path, lines)

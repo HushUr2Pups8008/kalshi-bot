@@ -243,7 +243,10 @@ or pinned by immutable content hash, and its effective interval verified before
 implementation. The current fee-rounding documentation requires direct account
 precision of $0.0001, non-direct precision of $0.01, trade fee rounding to
 $0.0001, per-fill rounding adjustments, and an order-level accumulator/rebate.
-No implementation may rely on the previously assumed July 7 effective date.
+The July 7, 2026 effective date is no longer an assumption: on 2026-07-14 the
+official Kalshi fee-schedule PDF was fetched and pinned at SHA-256
+`815e2d5127d02d2fb90773d1a3844dc15a987696171eddc4e58de87b59c6124c`.
+Implementation must use that verified interval and content hash together.
 
 Polymarket US uses the official schedule effective 2026-07-01. Taker and maker
 coefficients, fill role, and banker's rounding to the nearest cent are stored as

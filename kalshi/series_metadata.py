@@ -6,7 +6,11 @@ probability, readiness, execution, or trading decisions.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
 from urllib.parse import urlparse
 
@@ -32,6 +36,10 @@ class KalshiSeriesMetadata:
     fee_type: str = ""
     can_close_early: bool | None = None
     raw_payload: Mapping[str, Any] = field(default_factory=dict)
+    fee_multiplier_decimal: Decimal | None = None
+    metadata_updated_at: datetime | None = None
+    raw_payload_hash: str = ""
+    snapshot_at: datetime | None = None
 
 
 def _domain_from_url(url: str) -> str:
@@ -85,7 +93,46 @@ def _source_from_raw(raw: Any) -> SettlementSource | None:
     return SettlementSource(label=" ".join(label.split()), url=url, domain=domain)
 
 
-def normalize_series_payload(payload: Mapping[str, Any]) -> KalshiSeriesMetadata:
+def _optional_decimal(value: Any) -> Decimal | None:
+    if value is None or value == "":
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _optional_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _payload_hash(payload: Mapping[str, Any]) -> str:
+    def json_safe(value: Any) -> Any:
+        if isinstance(value, Mapping):
+            return {str(key): json_safe(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [json_safe(item) for item in value]
+        if isinstance(value, int) and not isinstance(value, bool) and value.bit_length() > 12_000:
+            sign = "-" if value < 0 else ""
+            return {"__oversized_int_hex__": f"{sign}{abs(value):x}"}
+        return value
+
+    canonical = json.dumps(
+        json_safe(payload), sort_keys=True, separators=(",", ":"), default=str
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def normalize_series_payload(
+    payload: Mapping[str, Any],
+    *,
+    snapshot_at: datetime | None = None,
+) -> KalshiSeriesMetadata:
     """Normalize a Kalshi ``/series/{ticker}`` or list-entry payload."""
 
     inner = payload.get("series", payload)
@@ -113,6 +160,10 @@ def normalize_series_payload(payload: Mapping[str, Any]) -> KalshiSeriesMetadata
             bool(inner["can_close_early"]) if "can_close_early" in inner else None
         ),
         raw_payload=dict(inner),
+        fee_multiplier_decimal=_optional_decimal(inner.get("fee_multiplier")),
+        metadata_updated_at=_optional_datetime(inner.get("last_updated_ts")),
+        raw_payload_hash=_payload_hash(inner),
+        snapshot_at=snapshot_at or datetime.now(timezone.utc),
     )
 
 

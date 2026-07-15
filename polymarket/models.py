@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
+from decimal import Decimal
 
 from polymarket.domain_key import pm_domain_key
 from trading.venue import Venue
@@ -32,6 +34,26 @@ class PolymarketMarket:
     public_comments: tuple[str, ...] = ()
     price_source: str = ""
     price_method: str = ""
+    yes_bid_cents: int | None = None
+    no_bid_cents: int | None = None
+    yes_bid_size: Decimal | None = None
+    no_bid_size: Decimal | None = None
+    yes_token_id: str | None = None
+    no_token_id: str | None = None
+    fee_coefficient: Decimal | None = None
+    fee_effective_at: datetime | None = None
+    quantity_step: Decimal | None = None
+    price_tick: Decimal | None = None
+    fill_role: str | None = None
+    source_payload_hash: str = ""
+    snapshot_at: datetime | None = None
+    yes_bid_levels: tuple[tuple[Decimal, Decimal], ...] = ()
+    no_bid_levels: tuple[tuple[Decimal, Decimal], ...] = ()
+    book_as_of: datetime | None = None
+    book_payload_hash: str | None = None
+    book_error: str | None = None
+    report_venue: str | None = None
+    report_venue_market_id: str | None = None
 
     @property
     def tradeable_id(self) -> str:
