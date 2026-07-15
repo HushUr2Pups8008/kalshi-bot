@@ -252,6 +252,44 @@ def test_legacy_alias_check_allows_same_ref_duplicates_and_blocks_cross_ref_alia
     assert blocked.metrics["alias_collision_count"] == 1
 
 
+def test_duplicate_observation_retry_recovers_post_commit_portfolio_sync(
+    trader_factory,
+):
+    trader = trader_factory("portfolio-recovery")
+    market_ref = MarketRef(Venue.KALSHI, "KX-RECOVER", "KX-RECOVER")
+    trade_id = _record_mapped_trade(
+        trader,
+        market_ref,
+        trade_id="recovr000001",
+    )
+    observation = _observation(market_ref, MarketOutcome.YES)
+    original_resolve = trader.portfolio.resolve
+    resolve_calls = 0
+
+    def fail_once_then_resolve(ref):
+        nonlocal resolve_calls
+        resolve_calls += 1
+        if resolve_calls == 1:
+            raise RuntimeError("injected post-commit portfolio failure")
+        return original_resolve(ref)
+
+    trader.portfolio.resolve = fail_once_then_resolve
+
+    with pytest.raises(RuntimeError, match="post-commit portfolio failure"):
+        _resolve(trader, observation)
+
+    row = trader._conn.execute(
+        "SELECT resolved, settlement_observation_sha256 FROM paper_trades WHERE trade_id=?",
+        (trade_id,),
+    ).fetchone()
+    assert tuple(row) == (1, observation.observation_sha256)
+    assert trader.portfolio.open_positions(market_ref.alias)
+
+    assert _resolve(trader, observation) is False
+    assert trader.portfolio.open_positions(market_ref.alias) == []
+    assert resolve_calls == 2
+
+
 def _financial_snapshot(trader) -> dict[str, object]:
     trades = trader._conn.execute(
         """
