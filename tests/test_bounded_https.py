@@ -11,6 +11,7 @@ from typing import Any
 import aiohttp
 import pytest
 
+from analysis import research_gate
 from utils.bounded_https import fetch_bounded_https_ipv4
 
 
@@ -611,3 +612,56 @@ async def test_other_client_connection_errors_map_to_connection_error() -> None:
 
     assert raised.value.__cause__ is client_error
     _assert_resources_closed(connectors, sessions)
+
+
+@pytest.mark.asyncio
+async def test_research_wrapper_keeps_shared_limiter_inside_total_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    admission_started = asyncio.Event()
+    blocker = asyncio.Event()
+    shared_calls: list[Any] = []
+
+    class _BlockingAdmission:
+        async def __aenter__(self) -> None:
+            admission_started.set()
+            await blocker.wait()
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+    class _BlockingLimiter:
+        def slot(self) -> _BlockingAdmission:
+            return _BlockingAdmission()
+
+    async def shared_fetch(*args: Any, **kwargs: Any) -> bytes:
+        shared_calls.append(kwargs["admission_factory"])
+        return await fetch_bounded_https_ipv4(*args, **kwargs)
+
+    monkeypatch.setattr(
+        research_gate,
+        "fetch_bounded_https_ipv4",
+        shared_fetch,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        research_gate,
+        "_get_generic_web_search_work_limiter",
+        lambda: _BlockingLimiter(),
+    )
+
+    before = time.monotonic()
+    with pytest.raises(TimeoutError):
+        await research_gate._fetch_bounded_https_ipv4(
+            _URL,
+            canonical_host=_HOST,
+            provider_name=_PROVIDER,
+            user_agent=_USER_AGENT,
+            timeout=0.03,
+            max_bytes=10,
+            resolver_factory=_Resolver,
+        )
+
+    assert time.monotonic() - before < 0.15
+    assert admission_started.is_set()
+    assert len(shared_calls) == 1
