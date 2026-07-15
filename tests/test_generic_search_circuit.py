@@ -95,6 +95,20 @@ def _generic_evidence(query: ResearchQuery, *, source_name: str) -> ResearchEvid
     )
 
 
+def _provider_returns(value):
+    async def provider(_query: ResearchQuery):
+        return value
+
+    return provider
+
+
+def _provider_raises(error: Exception):
+    async def provider(_query: ResearchQuery):
+        raise error
+
+    return provider
+
+
 @pytest.mark.asyncio
 async def test_generic_search_runner_returns_rss_success_without_fallback(
     monkeypatch,
@@ -104,11 +118,11 @@ async def test_generic_search_runner_returns_rss_success_without_fallback(
     expected = [_generic_evidence(query, source_name="RSS")]
     calls: list[str] = []
 
-    def rss_search(_query: ResearchQuery) -> list[ResearchEvidence]:
+    async def rss_search(_query: ResearchQuery) -> list[ResearchEvidence]:
         calls.append("rss")
         return expected
 
-    def fallback_search(_query: ResearchQuery) -> list[ResearchEvidence]:
+    async def fallback_search(_query: ResearchQuery) -> list[ResearchEvidence]:
         calls.append("ddg")
         raise AssertionError("fallback must not run after RSS success")
 
@@ -132,11 +146,11 @@ async def test_generic_search_runner_opens_after_two_availability_failures(
     query = ResearchQuery("private query", "supporting", "reputable_secondary")
     calls: list[str] = []
 
-    def rss_search(_query: ResearchQuery) -> list[ResearchEvidence]:
+    async def rss_search(_query: ResearchQuery) -> list[ResearchEvidence]:
         calls.append("rss")
         raise TimeoutError("private RSS failure")
 
-    def fallback_search(_query: ResearchQuery) -> list[ResearchEvidence]:
+    async def fallback_search(_query: ResearchQuery) -> list[ResearchEvidence]:
         calls.append("ddg")
         raise ConnectionError("private DDG failure")
 
@@ -166,11 +180,11 @@ async def test_generic_search_runner_parser_failure_uses_fallback_without_mutati
     expected = [_generic_evidence(query, source_name="DDG")]
     calls: list[str] = []
 
-    def rss_search(_query: ResearchQuery) -> list[ResearchEvidence]:
+    async def rss_search(_query: ResearchQuery) -> list[ResearchEvidence]:
         calls.append("rss")
         raise ET.ParseError("private response body")
 
-    def fallback_search(_query: ResearchQuery) -> list[ResearchEvidence]:
+    async def fallback_search(_query: ResearchQuery) -> list[ResearchEvidence]:
         calls.append("ddg")
         return expected
 
@@ -200,12 +214,12 @@ async def test_structured_evidence_returns_while_generic_circuit_is_open(
     monkeypatch.setattr(
         research_gate_module,
         "_rss_search",
-        lambda _query: (_ for _ in ()).throw(TimeoutError("RSS unavailable")),
+        _provider_raises(TimeoutError("RSS unavailable")),
     )
     monkeypatch.setattr(
         research_gate_module,
         "_duckduckgo_lite_search",
-        lambda _query: (_ for _ in ()).throw(ConnectionError("DDG unavailable")),
+        _provider_raises(ConnectionError("DDG unavailable")),
     )
     with pytest.raises(GenericSearchUnavailable):
         await research_gate_module._run_generic_search(query)
@@ -303,12 +317,12 @@ async def test_repository_circuit_event_logging_is_sanitized(monkeypatch) -> Non
     monkeypatch.setattr(
         research_gate_module,
         "_rss_search",
-        lambda _query: (_ for _ in ()).throw(TimeoutError(secret_rss)),
+        _provider_raises(TimeoutError(secret_rss)),
     )
     monkeypatch.setattr(
         research_gate_module,
         "_duckduckgo_lite_search",
-        lambda _query: (_ for _ in ()).throw(ConnectionError(secret_ddg)),
+        _provider_raises(ConnectionError(secret_ddg)),
     )
 
     with pytest.raises(GenericSearchUnavailable):
@@ -341,12 +355,12 @@ async def test_repository_logger_failure_cannot_change_circuit_result(monkeypatc
     monkeypatch.setattr(
         research_gate_module,
         "_rss_search",
-        lambda _query: (_ for _ in ()).throw(TimeoutError("RSS unavailable")),
+        _provider_raises(TimeoutError("RSS unavailable")),
     )
     monkeypatch.setattr(
         research_gate_module,
         "_duckduckgo_lite_search",
-        lambda _query: (_ for _ in ()).throw(ConnectionError("DDG unavailable")),
+        _provider_raises(ConnectionError("DDG unavailable")),
     )
 
     with pytest.raises(GenericSearchUnavailable):
