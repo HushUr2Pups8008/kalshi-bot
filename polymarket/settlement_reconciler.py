@@ -5,8 +5,8 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 
-from trading.settlement import SettlementDriftError
-from trading.venue import Venue
+from trading.settlement import SettlementDriftError, SettlementObservation
+from trading.venue import MarketRef, Venue
 from utils.logger import get_logger
 
 log = get_logger("polymarket_settlement")
@@ -28,6 +28,22 @@ class SettlementResolver(Protocol):
         self, ticker: str, resolved_yes: bool
     ) -> list[tuple[str, str, float]]:
         """Resolve open paper trades using PaperTrader atomicity semantics."""
+
+
+class PersistedSettlementSource(Protocol):
+    def get_settlement(
+        self,
+        market_ref: MarketRef,
+    ) -> SettlementObservation | None:
+        """Return an exact canonical observation or report no settlement."""
+
+
+class PersistedPositionResolver(Protocol):
+    def mapped_open_market_refs(self) -> tuple[MarketRef, ...]:
+        """Return exact mapped identities for every unresolved persisted position."""
+
+    def resolve_observation(self, observation: SettlementObservation) -> bool:
+        """Apply one canonical observation atomically."""
 
 
 class PolymarketPublicSettlementSource:
@@ -154,6 +170,93 @@ class SettlementReconciler:
             params.append(limit)
         rows = self._resolver._conn.execute(sql, params).fetchall()
         return [str(row["ticker"]) for row in rows]
+
+
+class PersistedPositionReconciler:
+    """Reconcile mapped persisted positions without alias-based authority."""
+
+    def __init__(
+        self,
+        *,
+        source: PersistedSettlementSource,
+        resolver: PersistedPositionResolver,
+    ) -> None:
+        self._source = source
+        self._resolver = resolver
+
+    def reconcile(self, *, limit: int | None = None) -> SettlementReconcileResult:
+        if limit is not None and (isinstance(limit, bool) or limit < 0):
+            raise ValueError("limit must be a nonnegative integer or None")
+
+        market_refs = tuple(dict.fromkeys(self._resolver.mapped_open_market_refs()))
+        if limit is not None:
+            market_refs = market_refs[:limit]
+
+        checked = 0
+        resolved = 0
+        not_found = 0
+        errors = 0
+        for market_ref in market_refs:
+            if not isinstance(market_ref, MarketRef):
+                raise SettlementDriftError(
+                    "persisted settlement identity must be a MarketRef"
+                )
+            checked += 1
+            try:
+                observation = self._source.get_settlement(market_ref)
+            except SettlementNotFound:
+                not_found += 1
+                continue
+            except SettlementDriftError:
+                raise
+            except Exception as exc:
+                errors += 1
+                log.error(
+                    "Persisted settlement reconcile: isolating failed market %s:%s "
+                    "at FETCH stage: %s",
+                    market_ref.venue.value,
+                    market_ref.venue_market_id,
+                    exc,
+                    exc_info=True,
+                )
+                continue
+
+            if observation is None:
+                not_found += 1
+                continue
+            if not isinstance(observation, SettlementObservation):
+                raise SettlementDriftError(
+                    "authoritative settlement must return a SettlementObservation"
+                )
+            if observation.market_ref != market_ref:
+                raise SettlementDriftError(
+                    "authoritative settlement identity does not match persisted identity"
+                )
+
+            try:
+                applied = self._resolver.resolve_observation(observation)
+            except SettlementDriftError:
+                raise
+            except Exception as exc:
+                errors += 1
+                log.error(
+                    "Persisted settlement reconcile: isolating failed market %s:%s "
+                    "at RESOLUTION stage: %s",
+                    market_ref.venue.value,
+                    market_ref.venue_market_id,
+                    exc,
+                    exc_info=True,
+                )
+                continue
+            if applied:
+                resolved += 1
+
+        return SettlementReconcileResult(
+            checked=checked,
+            resolved=resolved,
+            not_found=not_found,
+            errors=errors,
+        )
 
 
 def _resolved_yes_from_settlement_value(market_id: str, raw: Any) -> bool:
