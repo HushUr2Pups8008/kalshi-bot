@@ -28,13 +28,21 @@ def test_normalizes_binary_market_payload():
             {
                 "name": "Yes",
                 "tokenId": "yes-token-1",
-                "bestBid": {"value": "0.41", "currency": "USD"},
+                "bestBid": {
+                    "value": "0.41",
+                    "quantity": "120",
+                    "currency": "USD",
+                },
                 "bestAsk": {"value": "0.42", "currency": "USD"},
             },
             {
                 "name": "No",
                 "tokenId": "no-token-1",
-                "bestBid": {"value": "0.58", "currency": "USD"},
+                "bestBid": {
+                    "value": "0.58",
+                    "quantity": "80",
+                    "currency": "USD",
+                },
                 "bestAsk": {"value": "0.59", "currency": "USD"},
             },
         ],
@@ -70,6 +78,8 @@ def test_normalizes_binary_market_payload():
     assert market.no_ask_cents == 59
     assert market.yes_bid_cents == 41
     assert market.no_bid_cents == 58
+    assert market.yes_bid_size == Decimal("120")
+    assert market.no_bid_size == Decimal("80")
     assert market.yes_token_id == "yes-token-1"
     assert market.no_token_id == "no-token-1"
     assert market.fee_coefficient == Decimal("0.06")

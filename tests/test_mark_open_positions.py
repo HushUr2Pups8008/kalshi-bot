@@ -9,13 +9,21 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
-from scripts.mark_open_positions import compute_open_position_marks
+from scripts.mark_open_positions import PublicMarketProvider, compute_open_position_marks
+from trading.fees import (
+    KALSHI_GENERAL_2026_07_07,
+    POLYMARKET_US_2026_07_01,
+)
+from trading.venue import Venue
+from trading.orderbook import BinaryMarketBook, BookLevel
 
 
 def _make_db(
@@ -93,6 +101,495 @@ def test_marks_accumulate_priced_and_fail_soft_unpriced(tmp_path: Path):
 
 def test_missing_db_returns_none(tmp_path: Path):
     assert compute_open_position_marks(tmp_path / "absent.db") is None
+
+
+_PM_TEST_IDS = {
+    "pm-report-1": "1001",
+    "pm-missing-fee": "1002",
+}
+
+
+def _add_canonical_ids(path: Path) -> None:
+    with sqlite3.connect(path) as conn:
+        conn.execute("ALTER TABLE paper_trades ADD COLUMN venue_market_id TEXT")
+        conn.execute(
+            "UPDATE paper_trades SET venue_market_id = ticker WHERE resolved = 0"
+        )
+        for ticker, venue_market_id in _PM_TEST_IDS.items():
+            conn.execute(
+                "UPDATE paper_trades SET venue_market_id = ? "
+                "WHERE resolved = 0 AND venue = 'polymarket_us' AND ticker = ?",
+                (venue_market_id, ticker),
+            )
+
+
+class _StaticMarketProvider:
+    def __init__(self, markets: dict[tuple[Venue, str], object]):
+        self.markets = markets
+        self.calls: list[tuple[Venue, str]] = []
+
+    def get_market(self, venue: Venue, ticker: str):
+        self.calls.append((venue, ticker))
+        key = (venue, ticker)
+        if key not in self.markets and venue is Venue.POLYMARKET_US:
+            alias = next(
+                (
+                    market_ticker
+                    for market_ticker, venue_market_id in _PM_TEST_IDS.items()
+                    if venue_market_id == ticker
+                ),
+                None,
+            )
+            if alias is not None:
+                key = (venue, alias)
+        market = self.markets[key]
+        if isinstance(market, Exception):
+            raise market
+        values = {
+            "report_venue": venue.value,
+            "report_venue_market_id": ticker,
+            **vars(market),
+        }
+        return SimpleNamespace(**values)
+
+
+def test_public_provider_enriches_kalshi_fee_terms_from_exact_series_and_caches():
+    as_of = datetime(2026, 7, 14, 12, tzinfo=timezone.utc)
+
+    class _FakeKalshi:
+        def __init__(self):
+            self.event_calls = 0
+            self.series_calls = 0
+
+        def get_market(self, ticker):
+            return SimpleNamespace(
+                ticker=ticker,
+                event_ticker="KXREPORT-26",
+                fee_multiplier=None,
+                fee_type=None,
+            )
+
+        def get_event_fee_terms(self, event_ticker, *, as_of):
+            self.event_calls += 1
+            assert event_ticker == "KXREPORT-26"
+            assert as_of == datetime(2026, 7, 14, 12, tzinfo=timezone.utc)
+            return SimpleNamespace(
+                series_ticker="KXREPORT",
+                fee_multiplier_override=Decimal("0.5"),
+                fee_type_override=None,
+                effective_at=datetime(2026, 7, 14, 10, tzinfo=timezone.utc),
+                raw_payload_hash="e" * 64,
+            )
+
+        def get_series(self, series_ticker):
+            self.series_calls += 1
+            assert series_ticker == "KXREPORT"
+            return SimpleNamespace(
+                fee_multiplier_decimal=Decimal("1"),
+                fee_type="quadratic",
+                metadata_updated_at=datetime(2026, 7, 8, tzinfo=timezone.utc),
+                raw_payload_hash="s" * 64,
+            )
+
+        def get_market_orderbook(self, ticker, *, depth):
+            assert depth == 100
+            return BinaryMarketBook(
+                venue=Venue.KALSHI,
+                venue_market_id=ticker,
+                yes_bids=(BookLevel(Decimal("0.40"), Decimal("10")),),
+                no_bids=(BookLevel(Decimal("0.60"), Decimal("10")),),
+                as_of=as_of,
+                raw_payload_hash="a" * 64,
+            )
+
+    client = _FakeKalshi()
+    provider = PublicMarketProvider(as_of=as_of)
+    provider._kalshi = client
+
+    first = provider.get_market(Venue.KALSHI, "KXREPORT-26-A")
+    second = provider.get_market(Venue.KALSHI, "KXREPORT-26-B")
+
+    assert first.fee_multiplier == Decimal("0.5")
+    assert first.fee_type == "quadratic"
+    assert first.yes_bid_levels == ((Decimal("40.00"), Decimal("10")),)
+    assert second.fee_multiplier == Decimal("0.5")
+    assert first.fee_effective_at == datetime(
+        2026, 7, 14, 10, tzinfo=timezone.utc
+    )
+    assert len(first.fee_provenance_hash) == 64
+    assert client.event_calls == 1
+    assert client.series_calls == 1
+
+
+def test_report_liquidation_uses_held_bids_depth_and_exit_fees_without_g7_cutover(
+    tmp_path: Path,
+):
+    db = tmp_path / "paper_trades.db"
+    _make_db(
+        db,
+        kalshi_rows=[
+            ("k", "KXREPORT-1", "kalshi", "yes", 10, 4.00, None, 0),
+        ],
+        pm_rows=[
+            ("p", "pm-report-1", "polymarket_us", "no", 10, 7.00, None, 0),
+        ],
+    )
+    _add_canonical_ids(db)
+    as_of = datetime(2026, 7, 14, 12, tzinfo=timezone.utc)
+    provider = _StaticMarketProvider(
+        {
+            (Venue.KALSHI, "KXREPORT-1"): SimpleNamespace(
+                yes_bid_cents=40,
+                yes_ask_cents=60,
+                no_bid_cents=40,
+                no_ask_cents=60,
+                yes_bid_size=Decimal("12"),
+                no_bid_size=Decimal("12"),
+                yes_bid_levels=(
+                    (Decimal("40"), Decimal("6")),
+                    (Decimal("39"), Decimal("6")),
+                ),
+                no_bid_levels=((Decimal("40"), Decimal("12")),),
+                last_price_cents=50,
+                fee_multiplier=Decimal("1"),
+                fee_type="quadratic",
+                fee_effective_at=datetime(2026, 7, 8, tzinfo=timezone.utc),
+                fee_provenance_hash="f" * 64,
+            ),
+            (Venue.POLYMARKET_US, "pm-report-1"): SimpleNamespace(
+                yes_bid_cents=25,
+                yes_ask_cents=30,
+                no_bid_cents=70,
+                no_ask_cents=75,
+                yes_bid_size=Decimal("15"),
+                no_bid_size=Decimal("15"),
+                yes_bid_levels=((Decimal("25"), Decimal("15")),),
+                no_bid_levels=(
+                    (Decimal("70"), Decimal("5")),
+                    (Decimal("69"), Decimal("10")),
+                ),
+                fee_coefficient=Decimal("0.06"),
+            ),
+        }
+    )
+
+    marks = compute_open_position_marks(db, provider=provider, as_of=as_of)
+
+    assert marks is not None
+    # Existing G7 input remains the legacy midpoint/conservative mark exactly.
+    assert marks["marked_value"] == pytest.approx(12.0)
+    assert marks["gross_bid_value"] == Decimal("10.91")
+    assert marks["estimated_exit_fees"] == Decimal("0.2875")
+    assert marks["report_net_liquidation_value"] == Decimal("10.6225")
+    assert marks["unscorable_cost"] == Decimal("0")
+    assert marks["unscorable_reasons"] == {}
+    assert marks["as_of"] == "2026-07-14T12:00:00+00:00"
+    assert marks["fee_schedule_hashes"]["kalshi"]["artifact_sha256"] == (
+        KALSHI_GENERAL_2026_07_07.artifact_sha256
+    )
+    assert marks["fee_schedule_hashes"]["polymarket_us"]["artifact_sha256"] == (
+        POLYMARKET_US_2026_07_01.artifact_sha256
+    )
+    assert provider.calls == [
+        (Venue.KALSHI, "KXREPORT-1"),
+        (Venue.POLYMARKET_US, "pm-report-1"),
+        (Venue.POLYMARKET_US, "1001"),
+    ]
+    assert {row["as_of"] for row in marks["rows"]} == {marks["as_of"]}
+    assert {row["gross_bid_cents"] for row in marks["rows"]} == {
+        Decimal("40"),
+        Decimal("70"),
+    }
+    assert {row["fills"] for row in marks["rows"]} == {2}
+    assert {row["liquidation_status"] for row in marks["rows"]} == {"scorable"}
+
+
+def test_report_liquidation_fails_closed_for_unknowns_without_heuristic_dispatch(
+    tmp_path: Path,
+):
+    db = tmp_path / "paper_trades.db"
+    _make_db(
+        db,
+        kalshi_rows=[
+            ("f", "KXFETCH-1", "kalshi", "yes", 2, 1.00, None, 0),
+            ("d", "KXDEPTH-1", "kalshi", "yes", 2, 1.00, None, 0),
+        ],
+        pm_rows=[
+            ("m", "pm-missing-fee", "polymarket_us", "yes", 2, 1.00, None, 0),
+            ("u", "other-market", "other", "yes", 2, 1.00, None, 0),
+        ],
+    )
+    _add_canonical_ids(db)
+    provider = _StaticMarketProvider(
+        {
+            (Venue.KALSHI, "KXFETCH-1"): RuntimeError("api down"),
+            (Venue.KALSHI, "KXDEPTH-1"): SimpleNamespace(
+                yes_bid_cents=40,
+                yes_ask_cents=45,
+                no_bid_cents=55,
+                no_ask_cents=60,
+                yes_bid_size=None,
+                fee_multiplier=Decimal("1"),
+                fee_type="quadratic",
+            ),
+            (Venue.POLYMARKET_US, "pm-missing-fee"): SimpleNamespace(
+                yes_bid_cents=40,
+                yes_ask_cents=45,
+                no_bid_cents=55,
+                no_ask_cents=60,
+                yes_bid_size=Decimal("5"),
+                fee_coefficient=None,
+            ),
+            # Legacy marked_value still uses its old non-Kalshi branch. The new
+            # report dispatcher must nevertheless reject the unsupported venue.
+            (Venue.POLYMARKET_US, "other-market"): SimpleNamespace(
+                yes_bid_cents=40,
+                yes_ask_cents=45,
+                no_bid_cents=55,
+                no_ask_cents=60,
+                yes_bid_size=Decimal("5"),
+                fee_coefficient=Decimal("0.06"),
+            ),
+        }
+    )
+
+    marks = compute_open_position_marks(
+        db,
+        provider=provider,
+        as_of=datetime(2026, 7, 14, 12, tzinfo=timezone.utc),
+    )
+
+    assert marks is not None
+    assert marks["report_net_liquidation_value"] == Decimal("0")
+    assert marks["unscorable_cost"] == Decimal("4")
+    assert marks["unscorable_reasons"] == {
+        "fetch_error": 1,
+        "missing_bid_depth": 1,
+        "missing_fee_provenance": 1,
+        "unsupported_venue": 1,
+    }
+    statuses = {row["ticker"]: row for row in marks["rows"]}
+    assert statuses["KXFETCH-1"]["report_net_liquidation_value"] == Decimal("0")
+    assert statuses["KXDEPTH-1"]["unscorable_reason"] == "missing_bid_depth"
+    assert statuses["pm-missing-fee"]["gross_bid_value"] == Decimal("0.8")
+    assert statuses["pm-missing-fee"]["unscorable_reason"] == (
+        "missing_fee_provenance"
+    )
+    assert statuses["other-market"]["unscorable_reason"] == "unsupported_venue"
+
+
+def test_report_liquidation_rejects_canonical_identity_mismatch_without_changing_legacy_mark(
+    tmp_path: Path,
+):
+    db = tmp_path / "paper_trades.db"
+    _make_db(
+        db,
+        kalshi_rows=[],
+        pm_rows=[
+            ("p", "pm-report-1", "polymarket_us", "yes", 2, 1.00, None, 0),
+        ],
+    )
+    _add_canonical_ids(db)
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE paper_trades SET venue_market_id = '8594' WHERE ticker = 'pm-report-1'"
+        )
+
+    legacy_market = SimpleNamespace(
+        yes_bid_cents=40,
+        yes_ask_cents=45,
+        no_bid_cents=55,
+        no_ask_cents=60,
+    )
+    wrong_canonical_market = SimpleNamespace(
+        report_venue=Venue.KALSHI.value,
+        report_venue_market_id="KXWRONG",
+        yes_bid_cents=40,
+        yes_bid_size=Decimal("5"),
+        yes_bid_levels=((Decimal("40"), Decimal("5")),),
+        fee_coefficient=Decimal("0.06"),
+    )
+    provider = _StaticMarketProvider(
+        {
+            (Venue.POLYMARKET_US, "pm-report-1"): legacy_market,
+            (Venue.POLYMARKET_US, "8594"): wrong_canonical_market,
+        }
+    )
+
+    marks = compute_open_position_marks(
+        db,
+        provider=provider,
+        as_of=datetime(2026, 7, 14, 12, tzinfo=timezone.utc),
+    )
+
+    assert marks is not None
+    assert marks["marked_value"] == pytest.approx(0.8)
+    assert marks["report_net_liquidation_value"] == Decimal("0")
+    assert marks["unscorable_reasons"] == {"identity_mismatch": 1}
+    assert provider.calls == [
+        (Venue.POLYMARKET_US, "pm-report-1"),
+        (Venue.POLYMARKET_US, "8594"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("fee_coefficient", "fee_effective_at"),
+    [
+        (Decimal("0.05"), None),
+        (Decimal("0.06"), datetime(2026, 7, 15, tzinfo=timezone.utc)),
+    ],
+)
+def test_report_liquidation_rejects_pm_fee_terms_outside_pinned_schedule(
+    tmp_path: Path,
+    fee_coefficient: Decimal,
+    fee_effective_at: datetime | None,
+):
+    db = tmp_path / "paper_trades.db"
+    _make_db(
+        db,
+        kalshi_rows=[],
+        pm_rows=[
+            ("p", "pm-report-1", "polymarket_us", "yes", 2, 1.00, None, 0),
+        ],
+    )
+    _add_canonical_ids(db)
+    provider = _StaticMarketProvider(
+        {
+            (Venue.POLYMARKET_US, "pm-report-1"): SimpleNamespace(
+                yes_bid_cents=40,
+                yes_ask_cents=45,
+                no_bid_cents=55,
+                no_ask_cents=60,
+                yes_bid_size=Decimal("5"),
+                yes_bid_levels=((Decimal("40"), Decimal("5")),),
+                fee_coefficient=fee_coefficient,
+                fee_effective_at=fee_effective_at,
+            ),
+        }
+    )
+
+    marks = compute_open_position_marks(
+        db,
+        provider=provider,
+        as_of=datetime(2026, 7, 14, 12, tzinfo=timezone.utc),
+    )
+
+    assert marks is not None
+    assert marks["report_net_liquidation_value"] == Decimal("0")
+    assert marks["unscorable_reasons"] == {"fee_schedule_mismatch": 1}
+
+
+def test_public_provider_clears_unverified_kalshi_fee_fields_on_event_failure():
+    as_of = datetime(2026, 7, 14, 12, tzinfo=timezone.utc)
+
+    class _FailingEventKalshi:
+        def get_market(self, ticker):
+            return SimpleNamespace(
+                ticker=ticker,
+                event_ticker="KXREPORT-26",
+                fee_multiplier=Decimal("1"),
+                fee_type="quadratic",
+                fee_effective_at=datetime(2026, 7, 8, tzinfo=timezone.utc),
+                fee_provenance_hash="m" * 64,
+            )
+
+        def get_event_fee_terms(self, event_ticker, *, as_of):
+            raise RuntimeError("event fee API unavailable")
+
+        def get_market_orderbook(self, ticker, *, depth):
+            return BinaryMarketBook(
+                venue=Venue.KALSHI,
+                venue_market_id=ticker,
+                yes_bids=(BookLevel(Decimal("0.40"), Decimal("5")),),
+                no_bids=(BookLevel(Decimal("0.60"), Decimal("5")),),
+                as_of=as_of,
+                raw_payload_hash="b" * 64,
+            )
+
+    provider = PublicMarketProvider(as_of=as_of)
+    provider._kalshi = _FailingEventKalshi()
+
+    market = provider.get_market(Venue.KALSHI, "KXREPORT-26-A")
+
+    assert market.fee_multiplier is None
+    assert market.fee_type is None
+    assert market.fee_effective_at is None
+    assert market.fee_provenance_hash is None
+
+
+def test_report_liquidation_rejects_future_kalshi_fee_provenance(tmp_path: Path):
+    db = tmp_path / "paper_trades.db"
+    _make_db(
+        db,
+        kalshi_rows=[
+            ("k", "KXREPORT-1", "kalshi", "yes", 2, 1.00, None, 0),
+        ],
+    )
+    _add_canonical_ids(db)
+    provider = _StaticMarketProvider(
+        {
+            (Venue.KALSHI, "KXREPORT-1"): SimpleNamespace(
+                yes_bid_cents=40,
+                yes_bid_size=Decimal("5"),
+                yes_bid_levels=((Decimal("40"), Decimal("5")),),
+                fee_multiplier=Decimal("1"),
+                fee_type="quadratic",
+                fee_effective_at=datetime(2026, 7, 15, tzinfo=timezone.utc),
+                fee_provenance_hash="f" * 64,
+            ),
+        }
+    )
+
+    marks = compute_open_position_marks(
+        db,
+        provider=provider,
+        as_of=datetime(2026, 7, 14, 12, tzinfo=timezone.utc),
+    )
+
+    assert marks is not None
+    assert marks["report_net_liquidation_value"] == Decimal("0")
+    assert marks["unscorable_reasons"] == {"fee_schedule_mismatch": 1}
+
+
+def test_report_liquidation_rejects_polymarket_slug_as_canonical_id(tmp_path: Path):
+    db = tmp_path / "paper_trades.db"
+    _make_db(
+        db,
+        kalshi_rows=[],
+        pm_rows=[
+            ("p", "pm-report-1", "polymarket_us", "yes", 2, 1.00, None, 0),
+        ],
+    )
+    _add_canonical_ids(db)
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE paper_trades SET venue_market_id = ticker WHERE ticker = 'pm-report-1'"
+        )
+    provider = _StaticMarketProvider(
+        {
+            (Venue.POLYMARKET_US, "pm-report-1"): SimpleNamespace(
+                yes_bid_cents=40,
+                yes_ask_cents=45,
+                no_bid_cents=55,
+                no_ask_cents=60,
+                yes_bid_size=Decimal("5"),
+                yes_bid_levels=((Decimal("40"), Decimal("5")),),
+                fee_coefficient=Decimal("0.06"),
+            ),
+        }
+    )
+
+    marks = compute_open_position_marks(
+        db,
+        provider=provider,
+        as_of=datetime(2026, 7, 14, 12, tzinfo=timezone.utc),
+    )
+
+    assert marks is not None
+    assert marks["marked_value"] == pytest.approx(0.8)
+    assert marks["report_net_liquidation_value"] == Decimal("0")
+    assert marks["unscorable_reasons"] == {"invalid_venue_market_id": 1}
+    assert provider.calls == [(Venue.POLYMARKET_US, "pm-report-1")]
 
 
 def test_kalshi_last_zero_no_side_is_unpriced_not_full_value():

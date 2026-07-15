@@ -18,6 +18,7 @@ class KalshiMarket:
     close_time:       str
     status:           str
     series_ticker:    str = ""
+    event_ticker:     str = ""
     subtitle:         str = ""
     result:           str = ""
     regime_weights:   dict[str, float] = field(default_factory=dict)
@@ -69,6 +70,14 @@ class KalshiMarket:
     price_tick:              Optional[Decimal] = None
     fill_role:               Optional[str] = None
     outcome_side:            Optional[str] = None
+    yes_bid_levels:          tuple[tuple[Decimal, Decimal], ...] = ()
+    no_bid_levels:           tuple[tuple[Decimal, Decimal], ...] = ()
+    book_as_of:              Optional[datetime] = None
+    book_payload_hash:       Optional[str] = None
+    book_error:              Optional[str] = None
+    fee_provenance_hash:     Optional[str] = None
+    report_venue:            Optional[str] = None
+    report_venue_market_id:  Optional[str] = None
     unsupported_payload_contract: bool = False
 
     # Legacy price fields guarded post-P0 (CR-C). Reads of `yes_price`,

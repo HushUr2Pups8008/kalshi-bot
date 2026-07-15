@@ -71,6 +71,15 @@ _SCHEDULE_COEFFICIENTS = {
 }
 
 
+def fee_coefficient_for(schedule_id: FeeScheduleId, role: FeeRole) -> Decimal:
+    if schedule_id not in _SUPPORTED_SCHEDULES:
+        raise FeeUnscorableError("unknown or unpinned fee schedule")
+    coefficient = _SCHEDULE_COEFFICIENTS[schedule_id].get(role)
+    if coefficient is None:
+        raise FeeUnscorableError("unsupported fee role")
+    return coefficient
+
+
 @dataclass(frozen=True)
 class FeeContext:
     schedule_id: FeeScheduleId

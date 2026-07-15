@@ -362,6 +362,7 @@ def _build_market(
         close_time=str(payload.get("close_time", "")),
         status=str(payload.get("status", "")),
         series_ticker=str(payload.get("series_ticker", "")),
+        event_ticker=str(payload.get("event_ticker", "")),
         subtitle=str(payload.get("subtitle", "")),
         result=str(payload.get("result", "")),
         market_metadata=_extract_market_metadata(payload),

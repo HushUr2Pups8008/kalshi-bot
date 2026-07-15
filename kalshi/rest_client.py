@@ -9,7 +9,11 @@ Kalshi API docs: https://trading-api.kalshi.com/trade-api/v2/openapi.json
 
 import base64
 import json
+import re
 import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
 
 import requests
@@ -28,9 +32,24 @@ from kalshi.normalizer import (
 )
 from kalshi.series_metadata import KalshiSeriesMetadata, normalize_series_payload
 from trading.venue import Venue
+from trading.orderbook import (
+    BinaryMarketBook,
+    BookLevel,
+    decimal_value,
+    payload_sha256,
+)
 from utils.logger import get_logger
 
 log = get_logger("kalshi_rest")
+
+
+@dataclass(frozen=True)
+class KalshiEventFeeTerms:
+    series_ticker: str
+    fee_type_override: str | None
+    fee_multiplier_override: Decimal | None
+    effective_at: datetime | None
+    raw_payload_hash: str
 
 
 def _normalize_pem(raw: str | bytes) -> bytes:
@@ -247,6 +266,189 @@ class KalshiRestClient:
             raise
 
     # ── Public market data ────────────────────────────────────────────────────
+
+    def get_market_orderbook(
+        self,
+        ticker: str,
+        *,
+        depth: int = 100,
+    ) -> BinaryMarketBook:
+        if not isinstance(depth, int) or isinstance(depth, bool) or not 0 <= depth <= 100:
+            raise ValueError("orderbook depth must be an integer in [0, 100]")
+        data = self._request(
+            "GET", f"/markets/{ticker}/orderbook", params={"depth": depth}
+        )
+        raw_book = data.get("orderbook_fp") if isinstance(data, dict) else None
+        if not isinstance(raw_book, dict):
+            raise ValueError("Kalshi orderbook response missing orderbook_fp")
+
+        def levels_for(key: str) -> tuple[BookLevel, ...]:
+            raw_levels = raw_book.get(key)
+            if not isinstance(raw_levels, list):
+                raise ValueError(f"Kalshi orderbook {key} must be a list")
+            levels = []
+            for raw_level in raw_levels:
+                if not isinstance(raw_level, (list, tuple)) or len(raw_level) != 2:
+                    raise ValueError(f"Kalshi orderbook {key} level is malformed")
+                levels.append(
+                    BookLevel(
+                        price=decimal_value(raw_level[0]),
+                        quantity=decimal_value(raw_level[1]),
+                    )
+                )
+            return tuple(sorted(levels, key=lambda level: level.price, reverse=True))
+
+        return BinaryMarketBook(
+            venue=Venue.KALSHI,
+            venue_market_id=str(ticker),
+            yes_bids=levels_for("yes_dollars"),
+            no_bids=levels_for("no_dollars"),
+            as_of=datetime.now(timezone.utc),
+            raw_payload_hash=payload_sha256(data),
+        )
+
+    def get_event_series_ticker(self, event_ticker: str) -> str:
+        requested = str(event_ticker).strip()
+        if not requested or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", requested) is None:
+            raise ValueError("invalid Kalshi event ticker")
+        data = self._request("GET", f"/events/{requested}")
+        event = data.get("event") if isinstance(data, dict) else None
+        if not isinstance(event, dict):
+            raise ValueError("Kalshi event response missing event")
+        returned = str(event.get("event_ticker") or "").strip()
+        if returned != requested:
+            raise ValueError(
+                f"Kalshi event ticker mismatch: expected {requested!r}, got {returned!r}"
+            )
+        series_ticker = str(event.get("series_ticker") or "").strip()
+        if not series_ticker:
+            raise ValueError("Kalshi event response missing series_ticker")
+        return series_ticker
+
+    def get_event_fee_terms(
+        self,
+        event_ticker: str,
+        *,
+        as_of: datetime,
+        max_pages: int = 100,
+    ) -> KalshiEventFeeTerms:
+        """Resolve the event fee override effective at one report timestamp."""
+        if as_of.tzinfo is None:
+            raise ValueError("Kalshi event fee as_of must be timezone-aware")
+        as_of = as_of.astimezone(timezone.utc)
+        requested = str(event_ticker).strip()
+        series_ticker = self.get_event_series_ticker(requested)
+        pages: list[dict[str, Any]] = []
+        changes: list[tuple[datetime, str | None, Decimal | None]] = []
+        cursor: str | None = None
+        seen_cursors: set[str] = set()
+        allowed_fee_types = {"quadratic", "quadratic_with_maker_fees", "flat"}
+
+        for _ in range(max_pages):
+            params = {"event_ticker": requested, "limit": 100}
+            if cursor:
+                params["cursor"] = cursor
+            data = self._request("GET", "/events/fee_changes", params=params)
+            if not isinstance(data, dict):
+                raise ValueError("Kalshi event fee response must be an object")
+            raw_changes = data.get("event_fee_changes")
+            next_cursor = data.get("cursor")
+            if not isinstance(raw_changes, list) or not isinstance(next_cursor, str):
+                raise ValueError("Kalshi event fee response has invalid pagination")
+            pages.append(data)
+
+            for raw in raw_changes:
+                if not isinstance(raw, dict):
+                    raise ValueError("Kalshi event fee change must be an object")
+                required = {
+                    "id",
+                    "event_ticker",
+                    "series_ticker",
+                    "fee_type_override",
+                    "fee_multiplier_override",
+                    "scheduled_ts",
+                }
+                if not required.issubset(raw):
+                    raise ValueError("Kalshi event fee change is missing required fields")
+                if not str(raw.get("id") or "").strip():
+                    raise ValueError("Kalshi event fee change id is required")
+                if str(raw.get("event_ticker") or "").strip() != requested:
+                    raise ValueError("Kalshi event fee change event identity mismatch")
+                if str(raw.get("series_ticker") or "").strip() != series_ticker:
+                    raise ValueError("Kalshi event fee change series identity mismatch")
+
+                fee_type_raw = raw.get("fee_type_override")
+                fee_type = None if fee_type_raw is None else str(fee_type_raw).strip()
+                if fee_type is not None and fee_type not in allowed_fee_types:
+                    raise ValueError("Kalshi event fee change has unsupported fee type")
+                multiplier_raw = raw.get("fee_multiplier_override")
+                if multiplier_raw is None:
+                    multiplier = None
+                else:
+                    try:
+                        multiplier = Decimal(str(multiplier_raw))
+                    except (InvalidOperation, ValueError) as exc:
+                        raise ValueError(
+                            "Kalshi event fee change has invalid multiplier"
+                        ) from exc
+                    if not multiplier.is_finite() or multiplier < 0:
+                        raise ValueError("Kalshi event fee change has invalid multiplier")
+
+                scheduled_raw = raw.get("scheduled_ts")
+                if not isinstance(scheduled_raw, str) or not scheduled_raw:
+                    raise ValueError("Kalshi event fee change has invalid scheduled_ts")
+                try:
+                    scheduled_at = datetime.fromisoformat(
+                        scheduled_raw.replace("Z", "+00:00")
+                    )
+                except ValueError as exc:
+                    raise ValueError(
+                        "Kalshi event fee change has invalid scheduled_ts"
+                    ) from exc
+                if scheduled_at.tzinfo is None:
+                    raise ValueError("Kalshi event fee scheduled_ts must be timezone-aware")
+                changes.append(
+                    (scheduled_at.astimezone(timezone.utc), fee_type, multiplier)
+                )
+
+            if not next_cursor:
+                break
+            if next_cursor in seen_cursors:
+                raise ValueError("Kalshi event fee pagination cursor repeated")
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+        else:
+            raise ValueError("Kalshi event fee pagination exceeded max_pages")
+
+        applicable = [change for change in changes if change[0] <= as_of]
+        if applicable:
+            effective_at = max(change[0] for change in applicable)
+            latest_terms = {
+                (fee_type, multiplier)
+                for scheduled_at, fee_type, multiplier in applicable
+                if scheduled_at == effective_at
+            }
+            if len(latest_terms) != 1:
+                raise ValueError("ambiguous Kalshi event fee changes")
+            fee_type_override, fee_multiplier_override = latest_terms.pop()
+        else:
+            effective_at = None
+            fee_type_override = None
+            fee_multiplier_override = None
+
+        return KalshiEventFeeTerms(
+            series_ticker=series_ticker,
+            fee_type_override=fee_type_override,
+            fee_multiplier_override=fee_multiplier_override,
+            effective_at=effective_at,
+            raw_payload_hash=payload_sha256(
+                {
+                    "event_ticker": requested,
+                    "series_ticker": series_ticker,
+                    "fee_change_pages": pages,
+                }
+            ),
+        )
 
     def get_markets(
         self,

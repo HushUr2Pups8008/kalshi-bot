@@ -36,6 +36,8 @@ class PolymarketMarket:
     price_method: str = ""
     yes_bid_cents: int | None = None
     no_bid_cents: int | None = None
+    yes_bid_size: Decimal | None = None
+    no_bid_size: Decimal | None = None
     yes_token_id: str | None = None
     no_token_id: str | None = None
     fee_coefficient: Decimal | None = None
@@ -45,6 +47,13 @@ class PolymarketMarket:
     fill_role: str | None = None
     source_payload_hash: str = ""
     snapshot_at: datetime | None = None
+    yes_bid_levels: tuple[tuple[Decimal, Decimal], ...] = ()
+    no_bid_levels: tuple[tuple[Decimal, Decimal], ...] = ()
+    book_as_of: datetime | None = None
+    book_payload_hash: str | None = None
+    book_error: str | None = None
+    report_venue: str | None = None
+    report_venue_market_id: str | None = None
 
     @property
     def tradeable_id(self) -> str:

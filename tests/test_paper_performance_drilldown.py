@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
+from scripts import paper_performance_drilldown
 from scripts.paper_performance_drilldown import print_summary, summarize
 
 BASE_COLUMNS = [
@@ -598,6 +599,42 @@ def test_open_mark_summary_marks_kalshi_bid_and_tracks_unknowns(local_db_case):
     assert mark["marked_kalshi_bid_value_dollars"] == pytest.approx(0.25)
     assert mark["marked_kalshi_unrealized_pnl_dollars"] == pytest.approx(-0.25)
     assert mark["unknown_mark_cost_dollars"] == pytest.approx(2.00)
+
+
+def test_summarize_injects_one_provider_and_timestamp_for_liquidation(
+    monkeypatch, local_db_case
+):
+    path, conn, connect = local_db_case
+    _make_db(conn)
+    provider = object()
+    as_of = datetime(2026, 7, 14, 12, tzinfo=timezone.utc)
+    expected = {
+        "as_of": as_of.isoformat(),
+        "report_net_liquidation_value": 4.25,
+    }
+    captured = {}
+
+    def fake_marks(path, *, provider, as_of):
+        captured.update(path=path, provider=provider, as_of=as_of)
+        return expected
+
+    monkeypatch.setattr(
+        paper_performance_drilldown, "compute_open_position_marks", fake_marks
+    )
+
+    with patch("sqlite3.connect", connect):
+        stats = summarize(
+            path,
+            mark_provider=provider,
+            as_of=as_of,
+        )
+
+    assert stats["executable_liquidation"] is expected
+    assert captured == {
+        "path": path,
+        "provider": provider,
+        "as_of": as_of,
+    }
 
 
 def test_print_summary_missing_db(capsys):

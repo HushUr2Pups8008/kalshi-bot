@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 import time
+from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 import requests
@@ -11,6 +13,12 @@ from config import cfg
 from polymarket.models import PolymarketMarket
 from polymarket.normalizer import normalize_polymarket_market
 from trading.venue import Venue
+from trading.orderbook import (
+    BinaryMarketBook,
+    BookLevel,
+    decimal_value,
+    payload_sha256,
+)
 from utils.logger import get_logger
 
 log = get_logger("polymarket_public")
@@ -96,6 +104,76 @@ class PolymarketPublicClient:
         if not isinstance(payload, dict):
             raise ValueError("Polymarket market payload must be an object")
         return payload
+
+    def get_market_book(self, market_id: str) -> BinaryMarketBook:
+        requested = str(market_id).strip()
+        slug = requested
+        if requested.isdigit():
+            market = self.get_market_payload(requested)
+            slug = str(market.get("slug") or "").strip()
+        if not slug or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", slug) is None:
+            raise ValueError(f"Polymarket market {market_id!r} has invalid canonical slug")
+
+        data = self._request("GET", f"/v1/markets/{slug}/book")
+        market_data = data.get("marketData") if isinstance(data, dict) else None
+        if not isinstance(market_data, dict):
+            raise ValueError("Polymarket book response missing marketData")
+        returned_slug = str(market_data.get("marketSlug") or "").strip()
+        if returned_slug != slug:
+            raise ValueError(
+                f"Polymarket book slug mismatch: expected {slug!r}, "
+                f"got {returned_slug!r}"
+            )
+        transact_time = market_data.get("transactTime")
+        if not isinstance(transact_time, str) or not transact_time:
+            raise ValueError("Polymarket book missing transactTime")
+        try:
+            as_of = datetime.fromisoformat(transact_time.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("Polymarket book transactTime is invalid") from exc
+
+        def levels_for(key: str) -> tuple[BookLevel, ...]:
+            raw_levels = market_data.get(key)
+            if not isinstance(raw_levels, list):
+                raise ValueError(f"Polymarket book {key} must be a list")
+            levels = []
+            for raw_level in raw_levels:
+                if not isinstance(raw_level, dict):
+                    raise ValueError(f"Polymarket book {key} level is malformed")
+                price_obj = raw_level.get("px")
+                if not isinstance(price_obj, dict):
+                    raise ValueError(f"Polymarket book {key} price is malformed")
+                levels.append(
+                    BookLevel(
+                        price=decimal_value(price_obj.get("value")),
+                        quantity=decimal_value(raw_level.get("qty")),
+                    )
+                )
+            return tuple(sorted(levels, key=lambda level: level.price, reverse=True))
+
+        yes_bids = levels_for("bids")
+        yes_offers = levels_for("offers")
+        no_bids = tuple(
+            sorted(
+                (
+                    BookLevel(
+                        price=Decimal("1") - level.price,
+                        quantity=level.quantity,
+                    )
+                    for level in yes_offers
+                ),
+                key=lambda level: level.price,
+                reverse=True,
+            )
+        )
+        return BinaryMarketBook(
+            venue=Venue.POLYMARKET_US,
+            venue_market_id=slug,
+            yes_bids=yes_bids,
+            no_bids=no_bids,
+            as_of=as_of,
+            raw_payload_hash=payload_sha256(data),
+        )
 
     def get_market_settlement(self, market_id: str) -> dict[str, Any]:
         """Return the authoritative settlement payload for a market slug."""

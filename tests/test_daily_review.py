@@ -399,6 +399,30 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
                 "marked_kalshi_unrealized_pnl_dollars": -0.25,
                 "unknown_mark_cost_dollars": 12.0,
             },
+            "executable_liquidation": {
+                "as_of": "2026-07-14T12:00:00+00:00",
+                "gross_bid_value": 10.50,
+                "estimated_exit_fees": 0.20,
+                "report_net_liquidation_value": 10.30,
+                "unrealized_fee_net_pnl": -2.20,
+                "unscorable_cost": 0.0,
+                "unscorable_reasons": {},
+                "fee_schedule_hashes": {
+                    "polymarket_us": {
+                        "name": "polymarket-us-2026-07-01",
+                        "artifact_sha256": "83580a99558f43d3",
+                    }
+                },
+                "by_venue": [
+                    {
+                        "venue": "polymarket_us",
+                        "gross_bid_value": 10.50,
+                        "estimated_exit_fees": 0.20,
+                        "report_net_liquidation_value": 10.30,
+                        "unscorable_cost": 0.0,
+                    }
+                ],
+            },
         },
     )
     monkeypatch.setattr(
@@ -605,9 +629,13 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     assert "Paper trades                     : 2" in rendered
     assert "Skipped liquidity/near-limit     : 1" in rendered
     assert "Open cost                        : +$12.50" in rendered
-    assert "Marked Kalshi bid value          : +$0.25" in rendered
-    assert "Marked Kalshi unrealized P&L     : $-0.25" in rendered
-    assert "Unknown mark cost                : +$12.00" in rendered
+    assert "Gross executable bid value       : +$10.50" in rendered
+    assert "Estimated exit fees              : +$0.20" in rendered
+    assert "Fee-net liquidation value        : +$10.30" in rendered
+    assert "Unrealized fee-net P&L           : $-2.20" in rendered
+    assert "Unscorable liquidation cost      : +$0.00" in rendered
+    assert "polymarket_us gross=+$10.50 fees=+$0.20 net=+$10.30" in rendered
+    assert "Unknown mark cost" not in rendered
     assert "Drilldown: open exposure by resolution horizon" in rendered
     assert "0-3d venue=polymarket trades=1 exposure=$12.50" in rendered
 

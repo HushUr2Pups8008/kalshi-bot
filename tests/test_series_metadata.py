@@ -72,6 +72,7 @@ def test_market_normalizer_preserves_explicit_contract_fields():
         "close_time": "2026-12-31T23:59:59Z",
         "status": "active",
         "series_ticker": "KXTRUMPIRAN",
+        "event_ticker": "KXTRUMPIRAN-26",
         "rules_primary": "Primary rule",
         "rules_secondary": "Secondary rule",
         "settlement_timer_seconds": "3600",
@@ -93,6 +94,7 @@ def test_market_normalizer_preserves_explicit_contract_fields():
     assert market.early_close_condition == "May close early"
     assert market.expected_expiration_time == "2026-12-31T22:00:00Z"
     assert market.expiration_time == "2026-12-31T23:00:00Z"
+    assert market.event_ticker == "KXTRUMPIRAN-26"
     assert market.fee_multiplier == Decimal("1")
     assert market.fee_type == "quadratic"
     assert market.fee_effective_at == datetime(

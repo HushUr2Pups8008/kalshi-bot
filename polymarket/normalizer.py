@@ -51,6 +51,19 @@ def _bid_cents(outcome: dict[str, Any]) -> int | None:
     return _quote_cents(outcome.get("bestBid"))
 
 
+def _quote_size(quote: Any) -> Decimal | None:
+    if not isinstance(quote, dict):
+        return None
+    value = quote.get("quantity", quote.get("size"))
+    if isinstance(value, dict):
+        value = value.get("value")
+    return _optional_decimal(value)
+
+
+def _bid_size(outcome: dict[str, Any]) -> Decimal | None:
+    return _quote_size(outcome.get("bestBid"))
+
+
 def _token_id(outcome: dict[str, Any]) -> str | None:
     value = outcome.get("tokenId") or outcome.get("token_id")
     token_id = str(value).strip() if value is not None else ""
@@ -161,7 +174,15 @@ def _oriented_market_sides(payload: dict[str, Any]) -> tuple[dict[str, Any], dic
 
 def _long_book_prices(
     payload: dict[str, Any],
-) -> tuple[int | None, int, int | None, int, str] | None:
+) -> tuple[
+    int | None,
+    int,
+    int | None,
+    int,
+    Decimal | None,
+    Decimal | None,
+    str,
+] | None:
     sides = _oriented_market_sides(payload)
     if sides is None:
         return None
@@ -176,14 +197,22 @@ def _long_book_prices(
         yes_ask = _quote_cents(top_ask)
         if yes_bid is None or yes_ask is None or yes_bid > yes_ask:
             return None
-        return yes_bid, yes_ask, 100 - yes_ask, 100 - yes_bid, "pm_long_book_v1"
+        return (
+            yes_bid,
+            yes_ask,
+            100 - yes_ask,
+            100 - yes_bid,
+            _quote_size(top_bid),
+            _quote_size(top_ask),
+            "pm_long_book_v1",
+        )
 
     long_side, short_side = sides
     yes_ask = _quote_cents(long_side.get("quote"))
     no_ask = _quote_cents(short_side.get("quote"))
     if yes_ask is None or no_ask is None:
         return None
-    return None, yes_ask, None, no_ask, "pm_named_sides_v1"
+    return None, yes_ask, None, no_ask, None, None, "pm_named_sides_v1"
 
 
 def _status(payload: dict[str, Any]) -> str:
@@ -233,18 +262,28 @@ def normalize_polymarket_market(
             yes_ask_cents = None
             no_bid_cents = None
             no_ask_cents = None
+            yes_bid_size = None
+            no_bid_size = None
             price_source = ""
             price_method = ""
         else:
-            yes_bid_cents, yes_ask_cents, no_bid_cents, no_ask_cents, price_method = (
-                long_book_prices
-            )
+            (
+                yes_bid_cents,
+                yes_ask_cents,
+                no_bid_cents,
+                no_ask_cents,
+                yes_bid_size,
+                no_bid_size,
+                price_method,
+            ) = long_book_prices
             price_source = "polymarket_public"
     else:
         yes_bid_cents = _bid_cents(by_name["yes"])
         yes_ask_cents = _price_cents(by_name["yes"])
         no_bid_cents = _bid_cents(by_name["no"])
         no_ask_cents = _price_cents(by_name["no"])
+        yes_bid_size = _bid_size(by_name["yes"])
+        no_bid_size = _bid_size(by_name["no"])
         if yes_ask_cents is None or no_ask_cents is None:
             yes_ask_cents = None
             no_ask_cents = None
@@ -263,6 +302,8 @@ def normalize_polymarket_market(
         no_ask_cents=no_ask_cents,
         yes_bid_cents=yes_bid_cents,
         no_bid_cents=no_bid_cents,
+        yes_bid_size=yes_bid_size,
+        no_bid_size=no_bid_size,
         volume_dollars=_money_value(payload.get("volume")),
         open_interest_dollars=_money_value(payload.get("openInterest")),
         close_time=str(
