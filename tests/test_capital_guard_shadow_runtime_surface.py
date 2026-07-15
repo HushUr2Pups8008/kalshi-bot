@@ -134,7 +134,7 @@ def test_capital_guard_shadow_status_collector_only_missing_does_not_create_db(
 
     assert capsys.readouterr().out.strip() == (
         "capital_guard_shadow: capture=off (process-env) "
-        "collection=on (process-env) db=missing"
+        "collection=off (unwired-exact-source; requested=on:process-env) db=missing"
     )
     assert not db_path.exists()
 
@@ -179,14 +179,16 @@ def test_capital_guard_shadow_status_reads_existing_db_read_only_and_bounded(
         for statement in statements
         if "COUNT(*)" in statement and "sqlite_schema" not in statement
     ]
-    assert len(count_queries) == len(botcheck.CAPITAL_GUARD_SHADOW_TABLES)
+    assert len(count_queries) == len(botcheck.CAPITAL_GUARD_SHADOW_TABLES) + 2
     assert all("LIMIT" in statement for statement in count_queries)
     assert capsys.readouterr().out.strip() == (
         "capital_guard_shadow: capture=on (process-env) "
-        "collection=off (process-env) integrity=ok tables=8/8 schema=ok "
+        "collection=off (process-env) "
+        "integrity=ok tables=10/10 schema=ok "
         "missing=none unexpected=none "
         "rows=meta:1,attempts:0,candidates:0,conflicts:0,observations:0,links:0,"
-        "settlements:0,evaluations:0"
+        "settlement_attempts:0,quarantines:0,settlements:0,evaluations:0,"
+        "link_backlog:0,current_heads:0"
     )
 
 
@@ -217,7 +219,7 @@ def test_capital_guard_shadow_status_reports_exact_schema_drift(
     botcheck.print_capital_guard_shadow_status(tmp_path)
 
     out = capsys.readouterr().out.strip()
-    assert "integrity=ok tables=8/8 schema=mismatch" in out
+    assert "integrity=ok tables=10/10 schema=mismatch" in out
 
 
 def test_capital_guard_shadow_status_running_env_is_authoritative(

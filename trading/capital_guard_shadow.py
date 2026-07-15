@@ -29,13 +29,22 @@ from trading.fees import (
     quote_fee,
     serialize_fee_schedule,
 )
-from trading.venue import Venue
+from trading.settlement import (
+    MarketOutcome,
+    SettlementObservation,
+    VoidRefundContract,
+    build_settlement_observation,
+)
+from trading.venue import MarketRef, Venue
 
 
-CAPITAL_GUARD_SHADOW_SCHEMA_VERSION = 1
+CAPITAL_GUARD_SHADOW_SCHEMA_VERSION = 2
 CAPITAL_GUARD_CAPTURE_ATTEMPT_VERSION = 1
 CAPITAL_GUARD_CANDIDATE_VERSION = 1
+CAPITAL_GUARD_SETTLEMENT_ATTEMPT_VERSION = 1
 CAPITAL_GUARD_SHADOW_DB = Path("data/capital_guard_shadow.db")
+MAX_SETTLEMENT_MARKETS_PER_RUN = 100
+MAX_SETTLEMENT_CANDIDATES_PER_MARKET = 1_000
 
 _BUSY_TIMEOUT_MS = 5_000
 _SQLITE_CONNECT = sqlite3.connect
@@ -47,6 +56,29 @@ _T = TypeVar("_T")
 
 class CapitalGuardShadowSchemaError(RuntimeError):
     """The isolated shadow schema is partial, drifted, or corrupt."""
+
+
+class CapitalGuardShadowIdentityError(ValueError):
+    """A bounded candidate group cannot produce one exact market identity."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        market_key: SettlementMarketKey,
+        reason_taxonomy: str,
+        candidate_count: int,
+        candidate_set_sha256: str | None,
+        identity_set_sha256: str | None,
+        identity_sample_sha256: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.market_key = market_key
+        self.reason_taxonomy = reason_taxonomy
+        self.candidate_count = candidate_count
+        self.candidate_set_sha256 = candidate_set_sha256
+        self.identity_set_sha256 = identity_set_sha256
+        self.identity_sample_sha256 = identity_sample_sha256
 
 
 def canonical_json(value: object) -> str:
@@ -94,7 +126,7 @@ _TABLE_STATEMENTS: tuple[tuple[str, str], ...] = (
             schema_version INTEGER PRIMARY KEY,
             ddl_sha256 TEXT NOT NULL,
             applied_at TEXT NOT NULL,
-            CHECK (schema_version = 1),
+            CHECK (schema_version = 2),
             CHECK (length(ddl_sha256) = 64)
         )
         """,
@@ -209,13 +241,35 @@ _TABLE_STATEMENTS: tuple[tuple[str, str], ...] = (
             observation_sha256 TEXT PRIMARY KEY,
             venue TEXT NOT NULL CHECK (venue IN ('kalshi','polymarket_us')),
             venue_market_id TEXT NOT NULL,
+            alias TEXT NOT NULL,
+            contract_fingerprint TEXT NOT NULL,
+            rules_fingerprint TEXT NOT NULL,
+            settlement_fingerprint TEXT NOT NULL,
             outcome TEXT NOT NULL CHECK (outcome IN ('yes','no','void','unresolved')),
             observed_at TEXT NOT NULL,
             effective_at TEXT NOT NULL,
             source_id TEXT NOT NULL,
+            rules_version TEXT NOT NULL,
+            authoritative_outcome_json TEXT NOT NULL,
             source_payload_json TEXT NOT NULL,
+            authoritative_payload_sha256 TEXT NOT NULL,
+            authoritative_observation_sha256 TEXT NOT NULL,
+            void_refund_json TEXT,
+            void_refund_sha256 TEXT,
+            semantic_sha256 TEXT NOT NULL UNIQUE,
             supersedes_observation_sha256 TEXT REFERENCES capital_guard_shadow_observations(observation_sha256),
             CHECK (length(observation_sha256) = 64),
+            CHECK (length(authoritative_payload_sha256) = 64),
+            CHECK (length(authoritative_observation_sha256) = 64),
+            CHECK (void_refund_sha256 IS NULL OR length(void_refund_sha256) = 64),
+            CHECK (
+                (outcome = 'void' AND void_refund_json IS NOT NULL
+                 AND void_refund_sha256 IS NOT NULL)
+                OR
+                (outcome != 'void' AND void_refund_json IS NULL
+                 AND void_refund_sha256 IS NULL)
+            ),
+            CHECK (length(semantic_sha256) = 64),
             CHECK (supersedes_observation_sha256 IS NULL OR length(supersedes_observation_sha256) = 64),
             CHECK (observation_sha256 IS NOT supersedes_observation_sha256),
             UNIQUE (supersedes_observation_sha256)
@@ -232,6 +286,155 @@ _TABLE_STATEMENTS: tuple[tuple[str, str], ...] = (
             linked_at TEXT NOT NULL,
             CHECK (length(link_id) = 64),
             UNIQUE (candidate_id, observation_sha256)
+        )
+        """,
+    ),
+    (
+        "capital_guard_shadow_settlement_attempts",
+        """
+        CREATE TABLE capital_guard_shadow_settlement_attempts (
+            attempt_id TEXT PRIMARY KEY,
+            attempt_version INTEGER NOT NULL CHECK (attempt_version = 1),
+            payload_sha256 TEXT NOT NULL,
+            venue TEXT NOT NULL CHECK (venue IN ('kalshi','polymarket_us')),
+            venue_market_id TEXT NOT NULL,
+            alias TEXT,
+            contract_fingerprint TEXT,
+            rules_fingerprint TEXT,
+            settlement_fingerprint TEXT,
+            identity_set_sha256 TEXT,
+            identity_sample_sha256 TEXT,
+            candidate_set_sha256 TEXT,
+            candidate_set_complete INTEGER NOT NULL CHECK (candidate_set_complete IN (0,1)),
+            candidate_count INTEGER NOT NULL CHECK (candidate_count > 0),
+            attempted_at TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (
+                status IN ('nonterminal','not_found','transient_error',
+                           'internal_error','quarantined','terminal')
+            ),
+            outcome TEXT CHECK (outcome IN ('yes','no','void')),
+            source_id TEXT,
+            rules_version TEXT,
+            authoritative_outcome_json TEXT,
+            authoritative_payload_sha256 TEXT,
+            authoritative_observation_sha256 TEXT,
+            semantic_sha256 TEXT,
+            void_refund_json TEXT,
+            void_refund_sha256 TEXT,
+            head_before_sha256 TEXT REFERENCES capital_guard_shadow_observations(observation_sha256),
+            head_after_sha256 TEXT REFERENCES capital_guard_shadow_observations(observation_sha256),
+            error_taxonomy TEXT,
+            error_sha256 TEXT,
+            CHECK (length(attempt_id) = 64),
+            CHECK (length(payload_sha256) = 64),
+            CHECK (identity_set_sha256 IS NULL OR length(identity_set_sha256) = 64),
+            CHECK (identity_sample_sha256 IS NULL OR length(identity_sample_sha256) = 64),
+            CHECK (candidate_set_sha256 IS NULL OR length(candidate_set_sha256) = 64),
+            CHECK (authoritative_payload_sha256 IS NULL OR length(authoritative_payload_sha256) = 64),
+            CHECK (authoritative_observation_sha256 IS NULL OR length(authoritative_observation_sha256) = 64),
+            CHECK (semantic_sha256 IS NULL OR length(semantic_sha256) = 64),
+            CHECK (void_refund_sha256 IS NULL OR length(void_refund_sha256) = 64),
+            CHECK (head_before_sha256 IS NULL OR length(head_before_sha256) = 64),
+            CHECK (head_after_sha256 IS NULL OR length(head_after_sha256) = 64),
+            CHECK (error_sha256 IS NULL OR length(error_sha256) = 64),
+            CHECK (
+                (void_refund_json IS NULL AND void_refund_sha256 IS NULL)
+                OR
+                (void_refund_json IS NOT NULL AND void_refund_sha256 IS NOT NULL)
+            ),
+            CHECK (
+                error_taxonomy IS NULL OR error_taxonomy IN (
+                    'authoritative_nonterminal','authoritative_not_found',
+                    'timeout','connection','transport_os_error',
+                    'internal_source_error','source_drift',
+                    'identity_ambiguous','candidate_group_over_cap',
+                    'missing_void_refund_contract',
+                    'void_financial_economics_deferred',
+                    'concurrent_state_change','observation_fork','backward_time',
+                    'financial_ambiguity'
+                )
+            ),
+            CHECK (
+                (alias IS NOT NULL AND contract_fingerprint IS NOT NULL
+                 AND rules_fingerprint IS NOT NULL AND settlement_fingerprint IS NOT NULL)
+                OR
+                (status = 'quarantined' AND alias IS NULL
+                 AND contract_fingerprint IS NULL AND rules_fingerprint IS NULL
+                 AND settlement_fingerprint IS NULL
+                 AND error_taxonomy IN ('identity_ambiguous','candidate_group_over_cap'))
+            ),
+            CHECK (
+                (candidate_set_complete = 1 AND candidate_set_sha256 IS NOT NULL
+                 AND identity_set_sha256 IS NOT NULL AND identity_sample_sha256 IS NULL)
+                OR
+                (candidate_set_complete = 0 AND status = 'quarantined'
+                 AND error_taxonomy = 'candidate_group_over_cap'
+                 AND candidate_set_sha256 IS NULL AND identity_set_sha256 IS NULL
+                 AND identity_sample_sha256 IS NOT NULL)
+            ),
+            CHECK (
+                (status = 'terminal' AND outcome IN ('yes','no')
+                 AND source_id IS NOT NULL AND rules_version IS NOT NULL
+                 AND authoritative_outcome_json IS NOT NULL
+                 AND authoritative_payload_sha256 IS NOT NULL
+                 AND authoritative_observation_sha256 IS NOT NULL
+                 AND semantic_sha256 IS NOT NULL AND head_after_sha256 IS NOT NULL
+                 AND void_refund_json IS NULL AND void_refund_sha256 IS NULL
+                 AND error_taxonomy IS NULL
+                 AND error_sha256 IS NULL)
+                OR status != 'terminal'
+            ),
+            CHECK (
+                status NOT IN ('nonterminal','not_found','transient_error','internal_error')
+                OR
+                (outcome IS NULL AND source_id IS NULL AND rules_version IS NULL
+                 AND authoritative_outcome_json IS NULL
+                 AND authoritative_payload_sha256 IS NULL
+                 AND authoritative_observation_sha256 IS NULL
+                 AND semantic_sha256 IS NULL AND void_refund_json IS NULL
+                 AND void_refund_sha256 IS NULL AND head_after_sha256 IS NULL)
+            ),
+            CHECK (
+                (status = 'nonterminal' AND error_taxonomy = 'authoritative_nonterminal'
+                 AND error_sha256 IS NOT NULL)
+                OR (status = 'not_found' AND error_taxonomy = 'authoritative_not_found'
+                    AND error_sha256 IS NOT NULL)
+                OR (status = 'transient_error'
+                    AND error_taxonomy IN ('timeout','connection','transport_os_error')
+                    AND error_sha256 IS NOT NULL)
+                OR (status = 'internal_error'
+                    AND error_taxonomy = 'internal_source_error'
+                    AND error_sha256 IS NOT NULL)
+                OR status IN ('quarantined','terminal')
+            ),
+            CHECK (
+                (status = 'quarantined' AND error_taxonomy IS NOT NULL
+                 AND error_sha256 IS NOT NULL)
+                OR status != 'quarantined'
+            )
+        )
+        """,
+    ),
+    (
+        "capital_guard_shadow_settlement_quarantines",
+        """
+        CREATE TABLE capital_guard_shadow_settlement_quarantines (
+            quarantine_id TEXT PRIMARY KEY,
+            attempt_id TEXT NOT NULL UNIQUE
+                REFERENCES capital_guard_shadow_settlement_attempts(attempt_id),
+            reason_taxonomy TEXT NOT NULL CHECK (
+                reason_taxonomy IN (
+                    'identity_ambiguous','candidate_group_over_cap','source_drift',
+                    'missing_void_refund_contract',
+                    'void_financial_economics_deferred',
+                    'concurrent_state_change','observation_fork','backward_time',
+                    'financial_ambiguity'
+                )
+            ),
+            reason_sha256 TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            CHECK (length(quarantine_id) = 64),
+            CHECK (length(reason_sha256) = 64)
         )
         """,
     ),
@@ -316,6 +519,22 @@ _INDEX_STATEMENTS: tuple[tuple[str, str], ...] = (
         "idx_capital_guard_shadow_observations_supersedes",
         "CREATE INDEX idx_capital_guard_shadow_observations_supersedes "
         "ON capital_guard_shadow_observations(supersedes_observation_sha256)",
+    ),
+    (
+        "idx_capital_guard_shadow_settlement_attempts_market",
+        "CREATE INDEX idx_capital_guard_shadow_settlement_attempts_market "
+        "ON capital_guard_shadow_settlement_attempts"
+        "(venue, venue_market_id, attempted_at, status)",
+    ),
+    (
+        "idx_capital_guard_shadow_settlement_attempts_status",
+        "CREATE INDEX idx_capital_guard_shadow_settlement_attempts_status "
+        "ON capital_guard_shadow_settlement_attempts(status, attempted_at)",
+    ),
+    (
+        "idx_capital_guard_shadow_settlement_quarantines_reason",
+        "CREATE INDEX idx_capital_guard_shadow_settlement_quarantines_reason "
+        "ON capital_guard_shadow_settlement_quarantines(reason_taxonomy, created_at)",
     ),
     (
         "idx_capital_guard_shadow_observations_root_market",
@@ -561,30 +780,129 @@ class CapitalGuardCandidate:
 
 
 @dataclass(frozen=True)
-class SettlementObservationRecord:
-    """Authoritative outcome observation; corrections append and supersede."""
-
+class SettlementMarketKey:
     venue: Venue
     venue_market_id: str
-    outcome: Literal["yes", "no", "void", "unresolved"]
-    observed_at: datetime
-    effective_at: datetime
-    source_id: str
-    source_payload_json: str
-    supersedes_observation_sha256: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.venue, Venue):
             raise ValueError("venue must be a supported Venue")
         _require_text("venue_market_id", self.venue_market_id)
+
+
+@dataclass(frozen=True)
+class CurrentAuthoritativeHead:
+    observation_sha256: str
+    market_ref: MarketRef
+    contract_fingerprint: str
+    rules_fingerprint: str
+    settlement_fingerprint: str
+    outcome: Literal["yes", "no", "void", "unresolved"]
+    observed_at: datetime
+    effective_at: datetime
+    source_id: str
+    rules_version: str
+    authoritative_outcome_json: str
+    source_payload_json: str
+    authoritative_payload_sha256: str
+    authoritative_observation_sha256: str
+    void_refund_json: str | None
+    void_refund_sha256: str | None
+    semantic_sha256: str
+
+
+@dataclass(frozen=True)
+class CandidateSettlementBacklog:
+    market_ref: MarketRef
+    contract_fingerprint: str
+    rules_fingerprint: str
+    settlement_fingerprint: str
+    candidate_ids: tuple[str, ...]
+    missing_link_candidate_ids: tuple[str, ...]
+    candidate_set_sha256: str
+    identity_set_sha256: str
+    current_head_sha256: str | None
+
+
+@dataclass(frozen=True)
+class CurrentHeadSettlement:
+    settlement_id: str
+    candidate_id: str
+    observation_sha256: str
+    outcome: Literal["yes", "no", "void"]
+    settled_at: datetime
+
+
+@dataclass(frozen=True)
+class SettlementObservationRecord:
+    """Authoritative outcome observation; corrections append and supersede."""
+
+    venue: Venue
+    venue_market_id: str
+    alias: str
+    contract_fingerprint: str
+    rules_fingerprint: str
+    settlement_fingerprint: str
+    outcome: Literal["yes", "no", "void", "unresolved"]
+    observed_at: datetime
+    effective_at: datetime
+    source_id: str
+    rules_version: str
+    authoritative_outcome_json: str
+    source_payload_json: str
+    authoritative_payload_sha256: str
+    authoritative_observation_sha256: str
+    semantic_sha256: str
+    void_refund_json: str | None = None
+    void_refund_sha256: str | None = None
+    supersedes_observation_sha256: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.venue, Venue):
+            raise ValueError("venue must be a supported Venue")
+        for name in (
+            "venue_market_id",
+            "alias",
+            "contract_fingerprint",
+            "rules_fingerprint",
+            "settlement_fingerprint",
+            "source_id",
+            "rules_version",
+        ):
+            _require_text(name, getattr(self, name))
         if self.outcome not in ("yes", "no", "void", "unresolved"):
             raise ValueError("unsupported observation outcome")
         _require_utc_datetime("observed_at", self.observed_at)
         _require_utc_datetime("effective_at", self.effective_at)
         if self.effective_at > self.observed_at:
             raise ValueError("effective_at must not follow observed_at")
-        _require_text("source_id", self.source_id)
+        _require_canonical_json_value(
+            "authoritative_outcome_json", self.authoritative_outcome_json
+        )
         _require_canonical_object("source_payload_json", self.source_payload_json)
+        _require_sha256(
+            "authoritative_payload_sha256", self.authoritative_payload_sha256
+        )
+        if _sha256(self.source_payload_json) != self.authoritative_payload_sha256:
+            raise ValueError("authoritative payload hash does not match source payload")
+        _require_sha256("semantic_sha256", self.semantic_sha256)
+        _require_sha256(
+            "authoritative_observation_sha256",
+            self.authoritative_observation_sha256,
+        )
+        if self.outcome == "void":
+            if self.void_refund_json is None or self.void_refund_sha256 is None:
+                raise ValueError("void observation requires an exact refund contract")
+            _require_canonical_object("void_refund_json", self.void_refund_json)
+            _require_sha256("void_refund_sha256", self.void_refund_sha256)
+            if _sha256(self.void_refund_json) != self.void_refund_sha256:
+                raise ValueError("void refund hash does not match contract")
+        elif self.void_refund_json is not None or self.void_refund_sha256 is not None:
+            raise ValueError("void refund contract is only valid for void outcome")
+        if _authoritative_observation_sha256(self) != self.authoritative_observation_sha256:
+            raise ValueError("authoritative observation hash does not match record")
+        if _settlement_semantic_sha256(self) != self.semantic_sha256:
+            raise ValueError("semantic_sha256 does not match settlement semantics")
         if self.supersedes_observation_sha256 is not None:
             _require_sha256(
                 "supersedes_observation_sha256",
@@ -713,6 +1031,23 @@ class ObservationWriteResult:
 
 
 @dataclass(frozen=True)
+class SettlementAttemptWriteResult:
+    status: Literal["inserted", "identical", "conflict"]
+    attempt_id: str
+    attempt_status: Literal[
+        "nonterminal",
+        "not_found",
+        "transient_error",
+        "internal_error",
+        "quarantined",
+        "terminal",
+    ]
+    observation_status: Literal["inserted", "identical"] | None = None
+    observation_sha256: str | None = None
+    conflict_id: str | None = None
+
+
+@dataclass(frozen=True)
 class SettlementWriteResult:
     status: Literal["inserted", "identical"]
     settlement_id: str
@@ -804,6 +1139,165 @@ class CapitalGuardShadowStore:
         return self._write(
             lambda conn: self._append_observation_transaction(
                 conn, record, normalized_ids
+            )
+        )
+
+    def settlement_market_backlog(
+        self,
+        *,
+        limit: int = MAX_SETTLEMENT_MARKETS_PER_RUN,
+    ) -> tuple[SettlementMarketKey, ...]:
+        _require_bounded_limit(
+            "limit", limit, maximum=MAX_SETTLEMENT_MARKETS_PER_RUN
+        )
+
+        def read(conn: sqlite3.Connection) -> tuple[SettlementMarketKey, ...]:
+            self._validate_schema(conn)
+            rows = conn.execute(
+                """
+                SELECT c.venue, c.venue_market_id, MIN(c.decision_at),
+                       MAX(a.attempted_at)
+                FROM capital_guard_shadow_candidates c
+                LEFT JOIN capital_guard_shadow_settlement_attempts a
+                  ON a.venue = c.venue
+                 AND a.venue_market_id = c.venue_market_id
+                GROUP BY c.venue, c.venue_market_id
+                ORDER BY (MAX(a.attempted_at) IS NOT NULL), MAX(a.attempted_at),
+                         MIN(c.decision_at), c.venue, c.venue_market_id
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            return tuple(
+                SettlementMarketKey(Venue(str(row[0])), str(row[1])) for row in rows
+            )
+
+        return self._read(read)
+
+    def candidate_settlement_backlog(
+        self,
+        market_key: SettlementMarketKey,
+        *,
+        limit: int = MAX_SETTLEMENT_CANDIDATES_PER_MARKET,
+    ) -> CandidateSettlementBacklog:
+        if not isinstance(market_key, SettlementMarketKey):
+            raise TypeError("market_key must be SettlementMarketKey")
+        _require_bounded_limit(
+            "limit", limit, maximum=MAX_SETTLEMENT_CANDIDATES_PER_MARKET
+        )
+        return self._read(
+            lambda conn: self._candidate_settlement_backlog_transaction(
+                conn, market_key, limit=limit
+            )
+        )
+
+    def current_authoritative_head(
+        self,
+        market_ref: MarketRef,
+    ) -> CurrentAuthoritativeHead | None:
+        if not isinstance(market_ref, MarketRef):
+            raise TypeError("market_ref must be MarketRef")
+        return self._read(
+            lambda conn: self._current_authoritative_head_transaction(
+                conn, market_ref.venue, market_ref.venue_market_id,
+                expected_alias=market_ref.alias,
+            )
+        )
+
+    def current_head_settlements(
+        self,
+        market_ref: MarketRef,
+        *,
+        limit: int = MAX_SETTLEMENT_CANDIDATES_PER_MARKET,
+    ) -> tuple[CurrentHeadSettlement, ...]:
+        if not isinstance(market_ref, MarketRef):
+            raise TypeError("market_ref must be MarketRef")
+        _require_bounded_limit(
+            "limit", limit, maximum=MAX_SETTLEMENT_CANDIDATES_PER_MARKET
+        )
+
+        def read(conn: sqlite3.Connection) -> tuple[CurrentHeadSettlement, ...]:
+            self._validate_schema(conn)
+            head = self._current_authoritative_head_transaction(
+                conn,
+                market_ref.venue,
+                market_ref.venue_market_id,
+                expected_alias=market_ref.alias,
+            )
+            if head is None:
+                return ()
+            rows = conn.execute(
+                """
+                SELECT settlement_id, candidate_id, observation_sha256,
+                       outcome, settled_at
+                FROM capital_guard_shadow_settlements
+                WHERE observation_sha256 = ?
+                ORDER BY candidate_id
+                LIMIT ?
+                """,
+                (head.observation_sha256, limit + 1),
+            ).fetchall()
+            if len(rows) > limit:
+                raise ValueError("current-head settlement result exceeds bounded limit")
+            return tuple(
+                CurrentHeadSettlement(
+                    settlement_id=str(row[0]),
+                    candidate_id=str(row[1]),
+                    observation_sha256=str(row[2]),
+                    outcome=str(row[3]),
+                    settled_at=_parse_timestamp(str(row[4])),
+                )
+                for row in rows
+            )
+
+        return self._read(read)
+
+    def record_settlement_attempt(
+        self,
+        backlog: CandidateSettlementBacklog,
+        *,
+        attempted_at: datetime,
+        status: Literal[
+            "nonterminal",
+            "not_found",
+            "transient_error",
+            "internal_error",
+            "quarantined",
+            "terminal",
+        ],
+        observation: SettlementObservation | None = None,
+        error_taxonomy: str | None = None,
+        error_sha256: str | None = None,
+        quarantine_reason: str | None = None,
+    ) -> SettlementAttemptWriteResult:
+        if not isinstance(backlog, CandidateSettlementBacklog):
+            raise TypeError("backlog must be CandidateSettlementBacklog")
+        _require_utc_datetime("attempted_at", attempted_at)
+        return self._write(
+            lambda conn: self._record_settlement_attempt_transaction(
+                conn,
+                backlog,
+                attempted_at=attempted_at,
+                status=status,
+                observation=observation,
+                error_taxonomy=error_taxonomy,
+                error_sha256=error_sha256,
+                quarantine_reason=quarantine_reason,
+            )
+        )
+
+    def record_settlement_identity_quarantine(
+        self,
+        error: CapitalGuardShadowIdentityError,
+        *,
+        attempted_at: datetime,
+    ) -> SettlementAttemptWriteResult:
+        if not isinstance(error, CapitalGuardShadowIdentityError):
+            raise TypeError("error must be CapitalGuardShadowIdentityError")
+        _require_utc_datetime("attempted_at", attempted_at)
+        return self._write(
+            lambda conn: self._record_identity_quarantine_transaction(
+                conn, error, attempted_at=attempted_at
             )
         )
 
@@ -916,6 +1410,745 @@ class CapitalGuardShadowStore:
             raise CapitalGuardShadowSchemaError("capital guard shadow schema drift") from exc
         if conn.execute("PRAGMA foreign_key_check").fetchone() is not None:
             raise CapitalGuardShadowSchemaError("capital guard shadow foreign-key drift")
+
+    def _candidate_settlement_backlog_transaction(
+        self,
+        conn: sqlite3.Connection,
+        market_key: SettlementMarketKey,
+        *,
+        limit: int,
+    ) -> CandidateSettlementBacklog:
+        self._validate_schema(conn)
+        count = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM capital_guard_shadow_candidates "
+                "WHERE venue = ? AND venue_market_id = ?",
+                (market_key.venue.value, market_key.venue_market_id),
+            ).fetchone()[0]
+        )
+        if count == 0:
+            raise ValueError("candidate settlement backlog is empty")
+        rows = conn.execute(
+            """
+            SELECT candidate_id, identity_json
+            FROM capital_guard_shadow_candidates
+            WHERE venue = ? AND venue_market_id = ?
+            ORDER BY decision_at, candidate_id
+            LIMIT ?
+            """,
+            (market_key.venue.value, market_key.venue_market_id, limit + 1),
+        ).fetchall()
+        if count > limit:
+            sample = [
+                {"candidate_id": str(row[0]), "identity_sha256": _sha256(str(row[1]))}
+                for row in rows
+            ]
+            raise CapitalGuardShadowIdentityError(
+                "candidate settlement backlog exceeds bounded limit",
+                market_key=market_key,
+                reason_taxonomy="candidate_group_over_cap",
+                candidate_count=count,
+                candidate_set_sha256=None,
+                identity_set_sha256=None,
+                identity_sample_sha256=_sha256(canonical_json(sample)),
+            )
+
+        identities: list[dict[str, object]] = []
+        candidate_ids = [str(row[0]) for row in rows]
+        candidate_evidence = [
+            {
+                "candidate_id": str(row[0]),
+                "identity_sha256": _sha256(str(row[1])),
+            }
+            for row in rows
+        ]
+        candidate_set_sha256 = _sha256(canonical_json(candidate_evidence))
+        raw_identity_set_sha256 = _sha256(
+            canonical_json(
+                sorted({evidence["identity_sha256"] for evidence in candidate_evidence})
+            )
+        )
+        for _candidate_id_raw, identity_json_raw in rows:
+            identity_json = str(identity_json_raw)
+            try:
+                identity = _require_canonical_object("identity_json", identity_json)
+                required = {
+                    "alias",
+                    "contract_fingerprint",
+                    "decision_key",
+                    "lifecycle_id",
+                    "rules_fingerprint",
+                    "schema_version",
+                    "settlement_fingerprint",
+                    "venue",
+                    "venue_market_id",
+                }
+                _require_exact_keys("identity_json", identity, required)
+                if (
+                    identity["venue"] != market_key.venue.value
+                    or identity["venue_market_id"] != market_key.venue_market_id
+                ):
+                    raise ValueError(
+                        "identity_json does not match candidate market"
+                    )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise CapitalGuardShadowIdentityError(
+                    "candidate settlement identity is ambiguous",
+                    market_key=market_key,
+                    reason_taxonomy="identity_ambiguous",
+                    candidate_count=count,
+                    candidate_set_sha256=candidate_set_sha256,
+                    identity_set_sha256=raw_identity_set_sha256,
+                ) from exc
+            singular = {
+                key: identity[key]
+                for key in (
+                    "alias",
+                    "contract_fingerprint",
+                    "rules_fingerprint",
+                    "settlement_fingerprint",
+                )
+            }
+            for name, value in singular.items():
+                try:
+                    _require_text(f"identity_json.{name}", value)
+                except ValueError as exc:
+                    raise CapitalGuardShadowIdentityError(
+                        "candidate settlement identity is ambiguous",
+                        market_key=market_key,
+                        reason_taxonomy="identity_ambiguous",
+                        candidate_count=count,
+                        candidate_set_sha256=candidate_set_sha256,
+                        identity_set_sha256=raw_identity_set_sha256,
+                    ) from exc
+            identities.append(singular)
+
+        identity_set = sorted(
+            {canonical_json(identity) for identity in identities}
+        )
+        identity_set_sha256 = _sha256(canonical_json(identity_set))
+        if len(identity_set) != 1:
+            raise CapitalGuardShadowIdentityError(
+                "candidate settlement identity is ambiguous",
+                market_key=market_key,
+                reason_taxonomy="identity_ambiguous",
+                candidate_count=count,
+                candidate_set_sha256=candidate_set_sha256,
+                identity_set_sha256=identity_set_sha256,
+            )
+        identity = json.loads(identity_set[0])
+        alias = str(identity["alias"])
+        if market_key.venue is Venue.KALSHI and alias != market_key.venue_market_id:
+            raise CapitalGuardShadowIdentityError(
+                "Kalshi candidate settlement alias is ambiguous",
+                market_key=market_key,
+                reason_taxonomy="identity_ambiguous",
+                candidate_count=count,
+                candidate_set_sha256=candidate_set_sha256,
+                identity_set_sha256=identity_set_sha256,
+            )
+        market_ref = MarketRef(market_key.venue, market_key.venue_market_id, alias)
+        head = self._current_authoritative_head_transaction(
+            conn,
+            market_key.venue,
+            market_key.venue_market_id,
+            expected_alias=alias,
+        )
+        if head is None:
+            missing = tuple(candidate_ids)
+        else:
+            linked = {
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT candidate_id FROM capital_guard_shadow_candidate_observations "
+                    "WHERE observation_sha256 = ?",
+                    (head.observation_sha256,),
+                )
+            }
+            missing = tuple(
+                candidate_id for candidate_id in candidate_ids if candidate_id not in linked
+            )
+        return CandidateSettlementBacklog(
+            market_ref=market_ref,
+            contract_fingerprint=str(identity["contract_fingerprint"]),
+            rules_fingerprint=str(identity["rules_fingerprint"]),
+            settlement_fingerprint=str(identity["settlement_fingerprint"]),
+            candidate_ids=tuple(candidate_ids),
+            missing_link_candidate_ids=missing,
+            candidate_set_sha256=candidate_set_sha256,
+            identity_set_sha256=identity_set_sha256,
+            current_head_sha256=(head.observation_sha256 if head is not None else None),
+        )
+
+    def _current_authoritative_head_transaction(
+        self,
+        conn: sqlite3.Connection,
+        venue: Venue,
+        venue_market_id: str,
+        *,
+        expected_alias: str | None = None,
+    ) -> CurrentAuthoritativeHead | None:
+        self._validate_schema(conn)
+        rows = conn.execute(
+            """
+            SELECT o.observation_sha256, o.alias, o.contract_fingerprint,
+                   o.rules_fingerprint, o.settlement_fingerprint, o.outcome,
+                   o.observed_at, o.effective_at, o.source_id, o.rules_version,
+                   o.authoritative_outcome_json, o.source_payload_json,
+                   o.authoritative_payload_sha256,
+                   o.authoritative_observation_sha256,
+                   o.void_refund_json, o.void_refund_sha256, o.semantic_sha256
+            FROM capital_guard_shadow_observations o
+            WHERE o.venue = ? AND o.venue_market_id = ?
+              AND NOT EXISTS (
+                  SELECT 1 FROM capital_guard_shadow_observations child
+                  WHERE child.supersedes_observation_sha256 = o.observation_sha256
+              )
+            """,
+            (venue.value, venue_market_id),
+        ).fetchall()
+        if not rows:
+            return None
+        if len(rows) != 1:
+            raise ValueError("observation market has ambiguous current heads")
+        row = rows[0]
+        alias = str(row[1])
+        if expected_alias is not None and alias != expected_alias:
+            raise ValueError("authoritative head alias differs from candidate identity")
+        return CurrentAuthoritativeHead(
+            observation_sha256=str(row[0]),
+            market_ref=MarketRef(venue, venue_market_id, alias),
+            contract_fingerprint=str(row[2]),
+            rules_fingerprint=str(row[3]),
+            settlement_fingerprint=str(row[4]),
+            outcome=str(row[5]),
+            observed_at=_parse_timestamp(str(row[6])),
+            effective_at=_parse_timestamp(str(row[7])),
+            source_id=str(row[8]),
+            rules_version=str(row[9]),
+            authoritative_outcome_json=str(row[10]),
+            source_payload_json=str(row[11]),
+            authoritative_payload_sha256=str(row[12]),
+            authoritative_observation_sha256=str(row[13]),
+            void_refund_json=None if row[14] is None else str(row[14]),
+            void_refund_sha256=None if row[15] is None else str(row[15]),
+            semantic_sha256=str(row[16]),
+        )
+
+    def _record_identity_quarantine_transaction(
+        self,
+        conn: sqlite3.Connection,
+        error: CapitalGuardShadowIdentityError,
+        *,
+        attempted_at: datetime,
+    ) -> SettlementAttemptWriteResult:
+        head = self._current_authoritative_head_transaction(
+            conn,
+            error.market_key.venue,
+            error.market_key.venue_market_id,
+        )
+        complete = error.reason_taxonomy != "candidate_group_over_cap"
+        payload = _settlement_attempt_payload(
+            venue=error.market_key.venue,
+            venue_market_id=error.market_key.venue_market_id,
+            alias=None,
+            contract_fingerprint=None,
+            rules_fingerprint=None,
+            settlement_fingerprint=None,
+            identity_set_sha256=error.identity_set_sha256,
+            identity_sample_sha256=error.identity_sample_sha256,
+            candidate_set_sha256=error.candidate_set_sha256,
+            candidate_set_complete=complete,
+            candidate_count=error.candidate_count,
+            attempted_at=attempted_at,
+            status="quarantined",
+            head_before_sha256=head.observation_sha256 if head is not None else None,
+            head_after_sha256=head.observation_sha256 if head is not None else None,
+            error_taxonomy=error.reason_taxonomy,
+            error_sha256=_sha256(error.reason_taxonomy),
+        )
+        return self._persist_settlement_attempt_transaction(
+            conn,
+            payload,
+            quarantine_reason=error.reason_taxonomy,
+        )
+
+    def _record_settlement_attempt_transaction(
+        self,
+        conn: sqlite3.Connection,
+        backlog: CandidateSettlementBacklog,
+        *,
+        attempted_at: datetime,
+        status: str,
+        observation: SettlementObservation | None,
+        error_taxonomy: str | None,
+        error_sha256: str | None,
+        quarantine_reason: str | None,
+    ) -> SettlementAttemptWriteResult:
+        market_key = SettlementMarketKey(
+            backlog.market_ref.venue, backlog.market_ref.venue_market_id
+        )
+        try:
+            current = self._candidate_settlement_backlog_transaction(
+                conn,
+                market_key,
+                limit=MAX_SETTLEMENT_CANDIDATES_PER_MARKET,
+            )
+        except CapitalGuardShadowIdentityError:
+            current = None
+        state_matches = current is not None and (
+            current.market_ref == backlog.market_ref
+            and current.contract_fingerprint == backlog.contract_fingerprint
+            and current.rules_fingerprint == backlog.rules_fingerprint
+            and current.settlement_fingerprint == backlog.settlement_fingerprint
+            and current.candidate_ids == backlog.candidate_ids
+            and current.candidate_set_sha256 == backlog.candidate_set_sha256
+            and current.identity_set_sha256 == backlog.identity_set_sha256
+            and current.current_head_sha256 == backlog.current_head_sha256
+        )
+        if not state_matches:
+            return self._persist_valid_identity_attempt(
+                conn,
+                backlog,
+                attempted_at=attempted_at,
+                status="quarantined",
+                head_after_sha256=(
+                    current.current_head_sha256 if current is not None else None
+                ),
+                error_taxonomy="concurrent_state_change",
+                error_sha256=_sha256("concurrent_state_change"),
+                quarantine_reason="concurrent_state_change",
+            )
+        assert current is not None
+
+        market_conflict = _market_has_observation_conflict(conn, market_key)
+        if market_conflict:
+            return self._persist_valid_identity_attempt(
+                conn,
+                backlog,
+                attempted_at=attempted_at,
+                status="quarantined",
+                head_after_sha256=current.current_head_sha256,
+                error_taxonomy="observation_fork",
+                error_sha256=_sha256("observation_fork"),
+                quarantine_reason="observation_fork",
+            )
+
+        if status != "terminal":
+            if observation is not None:
+                raise ValueError("nonterminal attempt cannot carry an observation")
+            return self._persist_valid_identity_attempt(
+                conn,
+                backlog,
+                attempted_at=attempted_at,
+                status=status,
+                error_taxonomy=error_taxonomy,
+                error_sha256=error_sha256,
+                quarantine_reason=quarantine_reason,
+            )
+
+        if not isinstance(observation, SettlementObservation):
+            return self._persist_valid_identity_attempt(
+                conn,
+                backlog,
+                attempted_at=attempted_at,
+                status="quarantined",
+                error_taxonomy="source_drift",
+                error_sha256=_sha256("source_drift"),
+                quarantine_reason="source_drift",
+            )
+        if (
+            observation.market_ref != backlog.market_ref
+            or observation.supersedes_observation_sha256 is not None
+        ):
+            return self._persist_valid_identity_attempt(
+                conn,
+                backlog,
+                attempted_at=attempted_at,
+                status="quarantined",
+                error_taxonomy="source_drift",
+                error_sha256=_sha256("source_drift"),
+                quarantine_reason="source_drift",
+            )
+        try:
+            _require_utc_datetime("observation.observed_at", observation.observed_at)
+            _require_utc_datetime("observation.effective_at", observation.effective_at)
+        except ValueError:
+            return self._persist_valid_identity_attempt(
+                conn,
+                backlog,
+                attempted_at=attempted_at,
+                status="quarantined",
+                error_taxonomy="source_drift",
+                error_sha256=_sha256("source_drift"),
+                quarantine_reason="source_drift",
+            )
+
+        void_refund_json, void_refund_sha256 = _void_refund_payload(
+            observation.void_refund
+        )
+        semantic_sha256 = _source_settlement_semantic_sha256(
+            observation,
+            contract_fingerprint=backlog.contract_fingerprint,
+            rules_fingerprint=backlog.rules_fingerprint,
+            settlement_fingerprint=backlog.settlement_fingerprint,
+        )
+        authority = {
+            "outcome": observation.outcome.value,
+            "source_id": observation.source_id,
+            "rules_version": observation.rules_version,
+            "authoritative_outcome_json": observation.authoritative_outcome_json,
+            "authoritative_payload_sha256": observation.payload_sha256,
+            "authoritative_observation_sha256": observation.observation_sha256,
+            "semantic_sha256": semantic_sha256,
+            "void_refund_json": void_refund_json,
+            "void_refund_sha256": void_refund_sha256,
+        }
+        if observation.outcome is MarketOutcome.VOID:
+            return self._persist_valid_identity_attempt(
+                conn,
+                backlog,
+                attempted_at=attempted_at,
+                status="quarantined",
+                head_after_sha256=current.current_head_sha256,
+                error_taxonomy="void_financial_economics_deferred",
+                error_sha256=_sha256("void_financial_economics_deferred"),
+                quarantine_reason="void_financial_economics_deferred",
+                **authority,
+            )
+        if observation.outcome not in (MarketOutcome.YES, MarketOutcome.NO):
+            return self._persist_valid_identity_attempt(
+                conn,
+                backlog,
+                attempted_at=attempted_at,
+                status="quarantined",
+                error_taxonomy="financial_ambiguity",
+                error_sha256=_sha256("financial_ambiguity"),
+                quarantine_reason="financial_ambiguity",
+            )
+
+        head = self._current_authoritative_head_transaction(
+            conn,
+            backlog.market_ref.venue,
+            backlog.market_ref.venue_market_id,
+            expected_alias=backlog.market_ref.alias,
+        )
+        if head is not None and head.semantic_sha256 == semantic_sha256:
+            attempt_payload = self._valid_identity_attempt_payload(
+                backlog,
+                attempted_at=attempted_at,
+                status="terminal",
+                head_after_sha256=head.observation_sha256,
+                **authority,
+            )
+            preflight = self._preflight_settlement_attempt_transaction(
+                conn, attempt_payload
+            )
+            if preflight is not None:
+                return preflight
+            self._link_candidates_transaction(
+                conn,
+                head.observation_sha256,
+                current.missing_link_candidate_ids,
+                linked_at=attempted_at,
+            )
+            persisted = self._persist_settlement_attempt_transaction(
+                conn, attempt_payload, quarantine_reason=None
+            )
+            return SettlementAttemptWriteResult(
+                status=persisted.status,
+                attempt_id=persisted.attempt_id,
+                attempt_status=persisted.attempt_status,
+                observation_status="identical",
+                observation_sha256=head.observation_sha256,
+            )
+        if head is not None and (
+            observation.observed_at <= head.observed_at
+            or observation.effective_at < head.effective_at
+        ):
+            return self._persist_valid_identity_attempt(
+                conn,
+                backlog,
+                attempted_at=attempted_at,
+                status="quarantined",
+                head_after_sha256=head.observation_sha256,
+                error_taxonomy="backward_time",
+                error_sha256=_sha256("backward_time"),
+                quarantine_reason="backward_time",
+                **authority,
+            )
+
+        record = SettlementObservationRecord(
+            venue=backlog.market_ref.venue,
+            venue_market_id=backlog.market_ref.venue_market_id,
+            alias=backlog.market_ref.alias,
+            contract_fingerprint=backlog.contract_fingerprint,
+            rules_fingerprint=backlog.rules_fingerprint,
+            settlement_fingerprint=backlog.settlement_fingerprint,
+            outcome=observation.outcome.value,
+            observed_at=observation.observed_at,
+            effective_at=observation.effective_at,
+            source_id=observation.source_id,
+            rules_version=observation.rules_version,
+            authoritative_outcome_json=observation.authoritative_outcome_json,
+            source_payload_json=observation.canonical_payload_json,
+            authoritative_payload_sha256=observation.payload_sha256,
+            authoritative_observation_sha256=observation.observation_sha256,
+            semantic_sha256=semantic_sha256,
+            supersedes_observation_sha256=(
+                head.observation_sha256 if head is not None else None
+            ),
+        )
+        predicted_observation_sha256 = _sha256(
+            canonical_json(_observation_payload(record))
+        )
+        attempt_payload = self._valid_identity_attempt_payload(
+            backlog,
+            attempted_at=attempted_at,
+            status="terminal",
+            head_after_sha256=predicted_observation_sha256,
+            **authority,
+        )
+        preflight = self._preflight_settlement_attempt_transaction(
+            conn, attempt_payload
+        )
+        if preflight is not None:
+            return preflight
+        observed = self._append_observation_transaction(
+            conn, record, current.candidate_ids
+        )
+        if observed.status == "conflict":
+            return self._persist_valid_identity_attempt(
+                conn,
+                backlog,
+                attempted_at=attempted_at,
+                status="quarantined",
+                head_after_sha256=head.observation_sha256 if head is not None else None,
+                error_taxonomy="observation_fork",
+                error_sha256=_sha256("observation_fork"),
+                quarantine_reason="observation_fork",
+                **authority,
+            )
+        persisted = self._persist_settlement_attempt_transaction(
+            conn, attempt_payload, quarantine_reason=None
+        )
+        return SettlementAttemptWriteResult(
+            status=persisted.status,
+            attempt_id=persisted.attempt_id,
+            attempt_status=persisted.attempt_status,
+            observation_status=observed.status,
+            observation_sha256=observed.observation_sha256,
+        )
+
+    def _persist_valid_identity_attempt(
+        self,
+        conn: sqlite3.Connection,
+        backlog: CandidateSettlementBacklog,
+        *,
+        attempted_at: datetime,
+        status: str,
+        head_after_sha256: str | None = None,
+        error_taxonomy: str | None = None,
+        error_sha256: str | None = None,
+        quarantine_reason: str | None = None,
+        outcome: str | None = None,
+        source_id: str | None = None,
+        rules_version: str | None = None,
+        authoritative_outcome_json: str | None = None,
+        authoritative_payload_sha256: str | None = None,
+        authoritative_observation_sha256: str | None = None,
+        semantic_sha256: str | None = None,
+        void_refund_json: str | None = None,
+        void_refund_sha256: str | None = None,
+        observation_status: str | None = None,
+        observation_sha256: str | None = None,
+    ) -> SettlementAttemptWriteResult:
+        payload = self._valid_identity_attempt_payload(
+            backlog,
+            attempted_at=attempted_at,
+            status=status,
+            head_after_sha256=head_after_sha256,
+            error_taxonomy=error_taxonomy,
+            error_sha256=error_sha256,
+            outcome=outcome,
+            source_id=source_id,
+            rules_version=rules_version,
+            authoritative_outcome_json=authoritative_outcome_json,
+            authoritative_payload_sha256=authoritative_payload_sha256,
+            authoritative_observation_sha256=authoritative_observation_sha256,
+            semantic_sha256=semantic_sha256,
+            void_refund_json=void_refund_json,
+            void_refund_sha256=void_refund_sha256,
+        )
+        result = self._persist_settlement_attempt_transaction(
+            conn, payload, quarantine_reason=quarantine_reason
+        )
+        if result.status == "conflict":
+            return result
+        return SettlementAttemptWriteResult(
+            status=result.status,
+            attempt_id=result.attempt_id,
+            attempt_status=result.attempt_status,
+            observation_status=observation_status,
+            observation_sha256=observation_sha256,
+        )
+
+    @staticmethod
+    def _valid_identity_attempt_payload(
+        backlog: CandidateSettlementBacklog,
+        *,
+        attempted_at: datetime,
+        status: str,
+        head_after_sha256: str | None = None,
+        error_taxonomy: str | None = None,
+        error_sha256: str | None = None,
+        outcome: str | None = None,
+        source_id: str | None = None,
+        rules_version: str | None = None,
+        authoritative_outcome_json: str | None = None,
+        authoritative_payload_sha256: str | None = None,
+        authoritative_observation_sha256: str | None = None,
+        semantic_sha256: str | None = None,
+        void_refund_json: str | None = None,
+        void_refund_sha256: str | None = None,
+    ) -> dict[str, object]:
+        return _settlement_attempt_payload(
+            venue=backlog.market_ref.venue,
+            venue_market_id=backlog.market_ref.venue_market_id,
+            alias=backlog.market_ref.alias,
+            contract_fingerprint=backlog.contract_fingerprint,
+            rules_fingerprint=backlog.rules_fingerprint,
+            settlement_fingerprint=backlog.settlement_fingerprint,
+            identity_set_sha256=backlog.identity_set_sha256,
+            candidate_set_sha256=backlog.candidate_set_sha256,
+            candidate_set_complete=True,
+            candidate_count=len(backlog.candidate_ids),
+            attempted_at=attempted_at,
+            status=status,
+            outcome=outcome,
+            source_id=source_id,
+            rules_version=rules_version,
+            authoritative_outcome_json=authoritative_outcome_json,
+            authoritative_payload_sha256=authoritative_payload_sha256,
+            authoritative_observation_sha256=authoritative_observation_sha256,
+            semantic_sha256=semantic_sha256,
+            void_refund_json=void_refund_json,
+            void_refund_sha256=void_refund_sha256,
+            head_before_sha256=backlog.current_head_sha256,
+            head_after_sha256=head_after_sha256,
+            error_taxonomy=error_taxonomy,
+            error_sha256=error_sha256,
+        )
+
+    def _preflight_settlement_attempt_transaction(
+        self,
+        conn: sqlite3.Connection,
+        payload: dict[str, object],
+    ) -> SettlementAttemptWriteResult | None:
+        attempt_id = _settlement_attempt_id(payload)
+        payload_sha256 = _sha256(canonical_json(payload))
+        existing = conn.execute(
+            "SELECT payload_sha256, status FROM capital_guard_shadow_settlement_attempts "
+            "WHERE attempt_id = ?",
+            (attempt_id,),
+        ).fetchone()
+        if existing is None:
+            return None
+        if str(existing[0]) == payload_sha256:
+            return SettlementAttemptWriteResult(
+                "identical", attempt_id, str(existing[1])
+            )
+        conflict_id = _insert_conflict(
+            conn,
+            entity_type="settlement_attempt",
+            entity_key=attempt_id,
+            existing_sha256=str(existing[0]),
+            incoming_sha256=payload_sha256,
+            created_at=_parse_timestamp(str(payload["attempted_at"])),
+        )
+        return SettlementAttemptWriteResult(
+            "conflict", attempt_id, str(existing[1]), conflict_id=conflict_id
+        )
+
+    def _persist_settlement_attempt_transaction(
+        self,
+        conn: sqlite3.Connection,
+        payload: dict[str, object],
+        *,
+        quarantine_reason: str | None,
+    ) -> SettlementAttemptWriteResult:
+        attempt_id = _settlement_attempt_id(payload)
+        payload_sha256 = _sha256(canonical_json(payload))
+        existing = conn.execute(
+            "SELECT payload_sha256, status FROM capital_guard_shadow_settlement_attempts "
+            "WHERE attempt_id = ?",
+            (attempt_id,),
+        ).fetchone()
+        if existing is not None:
+            if str(existing[0]) == payload_sha256:
+                return SettlementAttemptWriteResult(
+                    "identical", attempt_id, str(existing[1])
+                )
+            conflict_id = _insert_conflict(
+                conn,
+                entity_type="settlement_attempt",
+                entity_key=attempt_id,
+                existing_sha256=str(existing[0]),
+                incoming_sha256=payload_sha256,
+                created_at=_parse_timestamp(str(payload["attempted_at"])),
+            )
+            return SettlementAttemptWriteResult(
+                "conflict", attempt_id, str(existing[1]), conflict_id=conflict_id
+            )
+
+        columns = tuple(payload)
+        conn.execute(
+            "INSERT INTO capital_guard_shadow_settlement_attempts "
+            f"(attempt_id, payload_sha256, {', '.join(columns)}) "
+            f"VALUES (?, ?, {', '.join('?' for _ in columns)})",
+            (attempt_id, payload_sha256, *(payload[column] for column in columns)),
+        )
+        if quarantine_reason is not None:
+            quarantine_id = _stable_id(
+                "capital-guard-settlement-quarantine-v1",
+                attempt_id,
+                quarantine_reason,
+            )
+            conn.execute(
+                "INSERT INTO capital_guard_shadow_settlement_quarantines "
+                "(quarantine_id, attempt_id, reason_taxonomy, reason_sha256, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    quarantine_id,
+                    attempt_id,
+                    quarantine_reason,
+                    _sha256(canonical_json({"reason_taxonomy": quarantine_reason})),
+                    payload["attempted_at"],
+                ),
+            )
+        return SettlementAttemptWriteResult(
+            "inserted", attempt_id, str(payload["status"])
+        )
+
+    def _link_candidates_transaction(
+        self,
+        conn: sqlite3.Connection,
+        observation_sha256: str,
+        candidate_ids: Sequence[str],
+        *,
+        linked_at: datetime,
+    ) -> None:
+        for candidate_id in candidate_ids:
+            link_id = _stable_id(
+                "capital-guard-observation-link-v1",
+                candidate_id,
+                observation_sha256,
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO capital_guard_shadow_candidate_observations "
+                "(link_id, candidate_id, observation_sha256, linked_at) VALUES (?, ?, ?, ?)",
+                (link_id, candidate_id, observation_sha256, _timestamp(linked_at)),
+            )
 
     def _append_candidate_transaction(
         self,
@@ -1155,14 +2388,29 @@ class CapitalGuardShadowStore:
         observation_sha256 = _sha256(canonical_json(payload))
         for candidate_id in candidate_ids:
             candidate = conn.execute(
-                "SELECT venue, venue_market_id FROM capital_guard_shadow_candidates "
+                "SELECT venue, venue_market_id, identity_json "
+                "FROM capital_guard_shadow_candidates "
                 "WHERE candidate_id = ?",
                 (candidate_id,),
             ).fetchone()
             if candidate is None:
                 raise ValueError("candidate_id does not exist")
-            if tuple(candidate) != (record.venue.value, record.venue_market_id):
+            if tuple(candidate[0:2]) != (record.venue.value, record.venue_market_id):
                 raise ValueError("observation market identity does not match candidate")
+            identity = _require_canonical_object("identity_json", str(candidate[2]))
+            expected_identity = {
+                "alias": record.alias,
+                "contract_fingerprint": record.contract_fingerprint,
+                "rules_fingerprint": record.rules_fingerprint,
+                "settlement_fingerprint": record.settlement_fingerprint,
+            }
+            if any(
+                identity.get(key) != value
+                for key, value in expected_identity.items()
+            ):
+                raise ValueError(
+                    "observation contract identity does not match candidate"
+                )
         market_key = _observation_market_key(record.venue, record.venue_market_id)
         root = conn.execute(
             """
@@ -1192,7 +2440,7 @@ class CapitalGuardShadowStore:
             raise ValueError("observation market has an ambiguous observation root")
         if record.supersedes_observation_sha256 is not None:
             superseded = conn.execute(
-                "SELECT venue, venue_market_id, observed_at "
+                "SELECT venue, venue_market_id, observed_at, effective_at "
                 "FROM capital_guard_shadow_observations WHERE observation_sha256 = ?",
                 (record.supersedes_observation_sha256,),
             ).fetchone()
@@ -1202,6 +2450,10 @@ class CapitalGuardShadowStore:
                 raise ValueError("superseded observation market identity differs")
             if _parse_timestamp(str(superseded[2])) >= record.observed_at:
                 raise ValueError("correction must follow superseded observation")
+            if _parse_timestamp(str(superseded[3])) > record.effective_at:
+                raise ValueError(
+                    "correction effective_at must not precede superseded observation"
+                )
             successor = conn.execute(
                 "SELECT observation_sha256 FROM capital_guard_shadow_observations "
                 "WHERE supersedes_observation_sha256 = ?",
@@ -1229,20 +2481,35 @@ class CapitalGuardShadowStore:
             conn.execute(
                 """
                 INSERT INTO capital_guard_shadow_observations (
-                    observation_sha256, venue, venue_market_id, outcome, observed_at,
-                    effective_at, source_id, source_payload_json,
+                    observation_sha256, venue, venue_market_id, alias,
+                    contract_fingerprint, rules_fingerprint, settlement_fingerprint,
+                    outcome, observed_at, effective_at, source_id, rules_version,
+                    authoritative_outcome_json, source_payload_json,
+                    authoritative_payload_sha256, authoritative_observation_sha256,
+                    void_refund_json, void_refund_sha256, semantic_sha256,
                     supersedes_observation_sha256
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     observation_sha256,
                     record.venue.value,
                     record.venue_market_id,
+                    record.alias,
+                    record.contract_fingerprint,
+                    record.rules_fingerprint,
+                    record.settlement_fingerprint,
                     record.outcome,
                     payload["observed_at"],
                     payload["effective_at"],
                     record.source_id,
+                    record.rules_version,
+                    record.authoritative_outcome_json,
                     record.source_payload_json,
+                    record.authoritative_payload_sha256,
+                    record.authoritative_observation_sha256,
+                    record.void_refund_json,
+                    record.void_refund_sha256,
+                    record.semantic_sha256,
                     record.supersedes_observation_sha256,
                 ),
             )
@@ -1644,16 +2911,217 @@ def _candidate_id(record: CapitalGuardCandidate) -> str:
     return _stable_id("capital-guard-candidate-claim-v1", _claim_identity_json(record))
 
 
+def _settlement_attempt_payload(
+    *,
+    venue: Venue,
+    venue_market_id: str,
+    alias: str | None,
+    contract_fingerprint: str | None,
+    rules_fingerprint: str | None,
+    settlement_fingerprint: str | None,
+    identity_set_sha256: str | None,
+    candidate_set_sha256: str | None,
+    candidate_set_complete: bool,
+    candidate_count: int,
+    attempted_at: datetime,
+    status: str,
+    identity_sample_sha256: str | None = None,
+    outcome: str | None = None,
+    source_id: str | None = None,
+    rules_version: str | None = None,
+    authoritative_outcome_json: str | None = None,
+    authoritative_payload_sha256: str | None = None,
+    authoritative_observation_sha256: str | None = None,
+    semantic_sha256: str | None = None,
+    void_refund_json: str | None = None,
+    void_refund_sha256: str | None = None,
+    head_before_sha256: str | None = None,
+    head_after_sha256: str | None = None,
+    error_taxonomy: str | None = None,
+    error_sha256: str | None = None,
+) -> dict[str, object]:
+    return {
+        "attempt_version": CAPITAL_GUARD_SETTLEMENT_ATTEMPT_VERSION,
+        "venue": venue.value,
+        "venue_market_id": venue_market_id,
+        "alias": alias,
+        "contract_fingerprint": contract_fingerprint,
+        "rules_fingerprint": rules_fingerprint,
+        "settlement_fingerprint": settlement_fingerprint,
+        "identity_set_sha256": identity_set_sha256,
+        "identity_sample_sha256": identity_sample_sha256,
+        "candidate_set_sha256": candidate_set_sha256,
+        "candidate_set_complete": int(candidate_set_complete),
+        "candidate_count": candidate_count,
+        "attempted_at": _timestamp(attempted_at),
+        "status": status,
+        "outcome": outcome,
+        "source_id": source_id,
+        "rules_version": rules_version,
+        "authoritative_outcome_json": authoritative_outcome_json,
+        "authoritative_payload_sha256": authoritative_payload_sha256,
+        "authoritative_observation_sha256": authoritative_observation_sha256,
+        "semantic_sha256": semantic_sha256,
+        "void_refund_json": void_refund_json,
+        "void_refund_sha256": void_refund_sha256,
+        "head_before_sha256": head_before_sha256,
+        "head_after_sha256": head_after_sha256,
+        "error_taxonomy": error_taxonomy,
+        "error_sha256": error_sha256,
+    }
+
+
+def _settlement_attempt_id(payload: Mapping[str, object]) -> str:
+    key = {
+        name: payload[name]
+        for name in (
+            "attempt_version",
+            "venue",
+            "venue_market_id",
+            "identity_set_sha256",
+            "identity_sample_sha256",
+            "candidate_set_sha256",
+            "candidate_set_complete",
+            "candidate_count",
+            "attempted_at",
+            "head_before_sha256",
+        )
+    }
+    return _sha256(canonical_json(key))
+
+
+def _source_settlement_semantic_sha256(
+    observation: SettlementObservation,
+    *,
+    contract_fingerprint: str,
+    rules_fingerprint: str,
+    settlement_fingerprint: str,
+) -> str:
+    void_refund_json, void_refund_sha256 = _void_refund_payload(
+        observation.void_refund
+    )
+    return _sha256(
+        canonical_json(
+            {
+                "venue": observation.market_ref.venue.value,
+                "venue_market_id": observation.market_ref.venue_market_id,
+                "alias": observation.market_ref.alias,
+                "contract_fingerprint": contract_fingerprint,
+                "rules_fingerprint": rules_fingerprint,
+                "settlement_fingerprint": settlement_fingerprint,
+                "outcome": observation.outcome.value,
+                "authoritative_outcome_json": observation.authoritative_outcome_json,
+                "authoritative_payload_sha256": observation.payload_sha256,
+                "rules_version": observation.rules_version,
+                "source_id": observation.source_id,
+                "void_refund_json": void_refund_json,
+                "void_refund_sha256": void_refund_sha256,
+            }
+        )
+    )
+
+
+def _settlement_semantic_sha256(record: SettlementObservationRecord) -> str:
+    return _sha256(
+        canonical_json(
+            {
+                "venue": record.venue.value,
+                "venue_market_id": record.venue_market_id,
+                "alias": record.alias,
+                "contract_fingerprint": record.contract_fingerprint,
+                "rules_fingerprint": record.rules_fingerprint,
+                "settlement_fingerprint": record.settlement_fingerprint,
+                "outcome": record.outcome,
+                "authoritative_outcome_json": record.authoritative_outcome_json,
+                "authoritative_payload_sha256": record.authoritative_payload_sha256,
+                "rules_version": record.rules_version,
+                "source_id": record.source_id,
+                "void_refund_json": record.void_refund_json,
+                "void_refund_sha256": record.void_refund_sha256,
+            }
+        )
+    )
+
+
+def _void_refund_payload(
+    refund: VoidRefundContract | None,
+) -> tuple[str | None, str | None]:
+    if refund is None:
+        return None, None
+    payload = canonical_json(
+        {
+            "refund_cents_per_contract": _decimal_text(
+                refund.refund_cents_per_contract
+            ),
+            "refunds_entry_fee": refund.refunds_entry_fee,
+            "schema_version": 1,
+        }
+    )
+    return payload, _sha256(payload)
+
+
+def _void_refund_from_json(value: str | None) -> VoidRefundContract | None:
+    if value is None:
+        return None
+    payload = _require_canonical_object("void_refund_json", value)
+    _require_exact_keys(
+        "void_refund_json",
+        payload,
+        {"refund_cents_per_contract", "refunds_entry_fee", "schema_version"},
+    )
+    if payload["schema_version"] != 1 or not isinstance(
+        payload["refunds_entry_fee"], bool
+    ):
+        raise ValueError("void_refund_json has an unsupported contract")
+    return VoidRefundContract(
+        refund_cents_per_contract=_require_decimal_text_value(
+            "void_refund_json.refund_cents_per_contract",
+            payload["refund_cents_per_contract"],
+        ),
+        refunds_entry_fee=payload["refunds_entry_fee"],
+    )
+
+
+def _authoritative_observation_sha256(record: SettlementObservationRecord) -> str:
+    try:
+        outcome = MarketOutcome(record.outcome)
+    except ValueError as exc:
+        raise ValueError("unresolved observations cannot be authoritative") from exc
+    rebuilt = build_settlement_observation(
+        market_ref=MarketRef(record.venue, record.venue_market_id, record.alias),
+        outcome=outcome,
+        authoritative_outcome=json.loads(record.authoritative_outcome_json),
+        authoritative_payload=json.loads(record.source_payload_json),
+        observed_at=record.observed_at,
+        effective_at=record.effective_at,
+        rules_version=record.rules_version,
+        source_id=record.source_id,
+        void_refund=_void_refund_from_json(record.void_refund_json),
+    )
+    return rebuilt.observation_sha256
+
+
 def _observation_payload(record: SettlementObservationRecord) -> dict[str, object]:
     return {
+        "alias": record.alias,
+        "authoritative_observation_sha256": record.authoritative_observation_sha256,
+        "authoritative_outcome_json": record.authoritative_outcome_json,
+        "authoritative_payload_sha256": record.authoritative_payload_sha256,
+        "contract_fingerprint": record.contract_fingerprint,
         "effective_at": _timestamp(record.effective_at),
         "observed_at": _timestamp(record.observed_at),
         "outcome": record.outcome,
+        "rules_fingerprint": record.rules_fingerprint,
+        "rules_version": record.rules_version,
+        "semantic_sha256": record.semantic_sha256,
+        "settlement_fingerprint": record.settlement_fingerprint,
         "source_id": record.source_id,
         "source_payload_json": record.source_payload_json,
         "supersedes_observation_sha256": record.supersedes_observation_sha256,
         "venue": record.venue.value,
         "venue_market_id": record.venue_market_id,
+        "void_refund_json": record.void_refund_json,
+        "void_refund_sha256": record.void_refund_sha256,
     }
 
 
@@ -1679,6 +3147,30 @@ def _observation_root_is_ambiguous(
             LIMIT 1
             """,
             (market_key,),
+        ).fetchone()
+        is not None
+    )
+
+
+def _market_has_observation_conflict(
+    conn: sqlite3.Connection,
+    market_key: SettlementMarketKey,
+) -> bool:
+    key = _observation_market_key(market_key.venue, market_key.venue_market_id)
+    if _observation_root_is_ambiguous(conn, key):
+        return True
+    return (
+        conn.execute(
+            """
+            SELECT 1
+            FROM capital_guard_shadow_conflicts conflict
+            JOIN capital_guard_shadow_observations observation
+              ON observation.observation_sha256 = conflict.entity_key
+            WHERE conflict.entity_type = 'observation_correction'
+              AND observation.venue = ? AND observation.venue_market_id = ?
+            LIMIT 1
+            """,
+            (market_key.venue.value, market_key.venue_market_id),
         ).fetchone()
         is not None
     )
@@ -2445,6 +3937,25 @@ def _require_canonical_object(name: str, value: object) -> dict[str, object]:
     if not isinstance(parsed, dict) or canonical_json(parsed) != value:
         raise ValueError(f"{name} must be canonical JSON object text")
     return parsed
+
+
+def _require_canonical_json_value(name: str, value: object) -> object:
+    if not isinstance(value, str):
+        raise ValueError(f"{name} must be canonical JSON")
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{name} must be canonical JSON") from exc
+    if canonical_json(parsed) != value:
+        raise ValueError(f"{name} must be canonical JSON text")
+    return parsed
+
+
+def _require_bounded_limit(name: str, value: object, *, maximum: int) -> None:
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    if value > maximum:
+        raise ValueError(f"{name} exceeds hard bounded maximum {maximum}")
 
 
 def _timestamp(value: datetime) -> str:
