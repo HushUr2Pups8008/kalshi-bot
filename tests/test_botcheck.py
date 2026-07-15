@@ -277,6 +277,86 @@ def test_print_research_gate_section_process_env_overrides_dotenv_search_circuit
     assert "search_cb : off (process-env)" in capsys.readouterr().out
 
 
+def test_print_research_gate_section_uses_running_bot_search_circuit_mode(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("GENERIC_SEARCH_CIRCUIT_MODE", "off")
+    (tmp_path / ".env").write_text(
+        "GENERIC_SEARCH_CIRCUIT_MODE=shadow\n",
+        encoding="utf-8",
+    )
+    proc = _bot_proc(pid=2468)
+    monkeypatch.setattr(
+        botcheck,
+        "run_command",
+        lambda args: (
+            "/python main.py GENERIC_SEARCH_CIRCUIT_MODE=enforce "
+            "UNRELATED_SECRET=not-reported"
+        ),
+    )
+    now = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
+    stats = summarize_signal_flow(tmp_path / "missing.jsonl", now=now, window_hours=24)
+
+    botcheck.print_research_gate_section(
+        tmp_path,
+        stats,
+        now=now,
+        current_proc=proc,
+    )
+
+    assert "search_cb : enforce (runtime-process-env)" in capsys.readouterr().out
+
+
+def test_print_research_gate_section_uses_runtime_default_when_flag_absent(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("GENERIC_SEARCH_CIRCUIT_MODE", "off")
+    proc = _bot_proc(pid=2468)
+    monkeypatch.setattr(
+        botcheck,
+        "run_command",
+        lambda args: "/python main.py UNRELATED_FLAG=true",
+    )
+    now = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
+    stats = summarize_signal_flow(tmp_path / "missing.jsonl", now=now, window_hours=24)
+
+    botcheck.print_research_gate_section(
+        tmp_path,
+        stats,
+        now=now,
+        current_proc=proc,
+    )
+
+    assert "search_cb : shadow (runtime-process-env)" in capsys.readouterr().out
+
+
+def test_print_research_gate_section_reports_unreadable_running_environment(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("GENERIC_SEARCH_CIRCUIT_MODE", "enforce")
+    proc = _bot_proc(pid=2468)
+    monkeypatch.setattr(botcheck, "run_command", lambda args: "")
+    now = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
+    stats = summarize_signal_flow(tmp_path / "missing.jsonl", now=now, window_hours=24)
+
+    botcheck.print_research_gate_section(
+        tmp_path,
+        stats,
+        now=now,
+        current_proc=proc,
+    )
+
+    output = capsys.readouterr().out
+    assert "search_cb : unknown (runtime-process-env-unreadable)" in output
+    assert "search_cb : enforce (process-env)" not in output
+
+
 def test_print_research_gate_section_preserves_invalid_process_env_search_circuit_case(
     capsys,
     tmp_path,

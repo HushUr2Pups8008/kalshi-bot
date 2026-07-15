@@ -1272,6 +1272,7 @@ def print_research_gate_section(
     *,
     now: datetime,
     dossier_stats: ResearchDossierStats | None = None,
+    current_proc: ProcessInfo | None = None,
 ) -> None:
     mode, mode_source = _research_env_value(repo_root, "REAL_WEB_RESEARCH_MODE", "off")
     max_queries, max_queries_source = _research_env_value(
@@ -1284,11 +1285,21 @@ def print_research_gate_section(
         "REAL_WEB_RESEARCH_TIMEOUT_SECONDS",
         "12.0",
     )
-    search_circuit_mode, search_circuit_mode_source = _research_env_value(
-        repo_root,
-        "GENERIC_SEARCH_CIRCUIT_MODE",
-        "shadow",
+    runtime_search_circuit_mode, runtime_search_circuit_readable = (
+        _running_process_env_value(current_proc, "GENERIC_SEARCH_CIRCUIT_MODE")
     )
+    search_circuit_runtime_unreadable = (
+        current_proc is not None and not runtime_search_circuit_readable
+    )
+    if runtime_search_circuit_readable:
+        search_circuit_mode = runtime_search_circuit_mode or "shadow"
+        search_circuit_mode_source = "runtime-process-env"
+    else:
+        search_circuit_mode, search_circuit_mode_source = _research_env_value(
+            repo_root,
+            "GENERIC_SEARCH_CIRCUIT_MODE",
+            "shadow",
+        )
     prewarm_enabled, prewarm_source = _research_env_value(
         repo_root,
         "ENABLE_RESEARCH_PREWARM_TASK",
@@ -1314,14 +1325,19 @@ def print_research_gate_section(
     print(f"mode       : {mode} ({mode_source})")
     print(f"max_queries: {max_queries} ({max_queries_source})")
     print(f"timeout_s  : {timeout} ({timeout_source})")
-    search_circuit_mode = search_circuit_mode.strip()
-    search_circuit_suffix = (
-        "" if search_circuit_mode in {"off", "shadow", "enforce"} else " INVALID"
-    )
-    print(
-        f"search_cb : {search_circuit_mode} "
-        f"({search_circuit_mode_source}){search_circuit_suffix}"
-    )
+    if search_circuit_runtime_unreadable:
+        print("search_cb : unknown (runtime-process-env-unreadable)")
+    else:
+        search_circuit_mode = search_circuit_mode.strip()
+        search_circuit_suffix = (
+            ""
+            if search_circuit_mode in {"off", "shadow", "enforce"}
+            else " INVALID"
+        )
+        print(
+            f"search_cb : {search_circuit_mode} "
+            f"({search_circuit_mode_source}){search_circuit_suffix}"
+        )
     profile_path = Path("docs/governance/research-shadow.env.example")
     activation = evaluate_activation_profile(repo_root, profile_path)
     relative_profile = _relative_display_path(activation.profile_path, repo_root)
@@ -1984,6 +2000,7 @@ def main() -> int:
         signal_flow,
         now=now,
         dossier_stats=research_dossiers,
+        current_proc=current_proc,
     )
     print_weather_shadow_status(args.home, current_proc=current_proc)
     print_capital_guard_shadow_status(args.home, current_proc=current_proc)
