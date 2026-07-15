@@ -297,6 +297,41 @@ def test_find_market_payload_filter_returns_high_id_closed_market():
     assert "closed" not in params
 
 
+def test_exact_filter_accepts_short_page_without_cursor_as_terminal():
+    client = PolymarketPublicClient(base_url="https://gateway.polymarket.us")
+    payload = {
+        **_market_payload("exact-live-slug"),
+        "id": 44051,
+        "closed": True,
+    }
+    client._request = MagicMock(return_value={"markets": [payload]})
+
+    matches = client.find_market_payloads_by_slug_or_id("exact-live-slug")
+
+    assert matches == (payload,)
+    client._request.assert_called_once_with(
+        "GET",
+        "/v1/markets",
+        params={"slug": "exact-live-slug", "limit": 200},
+    )
+
+
+def test_exact_filter_rejects_full_page_without_cursor(monkeypatch):
+    client = PolymarketPublicClient(base_url="https://gateway.polymarket.us")
+    monkeypatch.setattr(client, "_EXACT_FILTER_PAGE_SIZE", 2)
+    client._request = MagicMock(
+        return_value={
+            "markets": [
+                {"slug": "exact-live-slug", "id": 44051},
+                {"slug": "different-slug", "id": 44052},
+            ]
+        }
+    )
+
+    with pytest.raises(ValueError, match="missing cursor.*full page"):
+        client.find_market_payloads_by_slug_or_id("exact-live-slug")
+
+
 def test_find_market_payload_id_filter_fallback():
     # WHY: the bot persists market_id = slug|id (normalize sets it from
     # payload['slug'] or payload['id']), so the stored identifier can be a

@@ -201,14 +201,15 @@ class PolymarketPublicClient:
                 data = self._request("GET", "/v1/markets", params=params)
                 if not isinstance(data, dict):
                     raise ValueError("Polymarket exact-filter response must be an object")
-                if "markets" not in data or "cursor" not in data:
+                if "markets" not in data:
                     raise ValueError(
-                        "Polymarket exact-filter response must include markets and cursor"
+                        "Polymarket exact-filter response must include markets"
                     )
                 raw_markets = data["markets"]
-                next_cursor = data["cursor"]
                 if not isinstance(raw_markets, list):
                     raise ValueError("Polymarket exact-filter markets must be a list")
+                cursor_present = "cursor" in data
+                next_cursor = data.get("cursor")
                 if next_cursor is not None and not isinstance(next_cursor, str):
                     raise ValueError(
                         "Polymarket exact-filter cursor must be a string or null"
@@ -230,6 +231,13 @@ class PolymarketPublicClient:
                         if identity not in seen:
                             seen.add(identity)
                             matches.append(payload)
+                if not cursor_present:
+                    if len(raw_markets) >= self._EXACT_FILTER_PAGE_SIZE:
+                        raise ValueError(
+                            "Polymarket exact-filter response missing cursor on "
+                            "full page; pagination is ambiguous"
+                        )
+                    break
                 if not next_cursor:
                     break
                 if next_cursor in seen_cursors:

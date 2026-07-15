@@ -192,7 +192,6 @@ def test_public_client_paginates_to_return_all_exact_candidates():
     [
         [],
         {},
-        {"markets": []},
         {"markets": {}},
         {"markets": [], "cursor": 123},
         {"markets": [None], "cursor": None},
@@ -335,6 +334,26 @@ def test_public_resolver_requires_unique_exact_pm_slug_and_numeric_id(
     resolver = PublicVenueIdentityResolver(kalshi=MagicMock(), polymarket=polymarket)
     result = resolver.lookup(Venue.POLYMARKET_US, "election-slug")
     assert (result.kind, result.canonical_id) == (kind, canonical_id)
+
+
+def test_public_resolver_maps_short_exact_pm_page_without_cursor():
+    polymarket = PolymarketPublicClient(base_url="https://example.invalid")
+    polymarket._request = MagicMock(
+        return_value={
+            "markets": [{"slug": "election-slug", "id": 44051}],
+        }
+    )
+    resolver = PublicVenueIdentityResolver(
+        kalshi=MagicMock(),
+        polymarket=polymarket,
+    )
+
+    result = resolver.lookup(Venue.POLYMARKET_US, "election-slug")
+
+    assert (result.kind, result.canonical_id) == (
+        "mapped",
+        "44051",
+    )
 
 
 @pytest.mark.parametrize(
