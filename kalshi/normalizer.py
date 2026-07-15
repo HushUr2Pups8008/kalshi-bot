@@ -398,6 +398,13 @@ def _build_market(
         fractional_trading_enabled=bool(payload.get("fractional_trading_enabled", False)),
         created_time=_optional_datetime(payload, "created_time"),
         updated_time=_optional_datetime(payload, "updated_time"),
+        fee_multiplier=_optional_decimal(payload, "fee_multiplier"),
+        fee_type=str(payload.get("fee_type") or "") or None,
+        fee_effective_at=_optional_datetime(payload, "fee_effective_at"),
+        quantity_step=_optional_decimal(payload, "quantity_step"),
+        price_tick=_optional_decimal(payload, "price_tick"),
+        fill_role=str(payload.get("fill_role") or "") or None,
+        outcome_side=str(payload.get("outcome_side") or "") or None,
     )
     return market
 

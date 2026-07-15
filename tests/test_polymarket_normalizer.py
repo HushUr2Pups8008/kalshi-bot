@@ -1,10 +1,13 @@
 import pytest
+from datetime import datetime, timezone
+from decimal import Decimal
 
 from polymarket.normalizer import normalize_polymarket_market
 from trading.venue import Venue
 
 
 def test_normalizes_binary_market_payload():
+    snapshot_at = datetime(2026, 7, 14, 12, tzinfo=timezone.utc)
     payload = {
         "id": 8594,
         "slug": "will-example-happen-2026",
@@ -22,15 +25,30 @@ def test_normalizes_binary_market_payload():
         "resolutionSource": "https://example.com/resolution-rules",
         "status": "open",
         "outcomes": [
-            {"name": "Yes", "bestAsk": {"value": "0.42", "currency": "USD"}},
-            {"name": "No", "bestAsk": {"value": "0.59", "currency": "USD"}},
+            {
+                "name": "Yes",
+                "tokenId": "yes-token-1",
+                "bestBid": {"value": "0.41", "currency": "USD"},
+                "bestAsk": {"value": "0.42", "currency": "USD"},
+            },
+            {
+                "name": "No",
+                "tokenId": "no-token-1",
+                "bestBid": {"value": "0.58", "currency": "USD"},
+                "bestAsk": {"value": "0.59", "currency": "USD"},
+            },
         ],
         "volume": {"value": "1234.50", "currency": "USD"},
         "openInterest": {"value": "99", "currency": "USD"},
         "closeTime": "2026-12-31T23:59:59Z",
+        "feeCoefficient": "0.06",
+        "feeEffectiveAt": "2026-07-01T04:00:00Z",
+        "quantityStep": "1",
+        "priceTick": "0.01",
+        "fillRole": "taker",
     }
 
-    market = normalize_polymarket_market(payload)
+    market = normalize_polymarket_market(payload, snapshot_at=snapshot_at)
 
     assert market.venue == Venue.POLYMARKET_US
     assert market.market_id == "will-example-happen-2026"
@@ -50,6 +68,19 @@ def test_normalizes_binary_market_payload():
     assert market.status == "open"
     assert market.yes_ask_cents == 42
     assert market.no_ask_cents == 59
+    assert market.yes_bid_cents == 41
+    assert market.no_bid_cents == 58
+    assert market.yes_token_id == "yes-token-1"
+    assert market.no_token_id == "no-token-1"
+    assert market.fee_coefficient == Decimal("0.06")
+    assert market.fee_effective_at == datetime(
+        2026, 7, 1, 4, tzinfo=timezone.utc
+    )
+    assert market.quantity_step == Decimal("1")
+    assert market.price_tick == Decimal("0.01")
+    assert market.fill_role == "taker"
+    assert len(market.source_payload_hash) == 64
+    assert market.snapshot_at == snapshot_at
     assert market.volume_dollars == 1234.50
     assert market.open_interest_dollars == 99.0
     assert market.close_time == "2026-12-31T23:59:59Z"
@@ -66,6 +97,20 @@ def test_normalizes_binary_market_payload():
     assert market.price_available is True
     assert market.price_source == "polymarket_public"
     assert market.price_method == "pm_named_outcomes_v1"
+
+
+def test_missing_polymarket_fee_and_fill_provenance_remains_explicit():
+    market = normalize_polymarket_market(_long_book_payload())
+
+    assert market.fee_coefficient is None
+    assert market.fee_effective_at is None
+    assert market.quantity_step is None
+    assert market.price_tick is None
+    assert market.fill_role is None
+    assert market.yes_token_id is None
+    assert market.no_token_id is None
+    assert len(market.source_payload_hash) == 64
+    assert market.snapshot_at is not None
 
 
 def _long_book_payload() -> dict:
@@ -94,7 +139,9 @@ def test_authoritative_long_book_ignores_reversed_positional_prices():
 
     market = normalize_polymarket_market(payload)
 
+    assert market.yes_bid_cents == 12
     assert market.yes_ask_cents == 13
+    assert market.no_bid_cents == 87
     assert market.no_ask_cents == 88
     assert market.price_source == "polymarket_public"
     assert market.price_method == "pm_long_book_v1"

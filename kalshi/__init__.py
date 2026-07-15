@@ -62,6 +62,13 @@ class KalshiMarket:
     fractional_trading_enabled: bool = False
     created_time:            Optional[datetime] = None
     updated_time:            Optional[datetime] = None
+    fee_multiplier:          Optional[Decimal] = None
+    fee_type:                Optional[str] = None
+    fee_effective_at:        Optional[datetime] = None
+    quantity_step:           Optional[Decimal] = None
+    price_tick:              Optional[Decimal] = None
+    fill_role:               Optional[str] = None
+    outcome_side:            Optional[str] = None
     unsupported_payload_contract: bool = False
 
     # Legacy price fields guarded post-P0 (CR-C). Reads of `yes_price`,
