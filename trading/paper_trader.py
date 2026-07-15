@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import sqlite3
+import threading
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -426,6 +427,7 @@ class PaperTrader:
         self._db_path = db_path
         self._startup_context = startup_context
         self._initialized = False
+        self._transaction_lock = threading.RLock()
         self._settlement_schema_present = False
         self._calibration_task = calibration_task
         self._validate_startup_context()
@@ -935,6 +937,10 @@ class PaperTrader:
     # ── Trade recording ───────────────────────────────────────────────────────
 
     def record_trade(self, analysis: SignalAnalysis) -> str:
+        with self._transaction_lock:
+            return self._record_trade_locked(analysis)
+
+    def _record_trade_locked(self, analysis: SignalAnalysis) -> str:
         from analysis.kelly import contracts_from_dollars
 
         # P-6 / LD-2 / CR-C: fail-closed when price_available=False. Past the
@@ -1328,6 +1334,13 @@ class PaperTrader:
 
     def resolve_observation(self, observation: SettlementObservation) -> bool:
         """Apply one canonical observation without wiring runtime callers."""
+        with self._transaction_lock:
+            return self._resolve_observation_locked(observation)
+
+    def _resolve_observation_locked(
+        self,
+        observation: SettlementObservation,
+    ) -> bool:
         if not isinstance(observation, SettlementObservation):
             raise TypeError("observation must be a SettlementObservation")
         if not settlement_schema_contract_matches(self._conn):
@@ -2057,6 +2070,12 @@ class PaperTrader:
         async shell to emit as CALIBRATION_CHECK events. Returns an empty list
         if no trades are resolved or no per-lane estimates are populated.
         """
+        with self._transaction_lock:
+            return self._resolve_market_sync_locked(ticker, resolved_yes)
+
+    def _resolve_market_sync_locked(
+        self, ticker: str, resolved_yes: bool
+    ) -> list[tuple[str, str, float]]:
         with self._conn:
             if self.settlement_schema_present:
                 self._conn.execute("BEGIN IMMEDIATE")

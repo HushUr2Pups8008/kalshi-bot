@@ -10,6 +10,7 @@ from decimal import Decimal
 import inspect
 import json
 from pathlib import Path
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -449,6 +450,86 @@ def test_schema_present_record_trade_persists_mapped_canonical_identity(
     )
     position = trader.portfolio.open_positions(market_ref.alias)[0]
     assert position.venue_market_id == market_ref.venue_market_id
+
+
+def test_record_trade_waits_for_canonical_settlement_transaction(trader_factory, monkeypatch):
+    trader = trader_factory("serialized-entry-and-settlement")
+    settled_ref = MarketRef(
+        Venue.KALSHI,
+        "KXSETTLE-26JUL31",
+        "KXSETTLE-26JUL31",
+    )
+    entry_ref = MarketRef(
+        Venue.KALSHI,
+        "KXENTRY-26JUL31",
+        "KXENTRY-26JUL31",
+    )
+    settled_trade_id = _record_trade(
+        trader,
+        settled_ref,
+        trade_id="settle000001",
+    )
+    observation = _observation(settled_ref, MarketOutcome.YES)
+    original_candidate_rows = trader._canonical_candidate_rows
+    settlement_began = threading.Event()
+    release_settlement = threading.Event()
+    entry_started = threading.Event()
+    entry_finished = threading.Event()
+    results: dict[str, object] = {}
+    errors: dict[str, BaseException] = {}
+
+    def paused_candidate_rows(current_observation):
+        settlement_began.set()
+        if not release_settlement.wait(timeout=5):
+            raise TimeoutError("test did not release settlement transaction")
+        return original_candidate_rows(current_observation)
+
+    def settle() -> None:
+        try:
+            results["settlement"] = _resolve(trader, observation)
+        except BaseException as exc:  # noqa: BLE001 - asserted after both threads join.
+            errors["settlement"] = exc
+
+    def enter() -> None:
+        entry_started.set()
+        try:
+            results["entry"] = _record_trade(
+                trader,
+                entry_ref,
+                trade_id="entry0000001",
+            )
+        except BaseException as exc:  # noqa: BLE001 - asserted after both threads join.
+            errors["entry"] = exc
+        finally:
+            entry_finished.set()
+
+    monkeypatch.setattr(trader, "_canonical_candidate_rows", paused_candidate_rows)
+    settlement_thread = threading.Thread(target=settle)
+    entry_thread = threading.Thread(target=enter)
+    settlement_thread.start()
+    assert settlement_began.wait(timeout=5)
+    entry_thread.start()
+    assert entry_started.wait(timeout=5)
+    entry_finished_while_settlement_paused = entry_finished.wait(timeout=0.2)
+    release_settlement.set()
+    settlement_thread.join(timeout=5)
+    entry_thread.join(timeout=5)
+
+    assert not settlement_thread.is_alive()
+    assert not entry_thread.is_alive()
+    assert entry_finished_while_settlement_paused is False
+    assert errors == {}
+    assert results == {"settlement": True, "entry": "entry0000001"}
+    rows = trader._conn.execute(
+        "SELECT trade_id, resolved FROM paper_trades ORDER BY trade_id"
+    ).fetchall()
+    assert {row["trade_id"]: row["resolved"] for row in rows} == {
+        settled_trade_id: 1,
+        "entry0000001": 0,
+    }
+    assert {position.trade_id for position in trader.portfolio.open_positions()} == {
+        "entry0000001"
+    }
 
 
 def test_schema_present_kalshi_ticker_is_authoritative_over_separate_id(
