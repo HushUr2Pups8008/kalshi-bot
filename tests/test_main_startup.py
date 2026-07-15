@@ -1,9 +1,11 @@
 import dataclasses
 import io
 import shutil
+import sqlite3
 import uuid
 from argparse import Namespace
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -21,9 +23,14 @@ from main import (
     _startup_probe_matched_tokens,
     _validate_startup_observability_probe_record,
     async_main,
+    parse_args,
 )
 from config import cfg
-from trading.settlement import MarketOutcome, build_settlement_observation
+from trading.settlement import (
+    MarketOutcome,
+    VoidRefundContract,
+    build_settlement_observation,
+)
 from trading.venue import MarketRef, Venue
 
 
@@ -443,9 +450,67 @@ async def test_async_main_cli_path_is_not_blocked_by_runtime_lock(caplog):
         shutil.rmtree(root, ignore_errors=True)
 
 
+@pytest.mark.asyncio
+async def test_async_main_resolve_is_blocked_before_shared_state_mutation(monkeypatch):
+    root = _tmp_root()
+    shared_db = sqlite3.connect(root / "shared-paper.db")
+    guard = None
+    try:
+        shared_db.execute("CREATE TABLE runtime_positions (trade_id TEXT PRIMARY KEY)")
+        shared_db.execute("INSERT INTO runtime_positions VALUES ('runtime-open')")
+        shared_db.commit()
+        runtime_portfolio = ["runtime-open"]
+        guard = _RuntimeInstanceGuard(root / "bot_runtime.lock")
+        assert guard.acquire() is True
+        args = Namespace(
+            report=False,
+            credibility=False,
+            resolve=("KXTEST", "YES"),
+            go_live=False,
+            rotate_logs=False,
+        )
+
+        def construct_cli_trader(*_args, **_kwargs):
+            shared_db.execute("DELETE FROM runtime_positions")
+            shared_db.commit()
+            runtime_portfolio.clear()
+            return MagicMock()
+
+        with patch("main.parse_args", return_value=args), patch(
+            "main._BOT_RUNTIME_LOCK", root / "bot_runtime.lock"
+        ), patch(
+            "main.PaperTrader", side_effect=construct_cli_trader
+        ) as trader_cls, patch(
+            "main.VenueRoutingAuthoritativeSettlementSource"
+        ) as source_cls:
+            with pytest.raises(SystemExit, match="[Ss]top.*restart"):
+                await async_main()
+
+        trader_cls.assert_not_called()
+        source_cls.assert_not_called()
+        assert runtime_portfolio == ["runtime-open"]
+        assert shared_db.execute(
+            "SELECT trade_id FROM runtime_positions"
+        ).fetchall() == [("runtime-open",)]
+    finally:
+        if guard is not None:
+            guard.release()
+        shared_db.close()
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.fixture()
+def available_cli_runtime_lock(monkeypatch, tmp_path):
+    lock_path = tmp_path / "bot_runtime.lock"
+    monkeypatch.setattr("main._BOT_RUNTIME_LOCK", lock_path)
+    return lock_path
+
+
 def _settlement_observation(
     market_ref: MarketRef,
     outcome: MarketOutcome,
+    *,
+    void_refund: VoidRefundContract | None = None,
 ):
     now = datetime(2026, 7, 14, 12, 0, tzinfo=timezone.utc)
     return build_settlement_observation(
@@ -457,11 +522,15 @@ def _settlement_observation(
         effective_at=now,
         rules_version="test-v1",
         source_id="test-authority",
+        void_refund=void_refund,
     )
 
 
 @pytest.mark.asyncio
-async def test_async_main_resolve_false_mode_rejects_non_yes_no(monkeypatch):
+async def test_async_main_resolve_false_mode_rejects_non_yes_no(
+    monkeypatch,
+    available_cli_runtime_lock,
+):
     monkeypatch.setattr(
         cfg,
         "enable_canonical_persisted_settlement_reconciliation",
@@ -487,7 +556,42 @@ async def test_async_main_resolve_false_mode_rejects_non_yes_no(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_async_main_resolve_false_mode_preserves_legacy_resolution(monkeypatch):
+async def test_async_main_resolve_false_mode_rejects_void_even_with_refund(
+    monkeypatch,
+    available_cli_runtime_lock,
+):
+    monkeypatch.setattr(
+        cfg,
+        "enable_canonical_persisted_settlement_reconciliation",
+        False,
+    )
+    paper = MagicMock()
+    paper.resolve_market = AsyncMock()
+    args = Namespace(
+        report=False,
+        credibility=False,
+        resolve=("KXTEST", "VOID"),
+        go_live=False,
+        rotate_logs=False,
+        void_refund_cents_per_contract=Decimal("50"),
+        void_refunds_entry_fee="YES",
+    )
+
+    with patch("main.parse_args", return_value=args), patch(
+        "main.PaperTrader", return_value=paper
+    ):
+        with pytest.raises(SystemExit, match="exactly YES or NO"):
+            await async_main()
+
+    paper.resolve_market.assert_not_awaited()
+    paper.resolve_observation.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_main_resolve_false_mode_preserves_legacy_resolution(
+    monkeypatch,
+    available_cli_runtime_lock,
+):
     monkeypatch.setattr(
         cfg,
         "enable_canonical_persisted_settlement_reconciliation",
@@ -513,10 +617,131 @@ async def test_async_main_resolve_false_mode_preserves_legacy_resolution(monkeyp
     source_cls.assert_not_called()
 
 
+def test_parse_args_preserves_exact_void_refund_economics(monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "main.py",
+            "--resolve",
+            "KXVOID",
+            "VOID",
+            "--void-refund-cents-per-contract",
+            "37.25",
+            "--void-refunds-entry-fee",
+            "NO",
+        ],
+    )
+
+    args = parse_args()
+
+    assert args.void_refund_cents_per_contract == Decimal("37.25")
+    assert args.void_refunds_entry_fee == "NO"
+
+
+@pytest.mark.asyncio
+async def test_async_main_rejects_void_refund_args_without_resolve(monkeypatch):
+    args = Namespace(
+        report=False,
+        credibility=False,
+        resolve=None,
+        go_live=False,
+        rotate_logs=False,
+        void_refund_cents_per_contract=Decimal("50"),
+        void_refunds_entry_fee="YES",
+    )
+
+    with patch("main.parse_args", return_value=args), patch(
+        "main.PaperTrader"
+    ) as trader_cls, patch("main.TradingBot") as bot_cls:
+        with pytest.raises(SystemExit, match="require --resolve .* VOID"):
+            await async_main()
+
+    trader_cls.assert_not_called()
+    bot_cls.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("result", ["YES", "NO"])
+async def test_async_main_rejects_void_refund_args_for_nonvoid_result(
+    monkeypatch,
+    available_cli_runtime_lock,
+    result,
+):
+    monkeypatch.setattr(
+        cfg,
+        "enable_canonical_persisted_settlement_reconciliation",
+        True,
+    )
+    paper = MagicMock()
+    args = Namespace(
+        report=False,
+        credibility=False,
+        resolve=("KXTEST", result),
+        go_live=False,
+        rotate_logs=False,
+        void_refund_cents_per_contract=Decimal("50"),
+        void_refunds_entry_fee="YES",
+    )
+
+    with patch("main.parse_args", return_value=args), patch(
+        "main.PaperTrader", return_value=paper
+    ):
+        with pytest.raises(SystemExit, match="only valid with --resolve .* VOID"):
+            await async_main()
+
+    paper.mapped_open_market_refs.assert_not_called()
+    paper.resolve_observation.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("refund_cents", "refunds_entry_fee"),
+    [
+        (None, None),
+        (Decimal("50"), None),
+        (None, "YES"),
+        ("50", "YES"),
+        (Decimal("101"), "YES"),
+        (Decimal("50"), "MAYBE"),
+    ],
+)
+async def test_async_main_resolve_void_rejects_missing_or_invalid_refund_args(
+    monkeypatch,
+    available_cli_runtime_lock,
+    refund_cents,
+    refunds_entry_fee,
+):
+    monkeypatch.setattr(
+        cfg,
+        "enable_canonical_persisted_settlement_reconciliation",
+        True,
+    )
+    paper = MagicMock()
+    args = Namespace(
+        report=False,
+        credibility=False,
+        resolve=("KXVOID", "VOID"),
+        go_live=False,
+        rotate_logs=False,
+        void_refund_cents_per_contract=refund_cents,
+        void_refunds_entry_fee=refunds_entry_fee,
+    )
+
+    with patch("main.parse_args", return_value=args), patch(
+        "main.PaperTrader", return_value=paper
+    ):
+        with pytest.raises(SystemExit, match="VOID"):
+            await async_main()
+
+    paper.mapped_open_market_refs.assert_not_called()
+    paper.resolve_observation.assert_not_called()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("matching_ref_count", [0, 2])
 async def test_async_main_resolve_true_mode_requires_exactly_one_mapped_ref(
     monkeypatch,
+    available_cli_runtime_lock,
     matching_ref_count,
 ):
     monkeypatch.setattr(
@@ -550,6 +775,7 @@ async def test_async_main_resolve_true_mode_requires_exactly_one_mapped_ref(
 @pytest.mark.asyncio
 async def test_async_main_resolve_true_mode_rejects_authority_disagreement(
     monkeypatch,
+    available_cli_runtime_lock,
 ):
     monkeypatch.setattr(
         cfg,
@@ -583,11 +809,146 @@ async def test_async_main_resolve_true_mode_rejects_authority_disagreement(
     source.get_settlement.assert_called_once_with(market_ref)
     paper.resolve_observation.assert_not_called()
     paper.resolve_market.assert_not_called()
+    guard = _RuntimeInstanceGuard(available_cli_runtime_lock)
+    assert guard.acquire() is True
+    guard.release()
+
+
+@pytest.mark.asyncio
+async def test_async_main_resolve_void_rejects_authority_disagreement(
+    monkeypatch,
+    available_cli_runtime_lock,
+):
+    monkeypatch.setattr(
+        cfg,
+        "enable_canonical_persisted_settlement_reconciliation",
+        True,
+    )
+    market_ref = MarketRef(Venue.KALSHI, "KXVOID-1", "KXVOID")
+    paper = MagicMock()
+    paper.mapped_open_market_refs.return_value = (market_ref,)
+    source = MagicMock()
+    source.get_settlement.return_value = _settlement_observation(
+        market_ref,
+        MarketOutcome.YES,
+    )
+    args = Namespace(
+        report=False,
+        credibility=False,
+        resolve=("KXVOID", "VOID"),
+        go_live=False,
+        rotate_logs=False,
+        void_refund_cents_per_contract=Decimal("37.25"),
+        void_refunds_entry_fee="NO",
+    )
+
+    with patch("main.parse_args", return_value=args), patch(
+        "main.PaperTrader", return_value=paper
+    ), patch(
+        "main.VenueRoutingAuthoritativeSettlementSource", return_value=source
+    ), patch("main.KalshiRestClient"), patch("main.PolymarketPublicSettlementSource"):
+        with pytest.raises(SystemExit, match="disagrees with authoritative YES"):
+            await async_main()
+
+    paper.resolve_observation.assert_not_called()
+    paper.resolve_market.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_main_resolve_void_rejects_unavailable_authority(
+    monkeypatch,
+    available_cli_runtime_lock,
+):
+    monkeypatch.setattr(
+        cfg,
+        "enable_canonical_persisted_settlement_reconciliation",
+        True,
+    )
+    market_ref = MarketRef(Venue.KALSHI, "KXVOID-1", "KXVOID")
+    paper = MagicMock()
+    paper.mapped_open_market_refs.return_value = (market_ref,)
+    source = MagicMock()
+    source.get_settlement.return_value = None
+    args = Namespace(
+        report=False,
+        credibility=False,
+        resolve=("KXVOID", "VOID"),
+        go_live=False,
+        rotate_logs=False,
+        void_refund_cents_per_contract=Decimal("37.25"),
+        void_refunds_entry_fee="NO",
+    )
+
+    with patch("main.parse_args", return_value=args), patch(
+        "main.PaperTrader", return_value=paper
+    ), patch(
+        "main.VenueRoutingAuthoritativeSettlementSource", return_value=source
+    ), patch("main.KalshiRestClient"), patch("main.PolymarketPublicSettlementSource"):
+        with pytest.raises(SystemExit, match="no authoritative terminal settlement"):
+            await async_main()
+
+    paper.resolve_observation.assert_not_called()
+    paper.resolve_market.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_main_resolve_void_applies_authoritative_observation(
+    monkeypatch,
+    available_cli_runtime_lock,
+):
+    monkeypatch.setattr(
+        cfg,
+        "enable_canonical_persisted_settlement_reconciliation",
+        True,
+    )
+    market_ref = MarketRef(Venue.POLYMARKET_US, "pm-void-1", "PMVOID")
+    refund = VoidRefundContract(
+        refund_cents_per_contract=Decimal("37.25"),
+        refunds_entry_fee=False,
+    )
+    observation = _settlement_observation(
+        market_ref,
+        MarketOutcome.VOID,
+        void_refund=refund,
+    )
+    paper = MagicMock()
+    paper.mapped_open_market_refs.return_value = (market_ref,)
+    paper.resolve_observation.return_value = True
+    source = MagicMock()
+    source.get_settlement.return_value = observation
+    args = Namespace(
+        report=False,
+        credibility=False,
+        resolve=("PMVOID", "VOID"),
+        go_live=False,
+        rotate_logs=False,
+        void_refund_cents_per_contract=Decimal("37.25"),
+        void_refunds_entry_fee="NO",
+    )
+
+    with patch("main.parse_args", return_value=args), patch(
+        "main.PaperTrader", return_value=paper
+    ), patch(
+        "main.VenueRoutingAuthoritativeSettlementSource", return_value=source
+    ) as source_cls, patch("main.KalshiRestClient") as kalshi_cls, patch(
+        "main.PolymarketPublicSettlementSource"
+    ) as polymarket_cls:
+        await async_main()
+
+    source_cls.assert_called_once_with(
+        kalshi_source=kalshi_cls.return_value,
+        polymarket_source=polymarket_cls.return_value,
+        void_refunds_by_market_ref={market_ref: refund},
+    )
+    source.get_settlement.assert_called_once_with(market_ref)
+    paper.resolve_observation.assert_called_once_with(observation)
+    paper.resolve_market.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_async_main_resolve_true_mode_applies_authoritative_observation(
     monkeypatch,
+    available_cli_runtime_lock,
 ):
     monkeypatch.setattr(
         cfg,

@@ -61,6 +61,7 @@ import time
 import uuid
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from types import ModuleType, SimpleNamespace
 from typing import Any, Awaitable, Callable, Iterable  # noqa: F401 — referenced in string annotations
 from urllib.parse import urlparse
@@ -115,7 +116,12 @@ from tasks.calibration_task import CalibrationTask
 from tasks.structural_task import StructuralTask
 from trading.executor import TradeExecutor
 from trading.paper_trader import PaperTrader
-from trading.settlement import MarketOutcome, SettlementObservation
+from trading.settlement import (
+    MarketOutcome,
+    SettlementObservation,
+    SettlementValidationError,
+    VoidRefundContract,
+)
 from trading.settlement_store import SettlementStore, settlement_schema_contract_matches
 from utils.logger import (
     TRADE_LOG_FILE,
@@ -332,12 +338,29 @@ def _account_from_rsshub_url(url: str) -> str:
     return parts[0]  # fallback: domain or bare token
 
 
+def _exact_decimal_arg(value: str) -> Decimal:
+    try:
+        return Decimal(value)
+    except (InvalidOperation, ValueError) as exc:
+        raise argparse.ArgumentTypeError("must be an exact decimal value") from exc
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Kalshi Geopolitical Trading Bot")
     p.add_argument("--report",      action="store_true",
                    help="Print paper trading report and exit")
     p.add_argument("--resolve",     nargs=2, metavar=("TICKER", "RESULT"),
-                   help="Resolve a paper trade: --resolve TICKER YES|NO")
+                   help="Resolve a paper trade: --resolve TICKER YES|NO|VOID")
+    p.add_argument(
+        "--void-refund-cents-per-contract",
+        type=_exact_decimal_arg,
+        help="Exact VOID refund per contract in cents (required with --resolve ... VOID)",
+    )
+    p.add_argument(
+        "--void-refunds-entry-fee",
+        choices=("YES", "NO"),
+        help="Whether VOID refunds the entry fee (required with --resolve ... VOID)",
+    )
     p.add_argument("--go-live",     action="store_true",
                    help="Review report then confirm switching to live trading")
     p.add_argument("--credibility", action="store_true",
@@ -436,7 +459,7 @@ class _RuntimeInstanceGuard:
 
     A file lock is used instead of command-line substring matching so we can
     block duplicate launches without depending on psutil or fragile process-name
-    heuristics. The lock is held only for the normal long-running bot path; CLI
+    heuristics. Mutating CLI commands share the runtime lock; read-only CLI
     commands remain unaffected.
     """
 
@@ -3634,19 +3657,63 @@ class TradingBot:
 # ── CLI handlers ──────────────────────────────────────────────────────────────
 
 
-def _manual_settlement_outcome(result: str) -> MarketOutcome:
-    if result not in {"YES", "NO"}:
-        raise SystemExit("--resolve RESULT must be exactly YES or NO")
-    return MarketOutcome.YES if result == "YES" else MarketOutcome.NO
+def _manual_settlement_outcome(
+    result: str,
+    *,
+    allow_void: bool,
+) -> MarketOutcome:
+    allowed = {"YES", "NO", "VOID"} if allow_void else {"YES", "NO"}
+    if result not in allowed:
+        expected = "YES, NO, or VOID" if allow_void else "YES or NO"
+        raise SystemExit(f"--resolve RESULT must be exactly {expected}")
+    return MarketOutcome(result.lower())
+
+
+def _manual_void_refund_contract(
+    outcome: MarketOutcome,
+    *,
+    refund_cents_per_contract: object,
+    refunds_entry_fee: object,
+) -> VoidRefundContract | None:
+    supplied_refund_arg = (
+        refund_cents_per_contract is not None or refunds_entry_fee is not None
+    )
+    if outcome is not MarketOutcome.VOID:
+        if supplied_refund_arg:
+            raise SystemExit(
+                "VOID refund arguments are only valid with --resolve TICKER VOID"
+            )
+        return None
+
+    if refund_cents_per_contract is None or refunds_entry_fee is None:
+        raise SystemExit(
+            "--resolve TICKER VOID requires both "
+            "--void-refund-cents-per-contract and --void-refunds-entry-fee"
+        )
+    if not isinstance(refund_cents_per_contract, Decimal):
+        raise SystemExit(
+            "--resolve TICKER VOID refund cents must be supplied as an exact Decimal"
+        )
+    if refunds_entry_fee not in {"YES", "NO"}:
+        raise SystemExit(
+            "--resolve TICKER VOID --void-refunds-entry-fee must be exactly YES or NO"
+        )
+    try:
+        return VoidRefundContract(
+            refund_cents_per_contract=refund_cents_per_contract,
+            refunds_entry_fee=refunds_entry_fee == "YES",
+        )
+    except SettlementValidationError as exc:
+        raise SystemExit(f"invalid --resolve TICKER VOID refund contract: {exc}") from exc
 
 
 async def _resolve_paper_market_from_cli(
     paper: PaperTrader,
     *,
     ticker: str,
-    result: str,
+    requested_outcome: MarketOutcome,
+    void_refund: VoidRefundContract | None,
 ) -> MarketOutcome:
-    requested_outcome = _manual_settlement_outcome(result)
     if not cfg.enable_canonical_persisted_settlement_reconciliation:
         await paper.resolve_market(ticker, requested_outcome is MarketOutcome.YES)
         return requested_outcome
@@ -3660,10 +3727,13 @@ async def _resolve_paper_market_from_cli(
         )
 
     market_ref = matching_refs[0]
-    source = VenueRoutingAuthoritativeSettlementSource(
-        kalshi_source=KalshiRestClient(),
-        polymarket_source=PolymarketPublicSettlementSource(),
-    )
+    source_kwargs: dict[str, object] = {
+        "kalshi_source": KalshiRestClient(),
+        "polymarket_source": PolymarketPublicSettlementSource(),
+    }
+    if void_refund is not None:
+        source_kwargs["void_refunds_by_market_ref"] = {market_ref: void_refund}
+    source = VenueRoutingAuthoritativeSettlementSource(**source_kwargs)
     observation = await asyncio.to_thread(source.get_settlement, market_ref)
     if observation is None:
         raise SystemExit(
@@ -3693,6 +3763,13 @@ async def _resolve_paper_market_from_cli(
 
 async def async_main() -> None:
     args = parse_args()
+    if args.resolve is None and (
+        getattr(args, "void_refund_cents_per_contract", None) is not None
+        or getattr(args, "void_refunds_entry_fee", None) is not None
+    ):
+        raise SystemExit(
+            "VOID refund arguments require --resolve TICKER VOID"
+        )
     startup_context = "cli" if _is_cli_only_command(args) else "runtime"
     _log_boot_summary(startup_context)
 
@@ -3701,26 +3778,59 @@ async def async_main() -> None:
             rotated = rotate_logs()
             log.info("[BOOT] manual_log_rotation_complete=true files=%s", ", ".join(str(path) for path in rotated))
             return
-        paper = PaperTrader(startup_context="cli")
-        if args.report:
-            print(paper.generate_report())
-            return
-        if args.credibility:
-            print("\nSOURCE CREDIBILITY TABLE")
-            print(paper.credibility.format_table())
-            return
+        requested_outcome: MarketOutcome | None = None
+        void_refund: VoidRefundContract | None = None
         if args.resolve:
             ticker, result_str = args.resolve
-            outcome = await _resolve_paper_market_from_cli(
-                paper,
-                ticker=ticker,
-                result=result_str,
+            requested_outcome = _manual_settlement_outcome(
+                result_str,
+                allow_void=cfg.enable_canonical_persisted_settlement_reconciliation,
             )
-            log.info("Resolved %s as %s", ticker, outcome.value.upper())
-            return
-        if args.go_live:
-            _handle_go_live(paper)
-            return
+            void_refund = _manual_void_refund_contract(
+                requested_outcome,
+                refund_cents_per_contract=getattr(
+                    args,
+                    "void_refund_cents_per_contract",
+                    None,
+                ),
+                refunds_entry_fee=getattr(args, "void_refunds_entry_fee", None),
+            )
+
+        cli_guard: _RuntimeInstanceGuard | None = None
+        mutating_command = "--resolve" if args.resolve else "--go-live" if args.go_live else None
+        if mutating_command is not None:
+            cli_guard = _RuntimeInstanceGuard(_BOT_RUNTIME_LOCK)
+            if not cli_guard.acquire():
+                raise SystemExit(
+                    f"{mutating_command} cannot run while the bot runtime owns "
+                    f"{_BOT_RUNTIME_LOCK}. Stop the runtime, run {mutating_command}, "
+                    f"then restart it. owner={cli_guard.describe_owner()}"
+                )
+        try:
+            paper = PaperTrader(startup_context="cli")
+            if args.report:
+                print(paper.generate_report())
+                return
+            if args.credibility:
+                print("\nSOURCE CREDIBILITY TABLE")
+                print(paper.credibility.format_table())
+                return
+            if args.resolve:
+                assert requested_outcome is not None
+                outcome = await _resolve_paper_market_from_cli(
+                    paper,
+                    ticker=ticker,
+                    requested_outcome=requested_outcome,
+                    void_refund=void_refund,
+                )
+                log.info("Resolved %s as %s", ticker, outcome.value.upper())
+                return
+            if args.go_live:
+                _handle_go_live(paper)
+                return
+        finally:
+            if cli_guard is not None:
+                cli_guard.release()
 
     runtime_guard = _RuntimeInstanceGuard(_BOT_RUNTIME_LOCK)
     if not runtime_guard.acquire():

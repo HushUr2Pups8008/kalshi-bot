@@ -9,7 +9,12 @@ from typing import Any, Mapping, Protocol
 
 from kalshi.settlement import normalize_kalshi_settlement
 from polymarket.settlement import normalize_polymarket_settlement
-from trading.settlement import SettlementDriftError, SettlementObservation
+from trading.settlement import (
+    SettlementDriftError,
+    SettlementObservation,
+    UnsupportedVoidError,
+    VoidRefundContract,
+)
 from trading.venue import MarketRef, Venue
 from utils.logger import get_logger
 
@@ -91,10 +96,12 @@ class VenueRoutingAuthoritativeSettlementSource:
         *,
         kalshi_source: KalshiSettlementSource,
         polymarket_source: SettlementSource,
+        void_refunds_by_market_ref: Mapping[MarketRef, VoidRefundContract] | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._kalshi_source = kalshi_source
         self._polymarket_source = polymarket_source
+        self._void_refunds_by_market_ref = dict(void_refunds_by_market_ref or {})
         self._clock = clock or (lambda: datetime.now(timezone.utc))
 
     def get_settlement(
@@ -112,7 +119,8 @@ class VenueRoutingAuthoritativeSettlementSource:
             }:
                 return None
             effective_at = getattr(market, "updated_time", None) or observed_at
-            return normalize_kalshi_settlement(
+            return self._normalize_with_configured_void_refund(
+                normalize_kalshi_settlement,
                 market_ref,
                 market,
                 observed_at=observed_at,
@@ -127,7 +135,8 @@ class VenueRoutingAuthoritativeSettlementSource:
             )
             if payload is None:
                 return None
-            return normalize_polymarket_settlement(
+            return self._normalize_with_configured_void_refund(
+                normalize_polymarket_settlement,
                 market_ref,
                 payload,
                 observed_at=observed_at,
@@ -139,6 +148,26 @@ class VenueRoutingAuthoritativeSettlementSource:
         raise SettlementDriftError(
             f"unsupported settlement venue: {market_ref.venue!r}"
         )
+
+    def _normalize_with_configured_void_refund(
+        self,
+        normalizer: Callable[..., SettlementObservation],
+        market_ref: MarketRef,
+        authoritative_value: Any,
+        **kwargs: Any,
+    ) -> SettlementObservation:
+        try:
+            return normalizer(market_ref, authoritative_value, **kwargs)
+        except UnsupportedVoidError:
+            void_refund = self._void_refunds_by_market_ref.get(market_ref)
+            if void_refund is None:
+                raise
+            return normalizer(
+                market_ref,
+                authoritative_value,
+                void_refund=void_refund,
+                **kwargs,
+            )
 
 
 @dataclass(frozen=True)
@@ -274,6 +303,18 @@ class PersistedPositionReconciler:
             except SettlementNotFound:
                 not_found += 1
                 continue
+            except UnsupportedVoidError as exc:
+                errors += 1
+                log.error(
+                    "MANUAL ACTION REQUIRED: persisted settlement %s:%s has an "
+                    "authoritative VOID without explicit refund economics; "
+                    "isolating this exact market and continuing: %s",
+                    market_ref.venue.value,
+                    market_ref.venue_market_id,
+                    exc,
+                    exc_info=True,
+                )
+                continue
             except SettlementDriftError:
                 raise
             except Exception as exc:
@@ -302,6 +343,18 @@ class PersistedPositionReconciler:
 
             try:
                 applied = self._resolver.resolve_observation(observation)
+            except UnsupportedVoidError as exc:
+                errors += 1
+                log.error(
+                    "MANUAL ACTION REQUIRED: persisted settlement %s:%s rejected "
+                    "VOID economics at RESOLUTION stage; isolating this exact "
+                    "market and continuing: %s",
+                    market_ref.venue.value,
+                    market_ref.venue_market_id,
+                    exc,
+                    exc_info=True,
+                )
+                continue
             except SettlementDriftError:
                 raise
             except Exception as exc:

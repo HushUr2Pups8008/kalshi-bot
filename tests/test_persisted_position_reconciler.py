@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
@@ -14,6 +15,8 @@ from trading.settlement import (
     MarketOutcome,
     SettlementDriftError,
     SettlementObservation,
+    UnsupportedVoidError,
+    VoidRefundContract,
     build_settlement_observation,
 )
 from trading.venue import MarketRef, Venue
@@ -128,6 +131,35 @@ def test_reconciler_isolates_unexpected_fetch_error_and_continues():
     assert (result.checked, result.resolved, result.not_found, result.errors) == (2, 1, 0, 1)
 
 
+def test_reconciler_isolates_unsupported_void_and_continues_in_order(caplog):
+    unsupported_void = MarketRef(Venue.KALSHI, "KXVOID", "void")
+    settled = MarketRef(Venue.POLYMARKET_US, "104982", "settled")
+    source = _Source(
+        {
+            unsupported_void: UnsupportedVoidError("explicit refund contract required"),
+            settled: _observation(settled),
+        }
+    )
+    resolver = _Resolver((unsupported_void, settled))
+
+    with caplog.at_level("ERROR", logger="polymarket_settlement"):
+        result = PersistedPositionReconciler(
+            source=source,
+            resolver=resolver,
+        ).reconcile()
+
+    assert source.calls == [unsupported_void, settled]
+    assert [item.market_ref for item in resolver.resolved] == [settled]
+    assert (result.checked, result.resolved, result.not_found, result.errors) == (
+        2,
+        1,
+        0,
+        1,
+    )
+    assert "MANUAL ACTION REQUIRED" in caplog.text
+    assert "kalshi:KXVOID" in caplog.text
+
+
 def test_reconciler_rejects_observation_identity_drift_before_mutation():
     expected = MarketRef(Venue.KALSHI, "KXEXPECTED", "shared")
     wrong = MarketRef(Venue.KALSHI, "KXWRONG", "shared")
@@ -190,6 +222,46 @@ def test_authoritative_source_treats_nonterminal_kalshi_as_not_found():
     assert source.get_settlement(market_ref) is None
 
 
+@pytest.mark.parametrize(
+    ("authoritative_result", "expected_outcome", "expected_refund"),
+    [
+        ("void", MarketOutcome.VOID, True),
+        ("yes", MarketOutcome.YES, False),
+    ],
+)
+def test_authoritative_source_uses_exact_refund_only_for_authoritative_void(
+    authoritative_result,
+    expected_outcome,
+    expected_refund,
+):
+    market_ref = MarketRef(Venue.KALSHI, "KXVOID-26JUL31", "KXVOID-26JUL31")
+    refund = VoidRefundContract(
+        refund_cents_per_contract=Decimal("37.25"),
+        refunds_entry_fee=True,
+    )
+    source = VenueRoutingAuthoritativeSettlementSource(
+        kalshi_source=SimpleNamespace(
+            get_market=lambda market_id: SimpleNamespace(
+                ticker=market_id,
+                status="settled",
+                result=authoritative_result,
+                expiration_time="2026-07-31T16:00:00Z",
+                raw_payload_hash="a" * 64,
+                updated_time=_NOW,
+            )
+        ),
+        polymarket_source=SimpleNamespace(),
+        void_refunds_by_market_ref={market_ref: refund},
+        clock=lambda: _NOW,
+    )
+
+    observation = source.get_settlement(market_ref)
+
+    assert observation is not None
+    assert observation.outcome is expected_outcome
+    assert (observation.void_refund is refund) is expected_refund
+
+
 def test_authoritative_source_fetches_and_normalizes_polymarket_by_canonical_id():
     market_ref = MarketRef(Venue.POLYMARKET_US, "104982", "gdp-q2")
     requested_ids: list[str] = []
@@ -212,3 +284,32 @@ def test_authoritative_source_fetches_and_normalizes_polymarket_by_canonical_id(
     assert observation is not None
     assert observation.market_ref == market_ref
     assert observation.outcome is MarketOutcome.YES
+
+
+def test_authoritative_source_applies_exact_refund_to_polymarket_void():
+    market_ref = MarketRef(Venue.POLYMARKET_US, "104982", "pm-void")
+    refund = VoidRefundContract(
+        refund_cents_per_contract=Decimal("42.5"),
+        refunds_entry_fee=False,
+    )
+    source = VenueRoutingAuthoritativeSettlementSource(
+        kalshi_source=SimpleNamespace(
+            get_market=lambda _market_id: pytest.fail("wrong venue route")
+        ),
+        polymarket_source=SimpleNamespace(
+            get_settlement=lambda market_id: {
+                "id": market_id,
+                "settled": True,
+                "result": "void",
+            }
+        ),
+        void_refunds_by_market_ref={market_ref: refund},
+        clock=lambda: _NOW,
+    )
+
+    observation = source.get_settlement(market_ref)
+
+    assert observation is not None
+    assert observation.market_ref == market_ref
+    assert observation.outcome is MarketOutcome.VOID
+    assert observation.void_refund is refund
