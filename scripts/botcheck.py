@@ -20,15 +20,18 @@ import gzip
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 from collections import Counter
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 REPO_ROOT_FOR_IMPORTS = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT_FOR_IMPORTS) not in sys.path:
@@ -784,6 +787,28 @@ def _format_ts_age(ts: datetime | None, *, now: datetime) -> tuple[str, str]:
     return ts.isoformat(), human_duration((now - ts).total_seconds())
 
 
+@contextmanager
+def _open_sqlite_snapshot(db_path: Path) -> Iterator[sqlite3.Connection]:
+    with tempfile.TemporaryDirectory(prefix="kalshi-botcheck-settlement-") as temp_dir:
+        snapshot_path = Path(temp_dir) / db_path.name
+        shutil.copyfile(db_path, snapshot_path)
+        for suffix in ("-wal", "-shm"):
+            try:
+                shutil.copyfile(
+                    Path(f"{db_path}{suffix}"),
+                    Path(f"{snapshot_path}{suffix}"),
+                )
+            except FileNotFoundError:
+                pass
+
+        db_uri = f"{snapshot_path.resolve().as_uri()}?mode=ro"
+        conn = sqlite3.connect(db_uri, uri=True)
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+
 def print_canonical_settlement_status(repo_root: Path) -> None:
     enabled_value, source = _research_env_value(
         repo_root,
@@ -804,8 +829,7 @@ def print_canonical_settlement_status(repo_root: Path) -> None:
         return
 
     try:
-        db_uri = f"{db_path.resolve().as_uri()}?mode=ro"
-        with sqlite3.connect(db_uri, uri=True) as conn:
+        with _open_sqlite_snapshot(db_path) as conn:
             schema_present = _sqlite_table_exists(
                 conn,
                 "paper_settlement_schema_meta",
@@ -893,7 +917,7 @@ def print_canonical_settlement_status(repo_root: Path) -> None:
                 ).fetchone()
             else:
                 observation_row = None
-    except sqlite3.Error as exc:
+    except (OSError, sqlite3.Error) as exc:
         print(f"{prefix} db=error error={exc}")
         return
 

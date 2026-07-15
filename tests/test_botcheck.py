@@ -717,6 +717,14 @@ def _create_settlement_diagnostics_db(db_path: Path) -> None:
         )
 
 
+def _sqlite_source_files(db_path: Path) -> dict[str, bytes]:
+    return {
+        path.name: path.read_bytes()
+        for path in db_path.parent.iterdir()
+        if path.name.startswith(db_path.name)
+    }
+
+
 def test_canonical_settlement_status_missing_db_is_reported_without_creation(
     capsys,
     tmp_path,
@@ -801,9 +809,15 @@ def test_canonical_settlement_status_reports_backlogs_and_last_observation_read_
 
     botcheck.print_canonical_settlement_status(tmp_path)
 
-    assert connect_calls == [
-        ((f"{db_path.resolve().as_uri()}?mode=ro",), {"uri": True})
-    ]
+    assert len(connect_calls) == 1
+    connect_args, connect_kwargs = connect_calls[0]
+    assert connect_kwargs == {"uri": True}
+    assert len(connect_args) == 1
+    snapshot_uri = connect_args[0]
+    assert snapshot_uri.endswith(f"/{db_path.name}?mode=ro")
+    assert snapshot_uri != f"{db_path.resolve().as_uri()}?mode=ro"
+    snapshot_path = Path(snapshot_uri.split("?", 1)[0].removeprefix("file://"))
+    assert not snapshot_path.parent.exists()
     assert statements
     assert all(
         statement.lstrip().upper().startswith(("SELECT", "PRAGMA"))
@@ -824,6 +838,56 @@ def test_canonical_settlement_status_reports_backlogs_and_last_observation_read_
     ) in out
     assert db_path.read_bytes() == before_bytes
     assert set(tmp_path.rglob("*")) == before_names
+
+
+def test_canonical_settlement_status_does_not_create_clean_source_wal_sidecars(
+    capsys,
+    tmp_path,
+):
+    db_path = tmp_path / "data" / "paper_trades.db"
+    _create_legacy_paper_db(db_path)
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+
+    assert _sqlite_source_files(db_path) == {db_path.name: db_path.read_bytes()}
+    before = _sqlite_source_files(db_path)
+
+    botcheck.print_canonical_settlement_status(tmp_path)
+
+    assert "schema=absent" in capsys.readouterr().out
+    assert _sqlite_source_files(db_path) == before
+
+
+def test_canonical_settlement_status_reads_committed_wal_from_unchanged_snapshot(
+    capsys,
+    tmp_path,
+):
+    db_path = tmp_path / "data" / "paper_trades.db"
+    _create_settlement_diagnostics_db(db_path)
+    writer = sqlite3.connect(db_path)
+    try:
+        assert writer.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        writer.execute(
+            "UPDATE paper_trades SET identity_status='quarantined', "
+            "quarantine_reason='live-wal-test' WHERE trade_id='mapped-kalshi'"
+        )
+        writer.commit()
+        before = _sqlite_source_files(db_path)
+        assert set(before) == {
+            db_path.name,
+            f"{db_path.name}-wal",
+            f"{db_path.name}-shm",
+        }
+
+        botcheck.print_canonical_settlement_status(tmp_path)
+
+        out = capsys.readouterr().out
+        assert "mapped_open=1" in out
+        assert "identity_quarantined_open=2" in out
+        assert _sqlite_source_files(db_path) == before
+    finally:
+        writer.close()
 
 
 def test_canonical_settlement_status_reports_sqlite_error(
