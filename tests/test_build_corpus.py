@@ -63,6 +63,18 @@ def _make_paper_trades_db(path: Path) -> None:
         conn.close()
 
 
+def _prepare_registered_paper_trades_db(path: Path) -> None:
+    """Build a registered-window fixture with explicit contamination provenance."""
+    _make_paper_trades_db(path)
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute("ALTER TABLE paper_trades ADD COLUMN cohort_extension TEXT")
+        conn.execute("DELETE FROM paper_trades WHERE series_ticker = 'KXOTHER'")
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _write_regimes_doc(repo_root: Path) -> Path:
     doc_dir = repo_root / "docs" / "governance"
     doc_dir.mkdir(parents=True, exist_ok=True)
@@ -515,7 +527,7 @@ def test_required_field_values_correct(tmp_path: Path) -> None:
 
 def test_registered_oos_stamps_hash_and_actual_row_family(tmp_path: Path) -> None:
     db = tmp_path / "paper_trades.db"
-    _make_paper_trades_db(db)
+    _prepare_registered_paper_trades_db(db)
     _write_regimes_doc(tmp_path)
     registry_path, registration_hash = _write_oos_registry(tmp_path)
     start, end = _start_end()
@@ -539,19 +551,181 @@ def test_registered_oos_stamps_hash_and_actual_row_family(tmp_path: Path) -> Non
     assert result.registration_hash == registration_hash
     rows = [json.loads(line) for line in out.read_text().splitlines()]
     assert rows
+    assert {row["trade_id"] for row in rows} == {"t3", "t4"}
     for row in rows:
         assert row["evidence_class"] == "registered_oos"
         assert row["oos_registration_id"] == "profit-oos-test-a"
         assert row["registration_hash"] == registration_hash
         assert row["market_families"] == [row["series_ticker"]]
         assert row["llm_capture_max_age_seconds"] == 900
+        assert row["in_period_validation_only"] is False
+        assert "row_id" not in row
+
+
+def test_registered_oos_preserves_trade_id_when_capture_row_id_is_present(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "paper_trades.db"
+    _make_paper_trades_db_with_capture_key(db)
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute("ALTER TABLE paper_trades ADD COLUMN cohort_extension TEXT")
+        conn.commit()
+    finally:
+        conn.close()
+    _write_regimes_doc(tmp_path)
+    registry_path, _ = _write_oos_registry(tmp_path)
+    capture = _write_capture_fixture(tmp_path / "logs" / "llm_capture.jsonl")
+    start, end = _start_end()
+    out = tmp_path / "registered-with-capture.jsonl"
+
+    build_corpus.build_corpus(
+        start_utc=start,
+        end_utc=end,
+        market_families=["KXTRUMPIRAN", "KXMOCTRUMP25"],
+        cohort_tag="POST_V030_2_OOS_SEED",
+        regime_label="post_v030_2_oos_seed",
+        output_path=out,
+        paper_trades_db=db,
+        regimes_doc_path=tmp_path / "docs" / "governance" / "corpus-regimes.md",
+        built_at_utc="2026-05-26T00:00:00Z",
+        llm_capture_path=capture,
+        oos_registration_id="profit-oos-test-a",
+        oos_registry_path=registry_path,
+    )
+
+    rows = {row["trade_id"]: row for row in map(json.loads, out.read_text().splitlines())}
+    assert rows["t1"]["trade_id"] == "t1"
+    assert rows["t1"]["row_id"] == "signal::KXTRUMPIRAN-27::news-abc"
+    assert rows["t1"]["in_period_validation_only"] is False
+    assert rows["t2"]["trade_id"] == "t2"
+    assert "row_id" not in rows["t2"]
+    assert rows["t2"]["in_period_validation_only"] is False
+
+
+def test_registered_oos_rejects_row_matching_multiple_families(tmp_path: Path) -> None:
+    db = tmp_path / "paper_trades.db"
+    _prepare_registered_paper_trades_db(db)
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute(
+            "UPDATE paper_trades SET ticker = 'KXMOCTRUMP25-COLLISION' "
+            "WHERE trade_id = 't3'"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    _write_regimes_doc(tmp_path)
+    registry_path, _ = _write_oos_registry(tmp_path)
+    start, end = _start_end()
+
+    with pytest.raises(ValueError, match=r"trade_id='t3'.*matched 2 registered families"):
+        build_corpus.build_corpus(
+            start_utc=start,
+            end_utc=end,
+            market_families=["KXTRUMPIRAN", "KXMOCTRUMP25"],
+            cohort_tag="POST_V030_2_OOS_SEED",
+            regime_label="post_v030_2_oos_seed",
+            output_path=tmp_path / "ambiguous.jsonl",
+            paper_trades_db=db,
+            regimes_doc_path=tmp_path / "docs" / "governance" / "corpus-regimes.md",
+            built_at_utc="2026-05-26T00:00:00Z",
+            oos_registration_id="profit-oos-test-a",
+            oos_registry_path=registry_path,
+        )
+
+
+def test_registered_oos_rejects_row_matching_no_family(tmp_path: Path) -> None:
+    db = tmp_path / "paper_trades.db"
+    _prepare_registered_paper_trades_db(db)
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute(
+            "UPDATE paper_trades SET ticker = 'KXOTHER-1', series_ticker = 'KXOTHER' "
+            "WHERE trade_id = 't3'"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    _write_regimes_doc(tmp_path)
+    registry_path, _ = _write_oos_registry(tmp_path)
+    start, end = _start_end()
+
+    with pytest.raises(ValueError, match=r"trade_id='t3'.*matched 0 registered families"):
+        build_corpus.build_corpus(
+            start_utc=start,
+            end_utc=end,
+            market_families=["KXTRUMPIRAN", "KXMOCTRUMP25"],
+            cohort_tag="POST_V030_2_OOS_SEED",
+            regime_label="post_v030_2_oos_seed",
+            output_path=tmp_path / "unmatched.jsonl",
+            paper_trades_db=db,
+            regimes_doc_path=tmp_path / "docs" / "governance" / "corpus-regimes.md",
+            built_at_utc="2026-05-26T00:00:00Z",
+            oos_registration_id="profit-oos-test-a",
+            oos_registry_path=registry_path,
+        )
+
+
+def test_registered_oos_rejects_missing_stable_trade_id(tmp_path: Path) -> None:
+    db = tmp_path / "paper_trades.db"
+    _prepare_registered_paper_trades_db(db)
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute("UPDATE paper_trades SET trade_id = '' WHERE trade_id = 't3'")
+        conn.commit()
+    finally:
+        conn.close()
+    _write_regimes_doc(tmp_path)
+    registry_path, _ = _write_oos_registry(tmp_path)
+    start, end = _start_end()
+
+    with pytest.raises(ValueError, match="non-empty stable trade_id"):
+        build_corpus.build_corpus(
+            start_utc=start,
+            end_utc=end,
+            market_families=["KXTRUMPIRAN", "KXMOCTRUMP25"],
+            cohort_tag="POST_V030_2_OOS_SEED",
+            regime_label="post_v030_2_oos_seed",
+            output_path=tmp_path / "missing-trade-id.jsonl",
+            paper_trades_db=db,
+            regimes_doc_path=tmp_path / "docs" / "governance" / "corpus-regimes.md",
+            built_at_utc="2026-05-26T00:00:00Z",
+            oos_registration_id="profit-oos-test-a",
+            oos_registry_path=registry_path,
+        )
+
+
+def test_registered_oos_requires_contamination_provenance_column(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "paper_trades.db"
+    _make_paper_trades_db(db)
+    _write_regimes_doc(tmp_path)
+    registry_path, _ = _write_oos_registry(tmp_path)
+    start, end = _start_end()
+
+    with pytest.raises(RuntimeError, match="missing required 'cohort_extension'"):
+        build_corpus.build_corpus(
+            start_utc=start,
+            end_utc=end,
+            market_families=["KXTRUMPIRAN", "KXMOCTRUMP25"],
+            cohort_tag="POST_V030_2_OOS_SEED",
+            regime_label="post_v030_2_oos_seed",
+            output_path=tmp_path / "unknown-contamination.jsonl",
+            paper_trades_db=db,
+            regimes_doc_path=tmp_path / "docs" / "governance" / "corpus-regimes.md",
+            built_at_utc="2026-05-26T00:00:00Z",
+            oos_registration_id="profit-oos-test-a",
+            oos_registry_path=registry_path,
+        )
 
 
 def test_registered_oos_cannot_materialize_before_window_end(tmp_path: Path) -> None:
     from scripts.edge_replay.oos_registry import OOSMaterializationTooEarlyError
 
     db = tmp_path / "paper_trades.db"
-    _make_paper_trades_db(db)
+    _prepare_registered_paper_trades_db(db)
     _write_regimes_doc(tmp_path)
     registry_path, _ = _write_oos_registry(tmp_path)
     start, end = _start_end()
@@ -574,7 +748,7 @@ def test_registered_oos_cannot_materialize_before_window_end(tmp_path: Path) -> 
 
 def test_registered_oos_requires_exact_registered_build_policy(tmp_path: Path) -> None:
     db = tmp_path / "paper_trades.db"
-    _make_paper_trades_db(db)
+    _prepare_registered_paper_trades_db(db)
     _write_regimes_doc(tmp_path)
     registry_path, _ = _write_oos_registry(tmp_path)
     start, end = _start_end()

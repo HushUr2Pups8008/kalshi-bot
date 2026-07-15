@@ -102,6 +102,7 @@ CORPUS_STAMP_FIELDS = (
     "corpus_builder_version",
     "built_at_utc",
     "evidence_class",
+    "in_period_validation_only",
     "llm_capture_max_age_seconds",
 )
 
@@ -238,6 +239,7 @@ def _stamp_row(
     market_families: list[str],
     built_at_utc: str,
     registration: OOSRegistration | None,
+    in_period_validation_only: bool,
     llm_capture_max_age_seconds: int,
 ) -> dict[str, Any]:
     stamped = dict(row)
@@ -248,6 +250,7 @@ def _stamp_row(
     stamped["market_families"] = list(market_families)
     stamped["corpus_builder_version"] = CORPUS_BUILDER_VERSION
     stamped["built_at_utc"] = built_at_utc
+    stamped["in_period_validation_only"] = in_period_validation_only
     stamped["llm_capture_max_age_seconds"] = llm_capture_max_age_seconds
     if registration is None:
         stamped["evidence_class"] = "historical_diagnostic"
@@ -450,10 +453,15 @@ def build_corpus(
 
         # I-10 contamination filter: only apply the LIKE exclusion when
         # both (a) the caller wants the default exclusion and (b) the
-        # cohort_extension column actually exists. Pre-migration DBs
-        # must continue to build corpora cleanly — every row is
-        # implicitly non-contamination there.
+        # cohort_extension column actually exists. Legacy diagnostics retain
+        # pre-migration compatibility; registered evidence requires explicit
+        # provenance and fails closed when the column is absent.
         cohort_extension_present = "cohort_extension" in cols
+        if registration is not None and not cohort_extension_present:
+            raise RuntimeError(
+                "paper_trades table missing required 'cohort_extension' column "
+                "for registered OOS contamination provenance"
+            )
         if include_contamination or not cohort_extension_present:
             rows = conn.execute(
                 "SELECT * FROM paper_trades "
@@ -486,7 +494,19 @@ def build_corpus(
     contamination_row_count = 0
     for raw in rows:
         row_dict = _row_to_dict(raw)
+        trade_id = row_dict.get("trade_id")
+        if registration is not None and (
+            not isinstance(trade_id, str) or not trade_id.strip()
+        ):
+            raise ValueError(
+                "registered OOS row requires a non-empty stable trade_id"
+            )
         matches = _row_families(row_dict, market_families)
+        if registration is not None and len(matches) != 1:
+            raise ValueError(
+                f"registered OOS row trade_id={trade_id!r} matched "
+                f"{len(matches)} registered families; expected exactly 1"
+            )
         if matches:
             matched_rows.append((row_dict, matches))
             distinct_families_present.update(matches)
@@ -543,6 +563,7 @@ def build_corpus(
                 market_families=list(matches),
                 built_at_utc=stamp_built_at,
                 registration=registration,
+                in_period_validation_only=in_period,
                 llm_capture_max_age_seconds=llm_capture_max_age_seconds,
             )
             stamped = _apply_capture_cache_keys(
