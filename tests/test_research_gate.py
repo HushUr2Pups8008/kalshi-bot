@@ -21,7 +21,7 @@ from analysis.research_gate import (
     _contract_fingerprint,
     _direct_source_targets,
     _decision_grade_verdict,
-    _duckduckgo_lite_search,
+    _duckduckgo_lite_search as _async_duckduckgo_lite_search,
     _economic_stat_pending_search,
     _evidence_identity,
     _event_window_pending_search,
@@ -40,7 +40,7 @@ from analysis.research_gate import (
     _white_house_presidential_actions_search,
     _should_direct_fetch_source,
     urllib,
-    _rss_search,
+    _rss_search as _async_rss_search,
     _truth_social_event_search,
     _treasury_yield_search,
     build_research_queries,
@@ -55,6 +55,31 @@ from analysis import research_gate as research_gate_module
 from kalshi.series_metadata import SettlementSource
 from tasks.research_dossier import ResearchDossierStore
 from utils.research_gaps import research_gap_query_intent, research_questions_for_skip
+
+
+def _rss_search(query: ResearchQuery, **kwargs) -> list[ResearchEvidence]:
+    return asyncio.run(_async_rss_search(query, **kwargs))
+
+
+def _duckduckgo_lite_search(
+    query: ResearchQuery,
+    **kwargs,
+) -> list[ResearchEvidence]:
+    return asyncio.run(_async_duckduckgo_lite_search(query, **kwargs))
+
+
+def _provider_returns(value):
+    async def provider(_query: ResearchQuery):
+        return value
+
+    return provider
+
+
+def _provider_raises(error: Exception):
+    async def provider(_query: ResearchQuery):
+        raise error
+
+    return provider
 
 
 def test_build_research_queries_prioritizes_persisted_resolution_gap():
@@ -1903,7 +1928,11 @@ async def test_default_search_prefers_bank_of_israel_policy_over_generic_event_w
             now=datetime(2026, 7, 2, tzinfo=timezone.utc),
         ),
     )
-    monkeypatch.setattr(research_gate_module, "_rss_search", lambda _query: [])
+    monkeypatch.setattr(
+        research_gate_module,
+        "_rss_search",
+        _provider_returns([]),
+    )
     evidence = await default_search_provider(
         ResearchQuery(
             (
@@ -1956,7 +1985,7 @@ async def test_default_search_prefers_fed_policy_and_retains_pending_with_rss(
         calls.append("generic")
         return [replace(pending, metric_name="event_window_pending")]
 
-    def rss_search(_query):
+    async def rss_search(_query):
         calls.append("rss")
         return [predictive]
 
@@ -2005,7 +2034,7 @@ async def test_default_search_returns_nonpending_fed_evidence_without_rss(
         calls.append("generic")
         raise AssertionError("generic pending detection must follow Fed policy detection")
 
-    def rss_search(_query):
+    async def rss_search(_query):
         calls.append("rss")
         raise AssertionError("non-pending structured evidence must retain early return")
 
@@ -5359,10 +5388,13 @@ async def test_strict_research_gate_does_not_spend_budget_on_raw_pdf_or_homepage
 
 
 def _stub_google_news_rss(monkeypatch, rss: bytes) -> None:
+    async def fetch(*_args, **_kwargs) -> bytes:
+        return rss
+
     monkeypatch.setattr(
         research_gate_module,
         "_fetch_google_news_rss_ipv4",
-        lambda *_args, **_kwargs: rss,
+        fetch,
     )
 
 
@@ -5825,17 +5857,14 @@ def test_duckduckgo_lite_search_parses_result_links_and_snippets(monkeypatch):
     </body></html>
     """
 
-    class _Response:
-        def __enter__(self):
-            return self
+    async def fetch(*_args, **_kwargs):
+        return html
 
-        def __exit__(self, *_args):
-            return None
-
-        def read(self, _limit):
-            return html
-
-    monkeypatch.setattr(urllib.request, "urlopen", lambda *_args, **_kwargs: _Response())
+    monkeypatch.setattr(
+        research_gate_module,
+        "_fetch_duckduckgo_lite_ipv4",
+        fetch,
+    )
 
     evidence = _duckduckgo_lite_search(
         ResearchQuery(
@@ -5920,17 +5949,14 @@ def test_duckduckgo_lite_search_ignores_internal_navigation_links(monkeypatch):
     </body></html>
     """
 
-    class _Response:
-        def __enter__(self):
-            return self
+    async def fetch(*_args, **_kwargs):
+        return html
 
-        def __exit__(self, *_args):
-            return None
-
-        def read(self, _limit):
-            return html
-
-    monkeypatch.setattr(urllib.request, "urlopen", lambda *_args, **_kwargs: _Response())
+    monkeypatch.setattr(
+        research_gate_module,
+        "_fetch_duckduckgo_lite_ipv4",
+        fetch,
+    )
 
     evidence = _duckduckgo_lite_search(
         ResearchQuery(
@@ -5948,11 +5974,11 @@ def test_duckduckgo_lite_search_ignores_internal_navigation_links(monkeypatch):
 async def test_default_search_provider_falls_back_to_duckduckgo_lite(monkeypatch):
     calls: list[str] = []
 
-    def rss_unavailable(_query):
+    async def rss_unavailable(_query):
         calls.append("rss")
         raise TimeoutError("rss unavailable")
 
-    def fallback_search(query, **_kwargs):
+    async def fallback_search(query, **_kwargs):
         calls.append("fallback")
         return [
             ResearchEvidence(
@@ -6040,7 +6066,7 @@ async def test_default_search_provider_uses_federal_register_api_first(monkeypat
             )
         ]
 
-    def rss_search(_query):
+    async def rss_search(_query):
         calls.append("rss")
         raise AssertionError("rss should not be called when official API returns evidence")
 
@@ -10310,9 +10336,13 @@ async def test_generic_backend_failure_with_fallback_recovery_is_not_gate_error(
     monkeypatch.setattr(
         research_gate_module,
         "_rss_search",
-        lambda _query: (_ for _ in ()).throw(TimeoutError("private RSS payload")),
+        _provider_raises(TimeoutError("private RSS payload")),
     )
-    monkeypatch.setattr(research_gate_module, "_duckduckgo_lite_search", lambda _query: [])
+    monkeypatch.setattr(
+        research_gate_module,
+        "_duckduckgo_lite_search",
+        _provider_returns([]),
+    )
 
     verdict = await run_research_gate(
         SimpleNamespace(headline="Iran crude output rises sharply", source="Reuters"),
@@ -10352,12 +10382,12 @@ async def test_enforced_open_blocked_generic_search_emits_one_gate_error_verdict
     monkeypatch.setattr(
         research_gate_module,
         "_rss_search",
-        lambda _query: (_ for _ in ()).throw(TimeoutError("private RSS payload")),
+        _provider_raises(TimeoutError("private RSS payload")),
     )
     monkeypatch.setattr(
         research_gate_module,
         "_duckduckgo_lite_search",
-        lambda _query: (_ for _ in ()).throw(ConnectionError("private DDG payload")),
+        _provider_raises(ConnectionError("private DDG payload")),
     )
     with pytest.raises(GenericSearchUnavailable):
         await research_gate_module._run_generic_search(

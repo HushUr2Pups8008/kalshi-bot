@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import asyncio
 import csv
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from email.utils import parsedate_to_datetime
 import hashlib
 import html
-import http.client
 import ipaddress
 import io
 import json
@@ -25,6 +26,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import weakref
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
@@ -32,6 +34,11 @@ from enum import Enum
 from html.parser import HTMLParser
 from typing import Any, Awaitable, Callable, Iterable, Sequence
 from zoneinfo import ZoneInfo
+
+import aiohttp
+import dns.asyncresolver
+import dns.exception
+import dns.resolver
 
 from analysis.generic_search_circuit import (
     GenericSearchCircuit,
@@ -56,6 +63,72 @@ from utils.research_evidence_quality import (
 
 log = get_logger("research_gate")
 _GENERIC_SEARCH_CIRCUIT: GenericSearchCircuit | None = None
+_GENERIC_WEB_SEARCH_MAX_CONCURRENCY = 4
+
+
+@dataclass(frozen=True)
+class _GenericWebSearchWorkSnapshot:
+    active: int
+    peak: int
+
+
+class _GenericWebSearchWorkLimiter:
+    def __init__(self) -> None:
+        self._semaphore = asyncio.BoundedSemaphore(
+            _GENERIC_WEB_SEARCH_MAX_CONCURRENCY
+        )
+        self.active = 0
+        self.peak = 0
+
+    @asynccontextmanager
+    async def slot(self) -> AsyncIterator[None]:
+        await self._semaphore.acquire()
+        self.active += 1
+        self.peak = max(self.peak, self.active)
+        try:
+            yield
+        finally:
+            self.active -= 1
+            self._semaphore.release()
+
+
+_GENERIC_WEB_SEARCH_WORK_LIMITERS: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop,
+    _GenericWebSearchWorkLimiter,
+] = weakref.WeakKeyDictionary()
+_GENERIC_WEB_SEARCH_WORK_LIMITERS_LOCK = threading.Lock()
+
+
+def _get_generic_web_search_work_limiter() -> _GenericWebSearchWorkLimiter:
+    loop = asyncio.get_running_loop()
+    with _GENERIC_WEB_SEARCH_WORK_LIMITERS_LOCK:
+        limiter = _GENERIC_WEB_SEARCH_WORK_LIMITERS.get(loop)
+        if limiter is None:
+            limiter = _GenericWebSearchWorkLimiter()
+            _GENERIC_WEB_SEARCH_WORK_LIMITERS[loop] = limiter
+        return limiter
+
+
+def _generic_web_search_work_snapshot_for_tests() -> _GenericWebSearchWorkSnapshot:
+    loop = asyncio.get_running_loop()
+    with _GENERIC_WEB_SEARCH_WORK_LIMITERS_LOCK:
+        limiter = _GENERIC_WEB_SEARCH_WORK_LIMITERS.get(loop)
+        if limiter is None:
+            return _GenericWebSearchWorkSnapshot(active=0, peak=0)
+        return _GenericWebSearchWorkSnapshot(
+            active=limiter.active,
+            peak=limiter.peak,
+        )
+
+
+def _reset_generic_web_search_work_limiters_for_tests() -> None:
+    with _GENERIC_WEB_SEARCH_WORK_LIMITERS_LOCK:
+        if any(
+            limiter.active
+            for limiter in _GENERIC_WEB_SEARCH_WORK_LIMITERS.values()
+        ):
+            raise RuntimeError("cannot reset active generic web search work limiters")
+        _GENERIC_WEB_SEARCH_WORK_LIMITERS.clear()
 
 
 def _log_generic_search_circuit_event(event: GenericSearchCircuitEvent) -> None:
@@ -3359,42 +3432,21 @@ async def _reconcile_persisted_verdict(
     )
 
 
-def _create_ipv4_connection(
-    address: tuple[str, int],
-    timeout: float,
-    source_address: tuple[str, int] | None = None,
-) -> socket.socket:
-    if not math.isfinite(timeout) or timeout <= 0:
-        raise ValueError("Google News RSS connection timeout must be finite and positive")
-
-    host, port = address
-    if not host or isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65_535:
-        raise ValueError("Google News RSS connection address is invalid")
-    resolver_answers = socket.getaddrinfo(
-        host,
-        port,
-        socket.AF_INET,
-        socket.SOCK_STREAM,
-    )
-    validated_answers: list[tuple[int, int, int, tuple[str, int]]] = []
-    for answer in resolver_answers:
-        if not isinstance(answer, tuple) or len(answer) != 5:
-            raise ValueError("Google News RSS resolver answer is malformed")
-        family, socktype, proto, _canonname, sockaddr = answer
-        if (
-            family != socket.AF_INET
-            or socktype != socket.SOCK_STREAM
-            or proto not in {0, socket.IPPROTO_TCP}
-        ):
-            raise ValueError("Google News RSS resolver answer has an unexpected socket type")
-        if not isinstance(sockaddr, tuple) or len(sockaddr) != 2 or sockaddr[1] != port:
-            raise ValueError("Google News RSS resolver answer has an unexpected port")
-        if not isinstance(sockaddr[0], str):
-            raise ValueError("Google News RSS resolver answer has an invalid IP address")
+def _validated_global_ipv4_addresses(
+    addresses: Iterable[str],
+    *,
+    provider_name: str = "Google News",
+) -> tuple[str, ...]:
+    validated: list[str] = []
+    for address in addresses:
+        if not isinstance(address, str):
+            raise ValueError(f"{provider_name} DNS answer has an invalid IP address")
         try:
-            resolved_ip = ipaddress.ip_address(sockaddr[0])
+            resolved_ip = ipaddress.ip_address(address)
         except ValueError as exc:
-            raise ValueError("Google News RSS resolver answer has an invalid IP address") from exc
+            raise ValueError(
+                f"{provider_name} DNS answer has an invalid IP address"
+            ) from exc
         if (
             not isinstance(resolved_ip, ipaddress.IPv4Address)
             or not resolved_ip.is_global
@@ -3405,79 +3457,284 @@ def _create_ipv4_connection(
             or resolved_ip.is_unspecified
             or resolved_ip.is_reserved
         ):
-            raise ValueError("Google News RSS resolver answer is not a global IPv4 address")
-        validated_answers.append((family, socktype, proto, (str(resolved_ip), port)))
-    if not validated_answers:
-        raise OSError("Google News RSS has no validated IPv4 address")
-
-    last_error: OSError | None = None
-    for family, socktype, proto, sockaddr in validated_answers:
-        sock = socket.socket(family, socktype, proto)
-        try:
-            sock.settimeout(timeout)
-            if source_address is not None:
-                sock.bind(source_address)
-            sock.connect(sockaddr)
-            return sock
-        except BaseException as exc:
-            sock.close()
-            if not isinstance(exc, OSError):
-                raise
-            last_error = exc
-    if last_error is not None:
-        raise last_error
-    raise OSError("Google News RSS could not connect to a validated IPv4 address")
+            raise ValueError(
+                f"{provider_name} DNS answer is not a global IPv4 address"
+            )
+        normalized = str(resolved_ip)
+        if normalized not in validated:
+            validated.append(normalized)
+    if not validated:
+        raise socket.gaierror(
+            socket.EAI_AGAIN,
+            f"{provider_name} DNS returned no IPv4 addresses",
+        )
+    return tuple(validated)
 
 
-def _fetch_google_news_rss_ipv4(
+def _remaining_https_budget(deadline: float, *, provider_name: str) -> float:
+    remaining = deadline - asyncio.get_running_loop().time()
+    if remaining <= 0:
+        raise TimeoutError(f"{provider_name} exceeded its total timeout")
+    return remaining
+
+
+async def _resolve_provider_ipv4(
+    *,
+    canonical_host: str,
+    provider_name: str,
+    deadline: float,
+    resolver_factory: Callable[[], Any] | None = None,
+) -> tuple[str, ...]:
+    resolver = (
+        resolver_factory()
+        if resolver_factory is not None
+        else dns.asyncresolver.Resolver()
+    )
+    try:
+        answer = await resolver.resolve(
+            canonical_host,
+            "A",
+            lifetime=_remaining_https_budget(
+                deadline,
+                provider_name=provider_name,
+            ),
+            search=False,
+        )
+    except dns.exception.Timeout as exc:
+        raise TimeoutError(f"{provider_name} DNS resolution timed out") from exc
+    except (
+        dns.resolver.NXDOMAIN,
+        dns.resolver.NoAnswer,
+        dns.resolver.NoNameservers,
+    ) as exc:
+        raise socket.gaierror(
+            socket.EAI_AGAIN,
+            f"{provider_name} DNS resolution was unavailable",
+        ) from exc
+    return _validated_global_ipv4_addresses(
+        (getattr(item, "address", None) for item in answer),
+        provider_name=provider_name,
+    )
+
+
+async def _resolve_google_news_ipv4(
+    *,
+    deadline: float,
+    resolver_factory: Callable[[], Any] | None = None,
+) -> tuple[str, ...]:
+    return await _resolve_provider_ipv4(
+        canonical_host="news.google.com",
+        provider_name="Google News RSS",
+        deadline=deadline,
+        resolver_factory=resolver_factory,
+    )
+
+
+class _PinnedProviderIPv4Resolver(aiohttp.abc.AbstractResolver):
+    def __init__(
+        self,
+        *,
+        canonical_host: str,
+        provider_name: str,
+        addresses: tuple[str, ...],
+    ) -> None:
+        self._canonical_host = canonical_host
+        self._provider_name = provider_name
+        self._addresses = addresses
+
+    async def resolve(
+        self,
+        host: str,
+        port: int = 0,
+        family: socket.AddressFamily = socket.AF_INET,
+    ) -> list[dict[str, Any]]:
+        if (
+            host != self._canonical_host
+            or port != 443
+            or family != socket.AF_INET
+        ):
+            raise socket.gaierror(
+                socket.EAI_NONAME,
+                f"{self._provider_name} pinned resolver requires the canonical host",
+            )
+        return [
+            {
+                "hostname": self._canonical_host,
+                "host": address,
+                "port": 443,
+                "family": socket.AF_INET,
+                "proto": socket.IPPROTO_TCP,
+                "flags": socket.AI_NUMERICHOST,
+            }
+            for address in self._addresses
+        ]
+
+    async def close(self) -> None:
+        return None
+
+
+async def _fetch_bounded_https_ipv4(
     url: str,
     *,
+    canonical_host: str,
+    provider_name: str,
+    user_agent: str,
     timeout: float,
     max_bytes: int,
+    resolver_factory: Callable[[], Any] | None = None,
+    connector_factory: Callable[..., Any] = aiohttp.TCPConnector,
+    session_factory: Callable[..., Any] = aiohttp.ClientSession,
 ) -> bytes:
     parsed = urllib.parse.urlsplit(url)
     if (
         parsed.scheme != "https"
-        or parsed.hostname != "news.google.com"
+        or parsed.hostname != canonical_host
         or parsed.port not in {None, 443}
         or parsed.username is not None
         or parsed.password is not None
     ):
-        raise ValueError("Google News RSS transport requires the canonical HTTPS host")
-    if not math.isfinite(timeout) or timeout <= 0 or max_bytes <= 0:
-        raise ValueError("Google News RSS transport bounds must be positive")
-
-    connection = http.client.HTTPSConnection(
-        parsed.hostname,
-        port=parsed.port or 443,
-        timeout=timeout,
-    )
-    connection._create_connection = _create_ipv4_connection  # type: ignore[attr-defined]
-    request_path = urllib.parse.urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
-    try:
-        connection.request(
-            "GET",
-            request_path,
-            headers={"User-Agent": "kalshi-bot-research/1.0"},
+        raise ValueError(
+            f"{provider_name} transport requires the canonical HTTPS host"
         )
-        response = connection.getresponse()
-        if response.status != 200:
-            raise urllib.error.HTTPError(
-                url,
-                response.status,
-                response.reason,
-                response.headers,
-                None,
-            )
-        return response.read(max_bytes)
-    finally:
-        connection.close()
+    if not math.isfinite(timeout) or timeout <= 0 or max_bytes <= 0:
+        raise ValueError(f"{provider_name} transport bounds must be positive")
+
+    try:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        async with asyncio.timeout_at(deadline):
+            async with _get_generic_web_search_work_limiter().slot():
+                addresses = await _resolve_provider_ipv4(
+                    canonical_host=canonical_host,
+                    provider_name=provider_name,
+                    deadline=deadline,
+                    resolver_factory=resolver_factory,
+                )
+                remaining = _remaining_https_budget(
+                    deadline,
+                    provider_name=provider_name,
+                )
+                connector = connector_factory(
+                    resolver=_PinnedProviderIPv4Resolver(
+                        canonical_host=canonical_host,
+                        provider_name=provider_name,
+                        addresses=addresses,
+                    ),
+                    family=socket.AF_INET,
+                    use_dns_cache=False,
+                    force_close=True,
+                    limit=1,
+                    limit_per_host=1,
+                    happy_eyeballs_delay=None,
+                )
+                client_timeout = aiohttp.ClientTimeout(
+                    total=remaining,
+                    connect=remaining,
+                    sock_connect=remaining,
+                    sock_read=remaining,
+                )
+                async with session_factory(
+                    connector=connector,
+                    timeout=client_timeout,
+                    headers={"User-Agent": user_agent},
+                ) as session:
+                    async with session.get(url, allow_redirects=False) as response:
+                        if response.status != 200:
+                            raise urllib.error.HTTPError(
+                                url,
+                                response.status,
+                                response.reason,
+                                response.headers,
+                                None,
+                            )
+                        try:
+                            raw = await response.content.readexactly(max_bytes + 1)
+                        except asyncio.IncompleteReadError as exc:
+                            return exc.partial
+                        raise ValueError(
+                            f"{provider_name} exceeded its {max_bytes}-byte limit"
+                        )
+    except asyncio.CancelledError:
+        raise
+    except TimeoutError:
+        raise
+    except (
+        aiohttp.ClientConnectorCertificateError,
+        aiohttp.ClientSSLError,
+    ):
+        raise
+    except aiohttp.ClientConnectionError as exc:
+        raise ConnectionError(f"{provider_name} connection failed") from exc
 
 
-def _rss_search(query: ResearchQuery, *, timeout: float = 5.0, limit: int = 3) -> list[ResearchEvidence]:
-    params = urllib.parse.urlencode({"q": query.query, "hl": "en-US", "gl": "US", "ceid": "US:en"})
+async def _fetch_google_news_rss_ipv4(
+    url: str,
+    *,
+    timeout: float,
+    max_bytes: int,
+    resolver_factory: Callable[[], Any] | None = None,
+    connector_factory: Callable[..., Any] = aiohttp.TCPConnector,
+    session_factory: Callable[..., Any] = aiohttp.ClientSession,
+) -> bytes:
+    return await _fetch_bounded_https_ipv4(
+        url,
+        canonical_host="news.google.com",
+        provider_name="Google News RSS",
+        user_agent="kalshi-bot-research/1.0",
+        timeout=timeout,
+        max_bytes=max_bytes,
+        resolver_factory=resolver_factory,
+        connector_factory=connector_factory,
+        session_factory=session_factory,
+    )
+
+
+async def _fetch_duckduckgo_lite_ipv4(
+    url: str,
+    *,
+    timeout: float,
+    max_bytes: int,
+    resolver_factory: Callable[[], Any] | None = None,
+    connector_factory: Callable[..., Any] = aiohttp.TCPConnector,
+    session_factory: Callable[..., Any] = aiohttp.ClientSession,
+) -> bytes:
+    return await _fetch_bounded_https_ipv4(
+        url,
+        canonical_host="lite.duckduckgo.com",
+        provider_name="DuckDuckGo Lite",
+        user_agent="Mozilla/5.0 kalshi-bot-research/1.0",
+        timeout=timeout,
+        max_bytes=max_bytes,
+        resolver_factory=resolver_factory,
+        connector_factory=connector_factory,
+        session_factory=session_factory,
+    )
+
+
+async def _rss_search(
+    query: ResearchQuery,
+    *,
+    timeout: float = 5.0,
+    limit: int = 3,
+) -> list[ResearchEvidence]:
+    params = urllib.parse.urlencode(
+        {"q": query.query, "hl": "en-US", "gl": "US", "ceid": "US:en"}
+    )
     url = f"https://news.google.com/rss/search?{params}"
-    raw = _fetch_google_news_rss_ipv4(url, timeout=timeout, max_bytes=300_000)
+    raw = await _fetch_google_news_rss_ipv4(
+        url,
+        timeout=timeout,
+        max_bytes=300_000,
+    )
+    return _parse_rss_search_response(query, raw=raw, limit=limit)
+
+
+def _parse_rss_search_response(
+    query: ResearchQuery,
+    *,
+    raw: bytes,
+    limit: int,
+) -> list[ResearchEvidence]:
     root = ET.fromstring(raw)
     out: list[ResearchEvidence] = []
     retrieved_at = _utc_now_iso()
@@ -3561,7 +3818,7 @@ def _rss_direction_for_query_result(
     return "neutral", 0.0
 
 
-def _duckduckgo_lite_search(
+async def _duckduckgo_lite_search(
     query: ResearchQuery,
     *,
     timeout: float = 5.0,
@@ -3569,12 +3826,12 @@ def _duckduckgo_lite_search(
 ) -> list[ResearchEvidence]:
     params = urllib.parse.urlencode({"q": query.query})
     url = f"https://lite.duckduckgo.com/lite/?{params}"
-    request = urllib.request.Request(
+    response = await _fetch_duckduckgo_lite_ipv4(
         url,
-        headers={"User-Agent": "Mozilla/5.0 kalshi-bot-research/1.0"},
+        timeout=timeout,
+        max_bytes=300_000,
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310
-        raw = response.read(300_000).decode("utf-8", errors="ignore")
+    raw = response.decode("utf-8", errors="ignore")
     retrieved_at = _utc_now_iso()
     out: list[ResearchEvidence] = []
     result_pattern = re.compile(
@@ -5708,8 +5965,8 @@ def _event_deadline_from_text(text: str) -> date | None:
 async def _run_generic_search(query: ResearchQuery) -> list[ResearchEvidence]:
     circuit = _get_generic_search_circuit()
     return await circuit.run(
-        lambda: asyncio.to_thread(_rss_search, query),
-        lambda: asyncio.to_thread(_duckduckgo_lite_search, query),
+        lambda: _rss_search(query),
+        lambda: _duckduckgo_lite_search(query),
     )
 
 
