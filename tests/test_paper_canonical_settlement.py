@@ -452,6 +452,21 @@ def test_schema_present_record_trade_persists_mapped_canonical_identity(
     assert position.venue_market_id == market_ref.venue_market_id
 
 
+def test_canonical_record_trade_rechecks_bankroll_inside_transaction(
+    trader_factory,
+):
+    trader = trader_factory("canonical-entry-bankroll-race")
+    market_ref = MarketRef(Venue.KALSHI, "KXGDP-26JUL31", "KXGDP-26JUL31")
+    trader._set_state("notional_bankroll", "0.40")
+
+    with patch.object(trader, "get_notional_bankroll", return_value=500.0):
+        trade_id = _record_trade(trader, market_ref, trade_id="budget000001")
+
+    assert trade_id == ""
+    assert trader._conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 0
+    assert _bankroll_cents(trader) == Decimal("40")
+
+
 def test_record_trade_rejects_exact_identity_after_canonical_settlement(
     trader_factory,
 ):

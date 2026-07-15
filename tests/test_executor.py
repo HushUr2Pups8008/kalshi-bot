@@ -831,6 +831,33 @@ def _make_paper_executor(monkeypatch):
 
 
 class TestExecutorModeSafety:
+    @pytest.mark.parametrize("capped_dollars", [0.0, -1.0])
+    def test_paper_non_positive_capped_dollars_skips(
+        self,
+        monkeypatch,
+        capped_dollars,
+    ):
+        ex, _, _ = _make_paper_executor(monkeypatch)
+
+        reason = ex._validate(_make_analysis(capped_dollars=capped_dollars))
+
+        assert reason == "capped_dollars=0 (below minimum bet size)"
+
+    def test_paper_contract_rounding_cannot_exceed_capped_dollars(self, monkeypatch):
+        ex, _, _ = _make_paper_executor(monkeypatch)
+
+        reason = ex._validate(_make_analysis(capped_dollars=0.49, yes_price=50.0))
+
+        assert reason == "paper contract cost $0.50 exceeds capped dollars $0.49"
+
+    def test_paper_contract_cost_cannot_exceed_notional_bankroll(self, monkeypatch):
+        ex, _, paper = _make_paper_executor(monkeypatch)
+        paper.get_notional_bankroll.return_value = 0.40
+
+        reason = ex._validate(_make_analysis(capped_dollars=0.50, yes_price=50.0))
+
+        assert reason == "paper contract cost $0.50 exceeds notional bankroll $0.40"
+
     def test_mode_frozen_at_construction_paper(self, monkeypatch):
         """Paper executor stays paper even if cfg is mutated to live after construction."""
         ex, _, _ = _make_paper_executor(monkeypatch)
@@ -865,7 +892,7 @@ class TestExecutorModeSafety:
         ex._execute_live  = fake_live
 
         analysis = _make_analysis(edge=0.05, estimated_prob=0.55, yes_price=50.0,
-                                  capped_dollars=0.25)
+                                  capped_dollars=0.50)
         with patch("trading.executor.trade_log"):
             result = await ex.execute(analysis)
 

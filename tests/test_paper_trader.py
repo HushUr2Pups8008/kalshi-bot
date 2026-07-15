@@ -166,6 +166,46 @@ def test_record_trade_persists_llm_capture_join_key(trader):
     assert row["llm_capture_row_id"] == "signal::KXTRUMPIRAN-27::news-xyz"
 
 
+class TestTradeBudgetInvariant:
+    @pytest.mark.parametrize("capped_dollars", [0.0, -1.0])
+    def test_record_trade_rejects_non_positive_capped_dollars(
+        self,
+        trader,
+        capped_dollars,
+    ):
+        analysis = _make_mock_analysis(capped_dollars=capped_dollars)
+        bankroll_before = trader.get_notional_bankroll()
+
+        with patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}):
+            trade_id = trader.record_trade(analysis)
+
+        assert trade_id == ""
+        assert trader.get_notional_bankroll() == bankroll_before
+        assert trader._conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 0
+
+    def test_record_trade_rejects_contract_cost_above_capped_dollars(self, trader):
+        analysis = _make_mock_analysis(yes_price=50.0, capped_dollars=0.49)
+        bankroll_before = trader.get_notional_bankroll()
+
+        with patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}):
+            trade_id = trader.record_trade(analysis)
+
+        assert trade_id == ""
+        assert trader.get_notional_bankroll() == bankroll_before
+        assert trader._conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 0
+
+    def test_record_trade_rejects_contract_cost_above_bankroll(self, trader):
+        trader._set_state("notional_bankroll", "0.40")
+        analysis = _make_mock_analysis(yes_price=50.0, capped_dollars=0.50)
+
+        with patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}):
+            trade_id = trader.record_trade(analysis)
+
+        assert trade_id == ""
+        assert trader.get_notional_bankroll() == pytest.approx(0.40)
+        assert trader._conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 0
+
+
 class TestBankrollAtomicity:
     """Regression for the bankroll desync bug fixed in v0.23.0."""
 
