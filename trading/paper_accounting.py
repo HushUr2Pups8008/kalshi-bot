@@ -26,6 +26,7 @@ from trading.fees import (
     FeeUnscorableError,
     NON_DIRECT_ACCOUNT_PRECISION,
     fee_coefficient_for,
+    fee_type_for_schedule,
     quote_fee,
 )
 from trading.settlement_store import (
@@ -191,8 +192,18 @@ class PaperAccountingRecord:
         if not isinstance(self.schedule_id, FeeScheduleId):
             raise ValueError("schedule_id must be FeeScheduleId")
         _validate_schedule(self.schedule_id)
+        if self.fee_multiplier_effective_at < self.schedule_id.effective_from:
+            raise ValueError("fee_multiplier_effective_at must not precede fee schedule effective_from")
+        if (
+            self.schedule_id.effective_to is not None
+            and self.fee_multiplier_effective_at >= self.schedule_id.effective_to
+        ):
+            raise ValueError("fee_multiplier_effective_at must precede fee schedule effective_to")
         if not isinstance(self.role, FeeRole):
             raise ValueError("role must be FeeRole")
+        expected_fee_type = fee_type_for_schedule(self.schedule_id)
+        if self.fee_type != expected_fee_type:
+            raise ValueError("fee_type does not match pinned fee formula")
 
         for name in (
             "quantity",
@@ -294,9 +305,17 @@ class PaperAccountingRecord:
                 _require_decimal(name, getattr(self, name))
             if self.settlement_fee < 0 or self.settlement_refund < 0 or self.gross_settlement_payout < 0:
                 raise ValueError("settlement fee, refund, and gross payout must be non-negative")
+            if self.gross_settlement_payout > self.quantity:
+                raise ValueError("gross_settlement_payout must not exceed fill_quantity")
+            if self.settlement_refund > self.gross_entry_debit:
+                raise ValueError("settlement_refund must not exceed gross_entry_debit")
+            if self.gross_settlement_payout > 0 and self.settlement_refund > 0:
+                raise ValueError("settlement payout and refund are mutually exclusive")
             expected_net_payout = self.gross_settlement_payout - self.settlement_fee + self.settlement_refund
             if self.net_settlement_payout != expected_net_payout:
                 raise ValueError("net_settlement_payout must equal gross payout minus fee plus refund")
+            if self.net_settlement_payout < 0:
+                raise ValueError("net_settlement_payout must be non-negative")
             if self.fee_net_pnl != self.net_settlement_payout - self.net_entry_debit:
                 raise ValueError("fee_net_pnl must equal net payout minus net entry debit")
 
@@ -521,7 +540,7 @@ _TABLE_STATEMENTS: tuple[tuple[str, str], ...] = (
             ),
             fee_schedule_supporting_artifacts_json TEXT NOT NULL,
             fee_multiplier TEXT NOT NULL,
-            fee_type TEXT NOT NULL CHECK (length(trim(fee_type)) > 0),
+            fee_type TEXT NOT NULL CHECK (fee_type = 'quadratic'),
             fee_multiplier_provenance_sha256 TEXT NOT NULL CHECK (
                 length(fee_multiplier_provenance_sha256) = 64
                 AND fee_multiplier_provenance_sha256 NOT GLOB '*[^0-9a-f]*'
@@ -542,7 +561,9 @@ _TABLE_STATEMENTS: tuple[tuple[str, str], ...] = (
             accumulator_after_dollars TEXT NOT NULL,
             gross_entry_debit_dollars TEXT NOT NULL,
             net_entry_debit_dollars TEXT NOT NULL,
-            settlement_observation_sha256 TEXT,
+            settlement_observation_sha256 TEXT REFERENCES
+                paper_settlement_observations(observation_sha256)
+                ON UPDATE RESTRICT ON DELETE RESTRICT,
             settled_at TEXT,
             settlement_fee_dollars TEXT,
             settlement_refund_dollars TEXT,
@@ -780,16 +801,39 @@ def paper_accounting_schema_contract_matches(conn: sqlite3.Connection) -> bool:
             return False
         _parse_datetime_text("paper_accounting_schema_meta.applied_at", meta[0][4])
         foreign_keys = conn.execute("PRAGMA foreign_key_list(paper_trade_accounting)").fetchall()
-        if len(foreign_keys) != 1:
-            return False
-        foreign_key = foreign_keys[0]
-        if (
-            str(foreign_key[2]) != "paper_trades"
-            or str(foreign_key[3]) != "trade_id"
-            or str(foreign_key[4]) != "trade_id"
-            or str(foreign_key[5]).upper() != "RESTRICT"
-            or str(foreign_key[6]).upper() != "RESTRICT"
-        ):
+        observed_foreign_keys = {
+            (
+                int(foreign_key[1]),
+                str(foreign_key[2]),
+                str(foreign_key[3]),
+                str(foreign_key[4]),
+                str(foreign_key[5]).upper(),
+                str(foreign_key[6]).upper(),
+                str(foreign_key[7]).upper(),
+            )
+            for foreign_key in foreign_keys
+        }
+        expected_foreign_keys = {
+            (
+                0,
+                "paper_trades",
+                "trade_id",
+                "trade_id",
+                "RESTRICT",
+                "RESTRICT",
+                "NONE",
+            ),
+            (
+                0,
+                "paper_settlement_observations",
+                "settlement_observation_sha256",
+                "observation_sha256",
+                "RESTRICT",
+                "RESTRICT",
+                "NONE",
+            ),
+        }
+        if observed_foreign_keys != expected_foreign_keys:
             return False
         return not conn.execute("PRAGMA foreign_key_check").fetchone()
     except (PaperAccountingSchemaError, sqlite3.DatabaseError, TypeError, ValueError):

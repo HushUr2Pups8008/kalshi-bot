@@ -26,6 +26,7 @@ from trading.fees import (
     FeeRole,
     FeeScheduleId,
     fee_coefficient_for,
+    fee_type_for_schedule,
     quote_fee,
 )
 from trading.paper_accounting import (
@@ -95,6 +96,34 @@ def _seed_trade(conn: sqlite3.Connection, trade_id: str = "trade-1") -> None:
     )
 
 
+def _seed_settlement_observation(
+    conn: sqlite3.Connection,
+    observation_sha256: str = "b" * 64,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO paper_settlement_observations (
+            observation_sha256, venue, venue_market_id, alias, outcome,
+            authoritative_outcome_json, canonical_payload_json, payload_sha256,
+            observed_at, effective_at, rules_version, source_id,
+            refund_cents_per_contract, refunds_entry_fee,
+            supersedes_observation_sha256, applied_trade_count,
+            bankroll_before_cents, gross_payout_cents, bankroll_after_cents,
+            applied_at
+        ) VALUES (?, 'kalshi', 'KXTEST-1', 'KXTEST-1', 'yes',
+                  '{}', '{}', ?, ?, ?, 'test-v1', 'test',
+                  NULL, NULL, NULL, 1, '0', '0', '0', ?)
+        """,
+        (
+            observation_sha256,
+            "c" * 64,
+            NOW.isoformat(),
+            NOW.isoformat(),
+            NOW.isoformat(),
+        ),
+    )
+
+
 def _entry_record(**changes: object) -> PaperAccountingRecord:
     quantity = D("0.125")
     price = D("0.3333")
@@ -128,7 +157,7 @@ def _entry_record(**changes: object) -> PaperAccountingRecord:
         price=context.price,
         signed_revenue=context.signed_revenue,
         multiplier=context.multiplier,
-        fee_type="quadratic",
+        fee_type=fee_type_for_schedule(context.schedule_id),
         fee_multiplier_provenance_sha256="d" * 64,
         fee_multiplier_effective_at=NOW - timedelta(minutes=1),
         coefficient=context.coefficient,
@@ -290,8 +319,12 @@ def test_record_rejects_causally_impossible_timestamps_direct_and_persisted() ->
 
 def test_record_requires_exact_fee_multiplier_provenance_direct_and_persisted() -> None:
     entry = _entry_record()
+    assert entry.fee_type == fee_type_for_schedule(entry.schedule_id)
     with pytest.raises(ValueError, match="fee_type is required"):
         replace(entry, fee_type="")
+    for invalid_fee_type in ("bogus", "linear"):
+        with pytest.raises(ValueError, match="fee_type does not match pinned fee formula"):
+            replace(entry, fee_type=invalid_fee_type)
     with pytest.raises(ValueError, match="fee_multiplier_provenance_sha256"):
         replace(entry, fee_multiplier_provenance_sha256="D" * 64)
     with pytest.raises(
@@ -320,6 +353,34 @@ def test_record_requires_exact_fee_multiplier_provenance_direct_and_persisted() 
         values[column] = value
         with pytest.raises(ValueError, match=message):
             PaperAccountingRecord.from_database_row(values)
+
+
+def test_fee_multiplier_effective_at_must_be_inside_schedule_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry = _entry_record()
+    with pytest.raises(ValueError, match="must not precede fee schedule effective_from"):
+        replace(
+            entry,
+            fee_multiplier_effective_at=entry.schedule_id.effective_from - timedelta(microseconds=1),
+        )
+
+    bounded_schedule = replace(
+        entry.schedule_id,
+        effective_to=entry.filled_at - timedelta(seconds=1),
+    )
+    monkeypatch.setattr(
+        "trading.paper_accounting.fee_coefficient_for",
+        lambda _schedule_id, _role: entry.coefficient,
+    )
+    bounded = replace(
+        entry,
+        schedule_id=bounded_schedule,
+        fee_multiplier_effective_at=bounded_schedule.effective_to,
+        validate=False,
+    )
+    with pytest.raises(ValueError, match="must precede fee schedule effective_to"):
+        bounded.validate_record()
 
 
 def test_zero_fee_multiplier_remains_valid_with_exact_provenance() -> None:
@@ -427,6 +488,53 @@ def test_settlement_fields_are_all_null_or_complete_and_exact() -> None:
         replace(settled, net_settlement_payout=D("0.08"))
 
 
+def test_settlement_rejects_negative_net_payout_with_coherent_arithmetic() -> None:
+    settled = _settled_record()
+    negative_net_payout = D("-0.01")
+    with pytest.raises(ValueError, match="net_settlement_payout must be non-negative"):
+        replace(
+            settled,
+            settlement_fee=D("0.11"),
+            net_settlement_payout=negative_net_payout,
+            fee_net_pnl=negative_net_payout - settled.net_entry_debit,
+        )
+
+
+def test_settlement_rejects_over_payout_over_refund_and_mixed_resolution() -> None:
+    settled = _settled_record()
+
+    over_payout = settled.quantity + D("0.0001")
+    over_payout_net = over_payout - settled.settlement_fee
+    with pytest.raises(ValueError, match="gross_settlement_payout must not exceed fill_quantity"):
+        replace(
+            settled,
+            gross_settlement_payout=over_payout,
+            net_settlement_payout=over_payout_net,
+            fee_net_pnl=over_payout_net - settled.net_entry_debit,
+        )
+
+    over_refund = settled.gross_entry_debit + D("0.0001")
+    with pytest.raises(ValueError, match="settlement_refund must not exceed gross_entry_debit"):
+        replace(
+            settled,
+            settlement_fee=D("0"),
+            settlement_refund=over_refund,
+            gross_settlement_payout=D("0"),
+            net_settlement_payout=over_refund,
+            fee_net_pnl=over_refund - settled.net_entry_debit,
+        )
+
+    mixed_refund = D("0.01")
+    mixed_net = settled.gross_settlement_payout - settled.settlement_fee + mixed_refund
+    with pytest.raises(ValueError, match="payout and refund are mutually exclusive"):
+        replace(
+            settled,
+            settlement_refund=mixed_refund,
+            net_settlement_payout=mixed_net,
+            fee_net_pnl=mixed_net - settled.net_entry_debit,
+        )
+
+
 def test_schema_requires_exact_gross_settlement_v1(tmp_path: Path) -> None:
     conn = sqlite3.connect(tmp_path / "missing-gross.db")
     try:
@@ -454,8 +562,21 @@ def test_schema_contract_meta_uniques_and_immutable_version(tmp_path: Path) -> N
             PAPER_ACCOUNTING_DDL_SHA256,
             PLAN_SHA,
         )
+        table_sql = conn.execute("SELECT sql FROM sqlite_schema WHERE name='paper_trade_accounting'").fetchone()[0]
+        assert "CHECK (fee_type = 'quadratic')" in table_sql
 
         _seed_trade(conn)
+        invalid_values = _entry_record().to_database_values()
+        invalid_values["fee_type"] = "linear"
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO paper_trade_accounting ("
+                + ",".join(invalid_values)
+                + ") VALUES ("
+                + ",".join("?" for _ in invalid_values)
+                + ")",
+                tuple(invalid_values.values()),
+            )
         _insert_record(conn, _entry_record())
         with pytest.raises(sqlite3.IntegrityError, match="immutable"):
             conn.execute("UPDATE paper_trade_accounting SET accounting_version=2 WHERE entry_request_id='req-1'")
@@ -600,6 +721,14 @@ def test_settlement_transitions_once_then_is_database_immutable(tmp_path: Path) 
             "net_settlement_payout_dollars",
             "fee_net_pnl_dollars",
         )
+        with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
+            conn.execute(
+                "UPDATE paper_trade_accounting SET "
+                + ",".join(f"{column}=?" for column in settlement_columns)
+                + " WHERE entry_request_id='req-1'",
+                tuple(values[column] for column in settlement_columns),
+            )
+        _seed_settlement_observation(conn)
         conn.execute(
             "UPDATE paper_trade_accounting SET "
             + ",".join(f"{column}=?" for column in settlement_columns)
@@ -917,6 +1046,7 @@ def test_noop_migration_rechecks_accounting_rows_under_writer_lock(
         noop_plan = plan_paper_accounting_schema(conn, db)
 
     conn = _connect(db)
+    _seed_settlement_observation(conn)
     settled_values = _settled_record(entry).to_database_values()
     settlement_columns = (
         "settlement_observation_sha256",
