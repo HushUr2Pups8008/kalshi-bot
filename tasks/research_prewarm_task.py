@@ -8,6 +8,7 @@ return cycle results. It does not blend, size, gate, or execute trades.
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 import uuid
 from dataclasses import dataclass
@@ -46,6 +47,69 @@ ResearchPrewarmMarketResultSink = Callable[
     ["ResearchPrewarmResult", Any],
     Awaitable[None],
 ]
+# Decision-grade research can issue seven required queries plus one counter query.
+# Seven 1.5s gaps plus the observed 0.6s healthy request leaves 0.9s in its 12s budget.
+_RESEARCH_PREWARM_PROVIDER_MIN_START_INTERVAL_SECONDS = 1.5
+
+
+class _ResearchPrewarmProviderAdmission:
+    """Serialize and pace prewarm provider starts across task instances."""
+
+    def __init__(
+        self,
+        *,
+        min_start_interval_seconds: float,
+        clock: Callable[[], float] | None = None,
+        sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
+        interval = float(min_start_interval_seconds)
+        if not math.isfinite(interval) or interval < 0:
+            raise ValueError("provider start interval must be finite and non-negative")
+        self._min_start_interval_seconds = interval
+        self._clock = clock
+        self._sleeper = sleeper
+        self._lock = asyncio.Lock()
+        self._next_start = 0.0
+
+    async def run(self, provider: SearchProvider, query: Any) -> Any:
+        async with self._lock:
+            clock = self._clock or asyncio.get_running_loop().time
+            delay = self._next_start - clock()
+            if delay > 0:
+                await self._sleeper(delay)
+            started_at = clock()
+            self._next_start = (
+                max(started_at, self._next_start)
+                + self._min_start_interval_seconds
+            )
+            return await provider(query)
+
+
+_RESEARCH_PREWARM_PROVIDER_ADMISSION_ATTRIBUTE = (
+    "_kalshi_research_prewarm_provider_admission"
+)
+
+
+def _get_research_prewarm_provider_admission() -> _ResearchPrewarmProviderAdmission:
+    loop = asyncio.get_running_loop()
+    admission = getattr(
+        loop,
+        _RESEARCH_PREWARM_PROVIDER_ADMISSION_ATTRIBUTE,
+        None,
+    )
+    if admission is None:
+        admission = _ResearchPrewarmProviderAdmission(
+            min_start_interval_seconds=(
+                _RESEARCH_PREWARM_PROVIDER_MIN_START_INTERVAL_SECONDS
+            ),
+            clock=loop.time,
+        )
+        setattr(
+            loop,
+            _RESEARCH_PREWARM_PROVIDER_ADMISSION_ATTRIBUTE,
+            admission,
+        )
+    return admission
 
 
 class ResearchPrewarmError(Exception):
@@ -98,6 +162,12 @@ class ResearchPrewarmTask:
         self._last_attempted_by_ticker: dict[str, float] = {}
         self.result_sink = result_sink or _write_research_prewarm_result
         self.market_result_sink = market_result_sink
+
+    async def _search_provider_with_admission(self, query: Any) -> Any:
+        return await _get_research_prewarm_provider_admission().run(
+            self.search_provider,
+            query,
+        )
 
     async def process_market(
         self,
@@ -173,7 +243,7 @@ class ResearchPrewarmTask:
                 yes_ask=_ask_probability(market, "yes_ask_cents", "yes_ask"),
                 no_ask=_ask_probability(market, "no_ask_cents", "no_ask"),
                 live_mode=False,
-                search_provider=self.search_provider,
+                search_provider=self._search_provider_with_admission,
                 direct_fetcher=self.direct_fetcher,
                 adjudicator=self.adjudicator,
                 dossier_store=self.store,

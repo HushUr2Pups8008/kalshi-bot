@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+import gc
 from types import SimpleNamespace
 import sqlite3
+import weakref
 
 import pytest
 
@@ -19,6 +21,7 @@ from tasks.research_prewarm_task import (
     ResearchPrewarmError,
     ResearchPrewarmResult,
     ResearchPrewarmTask,
+    _ResearchPrewarmProviderAdmission,
     _has_independent_source_path,
     _prewarm_news,
     _write_research_prewarm_result,
@@ -132,13 +135,32 @@ def test_prewarm_source_path_requires_source_class_diversity():
 
 
 @pytest.mark.asyncio
-async def test_prewarm_process_market_persists_research_run_and_evidence(tmp_path):
+async def test_prewarm_process_market_persists_research_run_and_evidence(
+    monkeypatch,
+    tmp_path,
+):
     db_path = tmp_path / "research_dossier.db"
     store = ResearchDossierStore(db_path)
     await store.initialize()
     retrieved_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    provider_starts: list[float] = []
+    provider_completions = 0
+    loop = asyncio.get_running_loop()
+    admission = _ResearchPrewarmProviderAdmission(
+        min_start_interval_seconds=0.015,
+        clock=loop.time,
+    )
+    monkeypatch.setattr(
+        research_prewarm_task_module,
+        "_get_research_prewarm_provider_admission",
+        lambda: admission,
+    )
 
     async def search_provider(_query):
+        nonlocal provider_completions
+        provider_starts.append(loop.time())
+        await asyncio.sleep(0.006)
+        provider_completions += 1
         return [
             ResearchEvidence(
                 source_class="resolution_source",
@@ -176,6 +198,7 @@ async def test_prewarm_process_market_persists_research_run_and_evidence(tmp_pat
         store=store,
         search_provider=search_provider,
         adjudicator=adjudicator,
+        research_timeout_seconds=0.15,
     )
 
     result = await task.process_market(_market())
@@ -183,6 +206,15 @@ async def test_prewarm_process_market_persists_research_run_and_evidence(tmp_pat
     assert result.status == ResearchStatus.NEEDS_RESEARCH.value
     assert result.attempted is True
     assert result.evidence_count == 2
+    assert provider_completions == 8
+    assert len(provider_starts) == 8
+    assert all(
+        later - earlier >= 0.014
+        for earlier, later in zip(provider_starts, provider_starts[1:])
+    )
+    # Seven required-intent starts plus the post-adjudication counter query.
+    production_margin = 12.0 - (7 * 1.5 + 0.6)
+    assert production_margin == pytest.approx(0.9)
     with sqlite3.connect(db_path) as conn:
         dossier = conn.execute(
             """
@@ -362,6 +394,447 @@ async def test_prewarm_default_serializes_local_adjudication(tmp_path):
 
     assert len(results) == 3
     assert max_active == 1
+
+
+@pytest.mark.asyncio
+async def test_prewarm_backpressures_query_fanout_before_transport_admission(
+    monkeypatch,
+    tmp_path,
+):
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    transport_slots = asyncio.BoundedSemaphore(4)
+    provider_started: list[str] = []
+    provider_completed: list[str] = []
+    provider_active = 0
+    provider_peak = 0
+    now = 0.0
+
+    async def advance_clock(delay: float) -> None:
+        nonlocal now
+        now += delay
+        await asyncio.sleep(0)
+
+    admission = _ResearchPrewarmProviderAdmission(
+        min_start_interval_seconds=1.5,
+        clock=lambda: now,
+        sleeper=advance_clock,
+    )
+    monkeypatch.setattr(
+        research_prewarm_task_module,
+        "_get_research_prewarm_provider_admission",
+        lambda: admission,
+    )
+
+    async def search_provider(query: ResearchQuery):
+        nonlocal provider_active, provider_peak
+        provider_started.append(query.query)
+        if transport_slots.locked():
+            raise TimeoutError("transport deadline expired before DNS")
+        async with transport_slots:
+            provider_active += 1
+            provider_peak = max(provider_peak, provider_active)
+            await asyncio.sleep(0)
+            provider_active -= 1
+        provider_completed.append(query.query)
+        return []
+
+    async def research_gate(_news, _market, **kwargs):
+        queries = [
+            ResearchQuery(
+                f"provider-query-{index}",
+                "corroboration",
+                "reputable_secondary",
+            )
+            for index in range(6)
+        ]
+        results = await asyncio.gather(
+            *(kwargs["search_provider"](query) for query in queries),
+            return_exceptions=True,
+        )
+        assert not [result for result in results if isinstance(result, BaseException)]
+        return _decision_grade_verdict()
+
+    task = ResearchPrewarmTask(
+        store=store,
+        research_gate=research_gate,
+        search_provider=search_provider,
+    )
+
+    result = await task.process_market(_market("KXRESEARCH-BACKPRESSURE"))
+
+    assert result.status == ResearchStatus.DECISION_GRADE_CANDIDATE.value
+    assert provider_peak == 1
+    assert provider_started == [f"provider-query-{index}" for index in range(6)]
+    assert provider_completed == provider_started
+    assert now == 7.5
+
+
+@pytest.mark.asyncio
+async def test_prewarm_shares_provider_admission_across_task_instances(
+    monkeypatch,
+    tmp_path,
+):
+    transport_slots = asyncio.BoundedSemaphore(4)
+    release = asyncio.Event()
+    provider_active = 0
+    provider_peak = 0
+    completed: list[str] = []
+    admission = _ResearchPrewarmProviderAdmission(min_start_interval_seconds=0.0)
+    monkeypatch.setattr(
+        research_prewarm_task_module,
+        "_get_research_prewarm_provider_admission",
+        lambda: admission,
+    )
+
+    async def search_provider(query: ResearchQuery):
+        nonlocal provider_active, provider_peak
+        if transport_slots.locked():
+            raise TimeoutError("transport deadline expired before DNS")
+        async with transport_slots:
+            provider_active += 1
+            provider_peak = max(provider_peak, provider_active)
+            await release.wait()
+            provider_active -= 1
+        completed.append(query.query)
+        return []
+
+    async def research_gate(_news, market, **kwargs):
+        queries = [
+            ResearchQuery(
+                f"{market.ticker}-query-{index}",
+                "corroboration",
+                "reputable_secondary",
+            )
+            for index in range(3)
+        ]
+        results = await asyncio.gather(
+            *(kwargs["search_provider"](query) for query in queries),
+            return_exceptions=True,
+        )
+        if failures := [
+            result for result in results if isinstance(result, BaseException)
+        ]:
+            raise failures[0]
+        return _decision_grade_verdict()
+
+    first = ResearchPrewarmTask(
+        store=ResearchDossierStore(tmp_path / "first.db"),
+        research_gate=research_gate,
+        search_provider=search_provider,
+    )
+    second = ResearchPrewarmTask(
+        store=ResearchDossierStore(tmp_path / "second.db"),
+        research_gate=research_gate,
+        search_provider=search_provider,
+    )
+    runs = [
+        asyncio.create_task(first.process_market(_market("KXRESEARCH-FIRST"))),
+        asyncio.create_task(second.process_market(_market("KXRESEARCH-SECOND"))),
+    ]
+    while provider_active < 1 and not any(run.done() for run in runs):
+        await asyncio.sleep(0)
+
+    assert provider_active == 1
+    assert provider_peak == 1
+    release.set()
+    results = await asyncio.gather(*runs)
+
+    assert len(results) == 2
+    assert len(completed) == 6
+    assert len(set(completed)) == 6
+
+
+@pytest.mark.asyncio
+async def test_prewarm_provider_admission_releases_all_slots_on_cancellation(
+    monkeypatch,
+    tmp_path,
+):
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    release = asyncio.Event()
+    provider_active = 0
+    provider_peak = 0
+    provider_started: list[str] = []
+    spawned: list[asyncio.Task] = []
+    admission = _ResearchPrewarmProviderAdmission(min_start_interval_seconds=0.0)
+    monkeypatch.setattr(
+        research_prewarm_task_module,
+        "_get_research_prewarm_provider_admission",
+        lambda: admission,
+    )
+
+    async def search_provider(query: ResearchQuery):
+        nonlocal provider_active, provider_peak
+        provider_started.append(query.query)
+        provider_active += 1
+        provider_peak = max(provider_peak, provider_active)
+        try:
+            await release.wait()
+        finally:
+            provider_active -= 1
+        return []
+
+    async def research_gate(_news, _market, **kwargs):
+        queries = [
+            ResearchQuery(
+                f"provider-query-{index}",
+                "corroboration",
+                "reputable_secondary",
+            )
+            for index in range(8)
+        ]
+        spawned.extend(
+            asyncio.create_task(
+                kwargs["search_provider"](query),
+                name=query.query,
+            )
+            for query in queries
+        )
+        return await asyncio.gather(*spawned)
+
+    task = ResearchPrewarmTask(
+        store=store,
+        research_gate=research_gate,
+        search_provider=search_provider,
+    )
+    run = asyncio.create_task(
+        task.process_market(_market("KXRESEARCH-CANCELLED"))
+    )
+    while provider_active < 1:
+        await asyncio.sleep(0)
+
+    run.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await run
+    await asyncio.sleep(0)
+
+    assert provider_peak == 1
+    assert provider_active == 0
+    assert provider_started == ["provider-query-0"]
+    assert all(query_task.done() for query_task in spawned)
+
+
+@pytest.mark.parametrize("interval", [-1.0, float("inf"), float("nan")])
+def test_prewarm_provider_admission_rejects_invalid_intervals(interval):
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        _ResearchPrewarmProviderAdmission(min_start_interval_seconds=interval)
+
+
+@pytest.mark.asyncio
+async def test_prewarm_provider_admission_is_shared_by_live_loop():
+    first = research_prewarm_task_module._get_research_prewarm_provider_admission()
+    second = research_prewarm_task_module._get_research_prewarm_provider_admission()
+
+    assert second is first
+
+
+def test_prewarm_provider_admission_does_not_retain_closed_event_loops(monkeypatch):
+    references: list[
+        tuple[
+            weakref.ReferenceType[asyncio.AbstractEventLoop],
+            weakref.ReferenceType[_ResearchPrewarmProviderAdmission],
+        ]
+    ] = []
+    monkeypatch.setattr(
+        research_prewarm_task_module,
+        "_RESEARCH_PREWARM_PROVIDER_MIN_START_INTERVAL_SECONDS",
+        0.0,
+    )
+
+    async def contend_for_admission():
+        loop = asyncio.get_running_loop()
+        admission = (
+            research_prewarm_task_module._get_research_prewarm_provider_admission()
+        )
+        release = asyncio.Event()
+        started = asyncio.Event()
+
+        async def provider(query: str):
+            if query == "first":
+                started.set()
+                await release.wait()
+            return query
+
+        first = asyncio.create_task(admission.run(provider, "first"))
+        await started.wait()
+        second = asyncio.create_task(admission.run(provider, "second"))
+        await asyncio.sleep(0)
+        release.set()
+        await asyncio.gather(first, second)
+        return weakref.ref(loop), weakref.ref(admission)
+
+    for _ in range(2):
+        references.append(asyncio.run(contend_for_admission()))
+    gc.collect()
+
+    assert not hasattr(
+        research_prewarm_task_module,
+        "_RESEARCH_PREWARM_PROVIDER_ADMISSIONS",
+    )
+    assert all(loop_ref() is None for loop_ref, _ in references)
+    assert all(admission_ref() is None for _, admission_ref in references)
+
+
+@pytest.mark.asyncio
+async def test_prewarm_provider_admission_is_fifo_and_spaces_starts_after_errors():
+    now = 0.0
+    sleeps: list[float] = []
+    starts: list[tuple[str, float]] = []
+
+    async def advance_clock(delay: float) -> None:
+        nonlocal now
+        sleeps.append(delay)
+        now += delay
+        await asyncio.sleep(0)
+
+    async def provider(query: str):
+        starts.append((query, now))
+        if query == "query-2":
+            raise RuntimeError("isolated provider failure")
+        await asyncio.sleep(0)
+        return query
+
+    admission = _ResearchPrewarmProviderAdmission(
+        min_start_interval_seconds=1.5,
+        clock=lambda: now,
+        sleeper=advance_clock,
+    )
+
+    results = await asyncio.gather(
+        *(admission.run(provider, f"query-{index}") for index in range(6)),
+        return_exceptions=True,
+    )
+
+    assert starts == [
+        ("query-0", 0.0),
+        ("query-1", 1.5),
+        ("query-2", 3.0),
+        ("query-3", 4.5),
+        ("query-4", 6.0),
+        ("query-5", 7.5),
+    ]
+    assert sleeps == [1.5] * 5
+    assert isinstance(results[2], RuntimeError)
+    assert [result for result in results if not isinstance(result, BaseException)] == [
+        "query-0",
+        "query-1",
+        "query-3",
+        "query-4",
+        "query-5",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_prewarm_gate_budget_cancels_queued_provider_admissions(
+    monkeypatch,
+    tmp_path,
+):
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    provider_started: list[str] = []
+    provider_active = 0
+    admission = _ResearchPrewarmProviderAdmission(min_start_interval_seconds=1.5)
+    monkeypatch.setattr(
+        research_prewarm_task_module,
+        "_get_research_prewarm_provider_admission",
+        lambda: admission,
+    )
+
+    async def search_provider(query: ResearchQuery):
+        nonlocal provider_active
+        provider_started.append(query.query)
+        provider_active += 1
+        try:
+            await asyncio.Event().wait()
+        finally:
+            provider_active -= 1
+
+    async def research_gate(_news, _market, **kwargs):
+        queries = [
+            ResearchQuery(
+                f"provider-query-{index}",
+                "corroboration",
+                "reputable_secondary",
+            )
+            for index in range(6)
+        ]
+        async with asyncio.timeout(0.01):
+            await asyncio.gather(
+                *(kwargs["search_provider"](query) for query in queries)
+            )
+
+    task = ResearchPrewarmTask(
+        store=store,
+        research_gate=research_gate,
+        search_provider=search_provider,
+    )
+
+    with pytest.raises(ResearchPrewarmError) as exc_info:
+        await task.process_market(_market("KXRESEARCH-BUDGET"))
+    await asyncio.sleep(0.02)
+
+    assert isinstance(exc_info.value.__cause__, TimeoutError)
+    assert provider_started == ["provider-query-0"]
+    assert provider_active == 0
+
+
+@pytest.mark.asyncio
+async def test_prewarm_slow_provider_starts_at_most_three_queries_inside_gate_budget(
+    monkeypatch,
+    tmp_path,
+):
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    provider_started: list[str] = []
+    provider_active = 0
+    admission = _ResearchPrewarmProviderAdmission(min_start_interval_seconds=0.015)
+    monkeypatch.setattr(
+        research_prewarm_task_module,
+        "_get_research_prewarm_provider_admission",
+        lambda: admission,
+    )
+
+    async def search_provider(query: ResearchQuery):
+        nonlocal provider_active
+        provider_started.append(query.query)
+        provider_active += 1
+        try:
+            await asyncio.sleep(0.05)
+        finally:
+            provider_active -= 1
+        raise TimeoutError("scaled five-second provider timeout")
+
+    async def research_gate(_news, _market, **kwargs):
+        queries = [
+            ResearchQuery(
+                f"provider-query-{index}",
+                "corroboration",
+                "reputable_secondary",
+            )
+            for index in range(6)
+        ]
+        async with asyncio.timeout(0.12):
+            await asyncio.gather(
+                *(kwargs["search_provider"](query) for query in queries),
+                return_exceptions=True,
+            )
+
+    task = ResearchPrewarmTask(
+        store=store,
+        research_gate=research_gate,
+        search_provider=search_provider,
+    )
+
+    with pytest.raises(ResearchPrewarmError) as exc_info:
+        await task.process_market(_market("KXRESEARCH-SLOW-PROVIDER"))
+    starts_at_budget = tuple(provider_started)
+    await asyncio.sleep(0.06)
+
+    assert isinstance(exc_info.value.__cause__, TimeoutError)
+    assert 1 <= len(provider_started) <= 3
+    assert tuple(provider_started) == starts_at_budget
+    assert provider_active == 0
 
 
 @pytest.mark.asyncio
