@@ -1328,6 +1328,7 @@ class TradingBot:
             capture_weather=NwsPublicClient(),
             label_markets=KalshiPublicMarketDataReader(),
             label_weather=NwsPublicClient(),
+            runtime_logger=log,
         )
         return asyncio.create_task(
             supervisor.run(),

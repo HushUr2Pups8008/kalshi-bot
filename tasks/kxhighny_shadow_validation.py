@@ -375,10 +375,7 @@ def normalize_complete_ladder(event: RetrievedEvent, target_date: date) -> tuple
         raise LadderValidationError("event market enumeration is incomplete")
     if len(event.markets) < 3:
         raise LadderValidationError("event ladder requires two tails and at least one bounded range")
-    common_sources = (
-        event.markets[0].fingerprints.rules_source,
-        event.markets[0].fingerprints.settlement_source,
-    )
+    common_settlement_source = event.markets[0].fingerprints.settlement_source
     for item in event.markets:
         _require_aware(item.close_time, LadderValidationError, "market close_time")
         _require_aware(item.price_retrieved_at, LadderValidationError, "price_retrieved_at")
@@ -394,8 +391,8 @@ def normalize_complete_ladder(event: RetrievedEvent, target_date: date) -> tuple
             raise LadderValidationError("event retrieval predates a sibling quote")
         if not all(asdict(item.fingerprints).values()):
             raise LadderValidationError("contract, rules, and settlement fingerprints are required")
-        if (item.fingerprints.rules_source, item.fingerprints.settlement_source) != common_sources:
-            raise LadderValidationError("rules or settlement-source fingerprints differ")
+        if item.fingerprints.settlement_source != common_settlement_source:
+            raise LadderValidationError("settlement-source fingerprints differ")
     quotes = tuple(
         _quote_from_market(item)
         for item in sorted(

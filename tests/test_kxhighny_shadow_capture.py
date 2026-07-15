@@ -72,7 +72,7 @@ def event(
             is_upper_tail=is_upper,
             fingerprints=Fingerprints(
                 contract=f"contract-{suffix}",
-                rules_source="rules-v1",
+                rules_source=f"rules-{suffix}",
                 settlement_source="settlement-v1",
             ),
             yes_bid_cents=20,
@@ -421,7 +421,9 @@ async def test_cycle_fetches_series_once_and_processes_at_most_two_events_sequen
 
 
 @pytest.mark.asyncio
-async def test_run_initializes_lazily_and_uses_300_second_cadence() -> None:
+async def test_run_initializes_lazily_and_uses_300_second_cadence(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     store = FakeStore()
     markets = FakeMarkets(())
     weather = FakeWeather()
@@ -435,11 +437,17 @@ async def test_run_initializes_lazily_and_uses_300_second_cadence() -> None:
     capture = task(store=store, markets=markets, weather=weather, sleep=stop_after_sleep)
     assert store.initialized == 0
 
+    caplog.set_level(logging.INFO, logger="tasks.kxhighny_shadow_capture")
     await capture.run(stop_event)
 
     assert store.initialized == 1
     assert markets.series_calls == 1
     assert sleeps == [300]
+    assert any(
+        record.getMessage()
+        == "KXHIGHNY weather shadow capture cycle attempted=0 captured=0 skipped=0"
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio

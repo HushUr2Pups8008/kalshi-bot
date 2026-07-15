@@ -75,6 +75,7 @@ class WeatherShadowCaptureTask:
         capture_weather: NwsPublicClient,
         label_markets: PublicMarketDataReader,
         label_weather: NwsPublicClient,
+        runtime_logger: logging.Logger | None = None,
         model_version: str = WEATHER_SHADOW_CAPTURE_MODEL_VERSION,
         fee_schedule_version: str = WEATHER_SHADOW_FEE_SCHEDULE_VERSION,
         now: Callable[[], datetime] = utc_now,
@@ -85,6 +86,7 @@ class WeatherShadowCaptureTask:
         self._capture_weather = capture_weather
         self._label_markets = label_markets
         self._label_weather = label_weather
+        self._logger = runtime_logger or logger
         self._model_version = model_version
         self._fee_schedule_version = fee_schedule_version
         self._now = now
@@ -107,37 +109,50 @@ class WeatherShadowCaptureTask:
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
-                    logger.warning(
+                    self._logger.warning(
                         "KXHIGHNY weather shadow failed stage=initialize error=%s",
                         type(exc).__name__,
                     )
                 else:
                     initialized = True
+                    self._logger.info("KXHIGHNY weather shadow initialized")
                 if not initialized:
                     if stop_event is None or not stop_event.is_set():
                         await self._sleep(CAPTURE_CADENCE_SECONDS)
                     continue
             if stop_event is not None and stop_event.is_set():
                 break
-            await asyncio.gather(
+            capture_result, _ = await asyncio.gather(
                 self._run_lane("capture", self.run_capture_once),
                 self._run_lane("label", self.run_label_once),
             )
+            if isinstance(capture_result, CaptureCycleResult):
+                self._logger.info(
+                    "KXHIGHNY weather shadow capture cycle "
+                    "attempted=%d captured=%d skipped=%d",
+                    capture_result.attempted,
+                    capture_result.captured,
+                    capture_result.skipped,
+                )
             if stop_event is None or not stop_event.is_set():
                 await self._sleep(CAPTURE_CADENCE_SECONDS)
 
-    @staticmethod
-    async def _run_lane(name: str, operation: Callable[[], Awaitable[object]]) -> None:
+    async def _run_lane(
+        self,
+        name: str,
+        operation: Callable[[], Awaitable[object]],
+    ) -> object | None:
         try:
-            await operation()
+            return await operation()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning(
+            self._logger.warning(
                 "KXHIGHNY weather shadow %s cycle failed (%s)",
                 name,
                 type(exc).__name__,
             )
+            return None
 
     async def run_label_once(self) -> None:
         """Revalidate captured outcome targets within an independent budget."""
@@ -151,7 +166,7 @@ class WeatherShadowCaptureTask:
                     except asyncio.CancelledError:
                         raise
                     except Exception as exc:
-                        logger.warning(
+                        self._logger.warning(
                             "KXHIGHNY weather shadow event label failed (%s)",
                             type(exc).__name__,
                         )
@@ -159,7 +174,7 @@ class WeatherShadowCaptureTask:
                         if plan is not None:
                             plans.append(plan)
         except TimeoutError:
-            logger.warning("KXHIGHNY weather shadow label budget expired")
+            self._logger.warning("KXHIGHNY weather shadow label budget expired")
             return
         for plan in plans:
             await self._persist_label_plan(plan)
@@ -170,7 +185,7 @@ class WeatherShadowCaptureTask:
             async with asyncio.timeout(LABEL_BUILD_BUDGET_SECONDS):
                 plan = await self._prepare_label(target)
         except TimeoutError:
-            logger.warning("KXHIGHNY weather shadow event label budget expired")
+            self._logger.warning("KXHIGHNY weather shadow event label budget expired")
             return
         if plan is not None:
             await self._persist_label_plan(plan)
@@ -289,8 +304,25 @@ class WeatherShadowCaptureTask:
                         prepared.append(await self._prepare_capture(event, horizon))
                     except asyncio.CancelledError:
                         raise
+                    except WeatherShadowValidationError as exc:
+                        self._logger.warning(
+                            "KXHIGHNY weather shadow event capture failed "
+                            "(%s: %s)",
+                            type(exc).__name__,
+                            exc,
+                        )
+                        prepared.append(
+                            _PreparedCapture(
+                                event.event_ticker,
+                                horizon,
+                                None,
+                                CaptureAttemptResult(
+                                    event.event_ticker, horizon, False, "ineligible"
+                                ),
+                            )
+                        )
                     except Exception as exc:
-                        logger.warning(
+                        self._logger.warning(
                             "KXHIGHNY weather shadow event capture failed (%s)",
                             type(exc).__name__,
                         )
@@ -305,7 +337,7 @@ class WeatherShadowCaptureTask:
                             )
                         )
         except TimeoutError:
-            logger.warning("KXHIGHNY weather shadow network/build budget expired")
+            self._logger.warning("KXHIGHNY weather shadow network/build budget expired")
             return CaptureCycleResult(
                 attempted=attempted,
                 captured=0,
@@ -323,7 +355,7 @@ class WeatherShadowCaptureTask:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.warning(
+                self._logger.warning(
                     "KXHIGHNY weather shadow persistence failed (%s)",
                     type(exc).__name__,
                 )

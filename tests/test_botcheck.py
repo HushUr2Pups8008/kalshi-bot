@@ -364,6 +364,73 @@ def test_weather_shadow_status_enabled_missing_does_not_create_db(
     assert not db_path.exists()
 
 
+def test_weather_shadow_status_uses_running_bot_environment(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv("ENABLE_WEATHER_SHADOW_CAPTURE", raising=False)
+    (tmp_path / ".env").write_text(
+        "ENABLE_WEATHER_SHADOW_CAPTURE=false\n",
+        encoding="utf-8",
+    )
+    proc = _bot_proc(pid=2468)
+    monkeypatch.setattr(
+        botcheck,
+        "run_command",
+        lambda args: (
+            "/python main.py ENABLE_WEATHER_SHADOW_CAPTURE=true "
+            "UNRELATED_SECRET=not-reported"
+        ),
+    )
+
+    botcheck.print_weather_shadow_status(tmp_path, current_proc=proc)
+
+    assert capsys.readouterr().out.strip() == (
+        "weather_shadow: on (runtime-process-env) db=missing"
+    )
+
+
+def test_weather_shadow_status_treats_absent_running_flag_as_off(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv("ENABLE_WEATHER_SHADOW_CAPTURE", raising=False)
+    (tmp_path / ".env").write_text(
+        "ENABLE_WEATHER_SHADOW_CAPTURE=true\n",
+        encoding="utf-8",
+    )
+    proc = _bot_proc(pid=2468)
+    monkeypatch.setattr(
+        botcheck,
+        "run_command",
+        lambda args: "/python main.py UNRELATED_FLAG=true",
+    )
+
+    botcheck.print_weather_shadow_status(tmp_path, current_proc=proc)
+
+    assert capsys.readouterr().out.strip() == (
+        "weather_shadow: off (runtime-process-env)"
+    )
+
+
+def test_weather_shadow_status_reports_unreadable_running_environment(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("ENABLE_WEATHER_SHADOW_CAPTURE", "true")
+    proc = _bot_proc(pid=2468)
+    monkeypatch.setattr(botcheck, "run_command", lambda args: "")
+
+    botcheck.print_weather_shadow_status(tmp_path, current_proc=proc)
+
+    assert capsys.readouterr().out.strip() == (
+        "weather_shadow: unknown (runtime-process-env-unreadable)"
+    )
+
+
 def test_weather_shadow_status_enabled_reads_only_bounded_health(
     capsys,
     tmp_path,
