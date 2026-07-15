@@ -11,13 +11,16 @@ import csv
 from email.utils import parsedate_to_datetime
 import hashlib
 import html
+import http.client
 import io
 import json
 import math
 import os
 import re
+import socket
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
@@ -3355,12 +3358,82 @@ async def _reconcile_persisted_verdict(
     )
 
 
+def _create_ipv4_connection(
+    address: tuple[str, int],
+    timeout: float,
+    source_address: tuple[str, int] | None = None,
+) -> socket.socket:
+    last_error: OSError | None = None
+    for family, socktype, proto, _canonname, sockaddr in socket.getaddrinfo(
+        address[0],
+        address[1],
+        socket.AF_INET,
+        socket.SOCK_STREAM,
+    ):
+        sock = socket.socket(family, socktype, proto)
+        try:
+            sock.settimeout(timeout)
+            if source_address is not None:
+                sock.bind(source_address)
+            sock.connect(sockaddr)
+            return sock
+        except OSError as exc:
+            last_error = exc
+            sock.close()
+    if last_error is not None:
+        raise last_error
+    raise OSError("Google News RSS has no IPv4 address")
+
+
+def _fetch_google_news_rss_ipv4(
+    url: str,
+    *,
+    timeout: float,
+    max_bytes: int,
+) -> bytes:
+    parsed = urllib.parse.urlsplit(url)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "news.google.com"
+        or parsed.port not in {None, 443}
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise ValueError("Google News RSS transport requires the canonical HTTPS host")
+    if timeout <= 0 or max_bytes <= 0:
+        raise ValueError("Google News RSS transport bounds must be positive")
+
+    connection = http.client.HTTPSConnection(
+        parsed.hostname,
+        port=parsed.port or 443,
+        timeout=timeout,
+    )
+    connection._create_connection = _create_ipv4_connection  # type: ignore[attr-defined]
+    request_path = urllib.parse.urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
+    try:
+        connection.request(
+            "GET",
+            request_path,
+            headers={"User-Agent": "kalshi-bot-research/1.0"},
+        )
+        response = connection.getresponse()
+        if response.status != 200:
+            raise urllib.error.HTTPError(
+                url,
+                response.status,
+                response.reason,
+                response.headers,
+                None,
+            )
+        return response.read(max_bytes)
+    finally:
+        connection.close()
+
+
 def _rss_search(query: ResearchQuery, *, timeout: float = 5.0, limit: int = 3) -> list[ResearchEvidence]:
     params = urllib.parse.urlencode({"q": query.query, "hl": "en-US", "gl": "US", "ceid": "US:en"})
     url = f"https://news.google.com/rss/search?{params}"
-    request = urllib.request.Request(url, headers={"User-Agent": "kalshi-bot-research/1.0"})
-    with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310
-        raw = response.read(300_000)
+    raw = _fetch_google_news_rss_ipv4(url, timeout=timeout, max_bytes=300_000)
     root = ET.fromstring(raw)
     out: list[ResearchEvidence] = []
     retrieved_at = _utc_now_iso()

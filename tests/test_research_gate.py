@@ -5358,6 +5358,14 @@ async def test_strict_research_gate_does_not_spend_budget_on_raw_pdf_or_homepage
     assert verdict.skip_reason == "insufficient_corroboration"
 
 
+def _stub_google_news_rss(monkeypatch, rss: bytes) -> None:
+    monkeypatch.setattr(
+        research_gate_module,
+        "_fetch_google_news_rss_ipv4",
+        lambda *_args, **_kwargs: rss,
+    )
+
+
 def test_rss_search_does_not_treat_wrong_domain_as_resolution_source(monkeypatch):
     rss = b"""<?xml version="1.0" encoding="UTF-8"?>
     <rss><channel><item>
@@ -5369,17 +5377,7 @@ def test_rss_search_does_not_treat_wrong_domain_as_resolution_source(monkeypatch
     </item></channel></rss>
     """
 
-    class _Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return None
-
-        def read(self, _limit):
-            return rss
-
-    monkeypatch.setattr(urllib.request, "urlopen", lambda *_args, **_kwargs: _Response())
+    _stub_google_news_rss(monkeypatch, rss)
 
     evidence = _rss_search(
         ResearchQuery(
@@ -5405,17 +5403,7 @@ def test_rss_search_uses_source_label_to_match_site_scoped_resolution(monkeypatc
     </item></channel></rss>
     """
 
-    class _Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return None
-
-        def read(self, _limit):
-            return rss
-
-    monkeypatch.setattr(urllib.request, "urlopen", lambda *_args, **_kwargs: _Response())
+    _stub_google_news_rss(monkeypatch, rss)
 
     evidence = _rss_search(
         ResearchQuery(
@@ -5441,17 +5429,7 @@ def test_rss_search_uses_publisher_url_to_match_site_scoped_official_source(
     </item></channel></rss>
     """
 
-    class _Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return None
-
-        def read(self, _limit):
-            return rss
-
-    monkeypatch.setattr(urllib.request, "urlopen", lambda *_args, **_kwargs: _Response())
+    _stub_google_news_rss(monkeypatch, rss)
 
     evidence = _rss_search(
         ResearchQuery(
@@ -5489,17 +5467,7 @@ def test_rss_search_rejects_unverified_official_publisher_identity(
     </item></channel></rss>
     """.encode()
 
-    class _Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return None
-
-        def read(self, _limit):
-            return rss
-
-    monkeypatch.setattr(urllib.request, "urlopen", lambda *_args, **_kwargs: _Response())
+    _stub_google_news_rss(monkeypatch, rss)
 
     evidence = _rss_search(
         ResearchQuery(
@@ -5523,17 +5491,7 @@ def test_rss_search_does_not_override_direct_link_with_publisher_metadata(monkey
     </item></channel></rss>
     """
 
-    class _Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return None
-
-        def read(self, _limit):
-            return rss
-
-    monkeypatch.setattr(urllib.request, "urlopen", lambda *_args, **_kwargs: _Response())
+    _stub_google_news_rss(monkeypatch, rss)
 
     evidence = _rss_search(
         ResearchQuery(
@@ -5675,17 +5633,7 @@ def test_rss_search_labels_trump_passport_reporting_as_supporting(monkeypatch):
     </item></channel></rss>
     """
 
-    class _Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return None
-
-        def read(self, _limit):
-            return rss
-
-    monkeypatch.setattr(urllib.request, "urlopen", lambda *_args, **_kwargs: _Response())
+    _stub_google_news_rss(monkeypatch, rss)
 
     evidence = _rss_search(
         ResearchQuery(
@@ -5716,17 +5664,7 @@ def test_rss_search_labels_passport_result_when_query_is_truncated(monkeypatch):
     </item></channel></rss>
     """
 
-    class _Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return None
-
-        def read(self, _limit):
-            return rss
-
-    monkeypatch.setattr(urllib.request, "urlopen", lambda *_args, **_kwargs: _Response())
+    _stub_google_news_rss(monkeypatch, rss)
 
     evidence = _rss_search(
         ResearchQuery(
@@ -5756,17 +5694,7 @@ def test_rss_search_does_not_label_passport_query_echo_as_supporting(monkeypatch
     </item></channel></rss>
     """
 
-    class _Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return None
-
-        def read(self, _limit):
-            return rss
-
-    monkeypatch.setattr(urllib.request, "urlopen", lambda *_args, **_kwargs: _Response())
+    _stub_google_news_rss(monkeypatch, rss)
 
     evidence = _rss_search(
         ResearchQuery(
@@ -5837,17 +5765,7 @@ def test_rss_search_normalizes_verbose_publisher_labels(monkeypatch):
     </item></channel></rss>
     """
 
-    class _Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return None
-
-        def read(self, _limit):
-            return rss
-
-    monkeypatch.setattr(urllib.request, "urlopen", lambda *_args, **_kwargs: _Response())
+    _stub_google_news_rss(monkeypatch, rss)
 
     evidence = _rss_search(
         ResearchQuery(
@@ -5880,17 +5798,7 @@ def test_rss_search_normalizes_common_google_news_publisher_labels(monkeypatch):
     </channel></rss>
     """
 
-    class _Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return None
-
-        def read(self, _limit):
-            return rss
-
-    monkeypatch.setattr(urllib.request, "urlopen", lambda *_args, **_kwargs: _Response())
+    _stub_google_news_rss(monkeypatch, rss)
 
     evidence = _rss_search(
         ResearchQuery(
