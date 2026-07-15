@@ -93,6 +93,8 @@ CAPITAL_GUARD_SHADOW_TABLES = {
     "capital_guard_shadow_conflicts": "conflicts",
     "capital_guard_shadow_observations": "observations",
     "capital_guard_shadow_candidate_observations": "links",
+    "capital_guard_shadow_settlement_attempts": "settlement_attempts",
+    "capital_guard_shadow_settlement_quarantines": "quarantines",
     "capital_guard_shadow_settlements": "settlements",
     "capital_guard_shadow_evaluations": "evaluations",
 }
@@ -1082,7 +1084,9 @@ def print_capital_guard_shadow_status(
     capture_enabled, collection_enabled = map(_env_bool, values)
     capture_summary = f"capture={'on' if capture_enabled else 'off'} ({sources[0]})"
     collection_summary = (
-        f"collection={'on' if collection_enabled else 'off'} ({sources[1]})"
+        f"collection=off (unwired-exact-source; requested=on:{sources[1]})"
+        if collection_enabled
+        else f"collection=off ({sources[1]})"
     )
     prefix = f"capital_guard_shadow: {capture_summary} {collection_summary}"
     if not capture_enabled and not collection_enabled:
@@ -1121,6 +1125,55 @@ def print_capital_guard_shadow_status(
                     (CAPITAL_GUARD_SHADOW_ROW_COUNT_LIMIT + 1,),
                 ).fetchone()
                 counts[label] = int(row[0]) if row else 0
+            if {
+                "capital_guard_shadow_candidates",
+                "capital_guard_shadow_observations",
+                "capital_guard_shadow_candidate_observations",
+            } <= present_tables:
+                row = conn.execute(
+                    """
+                    SELECT COUNT(*) FROM (
+                        SELECT 1
+                        FROM capital_guard_shadow_candidates candidate
+                        LEFT JOIN capital_guard_shadow_observations head
+                          ON head.venue = candidate.venue
+                         AND head.venue_market_id = candidate.venue_market_id
+                         AND NOT EXISTS (
+                             SELECT 1
+                             FROM capital_guard_shadow_observations child
+                             WHERE child.supersedes_observation_sha256 =
+                                   head.observation_sha256
+                         )
+                        LEFT JOIN capital_guard_shadow_candidate_observations link
+                          ON link.candidate_id = candidate.candidate_id
+                         AND link.observation_sha256 = head.observation_sha256
+                        WHERE head.observation_sha256 IS NULL OR link.link_id IS NULL
+                        LIMIT ?
+                    )
+                    """,
+                    (CAPITAL_GUARD_SHADOW_ROW_COUNT_LIMIT + 1,),
+                ).fetchone()
+                counts["link_backlog"] = int(row[0]) if row else 0
+                row = conn.execute(
+                    """
+                    SELECT COUNT(*) FROM (
+                        SELECT 1
+                        FROM capital_guard_shadow_observations head
+                        WHERE NOT EXISTS (
+                            SELECT 1
+                            FROM capital_guard_shadow_observations child
+                            WHERE child.supersedes_observation_sha256 =
+                                  head.observation_sha256
+                        )
+                        LIMIT ?
+                    )
+                    """,
+                    (CAPITAL_GUARD_SHADOW_ROW_COUNT_LIMIT + 1,),
+                ).fetchone()
+                counts["current_heads"] = int(row[0]) if row else 0
+            else:
+                counts["link_backlog"] = None
+                counts["current_heads"] = None
             exact_schema_contract = capital_guard_shadow_schema_contract_matches(conn)
     except (OSError, sqlite3.Error) as exc:
         print(f"{prefix} db=error:{type(exc).__name__}")

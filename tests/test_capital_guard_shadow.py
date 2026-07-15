@@ -35,7 +35,12 @@ from trading.fees import (
     quote_fee,
     serialize_fee_schedule,
 )
-from trading.venue import Venue
+from trading.settlement import (
+    MarketOutcome,
+    VoidRefundContract,
+    build_settlement_observation,
+)
+from trading.venue import MarketRef, Venue
 
 
 UTC = timezone.utc
@@ -48,6 +53,8 @@ TABLES = {
     "capital_guard_shadow_conflicts",
     "capital_guard_shadow_observations",
     "capital_guard_shadow_candidate_observations",
+    "capital_guard_shadow_settlement_attempts",
+    "capital_guard_shadow_settlement_quarantines",
     "capital_guard_shadow_settlements",
     "capital_guard_shadow_evaluations",
 }
@@ -290,16 +297,50 @@ def observation(
     observed_at: datetime = NOW + timedelta(days=1),
     supersedes: str | None = None,
 ) -> SettlementObservationRecord:
+    effective_at = observed_at - timedelta(minutes=1)
+    payload = {"market_id": venue_market_id, "result": outcome}
+    void_refund = (
+        VoidRefundContract(D("100"), True) if outcome == "void" else None
+    )
+    authoritative = build_settlement_observation(
+        market_ref=MarketRef(Venue.KALSHI, venue_market_id, venue_market_id),
+        outcome=MarketOutcome(outcome),
+        authoritative_outcome=outcome,
+        authoritative_payload=payload,
+        observed_at=observed_at,
+        effective_at=effective_at,
+        rules_version="kalshi-settlement-v1",
+        source_id="kalshi-settlement-api-v1",
+        void_refund=void_refund,
+    )
+    void_refund_json, void_refund_sha256 = shadow_module._void_refund_payload(
+        void_refund
+    )
+    semantic_sha256 = shadow_module._source_settlement_semantic_sha256(
+        authoritative,
+        contract_fingerprint="contract-v1",
+        rules_fingerprint="rules-v1",
+        settlement_fingerprint="settlement-v1",
+    )
     return SettlementObservationRecord(
         venue=Venue.KALSHI,
         venue_market_id=venue_market_id,
+        alias=venue_market_id,
+        contract_fingerprint="contract-v1",
+        rules_fingerprint="rules-v1",
+        settlement_fingerprint="settlement-v1",
         outcome=outcome,
         observed_at=observed_at,
-        effective_at=observed_at - timedelta(minutes=1),
+        effective_at=effective_at,
         source_id="kalshi-settlement-api-v1",
-        source_payload_json=_json(
-            {"market_id": venue_market_id, "result": outcome}
-        ),
+        rules_version="kalshi-settlement-v1",
+        authoritative_outcome_json=authoritative.authoritative_outcome_json,
+        source_payload_json=authoritative.canonical_payload_json,
+        authoritative_payload_sha256=authoritative.payload_sha256,
+        authoritative_observation_sha256=authoritative.observation_sha256,
+        semantic_sha256=semantic_sha256,
+        void_refund_json=void_refund_json,
+        void_refund_sha256=void_refund_sha256,
         supersedes_observation_sha256=supersedes,
     )
 
@@ -767,7 +808,7 @@ def test_observation_rejects_cross_market_links_and_invalid_correction(tmp_path:
     store.initialize(applied_at=NOW)
     candidate_result = _append_candidate(store, candidate())
 
-    wrong_market = replace(observation(), venue_market_id="OTHER")
+    wrong_market = observation(venue_market_id="OTHER")
     with pytest.raises(ValueError, match="market identity"):
         store.append_observation(wrong_market, (candidate_result.candidate_id,))
     with pytest.raises(ValueError, match="superseded observation"):
