@@ -239,6 +239,29 @@ def test_enabled_accounting_fails_closed_before_gross_entry_until_task10(
     ).fetchone()[0] == 0
 
 
+def test_constructor_closes_connection_when_foreign_key_setup_fails(
+    monkeypatch,
+    tmp_path,
+):
+    import trading.paper_trader as paper_trader_module
+
+    conn = MagicMock()
+    monkeypatch.setattr(paper_trader_module.sqlite3, "connect", MagicMock(return_value=conn))
+    monkeypatch.setattr(
+        paper_trader_module,
+        "enable_and_verify_foreign_keys",
+        MagicMock(side_effect=RuntimeError("foreign keys unavailable")),
+    )
+
+    with pytest.raises(RuntimeError, match="foreign keys unavailable"):
+        paper_trader_module.PaperTrader(
+            db_path=tmp_path / "fk-failure.db",
+            startup_context="test",
+        )
+
+    conn.close.assert_called_once_with()
+
+
 def _attempt_record_trade(
     trader,
     market_ref: MarketRef,
