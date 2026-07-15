@@ -27,12 +27,63 @@ sqlite_dot_quote() {
   printf '"%s"' "$value"
 }
 
+sqlite_rw_uri() {
+  local value="$1"
+  value="${value//%/%25}"
+  value="${value//#/%23}"
+  value="${value//\?/%3F}"
+  value="${value// /%20}"
+  printf 'file:%s?mode=rw' "$value"
+}
+
 sqlite_backup() {
   local source="$1"
   local destination="$2"
   local quoted_destination
+  local fallback_error
+  local readonly_error
+  local source_uri
   quoted_destination="$(sqlite_dot_quote "$destination")"
-  sqlite3 -readonly "$source" ".backup $quoted_destination"
+  readonly_error="$destination.readonly-error"
+  if sqlite3 -readonly "$source" ".backup $quoted_destination" 2>"$readonly_error" \
+      && [[ ! -s "$readonly_error" && -s "$destination" ]]; then
+    rm -f "$readonly_error"
+    return 0
+  fi
+
+  if [[ ! -f "$source" ]]; then
+    cat "$readonly_error" >&2
+    rm -f "$readonly_error"
+    return 1
+  fi
+  rm -f "$destination" "$destination-wal" "$destination-shm"
+  source_uri="$(sqlite_rw_uri "$source")"
+  fallback_error="$destination.rw-error"
+  if sqlite3 "$source_uri" ".backup $quoted_destination" 2>"$fallback_error" \
+      && [[ ! -s "$fallback_error" && -s "$destination" ]]; then
+    rm -f "$readonly_error" "$fallback_error"
+    return 0
+  fi
+  cat "$fallback_error" >&2
+  cat "$readonly_error" >&2
+  rm -f "$readonly_error" "$fallback_error"
+  return 1
+}
+
+atomic_publish_dir() {
+  local source="$1"
+  local destination="$2"
+  "$PUBLISH_PYTHON" - "$source" "$destination" <<'PY'
+import os
+import sys
+
+source, destination = sys.argv[1:]
+try:
+    os.rename(source, destination)
+except OSError as exc:
+    print(f"{exc.strerror}: {destination}", file=sys.stderr)
+    raise SystemExit(1) from None
+PY
 }
 
 sqlite_restore() {
@@ -75,6 +126,14 @@ if [[ -z "$REPO_ROOT" ]]; then
   echo "ERROR: not in a git repo" >&2
   exit 3
 fi
+if [[ -x "$REPO_ROOT/.venv/bin/python" ]]; then
+  PUBLISH_PYTHON="$REPO_ROOT/.venv/bin/python"
+elif PUBLISH_PYTHON="$(command -v python3 2>/dev/null)" && [[ -n "$PUBLISH_PYTHON" ]]; then
+  :
+else
+  echo "ERROR: Python is required for atomic snapshot publish" >&2
+  exit 3
+fi
 
 PAPER_DB="$REPO_ROOT/data/paper_trades.db"
 EVIDENCE_DB="$REPO_ROOT/data/evidence_store.db"
@@ -109,21 +168,43 @@ if [[ "${DRY_RUN:-0}" == "1" ]]; then
   exit 0
 fi
 
-mkdir -p "$DEST"
+mkdir -p "$ARCHIVE_ROOT"
+if [[ -e "$DEST" ]]; then
+  echo "ERROR: snapshot destination already exists: $DEST" >&2
+  exit 2
+fi
+if ! SNAPSHOT_WORK_DIR="$(mktemp -d "$ARCHIVE_ROOT/.${UTC_STAMP}.tmp.XXXXXX")"; then
+  echo "ERROR: snapshot staging directory creation failed" >&2
+  exit 2
+fi
+WEATHER_RESTORE_DB=""
+PUBLISHED_DEST=""
+cleanup() {
+  if [[ -n "$WEATHER_RESTORE_DB" ]]; then
+    rm -f "$WEATHER_RESTORE_DB" "$WEATHER_RESTORE_DB-wal" "$WEATHER_RESTORE_DB-shm"
+  fi
+  if [[ -n "$SNAPSHOT_WORK_DIR" ]]; then
+    rm -rf "$SNAPSHOT_WORK_DIR"
+  fi
+  if [[ -n "$PUBLISHED_DEST" ]]; then
+    rm -rf "$PUBLISHED_DEST"
+  fi
+}
+trap cleanup EXIT
 
 # sqlite3 .backup is online-safe — does not block writers, no torn reads
-sqlite_backup "$PAPER_DB" "$DEST/paper_trades.db" || {
+sqlite_backup "$PAPER_DB" "$SNAPSHOT_WORK_DIR/paper_trades.db" || {
   echo "ERROR: paper_trades.db backup failed" >&2
   exit 2
 }
-sqlite_backup "$EVIDENCE_DB" "$DEST/evidence_store.db" || {
+sqlite_backup "$EVIDENCE_DB" "$SNAPSHOT_WORK_DIR/evidence_store.db" || {
   echo "ERROR: evidence_store.db backup failed" >&2
   exit 2
 }
 
 WEATHER_BACKED_UP=0
 if [[ "$INCLUDE_WEATHER" == "1" && -f "$WEATHER_DB" ]]; then
-  sqlite_backup "$WEATHER_DB" "$DEST/weather_shadow.db" || {
+  sqlite_backup "$WEATHER_DB" "$SNAPSHOT_WORK_DIR/weather_shadow.db" || {
     echo "ERROR: weather_shadow.db backup failed" >&2
     exit 2
   }
@@ -131,7 +212,7 @@ if [[ "$INCLUDE_WEATHER" == "1" && -f "$WEATHER_DB" ]]; then
 fi
 
 # Sanity check the snapshots are non-empty + sqlite-valid
-for f in "$DEST/paper_trades.db" "$DEST/evidence_store.db"; do
+for f in "$SNAPSHOT_WORK_DIR/paper_trades.db" "$SNAPSHOT_WORK_DIR/evidence_store.db"; do
   if [[ ! -s "$f" ]]; then
     echo "ERROR: snapshot empty: $f" >&2
     exit 2
@@ -143,16 +224,15 @@ for f in "$DEST/paper_trades.db" "$DEST/evidence_store.db"; do
 done
 
 if [[ "$WEATHER_BACKED_UP" == "1" ]]; then
-  if [[ ! -s "$DEST/weather_shadow.db" ]]; then
-    echo "ERROR: snapshot empty: $DEST/weather_shadow.db" >&2
+  if [[ ! -s "$SNAPSHOT_WORK_DIR/weather_shadow.db" ]]; then
+    echo "ERROR: snapshot empty: $SNAPSHOT_WORK_DIR/weather_shadow.db" >&2
     exit 2
   fi
   if ! WEATHER_RESTORE_DB="$(mktemp "${TMPDIR:-/tmp}/kalshi-weather-restore.XXXXXX")"; then
     echo "ERROR: weather_shadow.db restore temp creation failed" >&2
     exit 2
   fi
-  trap 'rm -f "$WEATHER_RESTORE_DB" "$WEATHER_RESTORE_DB-wal" "$WEATHER_RESTORE_DB-shm"' EXIT
-  sqlite_restore "$WEATHER_RESTORE_DB" "$DEST/weather_shadow.db" || {
+  sqlite_restore "$WEATHER_RESTORE_DB" "$SNAPSHOT_WORK_DIR/weather_shadow.db" || {
     echo "ERROR: weather_shadow.db restore validation failed" >&2
     exit 2
   }
@@ -165,22 +245,41 @@ if [[ "$WEATHER_BACKED_UP" == "1" ]]; then
     exit 2
   fi
   rm -f "$WEATHER_RESTORE_DB" "$WEATHER_RESTORE_DB-wal" "$WEATHER_RESTORE_DB-shm"
-  trap - EXIT
+  WEATHER_RESTORE_DB=""
 fi
 
 # Remove any WAL/SHM sidecars that integrity_check may have created.
 # The .db file is the canonical self-contained snapshot per sqlite3
 # .backup; sidecars are transient and should not be retained or counted
 # by retention/health audits.
-rm -f "$DEST"/*.db-wal "$DEST"/*.db-shm
+rm -f "$SNAPSHOT_WORK_DIR"/*.db-wal "$SNAPSHOT_WORK_DIR"/*.db-shm
 
-PAPER_SIZE="$(stat -f '%z' "$DEST/paper_trades.db")"
-EVID_SIZE="$(stat -f '%z' "$DEST/evidence_store.db")"
+PAPER_SIZE="$(stat -f '%z' "$SNAPSHOT_WORK_DIR/paper_trades.db")"
+EVID_SIZE="$(stat -f '%z' "$SNAPSHOT_WORK_DIR/evidence_store.db")"
+if [[ "$WEATHER_BACKED_UP" == "1" ]]; then
+  WEATHER_SIZE="$(stat -f '%z' "$SNAPSHOT_WORK_DIR/weather_shadow.db")"
+fi
+if ! atomic_publish_dir "$SNAPSHOT_WORK_DIR" "$DEST"; then
+  echo "ERROR: snapshot publish failed: $DEST" >&2
+  exit 2
+fi
+PUBLISHED_DEST="$DEST"
+SNAPSHOT_WORK_DIR=""
+for required in paper_trades.db evidence_store.db; do
+  if [[ ! -s "$DEST/$required" ]]; then
+    echo "ERROR: published snapshot missing canonical file: $DEST/$required" >&2
+    exit 2
+  fi
+done
+if [[ "$WEATHER_BACKED_UP" == "1" && ! -s "$DEST/weather_shadow.db" ]]; then
+  echo "ERROR: published snapshot missing canonical file: $DEST/weather_shadow.db" >&2
+  exit 2
+fi
+PUBLISHED_DEST=""
 echo "snapshot ok: $DEST"
 echo "  paper_trades.db: $PAPER_SIZE bytes"
 echo "  evidence_store.db: $EVID_SIZE bytes"
 if [[ "$WEATHER_BACKED_UP" == "1" ]]; then
-  WEATHER_SIZE="$(stat -f '%z' "$DEST/weather_shadow.db")"
   echo "  weather_shadow.db: $WEATHER_SIZE bytes"
 elif [[ "$INCLUDE_WEATHER" == "1" ]]; then
   echo "  weather_shadow.db: skipped (not found)"

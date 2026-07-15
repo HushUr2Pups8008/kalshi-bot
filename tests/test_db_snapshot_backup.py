@@ -43,6 +43,21 @@ def _create_sqlite(path: Path, value: str) -> None:
         conn.commit()
 
 
+def _convert_to_closed_wal(path: Path, value: str) -> None:
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
+        conn.execute("INSERT INTO sample(value) VALUES (?)", (value,))
+        conn.commit()
+        assert conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone() == (0, 0, 0)
+    path.with_name(f"{path.name}-wal").unlink(missing_ok=True)
+    path.with_name(f"{path.name}-shm").unlink(missing_ok=True)
+
+
+def _sample_values(path: Path) -> list[str]:
+    with sqlite3.connect(path) as conn:
+        return [str(row[0]) for row in conn.execute("SELECT value FROM sample ORDER BY rowid")]
+
+
 def _seed_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -109,6 +124,81 @@ def test_db_snapshot_backup_seeds_online_safe_sqlite_copies(tmp_path: Path):
     assert _integrity(snapshots[0] / "paper_trades.db") == "ok"
     assert _integrity(snapshots[0] / "evidence_store.db") == "ok"
     assert "snapshot ok:" in result.stdout
+
+
+@_DARWIN_ONLY
+def test_db_snapshot_backup_closed_wal_without_sidecars_uses_safe_fallback(
+    tmp_path: Path,
+):
+    repo = _seed_repo(tmp_path)
+    evidence_db = repo / "data/evidence_store.db"
+    _convert_to_closed_wal(evidence_db, "closed-wal")
+    before = _fingerprint(evidence_db)
+    probe = subprocess.run(
+        ["sqlite3", "-readonly", str(evidence_db), "SELECT COUNT(*) FROM sample;"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert probe.returncode != 0
+    assert "unable to open database" in probe.stderr
+
+    result = _run_backup(repo)
+
+    snapshot = next((repo / "logs/backups/db_snapshots").iterdir())
+    assert _sample_values(snapshot / "evidence_store.db") == [
+        "evidence",
+        "closed-wal",
+    ]
+    assert _fingerprint(evidence_db) == before
+    assert _sample_values(evidence_db) == ["evidence", "closed-wal"]
+    assert result.returncode == 0
+
+
+@_DARWIN_ONLY
+def test_db_snapshot_backup_preserves_active_evidence_wal_commits(tmp_path: Path):
+    repo = _seed_repo(tmp_path)
+    evidence_db = repo / "data/evidence_store.db"
+    evidence_conn = sqlite3.connect(evidence_db)
+    try:
+        assert evidence_conn.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
+        evidence_conn.execute("PRAGMA wal_autocheckpoint=0")
+        evidence_conn.execute("INSERT INTO sample(value) VALUES ('active-wal')")
+        evidence_conn.commit()
+        wal = evidence_db.with_name("evidence_store.db-wal")
+        shm = evidence_db.with_name("evidence_store.db-shm")
+        assert wal.is_file()
+        assert shm.is_file()
+        before = {path: _fingerprint(path) for path in (evidence_db, wal)}
+
+        _run_backup(repo)
+
+        snapshot = next((repo / "logs/backups/db_snapshots").iterdir())
+        assert _sample_values(snapshot / "evidence_store.db") == [
+            "evidence",
+            "active-wal",
+        ]
+        assert {path: _fingerprint(path) for path in (evidence_db, wal)} == before
+        assert shm.is_file()
+    finally:
+        evidence_conn.close()
+
+
+@_DARWIN_ONLY
+def test_db_snapshot_backup_evidence_failure_leaves_no_visible_bundle(tmp_path: Path):
+    repo = _seed_repo(tmp_path)
+    (repo / "data/evidence_store.db").write_text(
+        "not a sqlite database",
+        encoding="utf-8",
+    )
+
+    result = _run_backup(repo, check=False)
+
+    archive_root = repo / "logs/backups/db_snapshots"
+    assert result.returncode == 2
+    assert "ERROR: evidence_store.db backup failed" in result.stderr
+    assert not list(archive_root.glob("????-??-??T????Z"))
+    assert not list(archive_root.glob(".*.tmp.*"))
 
 
 @_DARWIN_ONLY
@@ -292,6 +382,51 @@ def test_db_snapshot_backup_readonly_weather_source_does_not_recover_hot_journal
         )
     assert result.returncode == 0
     assert {path: _fingerprint(path) for path in sources} == before
+
+
+@_DARWIN_ONLY
+def test_db_snapshot_backup_handles_publish_destination_race_without_nesting(
+    tmp_path: Path,
+):
+    repo = _seed_repo(tmp_path)
+    shim_dir = tmp_path / "bin"
+    shim_dir.mkdir()
+    stat_shim = shim_dir / "stat"
+    stat_shim.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "source_path=\"${!#}\"\n"
+        "stage_dir=\"$(dirname \"$source_path\")\"\n"
+        "stage_name=\"$(basename \"$stage_dir\")\"\n"
+        "stamp=\"${stage_name#.}\"\n"
+        "stamp=\"${stamp%%.tmp.*}\"\n"
+        "mkdir -p \"$(dirname \"$stage_dir\")/$stamp\"\n"
+        "exec /usr/bin/stat \"$@\"\n",
+        encoding="utf-8",
+    )
+    stat_shim.chmod(0o755)
+
+    result = _run_backup(
+        repo,
+        check=False,
+        extra_env={"PATH": f"{shim_dir}:{os.environ['PATH']}"},
+    )
+
+    archive_root = repo / "logs/backups/db_snapshots"
+    visible = [path for path in archive_root.iterdir() if not path.name.startswith(".")]
+    hidden = [path for path in archive_root.iterdir() if path.name.startswith(".")]
+    assert len(visible) == 1
+    if result.returncode == 0:
+        assert {path.name for path in visible[0].glob("*.db")} == {
+            "paper_trades.db",
+            "evidence_store.db",
+        }
+        assert not [path for path in visible[0].iterdir() if path.is_dir()]
+    else:
+        assert result.returncode == 2
+        assert "ERROR: snapshot publish failed" in result.stderr
+        assert not list(visible[0].iterdir())
+    assert hidden == []
 
 
 @_DARWIN_ONLY
