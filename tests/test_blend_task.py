@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
+import tasks.blend_task as blend_task_module
 from analysis import SignalAnalysis
 from analysis.decision_blender import BlendResult
 from config import cfg
@@ -98,6 +99,10 @@ class SpyCapitalGuardCaptureSink:
         self.envelopes.append(envelope)
         if self.failure is not None:
             raise self.failure
+
+
+class NonProcessControlCaptureFailure(BaseException):
+    pass
 
 
 class OrderedCaptureLogger(SpyLogger):
@@ -447,6 +452,76 @@ async def test_capital_guard_capture_failure_cannot_change_decision_or_telemetry
     assert len(logger.skipped_records) == len(baseline_logger.skipped_records) == 1
     assert logger.records == baseline_logger.records
     assert logger.skipped_records == baseline_logger.skipped_records
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [
+        RuntimeError("sqlite locked"),
+        asyncio.CancelledError(),
+        NonProcessControlCaptureFailure("opaque capture failure"),
+    ],
+)
+async def test_capital_guard_capture_diagnostic_failure_is_also_isolated(
+    failure: BaseException,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 7, 15, 12, 30, tzinfo=UTC)
+    baseline_logger = SpyLogger()
+    baseline_queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    baseline = await BlendTask(
+        trading_queue=baseline_queue,
+        store=FakeStore(),
+        logger=baseline_logger,
+        open_exposure_drawdown_provider=lambda: 0.21,
+        is_paper_mode=True,
+        now=lambda: now,
+    ).process_fast_lane_result(_analysis())
+    logger = SpyLogger()
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+
+    def _diagnostic_failure(*args, **kwargs) -> None:  # noqa: ANN002, ANN003
+        raise RuntimeError("warning logger unavailable")
+
+    monkeypatch.setattr(blend_task_module.log, "warning", _diagnostic_failure)
+    actual = await BlendTask(
+        trading_queue=queue,
+        store=FakeStore(),
+        logger=logger,
+        open_exposure_drawdown_provider=lambda: 0.21,
+        capital_guard_capture_sink=SpyCapitalGuardCaptureSink(failure=failure),
+        is_paper_mode=True,
+        now=lambda: now,
+    ).process_fast_lane_result(_analysis())
+
+    assert actual == baseline
+    assert queue.qsize() == baseline_queue.qsize() == 0
+    assert logger.records == baseline_logger.records
+    assert logger.skipped_records == baseline_logger.skipped_records
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure_type",
+    [KeyboardInterrupt, SystemExit, GeneratorExit],
+)
+async def test_capital_guard_capture_process_control_exceptions_propagate(
+    failure_type: type[BaseException],
+) -> None:
+    task = BlendTask(
+        trading_queue=asyncio.Queue(),
+        store=FakeStore(),
+        logger=SpyLogger(),
+        open_exposure_drawdown_provider=lambda: 0.21,
+        capital_guard_capture_sink=SpyCapitalGuardCaptureSink(
+            failure=failure_type("stop")
+        ),
+        is_paper_mode=True,
+    )
+
+    with pytest.raises(failure_type, match="stop"):
+        await task.process_fast_lane_result(_analysis())
 
 
 @pytest.mark.asyncio

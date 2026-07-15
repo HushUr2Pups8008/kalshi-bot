@@ -38,6 +38,19 @@ from utils.lifecycle import strict_optional_bool
 
 
 log = get_logger("blend_task")
+_PROCESS_CONTROL_EXCEPTIONS = (KeyboardInterrupt, SystemExit, GeneratorExit)
+
+
+def _log_capital_guard_capture_diagnostic_noexcept(
+    message: str,
+    *args: object,
+) -> None:
+    try:
+        log.warning(message, *args)
+    except _PROCESS_CONTROL_EXCEPTIONS:
+        raise
+    except BaseException:
+        return
 
 
 class BlendTaskError(Exception):
@@ -408,13 +421,15 @@ class BlendTask:
         )
         try:
             await sink.capture(envelope)
+        except _PROCESS_CONTROL_EXCEPTIONS:
+            raise
         except asyncio.CancelledError:
-            log.warning(
+            _log_capital_guard_capture_diagnostic_noexcept(
                 "capital guard shadow capture cancelled for %s",
                 fast_lane_result.market.ticker,
             )
-        except Exception as exc:
-            log.warning(
+        except BaseException as exc:
+            _log_capital_guard_capture_diagnostic_noexcept(
                 "capital guard shadow capture failed for %s: %s",
                 fast_lane_result.market.ticker,
                 exc,

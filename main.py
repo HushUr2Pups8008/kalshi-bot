@@ -66,7 +66,7 @@ from types import ModuleType, SimpleNamespace
 from typing import Any, Awaitable, Callable, Iterable  # noqa: F401 — referenced in string annotations
 from urllib.parse import urlparse
 
-from analysis import SignalAnalysis
+from analysis import DecisionFinancialProvenance, SignalAnalysis
 from analysis.evidence_scorer import source_quality
 from analysis.kelly import kelly_bet
 from analysis.research_gate import (
@@ -115,6 +115,7 @@ from tasks.blend_task import BlendTask, TradeCandidate
 from tasks.calibration_task import CalibrationTask
 from tasks.structural_task import StructuralTask
 from trading.executor import TradeExecutor
+from trading.fees import DIRECT_ACCOUNT_PRECISION, INITIAL_ORDER_FEE_ACCUMULATOR
 from trading.paper_trader import PaperTrader
 from trading.settlement import (
     MarketOutcome,
@@ -2273,6 +2274,16 @@ class TradingBot:
             llm_magnitude=llm_mag,
             llm_confidence=llm_conf,
             signal_meta=signal_meta or None,
+            decision_financial_provenance=DecisionFinancialProvenance(
+                sizing_bankroll_dollars=Decimal(str(notional)),
+                max_position_dollars=Decimal(str(max_bet)),
+                max_ticker_exposure_dollars=(
+                    Decimal(str(cfg.max_ticker_exposure_pct))
+                    * Decimal(str(notional))
+                ),
+                fee_account_precision_dollars=DIRECT_ACCOUNT_PRECISION,
+                fee_accumulator_dollars=INITIAL_ORDER_FEE_ACCUMULATOR,
+            ),
         )
 
         log.debug(

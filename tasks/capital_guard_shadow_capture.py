@@ -13,7 +13,6 @@ from typing import Any, Mapping
 
 from analysis import SignalAnalysis
 from analysis.decision_blender import BlendResult
-from config import cfg
 from tasks.trade_readiness_gate import (
     G1_CONFIDENCE_THRESHOLD,
     G1_FAILSAFE_CONFIDENCE_THRESHOLD,
@@ -115,14 +114,21 @@ def _records(
     decision_at = envelope.decision_at.astimezone(UTC)
     market = envelope.analysis.market
     venue = normalize_venue(envelope.venue)
+    canonical_venue_market_id = _clean_text(
+        getattr(market, "venue_market_id", None)
+    )
     venue_market_id = str(
-        getattr(market, "report_venue_market_id", None) or market.ticker
+        canonical_venue_market_id
+        or getattr(market, "report_venue_market_id", None)
+        or market.ticker
     ).strip()
     side = str(envelope.analysis.side).strip().lower()
     if side not in {"yes", "no"}:
         raise ValueError("capture side must be yes or no")
 
     reasons: list[str] = []
+    if venue is Venue.POLYMARKET_US and canonical_venue_market_id is None:
+        reasons.append("missing_canonical_venue_market_id")
     lifecycle_id = _clean_text(envelope.lifecycle_id)
     if lifecycle_id is None:
         lifecycle_id = _sha256_json(
@@ -182,7 +188,7 @@ def _records(
     if not reasons and book is not None and sizing is not None and fee is not None:
         executable_book_json, executable_price, _executable_depth = book
         sizing_json, requested_quantity, capital_at_risk = sizing
-        fee_provenance_json, fee_provenance_sha256, schedule_json, fee_role, fee_multiplier, fee_coefficient, fee_precision, fee_accumulator = fee
+        fee_provenance_json, fee_provenance_sha256, schedule_json, fee_formula_type, fee_role, fee_multiplier, fee_coefficient, fee_precision, fee_accumulator = fee
         try:
             candidate = CapitalGuardCandidate(
                 decision_key=decision_key,
@@ -221,7 +227,7 @@ def _records(
                 fee_schedule_json=schedule_json,
                 fee_provenance_json=fee_provenance_json,
                 fee_provenance_sha256=fee_provenance_sha256,
-                fee_formula_type=str(market.fee_type),
+                fee_formula_type=fee_formula_type,
                 fee_role=fee_role,
                 fee_multiplier=fee_multiplier,
                 fee_coefficient=fee_coefficient,
@@ -385,36 +391,69 @@ def _identity_json(
     reasons: list[str],
 ) -> str:
     market = envelope.analysis.market
-    if not _clean_text(getattr(market, "title", None)):
+    title = _clean_text(getattr(market, "title", None))
+    rules_primary = _clean_text(getattr(market, "rules_primary", None)) or _clean_text(
+        getattr(market, "question", None)
+    )
+    rules_secondary = _clean_text(
+        getattr(market, "rules_secondary", None)
+    ) or _clean_text(getattr(market, "description", None))
+    resolution_source = _clean_text(getattr(market, "resolution_source", None))
+    if not title:
         reasons.append("missing_contract_title")
-    if not _clean_text(getattr(market, "rules_primary", None)):
+    if not rules_primary:
         reasons.append("missing_market_rules")
     sources = getattr(market, "settlement_sources", ())
-    if not sources:
-        reasons.append("missing_settlement_sources")
     source_records = [
-        {"domain": source.domain, "label": source.label, "url": source.url}
+        {
+            "domain": _clean_text(getattr(source, "domain", None)),
+            "label": _clean_text(getattr(source, "label", None)),
+            "url": _clean_text(getattr(source, "url", None)),
+        }
         for source in sources
     ]
+    if not source_records and resolution_source:
+        source_records = [
+            {
+                "domain": None,
+                "label": "resolution_source",
+                "url": resolution_source,
+            }
+        ]
+    if not source_records:
+        reasons.append("missing_settlement_sources")
     return canonical_json(
         {
-            "alias": market.ticker,
+            "alias": str(market.ticker),
             "contract_fingerprint": _sha256_json(
                 {
-                    "event_ticker": market.event_ticker,
-                    "series_ticker": market.series_ticker,
-                    "subtitle": market.subtitle,
-                    "title": market.title,
+                    "event_ticker": _clean_text(
+                        getattr(market, "event_ticker", None)
+                    )
+                    or _clean_text(getattr(market, "event_slug", None))
+                    or _clean_text(getattr(market, "event_title", None)),
+                    "series_ticker": _clean_text(
+                        getattr(market, "series_ticker", None)
+                    )
+                    or _clean_text(getattr(market, "series_slug", None))
+                    or _clean_text(getattr(market, "series_title", None)),
+                    "subtitle": _clean_text(getattr(market, "subtitle", None)),
+                    "title": title,
                 }
             ),
             "decision_key": decision_key,
             "lifecycle_id": lifecycle_id,
             "rules_fingerprint": _sha256_json(
                 {
-                    "contract_terms_url": market.contract_terms_url,
-                    "early_close_condition": market.early_close_condition,
-                    "rules_primary": market.rules_primary,
-                    "rules_secondary": market.rules_secondary,
+                    "contract_terms_url": _clean_text(
+                        getattr(market, "contract_terms_url", None)
+                    )
+                    or resolution_source,
+                    "early_close_condition": _clean_text(
+                        getattr(market, "early_close_condition", None)
+                    ),
+                    "rules_primary": rules_primary,
+                    "rules_secondary": rules_secondary,
                 }
             ),
             "schema_version": 1,
@@ -432,16 +471,19 @@ def _book_artifact(
 ) -> tuple[str, Decimal, Decimal] | None:
     market = envelope.analysis.market
     reason_count = len(reasons)
+    book_as_of = getattr(market, "book_as_of", None)
+    book_payload_hash = getattr(market, "book_payload_hash", None)
+    price_source = _clean_text(getattr(market, "price_source", None))
+    price_method = _clean_text(getattr(market, "price_method", None))
     required = {
-        "book_as_of": market.book_as_of,
-        "book_payload_hash": market.book_payload_hash,
-        "book_source": _clean_text(market.price_source),
-        "book_method": _clean_text(market.price_method),
+        "book_as_of": book_as_of,
+        "book_payload_hash": book_payload_hash,
+        "book_source": price_source,
+        "book_method": price_method,
     }
     for name, value in required.items():
         if value is None or (name == "book_payload_hash" and not _is_sha256(value)):
             reasons.append(f"missing_{name}")
-    book_as_of = market.book_as_of
     if book_as_of is not None and (
         not isinstance(book_as_of, datetime)
         or book_as_of.tzinfo is None
@@ -449,19 +491,25 @@ def _book_artifact(
         or book_as_of > envelope.decision_at
     ):
         reasons.append("invalid_book_as_of")
-    if market.price_source == "unavailable":
+    if price_source == "unavailable":
         reasons.append("missing_book_source")
-    if market.price_method == "none":
+    if price_method == "none":
         reasons.append("missing_book_method")
-    selected = market.yes_bid_levels if side == "yes" else market.no_bid_levels
-    opposite = market.no_bid_levels if side == "yes" else market.yes_bid_levels
+    selected = getattr(market, "yes_bid_levels", ()) if side == "yes" else getattr(
+        market, "no_bid_levels", ()
+    )
+    opposite = getattr(market, "no_bid_levels", ()) if side == "yes" else getattr(
+        market, "yes_bid_levels", ()
+    )
     if not selected:
         reasons.append("missing_selected_side_bid_depth")
     if not opposite:
         reasons.append("missing_opposite_side_bid_depth")
     if not _valid_book_levels(selected) or not _valid_book_levels(opposite):
         reasons.append("invalid_book_depth")
-    cents = market.yes_ask_cents if side == "yes" else market.no_ask_cents
+    cents = getattr(market, "yes_ask_cents", None) if side == "yes" else getattr(
+        market, "no_ask_cents", None
+    )
     valid_cents = (
         isinstance(cents, int)
         and not isinstance(cents, bool)
@@ -503,23 +551,20 @@ def _sizing_artifact(
     book: tuple[str, Decimal, Decimal] | None,
     reasons: list[str],
 ) -> tuple[str, Decimal, Decimal] | None:
-    meta = envelope.analysis.signal_meta or {}
-    bankroll = _decimal_metadata(meta, "sizing_bankroll_dollars", reasons)
-    max_position = _optional_sizing_cap(
-        meta, "shadow_max_position_dollars", reasons
-    )
-    max_ticker = _optional_sizing_cap(
-        meta, "shadow_max_ticker_exposure_dollars", reasons
-    )
-    if bankroll is not None:
-        if max_position is None:
-            percent_cap = Decimal(str(cfg.max_bet_pct_bankroll)) * bankroll
-            max_position = max(
-                Decimal(str(cfg.min_bet_dollars)),
-                min(Decimal(str(cfg.max_bet_hard_cap)), percent_cap),
+    provenance = envelope.analysis.decision_financial_provenance
+    if provenance is None:
+        reasons.extend(
+            (
+                "missing_sizing_bankroll_dollars",
+                "missing_max_position_dollars",
+                "missing_max_ticker_exposure_dollars",
             )
-        if max_ticker is None:
-            max_ticker = Decimal(str(cfg.max_ticker_exposure_pct)) * bankroll
+        )
+        bankroll = max_position = max_ticker = None
+    else:
+        bankroll = provenance.sizing_bankroll_dollars
+        max_position = provenance.max_position_dollars
+        max_ticker = provenance.max_ticker_exposure_dollars
     step = getattr(envelope.analysis.market, "quantity_step", None)
     if not isinstance(step, Decimal) or not step.is_finite() or step <= 0:
         reasons.append("missing_quantity_step")
@@ -565,9 +610,19 @@ def _fee_artifact(
     envelope: CapitalGuardShadowCaptureEnvelope,
     venue: Venue,
     reasons: list[str],
-) -> tuple[str, str, str, FeeRole, Decimal, Decimal, Decimal | None, Decimal] | None:
+) -> tuple[
+    str,
+    str,
+    str,
+    str,
+    FeeRole,
+    Decimal,
+    Decimal,
+    Decimal | None,
+    Decimal,
+] | None:
     market = envelope.analysis.market
-    meta = envelope.analysis.signal_meta or {}
+    provenance = envelope.analysis.decision_financial_provenance
     reason_count = len(reasons)
     try:
         schedule = fee_schedule_at(venue=venue, timestamp=envelope.decision_at)
@@ -576,34 +631,51 @@ def _fee_artifact(
         return None
     schedule_json = serialize_fee_schedule(schedule)
     expected_type = fee_type_for_schedule(schedule)
-    if market.fee_type != expected_type:
-        reasons.append("fee_type_provenance_mismatch")
-    if market.fee_effective_at != schedule.effective_from:
+    market_effective_at = getattr(market, "fee_effective_at", None)
+    if market_effective_at != schedule.effective_from:
         reasons.append("fee_effective_at_provenance_mismatch")
-    fee_multiplier = market.fee_multiplier
-    if not isinstance(fee_multiplier, Decimal) or not fee_multiplier.is_finite():
-        reasons.append("missing_fee_multiplier")
     try:
-        fee_role = FeeRole(str(market.fill_role))
+        fee_role = FeeRole(str(getattr(market, "fill_role", None)))
     except ValueError:
         reasons.append("missing_fee_role")
         fee_role = FeeRole.TAKER
-    if not _is_sha256(market.fee_provenance_hash):
-        reasons.append("missing_fee_source_payload_sha256")
-    fee_accumulator = _decimal_metadata(meta, "fee_accumulator_dollars", reasons)
+    fee_coefficient = fee_coefficient_for(schedule, fee_role)
     if venue is Venue.KALSHI:
-        fee_precision = _decimal_metadata(
-            meta, "fee_account_precision_dollars", reasons
-        )
+        if getattr(market, "fee_type", None) != expected_type:
+            reasons.append("fee_type_provenance_mismatch")
+        fee_multiplier = getattr(market, "fee_multiplier", None)
+        fee_source_hash = getattr(market, "fee_provenance_hash", None)
     else:
+        fee_multiplier = Decimal("1")
+        fee_source_hash = (
+            getattr(market, "source_payload_hash", None)
+            or getattr(market, "raw_payload_hash", None)
+        )
+        if getattr(market, "fee_coefficient", None) != fee_coefficient:
+            reasons.append("fee_coefficient_provenance_mismatch")
+    if not isinstance(fee_multiplier, Decimal) or not fee_multiplier.is_finite():
+        reasons.append("missing_fee_multiplier")
+    if not _is_sha256(fee_source_hash):
+        reasons.append("missing_fee_source_payload_sha256")
+    if provenance is None:
+        reasons.append("missing_fee_accumulator_dollars")
+        fee_accumulator = None
+        if venue is Venue.KALSHI:
+            reasons.append("missing_fee_account_precision_dollars")
         fee_precision = None
+    else:
+        fee_accumulator = provenance.fee_accumulator_dollars
+        fee_precision = provenance.fee_account_precision_dollars
+        if venue is Venue.KALSHI and fee_precision is None:
+            reasons.append("missing_fee_account_precision_dollars")
+        if venue is Venue.POLYMARKET_US and fee_precision is not None:
+            reasons.append("unexpected_fee_account_precision_dollars")
     if (
         len(reasons) != reason_count
         or fee_accumulator is None
         or not isinstance(fee_multiplier, Decimal)
     ):
         return None
-    fee_coefficient = fee_coefficient_for(schedule, fee_role)
     provenance_json = canonical_json(
         {
             "account_precision_dollars": (
@@ -617,7 +689,7 @@ def _fee_artifact(
             "fee_schedule": json.loads(schedule_json),
             "fee_type": expected_type,
             "schema_version": 1,
-            "source_payload_sha256": str(market.fee_provenance_hash),
+            "source_payload_sha256": str(fee_source_hash),
             "venue": venue.value,
         }
     )
@@ -625,6 +697,7 @@ def _fee_artifact(
         provenance_json,
         hashlib.sha256(provenance_json.encode("utf-8")).hexdigest(),
         schedule_json,
+        expected_type,
         fee_role,
         fee_multiplier,
         fee_coefficient,

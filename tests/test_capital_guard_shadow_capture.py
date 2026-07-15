@@ -9,12 +9,16 @@ from pathlib import Path
 
 import pytest
 
-import tasks.capital_guard_shadow_capture as capture_module
-from analysis import SignalAnalysis
+from analysis import DecisionFinancialProvenance, SignalAnalysis
 from analysis.decision_blender import BlendResult
 from feeds import NewsItem
 from kalshi import KalshiMarket
 from kalshi.series_metadata import SettlementSource
+from polymarket.candidate_adapter import (
+    PolymarketExecutionMarket,
+    adapt_polymarket_analysis,
+)
+from polymarket.normalizer import normalize_polymarket_market
 from tasks.capital_guard_shadow_capture import (
     CapitalGuardShadowCaptureEnvelope,
     CapitalGuardShadowCaptureSink,
@@ -41,7 +45,7 @@ def _envelope(
     *,
     disagreement: float = 0.10,
     include_fee_precision: bool = True,
-    include_explicit_caps: bool = True,
+    include_financial_provenance: bool = True,
     venue: str = "kalshi",
     side: str = "yes",
 ):
@@ -93,21 +97,29 @@ def _envelope(
         ),
         outcome_side=side,
     )
+    if venue == "polymarket_us":
+        market.venue_market_id = "pm-test-threshold-50"
+        market.fee_coefficient = D("0.06")
+        market.source_payload_hash = "c" * 64
     signal_meta = {
         "lifecycle_id": "lifecycle-1",
         "settlement_source_match": True,
-        "sizing_bankroll_dollars": "8.76",
-        "fee_accumulator_dollars": "0",
     }
-    if include_explicit_caps:
-        signal_meta.update(
-            {
-                "shadow_max_position_dollars": "5",
-                "shadow_max_ticker_exposure_dollars": "5",
-            }
+    financial_provenance = (
+        DecisionFinancialProvenance(
+            sizing_bankroll_dollars=D("8.76"),
+            max_position_dollars=D("5"),
+            max_ticker_exposure_dollars=D("5"),
+            fee_account_precision_dollars=(
+                D("0.0001")
+                if include_fee_precision and venue == "kalshi"
+                else None
+            ),
+            fee_accumulator_dollars=D("0"),
         )
-    if include_fee_precision:
-        signal_meta["fee_account_precision_dollars"] = "0.0001"
+        if include_financial_provenance
+        else None
+    )
     analysis = SignalAnalysis(
         news_item=NewsItem("Threshold update", "https://example.test/news", "wire"),
         market=market,
@@ -120,6 +132,7 @@ def _envelope(
         capped_dollars=2.1,
         confidence=0.8,
         signal_meta=signal_meta,
+        decision_financial_provenance=financial_provenance,
     )
     blend = BlendResult(
         blended_p=0.55,
@@ -269,20 +282,13 @@ async def test_identical_lifecycle_retry_is_idempotent(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_position_caps_derive_from_exact_bankroll_and_runtime_config(
+async def test_position_caps_use_exact_decision_time_provenance(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(capture_module.cfg, "max_bet_pct_bankroll", 0.5)
-    monkeypatch.setattr(capture_module.cfg, "min_bet_dollars", 1.0)
-    monkeypatch.setattr(capture_module.cfg, "max_bet_hard_cap", 10.0)
-    monkeypatch.setattr(capture_module.cfg, "max_ticker_exposure_pct", 0.5)
     store = CapitalGuardShadowStore(tmp_path / "shadow.db")
     store.initialize(applied_at=NOW)
 
-    result = await CapitalGuardShadowCaptureSink(store).capture(
-        _envelope(include_explicit_caps=False)
-    )
+    result = await CapitalGuardShadowCaptureSink(store).capture(_envelope())
 
     assert result.candidate_status == "inserted"
     sizing = json.loads(
@@ -293,8 +299,8 @@ async def test_position_caps_derive_from_exact_bankroll_and_runtime_config(
             )[0][0]
         )
     )
-    assert sizing["max_position_dollars"] == "4.38"
-    assert sizing["max_ticker_exposure_dollars"] == "4.38"
+    assert sizing["max_position_dollars"] == "5"
+    assert sizing["max_ticker_exposure_dollars"] == "5"
 
 
 @pytest.mark.asyncio
@@ -318,3 +324,118 @@ async def test_kalshi_and_polymarket_capture_identical_selected_side_book_bytes(
         )[0]
 
     assert captured["kalshi"] == captured["polymarket_us"]
+
+
+@pytest.mark.asyncio
+async def test_normalized_polymarket_adapter_persists_incomplete_denominator_attempt(
+    tmp_path: Path,
+) -> None:
+    normalized = normalize_polymarket_market(
+        {
+            "id": 8594,
+            "slug": "will-example-happen-2026",
+            "title": "Will example happen in 2026?",
+            "question": "Does the official source report the example happened?",
+            "description": "Resolves from the official published report.",
+            "resolutionSource": "https://example.test/official-report",
+            "eventTitle": "Example Event",
+            "eventSlug": "example-event",
+            "seriesTitle": "Example Series",
+            "seriesSlug": "example-series",
+            "status": "open",
+            "outcomes": [
+                {
+                    "name": "Yes",
+                    "bestBid": {"value": "0.41", "quantity": "120"},
+                    "bestAsk": {"value": "0.42"},
+                },
+                {
+                    "name": "No",
+                    "bestBid": {"value": "0.58", "quantity": "80"},
+                    "bestAsk": {"value": "0.59"},
+                },
+            ],
+            "volume": {"value": "1234.50"},
+            "openInterest": {"value": "99"},
+            "closeTime": "2026-12-31T23:59:59Z",
+            "feeCoefficient": "0.06",
+            "feeEffectiveAt": "2026-07-01T04:00:00Z",
+            "quantityStep": "1",
+            "priceTick": "0.01",
+            "fillRole": "taker",
+        },
+        snapshot_at=NOW,
+    )
+    adapted = adapt_polymarket_analysis(
+        replace(
+            _envelope().analysis,
+            decision_financial_provenance=None,
+        ),
+        normalized,
+    )
+
+    assert isinstance(adapted.market, PolymarketExecutionMarket)
+    assert adapted.market.venue_market_id == "8594"
+    assert adapted.market.question == normalized.question
+    assert adapted.market.resolution_source == normalized.resolution_source
+    assert adapted.market.yes_bid_size == normalized.yes_bid_size
+    assert adapted.market.quantity_step == normalized.quantity_step
+    assert adapted.market.fee_coefficient == normalized.fee_coefficient
+    assert adapted.market.raw_payload_hash == normalized.source_payload_hash
+
+    store = CapitalGuardShadowStore(tmp_path / "polymarket-shadow.db")
+    store.initialize(applied_at=NOW)
+    result = await CapitalGuardShadowCaptureSink(store).capture(
+        replace(
+            _envelope(venue="polymarket_us"),
+            analysis=adapted,
+            venue="polymarket_us",
+            market_family=normalized.series_ticker,
+        )
+    )
+
+    assert (result.attempt_status, result.candidate_status) == ("inserted", None)
+    assert _rows(
+        store.db_path,
+        "SELECT venue, venue_market_id, scorable "
+        "FROM capital_guard_shadow_capture_attempts",
+    ) == [("polymarket_us", "8594", 0)]
+    reasons = json.loads(
+        str(
+            _rows(
+                store.db_path,
+                "SELECT ordered_unscorable_reasons_json "
+                "FROM capital_guard_shadow_capture_attempts",
+            )[0][0]
+        )
+    )
+    assert "missing_selected_side_bid_depth" in reasons
+    assert "missing_fee_accumulator_dollars" in reasons
+    assert _rows(store.db_path, "SELECT count(*) FROM capital_guard_shadow_candidates") == [(0,)]
+
+    missing_id_analysis = replace(
+        adapted,
+        market=replace(adapted.market, venue_market_id=None),
+    )
+    missing_id_store = CapitalGuardShadowStore(tmp_path / "polymarket-missing-id.db")
+    missing_id_store.initialize(applied_at=NOW)
+    missing_id_result = await CapitalGuardShadowCaptureSink(missing_id_store).capture(
+        replace(
+            _envelope(venue="polymarket_us"),
+            analysis=missing_id_analysis,
+            venue="polymarket_us",
+            market_family=normalized.series_ticker,
+        )
+    )
+
+    assert missing_id_result.candidate_status is None
+    missing_id_reasons = json.loads(
+        str(
+            _rows(
+                missing_id_store.db_path,
+                "SELECT ordered_unscorable_reasons_json "
+                "FROM capital_guard_shadow_capture_attempts",
+            )[0][0]
+        )
+    )
+    assert "missing_canonical_venue_market_id" in missing_id_reasons
