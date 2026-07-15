@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from polymarket.settlement_reconciler import PersistedPositionReconciler
 from tests.test_paper_trader import _cfg_module, _make_mock_analysis
 from trading.portfolio import Portfolio, Position
 from trading.settlement import (
@@ -252,7 +253,7 @@ def test_legacy_alias_check_allows_same_ref_duplicates_and_blocks_cross_ref_alia
     assert blocked.metrics["alias_collision_count"] == 1
 
 
-def test_duplicate_observation_retry_recovers_post_commit_portfolio_sync(
+def test_observation_recovers_post_commit_portfolio_sync_in_same_call(
     trader_factory,
 ):
     trader = trader_factory("portfolio-recovery")
@@ -273,21 +274,70 @@ def test_duplicate_observation_retry_recovers_post_commit_portfolio_sync(
             raise RuntimeError("injected post-commit portfolio failure")
         return original_resolve(ref)
 
-    trader.portfolio.resolve = fail_once_then_resolve
+    failed_portfolio = trader.portfolio
+    failed_portfolio.resolve = fail_once_then_resolve
 
-    with pytest.raises(RuntimeError, match="post-commit portfolio failure"):
-        _resolve(trader, observation)
+    assert _resolve(trader, observation) is True
 
     row = trader._conn.execute(
         "SELECT resolved, settlement_observation_sha256 FROM paper_trades WHERE trade_id=?",
         (trade_id,),
     ).fetchone()
     assert tuple(row) == (1, observation.observation_sha256)
-    assert trader.portfolio.open_positions(market_ref.alias)
-
-    assert _resolve(trader, observation) is False
     assert trader.portfolio.open_positions(market_ref.alias) == []
-    assert resolve_calls == 2
+    assert trader.portfolio is not failed_portfolio
+    assert resolve_calls == 1
+
+
+def test_reconciler_recovers_post_commit_portfolio_sync_without_second_cycle(
+    trader_factory,
+):
+    trader = trader_factory("reconciler-portfolio-recovery")
+    market_ref = MarketRef(Venue.KALSHI, "KX-RECONCILE", "KX-RECONCILE")
+    _record_mapped_trade(
+        trader,
+        market_ref,
+        trade_id="reconcl00001",
+    )
+    observation = _observation(market_ref, MarketOutcome.YES)
+    bankroll_before = _bankroll_cents(trader)
+    failed_portfolio = trader.portfolio
+    failed_portfolio.resolve = MagicMock(
+        side_effect=RuntimeError("injected post-commit portfolio failure")
+    )
+    source = MagicMock()
+    source.get_settlement.return_value = observation
+    reconciler = PersistedPositionReconciler(source=source, resolver=trader)
+
+    first = reconciler.reconcile()
+
+    assert first.checked == 1
+    assert first.resolved == 1
+    assert first.errors == 0
+    assert trader.portfolio is not failed_portfolio
+    assert trader.portfolio.open_positions(market_ref.alias) == []
+    bankroll_after = _bankroll_cents(trader)
+    assert bankroll_after > bankroll_before
+    assert trader._conn.execute(
+        "SELECT COUNT(*) FROM paper_settlement_observations"
+    ).fetchone()[0] == 1
+    assert trader._conn.execute(
+        "SELECT COUNT(*) FROM paper_settlement_outbox"
+    ).fetchone()[0] == 1
+
+    second = reconciler.reconcile()
+
+    assert second.checked == 0
+    assert second.resolved == 0
+    assert second.errors == 0
+    assert _bankroll_cents(trader) == bankroll_after
+    assert source.get_settlement.call_count == 1
+    assert trader._conn.execute(
+        "SELECT COUNT(*) FROM paper_settlement_observations"
+    ).fetchone()[0] == 1
+    assert trader._conn.execute(
+        "SELECT COUNT(*) FROM paper_settlement_outbox"
+    ).fetchone()[0] == 1
 
 
 def test_schema_present_legacy_resolution_rechecks_alias_under_write_lock(

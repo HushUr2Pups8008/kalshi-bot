@@ -1514,8 +1514,40 @@ class PaperTrader:
             )
             return False
 
-        self.portfolio.resolve(observation.market_ref)
+        self._synchronize_portfolio_after_canonical_settlement(
+            observation.market_ref
+        )
         return not observation_already_applied
+
+    def _synchronize_portfolio_after_canonical_settlement(
+        self,
+        market_ref: MarketRef,
+    ) -> None:
+        try:
+            self.portfolio.resolve(market_ref)
+        except Exception as exc:  # noqa: BLE001 - committed DB state is authoritative
+            log.warning(
+                "Canonical settlement committed for %s:%s but portfolio closure "
+                "failed; rebuilding from committed open rows: %s",
+                market_ref.venue.value,
+                market_ref.venue_market_id,
+                exc,
+                exc_info=True,
+            )
+            replacement = Portfolio()
+            try:
+                replacement.load_from_db(self._conn)
+            except Exception as rebuild_exc:
+                raise SettlementDriftError(
+                    "canonical settlement committed but portfolio recovery failed "
+                    f"for {market_ref.venue.value}:{market_ref.venue_market_id}"
+                ) from rebuild_exc
+            self.portfolio = replacement
+            log.warning(
+                "Canonical settlement portfolio recovery completed for %s:%s",
+                market_ref.venue.value,
+                market_ref.venue_market_id,
+            )
 
     def _canonical_candidate_rows(
         self,
