@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import json
+import math
 import re
 import time
+import urllib.error
+import urllib.parse
+from collections.abc import Awaitable
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Protocol
 
 import requests
 from requests import HTTPError
@@ -19,9 +24,88 @@ from trading.orderbook import (
     decimal_value,
     payload_sha256,
 )
+from utils.bounded_https import fetch_bounded_https_ipv4
 from utils.logger import get_logger
 
 log = get_logger("polymarket_public")
+
+_POLYMARKET_AUTHORITATIVE_HOST = "gateway.polymarket.us"
+_AUTHORITATIVE_POLYMARKET_MAX_BYTES = 256 * 1024
+_AUTHORITATIVE_POLYMARKET_SLUG = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
+
+
+class BoundedHttpsFetcher(Protocol):
+    def __call__(
+        self,
+        url: str,
+        *,
+        canonical_host: str,
+        provider_name: str,
+        user_agent: str,
+        timeout: float,
+        max_bytes: int,
+    ) -> Awaitable[bytes]: ...
+
+
+def _authoritative_timeout_seconds(value: float) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("Polymarket authoritative settlement timeout must be finite and positive")
+    timeout_seconds = float(value)
+    if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+        raise ValueError("Polymarket authoritative settlement timeout must be finite and positive")
+    return timeout_seconds
+
+
+def _authoritative_slug(value: str) -> str:
+    if not isinstance(value, str) or _AUTHORITATIVE_POLYMARKET_SLUG.fullmatch(value) is None:
+        raise ValueError("Polymarket authoritative settlement slug is invalid")
+    return value
+
+
+def _authoritative_base_url(value: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError("Polymarket authoritative settlement base must be a string")
+    parsed = urllib.parse.urlsplit(value)
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError(
+            "Polymarket authoritative settlement base has an invalid port"
+        ) from exc
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != _POLYMARKET_AUTHORITATIVE_HOST
+        or port is not None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path != ""
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError(
+            "Polymarket authoritative settlement requires exact gateway.polymarket.us HTTPS base"
+        )
+    return f"https://{_POLYMARKET_AUTHORITATIVE_HOST}"
+
+
+def _bounded_json_object(raw: bytes, *, provider_name: str) -> dict[str, Any]:
+    if not isinstance(raw, bytes):
+        raise TypeError(f"{provider_name} response must be bytes")
+    payload = json.loads(raw.decode("utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"{provider_name} response must be a JSON object")
+    return payload
+
+
+def _require_exact_slug(
+    payload: dict[str, Any], *, expected_slug: str, provider_name: str
+) -> None:
+    returned_slug = payload.get("slug")
+    if not isinstance(returned_slug, str) or returned_slug != expected_slug:
+        raise ValueError(
+            f"{provider_name} slug mismatch: expected {expected_slug!r}, "
+            f"got {returned_slug!r}"
+        )
 
 
 class PolymarketPublicClient:
@@ -30,12 +114,108 @@ class PolymarketPublicClient:
     _EXACT_FILTER_MAX_PAGES = 100
 
     def __init__(self, *, base_url: str | None = None):
-        self._base = (base_url or cfg.polymarket_us_public_base_url).rstrip("/")
+        self._authoritative_base = (
+            cfg.polymarket_us_public_base_url if base_url is None else base_url
+        )
+        self._base = self._authoritative_base.rstrip("/")
         self._session = requests.Session()
         self._last_req_time = 0.0
         self._min_interval = 1.0 / max(
             1, cfg.polymarket_us_public_requests_per_second
         )
+
+    async def _get_authoritative_object(
+        self,
+        endpoint: str,
+        *,
+        timeout_seconds: float,
+        fetcher: BoundedHttpsFetcher | None,
+        provider_name: str,
+    ) -> dict[str, Any] | None:
+        timeout_seconds = _authoritative_timeout_seconds(timeout_seconds)
+        base_url = _authoritative_base_url(self._authoritative_base)
+        bounded_fetch = fetcher or fetch_bounded_https_ipv4
+        url = f"{base_url}{endpoint}"
+        try:
+            raw = await bounded_fetch(
+                url,
+                canonical_host=_POLYMARKET_AUTHORITATIVE_HOST,
+                provider_name=provider_name,
+                user_agent="kalshi-bot/authoritative-settlement-v1",
+                timeout=timeout_seconds,
+                max_bytes=_AUTHORITATIVE_POLYMARKET_MAX_BYTES,
+            )
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return None
+            raise
+        return _bounded_json_object(raw, provider_name=provider_name)
+
+    async def get_market_settlement_exact_bounded(
+        self,
+        slug: str,
+        *,
+        timeout_seconds: float,
+        fetcher: BoundedHttpsFetcher | None = None,
+    ) -> dict[str, Any] | None:
+        """Fetch one exact official settlement without legacy client fallback."""
+        slug = _authoritative_slug(slug)
+        payload = await self._get_authoritative_object(
+            f"/v1/markets/{urllib.parse.quote(slug, safe='')}/settlement",
+            timeout_seconds=timeout_seconds,
+            fetcher=fetcher,
+            provider_name="Polymarket US authoritative settlement",
+        )
+        if payload is None:
+            return None
+        _require_exact_slug(
+            payload,
+            expected_slug=slug,
+            provider_name="Polymarket US authoritative settlement",
+        )
+        if "settlement" not in payload:
+            raise ValueError(
+                "Polymarket US authoritative settlement response is missing settlement"
+            )
+        return payload
+
+    async def get_market_by_slug_exact_bounded(
+        self,
+        slug: str,
+        *,
+        timeout_seconds: float,
+        fetcher: BoundedHttpsFetcher | None = None,
+    ) -> dict[str, Any] | None:
+        """Fetch the documented exact market-by-slug envelope without fallback."""
+        slug = _authoritative_slug(slug)
+        response = await self._get_authoritative_object(
+            f"/v1/market/slug/{urllib.parse.quote(slug, safe='')}",
+            timeout_seconds=timeout_seconds,
+            fetcher=fetcher,
+            provider_name="Polymarket US authoritative market",
+        )
+        if response is None:
+            return None
+        market = response.get("market")
+        if not isinstance(market, dict):
+            raise ValueError(
+                "Polymarket US authoritative market response must contain market object"
+            )
+        _require_exact_slug(
+            market,
+            expected_slug=slug,
+            provider_name="Polymarket US authoritative market",
+        )
+        market_id = market.get("id")
+        if (
+            not isinstance(market_id, str)
+            or not market_id
+            or market_id != market_id.strip()
+        ):
+            raise ValueError(
+                "Polymarket US authoritative market response has invalid id"
+            )
+        return market
 
     def _request(
         self,
