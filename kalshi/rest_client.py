@@ -9,12 +9,16 @@ Kalshi API docs: https://trading-api.kalshi.com/trade-api/v2/openapi.json
 
 import base64
 import json
+import math
 import re
 import time
+import urllib.error
+import urllib.parse
+from collections.abc import Awaitable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Any, Optional
+from typing import Any, Optional, Protocol
 
 import requests
 from cryptography.hazmat.primitives import hashes, serialization
@@ -30,6 +34,7 @@ from kalshi.normalizer import (
     normalize_market_list_entry,
     normalize_market_detail,
 )
+from kalshi.public_market_data import is_safe_kalshi_identifier
 from kalshi.series_metadata import KalshiSeriesMetadata, normalize_series_payload
 from trading.venue import Venue
 from trading.orderbook import (
@@ -38,6 +43,7 @@ from trading.orderbook import (
     decimal_value,
     payload_sha256,
 )
+from utils.bounded_https import fetch_bounded_https_ipv4
 from utils.logger import get_logger
 
 log = get_logger("kalshi_rest")
@@ -71,6 +77,81 @@ def _normalize_pem(raw: str | bytes) -> bytes:
 # Rate-limit guard: max 10 requests/second
 _MIN_REQUEST_INTERVAL = 0.12   # seconds
 _TRANSIENT_HTTP_STATUSES = {429, 500, 502, 503, 504}
+_KALSHI_AUTHORITATIVE_HOSTS = frozenset(
+    {
+        "external-api.kalshi.com",
+        "api.elections.kalshi.com",
+        "external-api.demo.kalshi.co",
+        "demo-api.kalshi.co",
+    }
+)
+_AUTHORITATIVE_MARKET_MAX_BYTES = 256 * 1024
+
+
+class BoundedHttpsFetcher(Protocol):
+    def __call__(
+        self,
+        url: str,
+        *,
+        canonical_host: str,
+        provider_name: str,
+        user_agent: str,
+        timeout: float,
+        max_bytes: int,
+    ) -> Awaitable[bytes]: ...
+
+
+def _authoritative_kalshi_market_url(base: str, ticker: str) -> tuple[str, str]:
+    if not isinstance(base, str):
+        raise ValueError("Kalshi authoritative settlement base must be a string")
+    if not is_safe_kalshi_identifier(ticker):
+        raise ValueError("Kalshi authoritative settlement ticker is invalid")
+
+    parsed = urllib.parse.urlsplit(base)
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError(
+            "Kalshi authoritative settlement base has an invalid port"
+        ) from exc
+    host = parsed.hostname
+    if (
+        parsed.scheme != "https"
+        or host not in _KALSHI_AUTHORITATIVE_HOSTS
+        or port not in {None, 443}
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path != "/trade-api/v2"
+    ):
+        raise ValueError(
+            "Kalshi authoritative settlement requires a documented Kalshi HTTPS host "
+            "and exact /trade-api/v2 base"
+        )
+
+    return (
+        f"https://{host}/trade-api/v2/markets/{urllib.parse.quote(ticker, safe='')}",
+        host,
+    )
+
+
+def _bounded_json_object(raw: bytes, *, provider_name: str) -> dict[str, Any]:
+    if not isinstance(raw, bytes):
+        raise TypeError(f"{provider_name} response must be bytes")
+    payload = json.loads(raw.decode("utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"{provider_name} response must be a JSON object")
+    return payload
+
+
+def _authoritative_timeout_seconds(value: float) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("Kalshi authoritative settlement timeout must be finite and positive")
+    timeout_seconds = float(value)
+    if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+        raise ValueError("Kalshi authoritative settlement timeout must be finite and positive")
+    return timeout_seconds
 
 
 def _is_transient_http_status(status: int | None) -> bool:
@@ -528,6 +609,41 @@ class KalshiRestClient:
                 return None
             raise
         return normalize_market_detail(data)
+
+    async def get_market_exact_bounded(
+        self,
+        ticker: str,
+        *,
+        timeout_seconds: float,
+        fetcher: BoundedHttpsFetcher | None = None,
+    ) -> KalshiMarket | None:
+        """Fetch one exact market through the bounded authoritative transport.
+
+        Only a received HTTP 404 establishes that the ticker is absent. Transport,
+        response, JSON, and market-contract failures remain errors for the caller.
+        """
+        timeout_seconds = _authoritative_timeout_seconds(timeout_seconds)
+        url, host = _authoritative_kalshi_market_url(self._base, ticker)
+        bounded_fetch = fetcher or fetch_bounded_https_ipv4
+        try:
+            raw = await bounded_fetch(
+                url,
+                canonical_host=host,
+                provider_name="Kalshi authoritative settlement",
+                user_agent="kalshi-bot/authoritative-settlement-v1",
+                timeout=timeout_seconds,
+                max_bytes=_AUTHORITATIVE_MARKET_MAX_BYTES,
+            )
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return None
+            raise
+        market = normalize_market_detail(
+            _bounded_json_object(raw, provider_name="Kalshi authoritative settlement")
+        )
+        if market.ticker != ticker:
+            raise ValueError("Kalshi authoritative settlement ticker mismatch")
+        return market
 
     def get_series(self, series_ticker: str) -> KalshiSeriesMetadata | None:
         """Fetch and normalize one series detail payload for shadow metadata."""
