@@ -366,6 +366,8 @@ async def test_polymarket_bounded_exact_reads_map_only_404_to_none(
         "https://gateway.polymarket.us?ignored=1",
         "https://gateway.polymarket.us#fragment",
         "https://user:pass@gateway.polymarket.us",
+        "https://GATEWAY.POLYMARKET.US",
+        "https://gateway.polymarket.us:",
         "https://gateway.polymarket.us:443",
         "https://gateway.polymarket.us:444",
         "https://gateway.polymarket.us:invalid",
@@ -447,6 +449,22 @@ async def test_polymarket_bounded_settlement_never_maps_malformed_2xx_to_none(
         return raw
 
     with pytest.raises(ValueError):
+        await client.get_market_settlement_exact_bounded(
+            "exact-slug", timeout_seconds=2.0, fetcher=fetcher
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("settlement", [[], True, float("nan"), float("inf")])
+async def test_polymarket_bounded_settlement_rejects_non_decimal_value(
+    settlement: object,
+) -> None:
+    client = PolymarketPublicClient(base_url="https://gateway.polymarket.us")
+
+    async def fetcher(*_: object, **__: object) -> bytes:
+        return _json_bytes({"slug": "exact-slug", "settlement": settlement})
+
+    with pytest.raises(ValueError, match="settlement"):
         await client.get_market_settlement_exact_bounded(
             "exact-slug", timeout_seconds=2.0, fetcher=fetcher
         )

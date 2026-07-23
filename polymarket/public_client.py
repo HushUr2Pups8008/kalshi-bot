@@ -65,6 +65,11 @@ def _authoritative_slug(value: str) -> str:
 def _authoritative_base_url(value: str) -> str:
     if not isinstance(value, str):
         raise ValueError("Polymarket authoritative settlement base must be a string")
+    canonical_base = f"https://{_POLYMARKET_AUTHORITATIVE_HOST}"
+    if value != canonical_base:
+        raise ValueError(
+            "Polymarket authoritative settlement requires exact gateway.polymarket.us HTTPS base"
+        )
     parsed = urllib.parse.urlsplit(value)
     try:
         port = parsed.port
@@ -85,7 +90,7 @@ def _authoritative_base_url(value: str) -> str:
         raise ValueError(
             "Polymarket authoritative settlement requires exact gateway.polymarket.us HTTPS base"
         )
-    return f"https://{_POLYMARKET_AUTHORITATIVE_HOST}"
+    return canonical_base
 
 
 def _bounded_json_object(raw: bytes, *, provider_name: str) -> dict[str, Any]:
@@ -176,6 +181,15 @@ class PolymarketPublicClient:
         if "settlement" not in payload:
             raise ValueError(
                 "Polymarket US authoritative settlement response is missing settlement"
+            )
+        settlement = payload["settlement"]
+        if (
+            isinstance(settlement, bool)
+            or not isinstance(settlement, (int, float))
+            or not math.isfinite(float(settlement))
+        ):
+            raise ValueError(
+                "Polymarket US authoritative settlement response has invalid settlement"
             )
         return payload
 
