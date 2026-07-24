@@ -28,6 +28,7 @@ logs/service/
 logs/tests/
 logs/governance/
 logs/edge_replay/
+logs/state/ingest_seen/
 
 # Test temp directories
 tests/_tmp_*/

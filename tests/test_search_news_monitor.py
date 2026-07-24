@@ -193,3 +193,11 @@ def test_source_hint_query_results_are_tagged_before_callback():
     assert tagged.retrieval_mode == "source_hint"
     assert tagged.source_hint_query == "site:apnews.com trump visit iran"
     assert tagged.source_hint_domain == "apnews.com"
+
+
+def test_search_seen_state_path_is_distinct_from_rss_path():
+    from feeds.rss_monitor import RSS_SEEN_STATE_PATH
+    from feeds.search_news_monitor import SEARCH_SEEN_STATE_PATH
+
+    assert SEARCH_SEEN_STATE_PATH != RSS_SEEN_STATE_PATH
+    assert SEARCH_SEEN_STATE_PATH.name == "search_seen_ids.json"

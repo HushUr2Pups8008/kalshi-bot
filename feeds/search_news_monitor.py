@@ -20,7 +20,7 @@ Poll interval: 300s -- both engines index within minutes of publication.
 import asyncio
 import re
 import urllib.parse
-from collections import OrderedDict
+from pathlib import Path
 from typing import Callable, Awaitable, Sequence
 
 from config import (
@@ -34,11 +34,13 @@ from config import (
 )
 from feeds import NewsItem
 from feeds.rss_monitor import poll_feed
+from feeds.seen_state import checkpoint_seen_ids, load_seen_ids
 from kalshi import KalshiMarket
 from kalshi.series_metadata import KalshiSeriesMetadata
 from kalshi.source_hints import build_market_contract_context, build_market_first_queries
 from tasks.stats.edge_series import active_edge_series
 from utils.logger import get_logger
+from utils.output_paths import STATE_ROOT
 
 log = get_logger("search_monitor")
 
@@ -46,6 +48,7 @@ SEARCH_POLL_INTERVAL = 300   # seconds between full fetch cycles
 SEARCH_MAX_QUERIES   = 25    # max distinct queries per cycle (ranked by open_interest×uncertainty;
                             # news-edge series first when ENABLE_NEWS_EDGE_PRIORITIZATION)
 SEARCH_MAX_SEEN      = 2000  # dedup cache entry limit
+SEARCH_SEEN_STATE_PATH = STATE_ROOT / "ingest_seen" / "search_seen_ids.json"
 
 # Hard bounds for the AIMD articles-per-query controller
 _SEARCH_ARTICLES_MIN =  1
@@ -322,6 +325,7 @@ async def run_search_news_monitor(
     poll_interval: int = SEARCH_POLL_INTERVAL,
     queue_depth_fn: "Callable[[], float] | None" = None,
     get_series_metadata: "Callable[[], dict[str, KalshiSeriesMetadata]] | None" = None,
+    seen_state_path: Path = SEARCH_SEEN_STATE_PATH,
 ) -> None:
     """
     Poll Google News RSS and Bing News RSS for queries derived from active
@@ -340,7 +344,7 @@ async def run_search_news_monitor(
                         keep the cap static at its current AIMD value.
     """
     global _search_articles_cap
-    seen: OrderedDict = OrderedDict()
+    seen = load_seen_ids(seen_state_path, SEARCH_MAX_SEEN)
     engines = _enabled_search_engines()
     if not engines:
         log.info("Search news monitor disabled by source-family policy; skipping polling")
@@ -424,6 +428,7 @@ async def run_search_news_monitor(
             # Trim dedup cache to bound memory
             while len(seen) > SEARCH_MAX_SEEN:
                 seen.popitem(last=False)
+            checkpoint_seen_ids(seen_state_path, seen, SEARCH_MAX_SEEN)
 
         except Exception as exc:
             log.warning("Search news monitor cycle error: %s", exc)
