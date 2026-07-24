@@ -55,6 +55,17 @@ def test_corrupt_checkpoint_fails_open(tmp_path):
     assert list(load_seen_ids(path, max_seen=5_000)) == []
 
 
+@pytest.mark.parametrize("version", [True, 1.0])
+def test_non_integer_schema_versions_fail_open_even_with_valid_ids(tmp_path, version):
+    path = tmp_path / "rss_seen_ids.json"
+    path.write_text(
+        json.dumps({"version": version, "ids": ["a" * 64]}),
+        encoding="utf-8",
+    )
+
+    assert list(load_seen_ids(path, max_seen=5_000)) == []
+
+
 def test_unreadable_checkpoint_fails_open(tmp_path, monkeypatch):
     path = tmp_path / "rss_seen_ids.json"
     path.write_text('{"version": 1, "ids": ["' + "a" * 64 + '"]}', encoding="utf-8")

@@ -35,7 +35,10 @@ def load_seen_ids(path: Path, max_seen: int) -> OrderedDict[str, None]:
     """Load a valid checkpoint, failing open when the state cannot be read."""
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict) or payload.get("version") != _SCHEMA_VERSION:
+        if not isinstance(payload, dict):
+            raise ValueError("invalid checkpoint schema")
+        version = payload.get("version")
+        if type(version) is not int or version != _SCHEMA_VERSION:
             raise ValueError("invalid checkpoint schema")
         ids = payload.get("ids")
         if not isinstance(ids, list):

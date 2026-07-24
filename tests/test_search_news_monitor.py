@@ -1,4 +1,4 @@
-"""Unit tests for feeds/search_news_monitor query construction.
+"""Tests for feeds/search_news_monitor query construction and state recovery.
 
 Covers `_markets_to_queries`, specifically the news-edge prioritization
 (option A, 2026-05-30): markets on series with demonstrated news-edge must
@@ -10,6 +10,8 @@ out of the query budget starves the only markets the bot actually trades.
 """
 
 from types import SimpleNamespace
+
+import pytest
 
 from feeds import NewsItem
 from feeds.search_news_monitor import _markets_to_queries, _tag_source_hint_item, SEARCH_MAX_QUERIES
@@ -25,6 +27,33 @@ def _mkt(series, title, oi, price=50, *, settlement_sources=()):
         ticker=f"{series}-26JUN05-X",
         settlement_sources=tuple(settlement_sources),
     )
+
+
+class StopAfterOneSearchCycle(Exception):
+    pass
+
+
+def _parsed(*entries):
+    return SimpleNamespace(feed=SimpleNamespace(title="Example"), entries=list(entries))
+
+
+async def _run_one_search_cycle(delivered, seen_state_path, monkeypatch):
+    import feeds.search_news_monitor as search
+
+    async def callback(item):
+        delivered.append(item)
+
+    async def stop_after_cycle(_seconds):
+        raise StopAfterOneSearchCycle
+
+    monkeypatch.setattr(search.asyncio, "sleep", stop_after_cycle)
+    with pytest.raises(StopAfterOneSearchCycle):
+        await search.run_search_news_monitor(
+            callback,
+            get_markets=lambda: [_mkt("KXIRAN", "Iran nuclear response", oi=100)],
+            poll_interval=1,
+            seen_state_path=seen_state_path,
+        )
 
 
 def test_edge_series_market_queried_despite_low_open_interest():
@@ -201,3 +230,38 @@ def test_search_seen_state_path_is_distinct_from_rss_path():
 
     assert SEARCH_SEEN_STATE_PATH != RSS_SEEN_STATE_PATH
     assert SEARCH_SEEN_STATE_PATH.name == "search_seen_ids.json"
+
+
+@pytest.mark.asyncio
+async def test_search_monitor_restart_restores_seen_ids_and_delivers_older_new_item(
+    tmp_path, monkeypatch
+):
+    import feeds.search_news_monitor as search
+
+    first = SimpleNamespace(
+        link="https://example.test/first",
+        title="first",
+        summary="",
+        published="2026-07-24T06:00:00Z",
+    )
+    older_second = SimpleNamespace(
+        link="https://example.test/older-second",
+        title="older second",
+        summary="",
+        published="2026-07-24T05:00:00Z",
+    )
+    entries = [[first], [first, older_second]]
+    monkeypatch.setattr(
+        "feeds.rss_monitor.feedparser.parse",
+        lambda _url: _parsed(*entries.pop(0)),
+    )
+    monkeypatch.setattr(search, "DISABLED_SOURCE_FAMILIES", frozenset({"bing_news_query"}))
+    monkeypatch.setattr(search, "_search_articles_cap", 3)
+    assert len(search._enabled_search_engines()) == 1
+
+    delivered = []
+    seen_state_path = tmp_path / "search_seen_ids.json"
+    await _run_one_search_cycle(delivered, seen_state_path, monkeypatch)
+    await _run_one_search_cycle(delivered, seen_state_path, monkeypatch)
+
+    assert [item.headline for item in delivered] == ["first", "older second"]

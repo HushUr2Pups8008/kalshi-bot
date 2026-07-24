@@ -105,7 +105,7 @@ from feeds.dedup import HeadlineDedup
 from feeds.gdelt_monitor import run_gdelt_monitor
 from feeds.search_news_monitor import run_search_news_monitor
 from feeds.reddit_monitor import run_reddit_monitor
-from feeds.rss_monitor import run_rss_monitor
+from feeds.rss_monitor import FADE_TWEET_SEEN_STATE_PATH, run_rss_monitor
 from kalshi.rest_client import KalshiRestClient
 from kalshi.websocket_client import KalshiWebSocketClient
 from kalshi.source_hints import build_market_source_hint_diagnostics
@@ -3735,7 +3735,11 @@ class TradingBot:
             asyncio.create_task(self._trading_queue_consumer_task(),    name="blend_consumer"),
             asyncio.create_task(self._structural_recompute_task(),      name="structural"),
             *([asyncio.create_task(
-                run_rss_monitor(self._on_fade_tweet, feeds=FADE_TWEET_FEED_URLS),
+                run_rss_monitor(
+                    self._on_fade_tweet,
+                    feeds=FADE_TWEET_FEED_URLS,
+                    seen_state_path=FADE_TWEET_SEEN_STATE_PATH,
+                ),
                 name="fade_tweets",
             )] if FADE_TWEET_FEED_URLS else []),
         ]

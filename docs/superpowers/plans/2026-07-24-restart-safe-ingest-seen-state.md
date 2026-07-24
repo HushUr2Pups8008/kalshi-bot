@@ -4,7 +4,7 @@
 
 **Goal:** Persist RSS and search-news deduplication IDs across process restarts so retained feed backlogs do not flood the existing stale-news gate.
 
-**Architecture:** Add a narrow shared JSON checkpoint helper with one independent file per monitor. run_rss_monitor and run_search_news_monitor load their own bounded OrderedDict once and checkpoint it only after a full polling cycle. Separate files avoid concurrent writer races and malformed state fails open to duplicate delivery rather than false suppression.
+**Architecture:** Add a narrow shared JSON checkpoint helper with one independent file per monitor lifetime. Primary RSS, conditional fade-tweet RSS, and search-news load their own bounded OrderedDict once and checkpoint it only after a full polling cycle. Separate files avoid concurrent writer races and malformed state fails open to duplicate delivery rather than false suppression.
 
 **Tech Stack:** Python 3, collections.OrderedDict, json, pathlib.Path, os.replace, pytest.
 
@@ -12,7 +12,7 @@
 
 - Persist only existing SHA-256 link-plus-title IDs; never persist URLs, titles, queries, or feed bodies.
 - RSS retains at most 5,000 IDs and search retains at most 2,000 IDs.
-- Use STATE_ROOT / "ingest_seen" / {rss,search}_seen_ids.json; add only that directory to .gitignore.
+- Use STATE_ROOT / "ingest_seen" / {rss,fade_tweet,search}_seen_ids.json; add only that directory to .gitignore.
 - Write via a same-directory temporary file plus os.replace; failed checkpoints leave the previous file intact.
 - Missing, corrupt, unreadable, or schema-invalid state must return an empty cache and never raise from monitor startup.
 - Do not change recency policy, _parse_date, generic-search policy, paper/live flags, sizing, order submission, or central gating.

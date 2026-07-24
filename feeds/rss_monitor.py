@@ -40,6 +40,7 @@ log = get_logger("rss_monitor")
 # Maximum number of dedup IDs to keep in memory (oldest dropped first)
 MAX_SEEN = 5_000
 RSS_SEEN_STATE_PATH = STATE_ROOT / "ingest_seen" / "rss_seen_ids.json"
+FADE_TWEET_SEEN_STATE_PATH = STATE_ROOT / "ingest_seen" / "fade_tweet_seen_ids.json"
 
 # Timeout for a single feedparser.parse() call (seconds).
 # Prevents a hanging feed server from stalling the entire RSS poll cycle.

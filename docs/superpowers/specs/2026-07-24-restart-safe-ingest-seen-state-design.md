@@ -12,12 +12,13 @@ Preserve the monitors' existing bounded SHA-256 link-plus-title deduplication ID
 
 Add feeds/seen_state.py with a small JSON checkpoint helper. Each monitor gets an independent checkpoint below STATE_ROOT / "ingest_seen":
 
-- rss_seen_ids.json, capped at 5,000 IDs.
+- rss_seen_ids.json for primary RSS feeds, capped at 5,000 IDs.
+- fade_tweet_seen_ids.json for the conditional fade-tweet RSS feed, capped at 5,000 IDs.
 - search_seen_ids.json, capped at 2,000 IDs.
 
 Each file contains a versioned JSON object with an ordered ids list. The helper accepts only 64-character lowercase SHA-256 IDs, deduplicates entries, retains the newest IDs up to the caller's cap, and atomically writes a temporary sibling file followed by os.replace.
 
-Separate files avoid a cross-monitor read-modify-write race: RSS and search run concurrently but never write the same checkpoint. A missing, malformed, or unreadable checkpoint produces an empty in-memory cache and a warning. This may permit one duplicate replay after corruption, but must never suppress an unknown item.
+Separate files avoid a cross-monitor read-modify-write race: primary RSS, fade-tweet RSS, and search run concurrently but never write the same checkpoint. A missing, malformed, or unreadable checkpoint produces an empty in-memory cache and a warning. This may permit one duplicate replay after corruption, but must never suppress an unknown item.
 
 ## Data Flow
 
@@ -44,7 +45,8 @@ Tests must prove:
 3. An atomic-write failure leaves a prior valid checkpoint unchanged.
 4. Two RSS monitor lifetimes over identical entries invoke the callback only during the first lifetime.
 5. A distinct fresh ID after restart is still delivered even if it would be out of publish order.
-6. The search-news monitor uses its own state path rather than the RSS path.
+6. The search-news monitor uses its own state path rather than either RSS path.
+7. Primary RSS and conditional fade-tweet RSS use distinct state paths.
 
 ## Runtime Acceptance
 
