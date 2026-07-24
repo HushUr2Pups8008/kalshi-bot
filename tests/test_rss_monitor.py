@@ -1,4 +1,4 @@
-"""Unit tests for feeds/rss_monitor helpers.
+"""Tests for RSS monitor helpers and monitor-lifetime behavior.
 
 Covers `_entry_source`, which extracts the real publisher when a feed
 aggregator (Google News RSS) populates `<source>` at the item level,
@@ -7,7 +7,137 @@ and falls back to the feed-level label for regular publisher feeds.
 
 from types import SimpleNamespace
 
+import pytest
+
 from feeds.rss_monitor import _entry_source
+
+
+class StopAfterOneCycle(Exception):
+    pass
+
+
+def _parsed(*entries):
+    return SimpleNamespace(feed=SimpleNamespace(title="Example"), entries=list(entries))
+
+
+async def _run_one_rss_cycle(delivered, seen_state_path, monkeypatch):
+    import feeds.rss_monitor as rss
+
+    async def callback(item):
+        delivered.append(item)
+
+    async def stop_after_cycle(_seconds):
+        raise StopAfterOneCycle
+
+    monkeypatch.setattr(rss.asyncio, "sleep", stop_after_cycle)
+    with pytest.raises(StopAfterOneCycle):
+        await rss.run_rss_monitor(
+            callback,
+            feeds=["https://example.test/feed"],
+            poll_interval=1,
+            seen_state_path=seen_state_path,
+        )
+
+
+@pytest.mark.asyncio
+async def test_rss_monitor_restart_suppresses_retained_backlog(tmp_path, monkeypatch):
+    entry = SimpleNamespace(
+        link="https://example.test/a",
+        title="fresh",
+        summary="",
+        published="2026-07-24T06:00:00Z",
+    )
+    monkeypatch.setattr("feeds.rss_monitor.feedparser.parse", lambda _url: _parsed(entry))
+
+    delivered = []
+    await _run_one_rss_cycle(delivered, tmp_path / "rss_seen_ids.json", monkeypatch)
+    await _run_one_rss_cycle(delivered, tmp_path / "rss_seen_ids.json", monkeypatch)
+
+    assert [item.headline for item in delivered] == ["fresh"]
+
+
+@pytest.mark.asyncio
+async def test_rss_monitor_restart_delivers_distinct_item(tmp_path, monkeypatch):
+    first = SimpleNamespace(
+        link="https://example.test/first",
+        title="first",
+        summary="",
+        published="2026-07-24T06:00:00Z",
+    )
+    second = SimpleNamespace(
+        link="https://example.test/second",
+        title="second",
+        summary="",
+        published="2026-07-24T05:00:00Z",
+    )
+    entries = [[first], [first, second]]
+    monkeypatch.setattr(
+        "feeds.rss_monitor.feedparser.parse",
+        lambda _url: _parsed(*entries.pop(0)),
+    )
+
+    delivered = []
+    await _run_one_rss_cycle(delivered, tmp_path / "rss_seen_ids.json", monkeypatch)
+    await _run_one_rss_cycle(delivered, tmp_path / "rss_seen_ids.json", monkeypatch)
+
+    assert [item.headline for item in delivered] == ["first", "second"]
+
+
+@pytest.mark.asyncio
+async def test_rss_monitor_retries_checkpoint_without_duplicate_delivery(
+    tmp_path, monkeypatch, caplog
+):
+    import feeds.rss_monitor as rss
+
+    entry = SimpleNamespace(
+        link="https://example.test/a",
+        title="fresh",
+        summary="",
+        published="2026-07-24T06:00:00Z",
+    )
+    monkeypatch.setattr("feeds.rss_monitor.feedparser.parse", lambda _url: _parsed(entry))
+
+    checkpoint_attempts = 0
+
+    def checkpoint_fails(*_args):
+        nonlocal checkpoint_attempts
+        checkpoint_attempts += 1
+        raise OSError("checkpoint unavailable")
+
+    sleep_calls = 0
+
+    async def stop_after_second_cycle(_seconds):
+        nonlocal sleep_calls
+        sleep_calls += 1
+        if sleep_calls == 2:
+            raise StopAfterOneCycle
+
+    delivered = []
+
+    async def callback(item):
+        delivered.append(item)
+
+    monkeypatch.setattr(rss, "checkpoint_seen_ids", checkpoint_fails)
+    monkeypatch.setattr(rss.asyncio, "sleep", stop_after_second_cycle)
+
+    with pytest.raises(StopAfterOneCycle):
+        await rss.run_rss_monitor(
+            callback,
+            feeds=["https://example.test/feed"],
+            poll_interval=1,
+            seen_state_path=tmp_path / "rss_seen_ids.json",
+        )
+
+    assert checkpoint_attempts == 2
+    assert [item.headline for item in delivered] == ["fresh"]
+    assert [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "rss_monitor" and record.levelname == "WARNING"
+    ] == [
+        "RSS seen-state checkpoint failed; retaining in-memory cache and will retry",
+        "RSS seen-state checkpoint failed; retaining in-memory cache and will retry",
+    ]
 
 
 def test_entry_source_prefers_entry_source_title_attribute():

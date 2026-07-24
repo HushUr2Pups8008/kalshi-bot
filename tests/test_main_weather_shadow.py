@@ -306,6 +306,12 @@ async def test_run_drains_only_weather_before_existing_cleanup(monkeypatch):
     async def _idle(*args, **kwargs):
         return None
 
+    rss_monitor_calls = []
+
+    def _record_rss_monitor(*args, **kwargs):
+        rss_monitor_calls.append((args, kwargs))
+        return _idle()
+
     bot = TradingBot.__new__(TradingBot)
     bot.paper = SimpleNamespace(get_notional_bankroll=lambda: 100.0)
     bot.rest = SimpleNamespace(get_balance=lambda: 0.0)
@@ -357,12 +363,13 @@ async def test_run_drains_only_weather_before_existing_cleanup(monkeypatch):
     monkeypatch.setattr(config_module.cfg, "is_paper_trading", True)
     monkeypatch.setattr(main_module, "emit_startup_banner", MagicMock())
     monkeypatch.setattr(main_module, "_log_bankroll_summary", MagicMock())
-    monkeypatch.setattr(main_module, "run_rss_monitor", _idle)
+    monkeypatch.setattr(main_module, "run_rss_monitor", _record_rss_monitor)
     monkeypatch.setattr(main_module, "run_reddit_monitor", _idle)
     monkeypatch.setattr(main_module, "run_search_news_monitor", _idle)
     monkeypatch.setattr(main_module, "run_gdelt_monitor", _idle)
     monkeypatch.setattr(main_module, "run_runtime_overrides_poll", _idle)
-    monkeypatch.setattr(main_module, "FADE_TWEET_FEED_URLS", ())
+    fade_feeds = ("https://example.test/fade-tweets",)
+    monkeypatch.setattr(main_module, "FADE_TWEET_FEED_URLS", fade_feeds)
     monkeypatch.setattr(main_module.asyncio, "create_task", _create_task)
     monkeypatch.setattr(main_module.asyncio, "gather", _gather)
 
@@ -380,6 +387,7 @@ async def test_run_drains_only_weather_before_existing_cleanup(monkeypatch):
     assert Counter(task.name for task in global_items) == Counter(
         {
             "rss": 1,
+            "fade_tweets": 1,
             "reddit": 1,
             "search": 1,
             "gdelt": 1,
@@ -401,6 +409,20 @@ async def test_run_drains_only_weather_before_existing_cleanup(monkeypatch):
             "capital_guard_shadow_settlement_collection": 1,
         }
     )
+    from feeds.rss_monitor import RSS_SEEN_STATE_PATH
+
+    normal_args, normal_kwargs = rss_monitor_calls[0]
+    fade_args, fade_kwargs = rss_monitor_calls[1]
+    assert normal_args == (bot._enqueue_news,)
+    assert normal_kwargs == {}
+    assert fade_args[0].__self__ is bot
+    assert fade_kwargs["feeds"] == fade_feeds
+    normal_seen_state_path = normal_kwargs.get("seen_state_path", RSS_SEEN_STATE_PATH)
+    fade_seen_state_path = fade_kwargs["seen_state_path"]
+    assert normal_seen_state_path == RSS_SEEN_STATE_PATH
+    assert fade_seen_state_path != normal_seen_state_path
+    assert fade_seen_state_path.name == "fade_tweet_seen_ids.json"
+    assert main_module.FADE_TWEET_SEEN_STATE_PATH == fade_seen_state_path
     assert events.index("drain:weather_shadow_capture") < events.index(
         "targeted-prewarm-cleanup"
     )

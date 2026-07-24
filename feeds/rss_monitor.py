@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 from collections import OrderedDict
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Callable, Awaitable
 
 import feedparser
@@ -30,12 +31,16 @@ _RSS_TZINFOS = {
 
 from config import RSS_FEEDS, RSS_POLL_INTERVAL_SECONDS
 from feeds import NewsItem
+from feeds.seen_state import checkpoint_seen_ids, load_seen_ids
 from utils.logger import get_logger
+from utils.output_paths import STATE_ROOT
 
 log = get_logger("rss_monitor")
 
 # Maximum number of dedup IDs to keep in memory (oldest dropped first)
 MAX_SEEN = 5_000
+RSS_SEEN_STATE_PATH = STATE_ROOT / "ingest_seen" / "rss_seen_ids.json"
+FADE_TWEET_SEEN_STATE_PATH = STATE_ROOT / "ingest_seen" / "fade_tweet_seen_ids.json"
 
 # Timeout for a single feedparser.parse() call (seconds).
 # Prevents a hanging feed server from stalling the entire RSS poll cycle.
@@ -152,6 +157,7 @@ async def run_rss_monitor(
     callback: Callable[[NewsItem], Awaitable[None]],
     feeds: list[str] | None = None,
     poll_interval: int = RSS_POLL_INTERVAL_SECONDS,
+    seen_state_path: Path = RSS_SEEN_STATE_PATH,
 ) -> None:
     """
     Continuously poll all RSS feeds and call `callback` for each new item.
@@ -161,11 +167,17 @@ async def run_rss_monitor(
     if feeds is None:
         feeds = RSS_FEEDS
 
-    seen: OrderedDict = OrderedDict()
+    seen = load_seen_ids(seen_state_path, MAX_SEEN)
     log.info("RSS monitor started -- watching %d feeds", len(feeds))
 
     while True:
         tasks = [poll_feed(url, callback, seen) for url in feeds]
         await asyncio.gather(*tasks, return_exceptions=True)
+        try:
+            checkpoint_seen_ids(seen_state_path, seen, MAX_SEEN)
+        except OSError:
+            log.warning(
+                "RSS seen-state checkpoint failed; retaining in-memory cache and will retry"
+            )
         log.debug("RSS poll cycle complete, sleeping %ds", poll_interval)
         await asyncio.sleep(poll_interval)
