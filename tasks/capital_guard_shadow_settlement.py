@@ -8,9 +8,9 @@ is synchronous and lossy, so it does not satisfy this module's protocol.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import inspect
 from typing import Protocol, TypeVar
@@ -21,6 +21,8 @@ from trading.capital_guard_shadow import (
     MAX_SETTLEMENT_MARKETS_PER_RUN,
     CapitalGuardShadowIdentityError,
     CapitalGuardShadowStore,
+    SettlementMarketKey,
+    SettlementPollState,
 )
 from trading.settlement import (
     SettlementDriftError,
@@ -59,6 +61,100 @@ class SettlementCollectionResult:
     conflicts: int = 0
 
 
+class SettlementPollingPolicy:
+    """Pure bounded policy over durable, read-only store projection facts."""
+
+    _RETRY_BACKOFFS: dict[str, tuple[timedelta, timedelta]] = {
+        "transient_error": (timedelta(minutes=5), timedelta(hours=1)),
+        "nonterminal": (timedelta(minutes=15), timedelta(hours=24)),
+        "internal_error": (timedelta(minutes=15), timedelta(hours=6)),
+        "not_found": (timedelta(hours=1), timedelta(hours=24)),
+    }
+
+    def next_due_at(
+        self,
+        state: SettlementPollState,
+        *,
+        now: datetime,
+    ) -> datetime | None:
+        """Return the next due time, or ``None`` for a terminal current snapshot."""
+        _require_utc_datetime("now", now)
+        if state.latest_attempted_at is None or not self._snapshot_matches(state):
+            return now
+        if state.latest_status in ("terminal", "quarantined"):
+            return None
+        retry = self._RETRY_BACKOFFS.get(state.latest_status)
+        if retry is None:
+            raise ValueError("poll state has an invalid latest status")
+        base, maximum = retry
+        retries = max(1, state.matching_snapshot_retry_count)
+        delay_seconds = min(
+            base.total_seconds() * (2 ** min(retries - 1, 63)),
+            maximum.total_seconds(),
+        )
+        return state.latest_attempted_at + timedelta(seconds=delay_seconds)
+
+    def select_due(
+        self,
+        states: Iterable[SettlementPollState],
+        *,
+        now: datetime,
+        limit: int = MAX_SETTLEMENT_MARKETS_PER_RUN,
+    ) -> tuple[SettlementMarketKey, ...]:
+        """Select at most the existing hard cap in deterministic due-time order."""
+        _require_utc_datetime("now", now)
+        _require_market_limit(limit)
+        due = [
+            (next_due_at, state)
+            for state in states
+            if (next_due_at := self.next_due_at(state, now=now)) is not None and next_due_at <= now
+        ]
+        due.sort(
+            key=lambda item: (
+                item[0],
+                item[1].first_decision_at,
+                item[1].market_key.venue.value,
+                item[1].market_key.venue_market_id,
+            )
+        )
+        return tuple(state.market_key for _due_at, state in due[:limit])
+
+    def select_terminal_correction_audit(
+        self,
+        states: Iterable[SettlementPollState],
+        *,
+        limit: int = MAX_SETTLEMENT_MARKETS_PER_RUN,
+    ) -> tuple[SettlementMarketKey, ...]:
+        """Select an explicit, bounded audit of unchanged terminal snapshots."""
+        _require_market_limit(limit)
+        terminal = [
+            state
+            for state in states
+            if self._snapshot_matches(state)
+            and state.latest_status == "terminal"
+            and state.latest_attempted_at is not None
+        ]
+        terminal.sort(
+            key=lambda state: (
+                state.latest_attempted_at,
+                state.first_decision_at,
+                state.market_key.venue.value,
+                state.market_key.venue_market_id,
+            )
+        )
+        return tuple(state.market_key for state in terminal[:limit])
+
+    @staticmethod
+    def _snapshot_matches(state: SettlementPollState) -> bool:
+        if state.latest_snapshot_count != state.current_candidate_count:
+            return False
+        if state.latest_snapshot_complete != state.current_candidate_set_complete:
+            return False
+        if not state.current_candidate_set_complete:
+            return state.latest_snapshot_sha256 is None and state.current_candidate_set_sha256 is None
+        return state.latest_snapshot_sha256 == state.current_candidate_set_sha256
+
+
 class CapitalGuardShadowSettlementCollector:
     """Poll exact market groups without payout, evaluation, or runtime mutation."""
 
@@ -86,13 +182,47 @@ class CapitalGuardShadowSettlementCollector:
         self._source = source
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._max_candidates_per_market = max_candidates_per_market
+        self._polling_policy = SettlementPollingPolicy()
 
     async def run_once(
         self,
         *,
         limit: int = MAX_SETTLEMENT_MARKETS_PER_RUN,
     ) -> SettlementCollectionResult:
-        keys = await self._store_call(lambda: self._store.settlement_market_backlog(limit=limit))
+        """Run the default bounded policy; unchanged terminal state stays suppressed."""
+        return await self._run_once(limit=limit, terminal_correction_audit=False)
+
+    async def audit_terminal_corrections_once(
+        self,
+        *,
+        limit: int = MAX_SETTLEMENT_MARKETS_PER_RUN,
+    ) -> SettlementCollectionResult:
+        """Explicit bounded audit of unchanged terminal snapshots.
+
+        This path is intentionally not runtime-wired. It exists for a future
+        operator/manual correction audit and never bypasses the market cap.
+        """
+        return await self._run_once(limit=limit, terminal_correction_audit=True)
+
+    async def _run_once(
+        self,
+        *,
+        limit: int,
+        terminal_correction_audit: bool,
+    ) -> SettlementCollectionResult:
+        now = self._clock()
+        _require_utc_datetime("clock", now)
+        states = await self._store_call(
+            lambda: self._store.settlement_poll_states(
+                limit=limit,
+                terminal_correction_audit=terminal_correction_audit,
+                now=now,
+            )
+        )
+        if terminal_correction_audit:
+            keys = self._polling_policy.select_terminal_correction_audit(states, limit=limit)
+        else:
+            keys = self._polling_policy.select_due(states, now=now, limit=limit)
         counts = {
             "checked": 0,
             "nonterminal": 0,
@@ -106,7 +236,7 @@ class CapitalGuardShadowSettlementCollector:
             "conflicts": 0,
         }
         for key in keys:
-            attempted_at = self._clock()
+            attempted_at = now
             try:
                 backlog = await self._store_call(
                     lambda: self._store.candidate_settlement_backlog(key, limit=self._max_candidates_per_market)
@@ -129,6 +259,23 @@ class CapitalGuardShadowSettlementCollector:
                         error_taxonomy="source_drift",
                         error_sha256=_error_sha256("source_drift"),
                         quarantine_reason="source_drift",
+                    )
+                )
+                self._count_write_result(counts, result)
+                continue
+            if (
+                backlog.current_head_sha256 is not None
+                and backlog.prior_authoritative_observation is not None
+                and backlog.missing_link_candidate_ids
+            ):
+                # A new candidate can attach to a validated current head without
+                # re-querying an already terminal authoritative market.
+                result = await self._store_call(
+                    lambda: self._store.record_settlement_attempt(
+                        backlog,
+                        attempted_at=attempted_at,
+                        status="terminal",
+                        observation=backlog.prior_authoritative_observation,
                     )
                 )
                 self._count_write_result(counts, result)
@@ -267,6 +414,26 @@ class CapitalGuardShadowSettlementCollector:
             counts["inserted_observations"] += 1
         elif result.observation_status == "identical":
             counts["identical_observations"] += 1
+
+
+def _require_utc_datetime(name: str, value: object) -> None:
+    if (
+        not isinstance(value, datetime)
+        or value.tzinfo is None
+        or value.utcoffset() is None
+        or value.utcoffset() != timezone.utc.utcoffset(value)
+    ):
+        raise ValueError(f"{name} must be a UTC timezone-aware datetime")
+
+
+def _require_market_limit(limit: object) -> None:
+    if (
+        not isinstance(limit, int)
+        or isinstance(limit, bool)
+        or limit <= 0
+        or limit > MAX_SETTLEMENT_MARKETS_PER_RUN
+    ):
+        raise ValueError("limit exceeds hard bounded maximum")
 
 
 def _error_sha256(taxonomy: str, exc: BaseException | None = None) -> str:

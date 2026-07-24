@@ -16,6 +16,7 @@ from kalshi import KalshiMarket
 from polymarket.settlement_reconciler import SettlementNotFound
 from tasks.capital_guard_shadow_settlement import (
     CapitalGuardShadowSettlementCollector,
+    SettlementPollingPolicy,
 )
 from tests.test_capital_guard_shadow import (
     NOW,
@@ -28,6 +29,7 @@ from trading.capital_guard_shadow import (
     MAX_SETTLEMENT_MARKETS_PER_RUN,
     CapitalGuardShadowIdentityError,
     CapitalGuardShadowStore,
+    SettlementPollState,
     SettlementMarketKey,
     canonical_json,
 )
@@ -104,6 +106,381 @@ class SequenceSource:
         return value
 
 
+def _poll_state(
+    *,
+    market_id: str = "KXTEST-1",
+    first_decision_at: datetime = NOW,
+    candidate_count: int = 1,
+    candidate_set_sha256: str = "a" * 64,
+    candidate_set_complete: bool = True,
+    latest_attempted_at: datetime | None = None,
+    latest_status: str | None = None,
+    latest_snapshot_count: int | None = None,
+    latest_snapshot_sha256: str | None = None,
+    latest_snapshot_complete: bool | None = None,
+    matching_snapshot_retry_count: int = 0,
+) -> SettlementPollState:
+    return SettlementPollState(
+        market_key=SettlementMarketKey(Venue.KALSHI, market_id),
+        first_decision_at=first_decision_at,
+        current_candidate_count=candidate_count,
+        current_candidate_set_sha256=candidate_set_sha256,
+        current_candidate_set_complete=candidate_set_complete,
+        latest_attempted_at=latest_attempted_at,
+        latest_status=latest_status,
+        latest_snapshot_count=latest_snapshot_count,
+        latest_snapshot_sha256=latest_snapshot_sha256,
+        latest_snapshot_complete=latest_snapshot_complete,
+        matching_snapshot_retry_count=matching_snapshot_retry_count,
+    )
+
+
+def test_polling_policy_immediately_reopens_new_snapshot_and_suppresses_terminal_or_quarantine() -> None:
+    policy = SettlementPollingPolicy()
+    now = NOW + timedelta(days=2)
+    attempted_at = now - timedelta(minutes=1)
+
+    assert policy.next_due_at(_poll_state(), now=now) == now
+    assert policy.next_due_at(
+        _poll_state(
+            latest_attempted_at=attempted_at,
+            latest_status="terminal",
+            latest_snapshot_count=1,
+            latest_snapshot_sha256="a" * 64,
+            latest_snapshot_complete=True,
+        ),
+        now=now,
+    ) is None
+    assert policy.next_due_at(
+        _poll_state(
+            latest_attempted_at=attempted_at,
+            latest_status="quarantined",
+            latest_snapshot_count=1,
+            latest_snapshot_sha256="a" * 64,
+            latest_snapshot_complete=True,
+        ),
+        now=now,
+    ) is None
+    assert policy.next_due_at(
+        _poll_state(
+            candidate_count=2,
+            candidate_set_sha256="b" * 64,
+            latest_attempted_at=attempted_at,
+            latest_status="terminal",
+            latest_snapshot_count=1,
+            latest_snapshot_sha256="a" * 64,
+            latest_snapshot_complete=True,
+        ),
+        now=now,
+    ) == now
+
+
+@pytest.mark.parametrize(
+    ("status", "retries", "expected_delay"),
+    (
+        ("transient_error", 1, timedelta(minutes=5)),
+        ("transient_error", 99, timedelta(hours=1)),
+        ("nonterminal", 2, timedelta(minutes=30)),
+        ("nonterminal", 99, timedelta(hours=24)),
+        ("internal_error", 3, timedelta(hours=1)),
+        ("internal_error", 99, timedelta(hours=6)),
+        ("not_found", 2, timedelta(hours=2)),
+        ("not_found", 99, timedelta(hours=24)),
+    ),
+)
+def test_polling_policy_uses_bounded_exponential_retry_backoff(
+    status: str,
+    retries: int,
+    expected_delay: timedelta,
+) -> None:
+    policy = SettlementPollingPolicy()
+    attempted_at = NOW + timedelta(days=2)
+    state = _poll_state(
+        latest_attempted_at=attempted_at,
+        latest_status=status,
+        latest_snapshot_count=1,
+        latest_snapshot_sha256="a" * 64,
+        latest_snapshot_complete=True,
+        matching_snapshot_retry_count=retries,
+    )
+
+    assert policy.next_due_at(state, now=attempted_at) == attempted_at + expected_delay
+
+
+def test_polling_policy_orders_due_work_and_honors_market_cap() -> None:
+    policy = SettlementPollingPolicy()
+    now = NOW + timedelta(days=2)
+    states = tuple(
+        _poll_state(
+            market_id=f"KXTEST-{number:03d}",
+            first_decision_at=NOW + timedelta(seconds=number),
+        )
+        for number in range(MAX_SETTLEMENT_MARKETS_PER_RUN + 1)
+    )
+    delayed = _poll_state(
+        market_id="KXDELAYED",
+        latest_attempted_at=now,
+        latest_status="transient_error",
+        latest_snapshot_count=1,
+        latest_snapshot_sha256="a" * 64,
+        latest_snapshot_complete=True,
+        matching_snapshot_retry_count=1,
+    )
+
+    selected = policy.select_due(states + (delayed,), now=now, limit=MAX_SETTLEMENT_MARKETS_PER_RUN)
+
+    assert len(selected) == MAX_SETTLEMENT_MARKETS_PER_RUN
+    assert tuple(key.venue_market_id for key in selected[:3]) == (
+        "KXTEST-000",
+        "KXTEST-001",
+        "KXTEST-002",
+    )
+    assert "KXTEST-100" not in {key.venue_market_id for key in selected}
+    assert "KXDELAYED" not in {key.venue_market_id for key in selected}
+
+
+def test_terminal_correction_audit_policy_is_bounded_and_snapshot_exact() -> None:
+    policy = SettlementPollingPolicy()
+    attempted_at = NOW + timedelta(days=2)
+    terminal_states = tuple(
+        _poll_state(
+            market_id=f"KXTERMINAL-{number:03d}",
+            first_decision_at=NOW + timedelta(seconds=number),
+            latest_attempted_at=attempted_at + timedelta(seconds=number),
+            latest_status="terminal",
+            latest_snapshot_count=1,
+            latest_snapshot_sha256="a" * 64,
+            latest_snapshot_complete=True,
+        )
+        for number in range(MAX_SETTLEMENT_MARKETS_PER_RUN + 1)
+    )
+    changed_snapshot = _poll_state(
+        market_id="KXCHANGED",
+        candidate_count=2,
+        candidate_set_sha256="b" * 64,
+        latest_attempted_at=attempted_at,
+        latest_status="quarantined",
+        latest_snapshot_count=1,
+        latest_snapshot_sha256="a" * 64,
+        latest_snapshot_complete=True,
+    )
+    quarantined = _poll_state(
+        market_id="KXQUARANTINED",
+        latest_attempted_at=attempted_at - timedelta(seconds=1),
+        latest_status="quarantined",
+        latest_snapshot_count=1,
+        latest_snapshot_sha256="a" * 64,
+        latest_snapshot_complete=True,
+    )
+
+    selected = policy.select_terminal_correction_audit(
+        (quarantined,) + terminal_states + (changed_snapshot,),
+        limit=MAX_SETTLEMENT_MARKETS_PER_RUN,
+    )
+
+    assert len(selected) == MAX_SETTLEMENT_MARKETS_PER_RUN
+    assert tuple(key.venue_market_id for key in selected[:3]) == (
+        "KXTERMINAL-000",
+        "KXTERMINAL-001",
+        "KXTERMINAL-002",
+    )
+    assert "KXTERMINAL-100" not in {key.venue_market_id for key in selected}
+    assert "KXCHANGED" not in {key.venue_market_id for key in selected}
+    assert "KXQUARANTINED" not in {key.venue_market_id for key in selected}
+
+
+def test_poll_state_projection_reopens_changed_snapshot_after_restart(tmp_path: Path) -> None:
+    store = _initialized_store(tmp_path)
+    first = candidate()
+    _append_candidate(store, first)
+    market_key = SettlementMarketKey(Venue.KALSHI, first.venue_market_id)
+    backlog = store.candidate_settlement_backlog(market_key)
+    attempted_at = NOW + timedelta(days=2)
+    store.record_settlement_attempt(
+        backlog,
+        attempted_at=attempted_at,
+        status="nonterminal",
+        error_taxonomy="authoritative_nonterminal",
+        error_sha256="a" * 64,
+    )
+
+    restarted = CapitalGuardShadowStore(store.db_path, existing_only=True)
+    before = restarted.settlement_poll_states()
+
+    assert len(before) == 1
+    assert before[0].current_candidate_count == 1
+    assert before[0].latest_status == "nonterminal"
+    assert before[0].matching_snapshot_retry_count == 1
+    _append_candidate(store, candidate(decision_key="decision-2", lifecycle_id="lifecycle-2"))
+    after = restarted.settlement_poll_states()
+
+    assert after[0].current_candidate_count == 2
+    assert after[0].latest_snapshot_count == 1
+    assert after[0].matching_snapshot_retry_count == 0
+    assert SettlementPollingPolicy().next_due_at(after[0], now=attempted_at) == attempted_at
+
+
+def test_poll_state_projection_is_bounded_and_prioritizes_untried_market(tmp_path: Path) -> None:
+    store = _initialized_store(tmp_path)
+    attempted_at = NOW + timedelta(days=2)
+    for number in range(MAX_SETTLEMENT_MARKETS_PER_RUN):
+        record = candidate(
+            decision_key=f"decision-{number}",
+            lifecycle_id=f"lifecycle-{number}",
+            venue_market_id=f"KXQ{number:03d}-26JUL15-T50",
+        )
+        _append_candidate(store, record)
+        market_key = SettlementMarketKey(Venue.KALSHI, record.venue_market_id)
+        store.record_settlement_attempt(
+            store.candidate_settlement_backlog(market_key),
+            attempted_at=attempted_at,
+            status="quarantined",
+            error_taxonomy="source_drift",
+            error_sha256="c" * 64,
+            quarantine_reason="source_drift",
+        )
+    fresh = candidate(
+        decision_key="fresh-decision",
+        lifecycle_id="fresh-lifecycle",
+        venue_market_id="KZZFRESH-26JUL15-T50",
+    )
+    _append_candidate(store, fresh)
+
+    states = store.settlement_poll_states()
+    selected = SettlementPollingPolicy().select_due(states, now=attempted_at)
+
+    assert len(states) == MAX_SETTLEMENT_MARKETS_PER_RUN
+    assert states[0].market_key.venue_market_id == fresh.venue_market_id
+    assert selected == (SettlementMarketKey(Venue.KALSHI, fresh.venue_market_id),)
+
+
+@pytest.mark.asyncio
+async def test_collector_prioritizes_due_retry_over_older_not_due_backlog(tmp_path: Path) -> None:
+    store = _initialized_store(tmp_path)
+    now = NOW + timedelta(days=2)
+    for number in range(MAX_SETTLEMENT_MARKETS_PER_RUN):
+        record = candidate(
+            decision_key=f"not-found-decision-{number}",
+            lifecycle_id=f"not-found-lifecycle-{number}",
+            venue_market_id=f"KXNOTFOUND{number:03d}-26JUL15-T50",
+        )
+        _append_candidate(store, record)
+        store.record_settlement_attempt(
+            store.candidate_settlement_backlog(
+                SettlementMarketKey(Venue.KALSHI, record.venue_market_id)
+            ),
+            attempted_at=now - timedelta(minutes=30),
+            status="not_found",
+            error_taxonomy="authoritative_not_found",
+            error_sha256="d" * 64,
+        )
+    due = candidate(
+        decision_key="due-transient-decision",
+        lifecycle_id="due-transient-lifecycle",
+        venue_market_id="KZZDUE-26JUL15-T50",
+    )
+    _append_candidate(store, due)
+    store.record_settlement_attempt(
+        store.candidate_settlement_backlog(SettlementMarketKey(Venue.KALSHI, due.venue_market_id)),
+        attempted_at=now - timedelta(minutes=5),
+        status="transient_error",
+        error_taxonomy="timeout",
+        error_sha256="e" * 64,
+    )
+    due_ref = MarketRef(Venue.KALSHI, due.venue_market_id, due.venue_market_id)
+    source = SequenceSource({due_ref: [None]})
+
+    result = await CapitalGuardShadowSettlementCollector(
+        store=store,
+        source=source,
+        clock=lambda: now,
+    ).run_once(limit=MAX_SETTLEMENT_MARKETS_PER_RUN)
+
+    assert result.checked == 1
+    assert source.calls == [due_ref]
+
+
+@pytest.mark.asyncio
+async def test_terminal_current_snapshot_is_not_polled_again(tmp_path: Path) -> None:
+    store = _initialized_store(tmp_path)
+    record = candidate()
+    _append_candidate(store, record)
+    market_ref = MarketRef(Venue.KALSHI, record.venue_market_id, record.venue_market_id)
+    source = SequenceSource({market_ref: [_authoritative(market_ref), _authoritative(market_ref)]})
+    now = NOW + timedelta(days=2)
+    collector = CapitalGuardShadowSettlementCollector(store=store, source=source, clock=lambda: now)
+
+    first = await collector.run_once(limit=10)
+    second = await collector.run_once(limit=10)
+
+    assert first.terminal == 1
+    assert second.checked == 0
+    assert source.calls == [market_ref]
+
+
+@pytest.mark.asyncio
+async def test_late_candidate_links_to_valid_head_without_source_io(tmp_path: Path) -> None:
+    store = _initialized_store(tmp_path)
+    first = candidate()
+    first_id = _append_candidate(store, first).candidate_id
+    market_ref = MarketRef(Venue.KALSHI, first.venue_market_id, first.venue_market_id)
+    source = SequenceSource({market_ref: [_authoritative(market_ref)]})
+    now = NOW + timedelta(days=2)
+    collector = CapitalGuardShadowSettlementCollector(store=store, source=source, clock=lambda: now)
+
+    await collector.run_once(limit=10)
+    late_id = _append_candidate(
+        store,
+        candidate(decision_key="decision-2", lifecycle_id="lifecycle-2"),
+    ).candidate_id
+    result = await collector.run_once(limit=10)
+
+    assert result.terminal == 1
+    assert result.identical_observations == 1
+    assert source.calls == [market_ref]
+    with sqlite3.connect(store.db_path) as conn:
+        linked = {
+            str(row[0])
+            for row in conn.execute("SELECT candidate_id FROM capital_guard_shadow_candidate_observations")
+        }
+    assert linked == {first_id, late_id}
+
+
+@pytest.mark.asyncio
+async def test_collector_calls_source_only_for_due_markets(tmp_path: Path) -> None:
+    store = _initialized_store(tmp_path)
+    delayed = candidate(venue_market_id="KXDELAYED-26JUL15-T50")
+    fresh = candidate(
+        decision_key="decision-2",
+        lifecycle_id="lifecycle-2",
+        venue_market_id="KXFRESH-26JUL15-T50",
+    )
+    _append_candidate(store, delayed)
+    delayed_key = SettlementMarketKey(Venue.KALSHI, delayed.venue_market_id)
+    now = NOW + timedelta(days=2)
+    store.record_settlement_attempt(
+        store.candidate_settlement_backlog(delayed_key),
+        attempted_at=now,
+        status="nonterminal",
+        error_taxonomy="authoritative_nonterminal",
+        error_sha256="b" * 64,
+    )
+    _append_candidate(store, fresh)
+    delayed_ref = MarketRef(Venue.KALSHI, delayed.venue_market_id, delayed.venue_market_id)
+    fresh_ref = MarketRef(Venue.KALSHI, fresh.venue_market_id, fresh.venue_market_id)
+    source = SequenceSource({delayed_ref: [], fresh_ref: [None]})
+
+    result = await CapitalGuardShadowSettlementCollector(
+        store=store,
+        source=source,
+        clock=lambda: now,
+    ).run_once(limit=10)
+
+    assert result.checked == 1
+    assert result.nonterminal == 1
+    assert source.calls == [fresh_ref]
+
+
 @pytest.mark.asyncio
 async def test_collector_passes_rehydrated_prior_source_observation(tmp_path: Path) -> None:
     store = _initialized_store(tmp_path)
@@ -114,7 +491,10 @@ async def test_collector_passes_rehydrated_prior_source_observation(tmp_path: Pa
     await CapitalGuardShadowSettlementCollector(store=store, source=SequenceSource({market_ref: [first]})).run_once()
     source = SequenceSource({market_ref: [first]})
 
-    result = await CapitalGuardShadowSettlementCollector(store=store, source=source).run_once()
+    result = await CapitalGuardShadowSettlementCollector(
+        store=store,
+        source=source,
+    ).audit_terminal_corrections_once()
 
     assert result.identical_observations == 1
     assert source.prior_observations[0] is not None
@@ -147,7 +527,10 @@ async def test_source_correction_links_prior_source_hash_but_store_links_prior_r
     )
     source = SequenceSource({market_ref: [correction]})
 
-    result = await CapitalGuardShadowSettlementCollector(store=store, source=source).run_once()
+    result = await CapitalGuardShadowSettlementCollector(
+        store=store,
+        source=source,
+    ).audit_terminal_corrections_once()
 
     assert result.inserted_observations == 1
     assert source.prior_observations[0] is not None
@@ -230,7 +613,7 @@ async def test_authoritative_source_correction_keeps_source_and_store_lineage_di
     collector = CapitalGuardShadowSettlementCollector(store=store, source=source)
 
     first_result = await collector.run_once()
-    second_result = await collector.run_once()
+    second_result = await collector.audit_terminal_corrections_once()
 
     assert first_result.inserted_observations == second_result.inserted_observations == 1
     assert len(source.observations) == 2
@@ -263,7 +646,7 @@ async def test_source_correction_without_prior_source_hash_quarantines(tmp_path:
 
     result = await CapitalGuardShadowSettlementCollector(
         store=store, source=SequenceSource({market_ref: [unlinked]})
-    ).run_once()
+    ).audit_terminal_corrections_once()
 
     assert result.quarantined == 1
     assert _counts(store)["capital_guard_shadow_observations"] == 1
@@ -296,7 +679,10 @@ async def test_corrupt_authoritative_head_quarantines_before_source_io(
     monkeypatch.setattr(store, "_current_authoritative_head_transaction", corrupt_head)
     source = SequenceSource({market_ref: [first]})
 
-    result = await CapitalGuardShadowSettlementCollector(store=store, source=source).run_once()
+    result = await CapitalGuardShadowSettlementCollector(
+        store=store,
+        source=source,
+    ).audit_terminal_corrections_once()
 
     assert result.quarantined == 1
     assert source.calls == []
@@ -332,7 +718,10 @@ async def test_invalid_authoritative_head_lookup_quarantines_before_source_io(
     monkeypatch.setattr(store, "_current_authoritative_head_transaction", invalid_head)
     source = SequenceSource({market_ref: [first]})
 
-    result = await CapitalGuardShadowSettlementCollector(store=store, source=source).run_once()
+    result = await CapitalGuardShadowSettlementCollector(
+        store=store,
+        source=source,
+    ).audit_terminal_corrections_once()
 
     assert result.quarantined == 1
     assert source.calls == []
@@ -357,7 +746,10 @@ async def test_void_authoritative_head_without_refund_quarantines_before_source_
     monkeypatch.setattr(store, "_current_authoritative_head_transaction", invalid_void_head)
     source = SequenceSource({market_ref: [first]})
 
-    result = await CapitalGuardShadowSettlementCollector(store=store, source=source).run_once()
+    result = await CapitalGuardShadowSettlementCollector(
+        store=store,
+        source=source,
+    ).audit_terminal_corrections_once()
 
     assert result.quarantined == 1
     assert source.calls == []
@@ -578,9 +970,9 @@ async def test_changed_authoritative_evidence_appends_one_successor(
     collector = CapitalGuardShadowSettlementCollector(store=store, source=source)
 
     await collector.run_once(limit=10)
-    # All original candidates are linked, but the market remains poll-eligible so
-    # authoritative corrections cannot be hidden by a completed link backlog.
-    result = await collector.run_once(limit=10)
+    # Routine polling suppresses the terminal snapshot; correction evidence is
+    # rechecked only through the explicit bounded audit path.
+    result = await collector.audit_terminal_corrections_once(limit=10)
 
     assert result.inserted_observations == 1
     with sqlite3.connect(store.db_path) as conn:
@@ -750,16 +1142,20 @@ async def test_blocking_store_call_does_not_starve_unrelated_coroutine(
     started = threading.Event()
     release = threading.Event()
     finished = threading.Event()
-    original = store.settlement_market_backlog
+    original = store.settlement_poll_states
 
-    def blocking_backlog(*, limit: int):
+    def blocking_poll_states(*, limit: int, terminal_correction_audit: bool, now: datetime):
         started.set()
         if not release.wait(timeout=1):
             raise AssertionError("test did not release blocking store call")
         finished.set()
-        return original(limit=limit)
+        return original(
+            limit=limit,
+            terminal_correction_audit=terminal_correction_audit,
+            now=now,
+        )
 
-    monkeypatch.setattr(store, "settlement_market_backlog", blocking_backlog)
+    monkeypatch.setattr(store, "settlement_poll_states", blocking_poll_states)
     collector = CapitalGuardShadowSettlementCollector(store=store, source=SequenceSource({}))
     run = asyncio.create_task(collector.run_once(limit=10))
     fallback_release = threading.Timer(1, release.set)
@@ -1161,7 +1557,7 @@ async def test_equal_or_backward_time_correction_is_quarantined(
     collector = CapitalGuardShadowSettlementCollector(store=store, source=source, clock=lambda: next(times))
 
     await collector.run_once(limit=10)
-    result = await collector.run_once(limit=10)
+    result = await collector.audit_terminal_corrections_once(limit=10)
 
     assert result.quarantined == 1
     assert _counts(store)["capital_guard_shadow_observations"] == 1
@@ -1234,7 +1630,7 @@ async def test_void_source_correction_without_prior_hash_quarantines_drift(
 
     result = await CapitalGuardShadowSettlementCollector(
         store=store, source=SequenceSource({market_ref: [unlinked_void]})
-    ).run_once()
+    ).audit_terminal_corrections_once()
 
     assert result.quarantined == 1
     with sqlite3.connect(store.db_path) as conn:
@@ -1623,7 +2019,7 @@ async def test_restart_semantic_idempotency_keeps_one_head(
             }
         ),
         clock=lambda: NOW + timedelta(days=3),
-    ).run_once(limit=10)
+    ).audit_terminal_corrections_once(limit=10)
 
     assert _counts(store)["capital_guard_shadow_observations"] == 1
     assert _counts(store)["capital_guard_shadow_settlement_attempts"] == 2

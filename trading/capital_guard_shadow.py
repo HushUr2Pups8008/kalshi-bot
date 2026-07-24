@@ -59,6 +59,7 @@ CAPITAL_GUARD_SETTLEMENT_ATTEMPT_VERSION = 1
 CAPITAL_GUARD_SHADOW_DB = Path("data/capital_guard_shadow.db")
 MAX_SETTLEMENT_MARKETS_PER_RUN = 100
 MAX_SETTLEMENT_CANDIDATES_PER_MARKET = 1_000
+MAX_SETTLEMENT_POLL_STATE_SCAN = MAX_SETTLEMENT_MARKETS_PER_RUN
 MAX_REPLAY_SNAPSHOT_FILE_BYTES = 64 * 1024 * 1024
 
 _BUSY_TIMEOUT_MS = 5_000
@@ -832,6 +833,30 @@ class CandidateSettlementBacklog:
     authoritative_head_error: str | None
 
 
+@dataclass(frozen=True)
+class SettlementPollState:
+    """Read-only durable scheduler facts for one current candidate market."""
+
+    market_key: SettlementMarketKey
+    first_decision_at: datetime
+    current_candidate_count: int
+    current_candidate_set_sha256: str | None
+    current_candidate_set_complete: bool
+    latest_attempted_at: datetime | None
+    latest_status: Literal[
+        "nonterminal",
+        "not_found",
+        "transient_error",
+        "internal_error",
+        "quarantined",
+        "terminal",
+    ] | None
+    latest_snapshot_count: int | None
+    latest_snapshot_sha256: str | None
+    latest_snapshot_complete: bool | None
+    matching_snapshot_retry_count: int
+
+
 def _rehydrate_current_authoritative_observation(
     head: CurrentAuthoritativeHead,
 ) -> SettlementObservation:
@@ -1199,6 +1224,286 @@ class CapitalGuardShadowStore:
                 (limit,),
             ).fetchall()
             return tuple(SettlementMarketKey(Venue(str(row[0])), str(row[1])) for row in rows)
+
+        return self._read(read)
+
+    def settlement_poll_states(
+        self,
+        *,
+        limit: int = MAX_SETTLEMENT_POLL_STATE_SCAN,
+        terminal_correction_audit: bool = False,
+        now: datetime | None = None,
+    ) -> tuple[SettlementPollState, ...]:
+        """Project bounded durable scheduler facts without mutable scheduler state.
+
+        At most ``limit`` market groups are materialized before bounded candidate
+        snapshot reads. When ``now`` is supplied, routine collection ranks new
+        and changed snapshots, then due retries, ahead of delayed and terminal
+        state. The terminal-only mode is reserved for an explicit, bounded
+        terminal-correction audit.
+        """
+        _require_bounded_limit("limit", limit, maximum=MAX_SETTLEMENT_POLL_STATE_SCAN)
+        if not isinstance(terminal_correction_audit, bool):
+            raise TypeError("terminal_correction_audit must be bool")
+        if now is not None:
+            _require_utc_datetime("now", now)
+
+        retry_delay_sql = """
+            CASE latest.status
+                WHEN 'transient_error' THEN
+                    CASE
+                        WHEN retry_counts.matching_retry_count <= 1 THEN 300
+                        WHEN retry_counts.matching_retry_count = 2 THEN 600
+                        WHEN retry_counts.matching_retry_count = 3 THEN 1200
+                        WHEN retry_counts.matching_retry_count = 4 THEN 2400
+                        ELSE 3600
+                    END
+                WHEN 'nonterminal' THEN
+                    CASE
+                        WHEN retry_counts.matching_retry_count <= 1 THEN 900
+                        WHEN retry_counts.matching_retry_count = 2 THEN 1800
+                        WHEN retry_counts.matching_retry_count = 3 THEN 3600
+                        WHEN retry_counts.matching_retry_count = 4 THEN 7200
+                        WHEN retry_counts.matching_retry_count = 5 THEN 14400
+                        WHEN retry_counts.matching_retry_count = 6 THEN 28800
+                        WHEN retry_counts.matching_retry_count = 7 THEN 57600
+                        ELSE 86400
+                    END
+                WHEN 'internal_error' THEN
+                    CASE
+                        WHEN retry_counts.matching_retry_count <= 1 THEN 900
+                        WHEN retry_counts.matching_retry_count = 2 THEN 1800
+                        WHEN retry_counts.matching_retry_count = 3 THEN 3600
+                        WHEN retry_counts.matching_retry_count = 4 THEN 7200
+                        WHEN retry_counts.matching_retry_count = 5 THEN 14400
+                        ELSE 21600
+                    END
+                WHEN 'not_found' THEN
+                    CASE
+                        WHEN retry_counts.matching_retry_count <= 1 THEN 3600
+                        WHEN retry_counts.matching_retry_count = 2 THEN 7200
+                        WHEN retry_counts.matching_retry_count = 3 THEN 14400
+                        WHEN retry_counts.matching_retry_count = 4 THEN 28800
+                        WHEN retry_counts.matching_retry_count = 5 THEN 57600
+                        ELSE 86400
+                    END
+            END
+        """
+
+        def read(conn: sqlite3.Connection) -> tuple[SettlementPollState, ...]:
+            self._validate_schema(conn)
+            if terminal_correction_audit:
+                filter_sql = """
+                    WHERE projection.attempt_id IS NOT NULL
+                      AND projection.status = 'terminal'
+                      AND projection.latest_snapshot_count = projection.current_candidate_count
+                      AND projection.latest_snapshot_complete =
+                          CASE
+                              WHEN projection.current_candidate_count <= ? THEN 1
+                              ELSE 0
+                          END
+                """
+                order_sql = """
+                    ORDER BY projection.attempted_at, projection.first_decision_at,
+                             projection.venue, projection.venue_market_id
+                """
+                query_params: tuple[object, ...] = (MAX_SETTLEMENT_CANDIDATES_PER_MARKET, limit)
+            else:
+                filter_sql = ""
+                if now is None:
+                    order_sql = """
+                        ORDER BY
+                            CASE
+                                WHEN projection.attempt_id IS NULL THEN 0
+                                WHEN projection.latest_snapshot_count != projection.current_candidate_count THEN 0
+                                WHEN projection.latest_snapshot_complete !=
+                                    CASE
+                                        WHEN projection.current_candidate_count <= ? THEN 1
+                                        ELSE 0
+                                    END THEN 0
+                                WHEN projection.status IN (
+                                    'nonterminal', 'not_found', 'transient_error', 'internal_error'
+                                ) THEN 1
+                                ELSE 2
+                            END,
+                            projection.attempted_at, projection.first_decision_at,
+                            projection.venue, projection.venue_market_id
+                    """
+                    query_params = (MAX_SETTLEMENT_CANDIDATES_PER_MARKET, limit)
+                else:
+                    order_sql = """
+                        ORDER BY
+                            CASE
+                                WHEN projection.attempt_id IS NULL THEN 0
+                                WHEN projection.latest_snapshot_count != projection.current_candidate_count THEN 0
+                                WHEN projection.latest_snapshot_complete !=
+                                    CASE
+                                        WHEN projection.current_candidate_count <= ? THEN 1
+                                        ELSE 0
+                                    END THEN 0
+                                WHEN projection.status IN (
+                                    'nonterminal', 'not_found', 'transient_error', 'internal_error'
+                                )
+                                 AND julianday(?) >=
+                                     julianday(projection.attempted_at)
+                                     + projection.retry_delay_seconds / 86400.0 THEN 1
+                                WHEN projection.status IN (
+                                    'nonterminal', 'not_found', 'transient_error', 'internal_error'
+                                ) THEN 2
+                                ELSE 3
+                            END,
+                            CASE
+                                WHEN projection.status IN (
+                                    'nonterminal', 'not_found', 'transient_error', 'internal_error'
+                                ) THEN julianday(projection.attempted_at)
+                                    + projection.retry_delay_seconds / 86400.0
+                            END,
+                            projection.first_decision_at,
+                            projection.venue, projection.venue_market_id
+                    """
+                    query_params = (
+                        MAX_SETTLEMENT_CANDIDATES_PER_MARKET,
+                        now.isoformat(),
+                        limit,
+                    )
+            groups = conn.execute(
+                f"""
+                WITH grouped AS (
+                    SELECT venue, venue_market_id, MIN(decision_at) AS first_decision_at,
+                           COUNT(*) AS candidate_count
+                    FROM capital_guard_shadow_candidates
+                    GROUP BY venue, venue_market_id
+                ), latest_ranked AS (
+                    SELECT attempt_id, venue, venue_market_id, attempted_at, status,
+                           candidate_count, candidate_set_sha256, candidate_set_complete,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY venue, venue_market_id
+                               ORDER BY attempted_at DESC, attempt_id DESC
+                           ) AS attempt_rank
+                    FROM capital_guard_shadow_settlement_attempts
+                ), latest AS (
+                    SELECT attempt_id, venue, venue_market_id, attempted_at, status,
+                           candidate_count, candidate_set_sha256, candidate_set_complete
+                    FROM latest_ranked
+                    WHERE attempt_rank = 1
+                ), retry_counts AS (
+                    SELECT attempts.venue, attempts.venue_market_id,
+                           COUNT(*) AS matching_retry_count
+                    FROM capital_guard_shadow_settlement_attempts attempts
+                    JOIN grouped
+                      ON grouped.venue = attempts.venue
+                     AND grouped.venue_market_id = attempts.venue_market_id
+                    WHERE attempts.status IN (
+                        'nonterminal', 'not_found', 'transient_error', 'internal_error'
+                    )
+                      AND attempts.candidate_count = grouped.candidate_count
+                      AND attempts.candidate_set_complete =
+                          CASE
+                              WHEN grouped.candidate_count <= {MAX_SETTLEMENT_CANDIDATES_PER_MARKET}
+                              THEN 1 ELSE 0
+                          END
+                    GROUP BY attempts.venue, attempts.venue_market_id
+                ), projection AS (
+                    SELECT grouped.venue, grouped.venue_market_id, grouped.first_decision_at,
+                           grouped.candidate_count AS current_candidate_count,
+                           latest.attempt_id, latest.attempted_at, latest.status,
+                           latest.candidate_count AS latest_snapshot_count,
+                           latest.candidate_set_sha256 AS latest_snapshot_sha256,
+                           latest.candidate_set_complete AS latest_snapshot_complete,
+                           COALESCE(retry_counts.matching_retry_count, 0) AS matching_retry_count,
+                           {retry_delay_sql} AS retry_delay_seconds
+                    FROM grouped
+                    LEFT JOIN latest
+                      ON latest.venue = grouped.venue
+                     AND latest.venue_market_id = grouped.venue_market_id
+                    LEFT JOIN retry_counts
+                      ON retry_counts.venue = grouped.venue
+                     AND retry_counts.venue_market_id = grouped.venue_market_id
+                )
+                SELECT projection.venue, projection.venue_market_id,
+                       projection.first_decision_at, projection.current_candidate_count,
+                       projection.attempted_at, projection.status,
+                       projection.latest_snapshot_count,
+                       projection.latest_snapshot_sha256,
+                       projection.latest_snapshot_complete,
+                       projection.matching_retry_count
+                FROM projection
+                {filter_sql}
+                {order_sql}
+                LIMIT ?
+                """,
+                query_params,
+            ).fetchall()
+            states: list[SettlementPollState] = []
+            for (
+                venue_raw,
+                market_id_raw,
+                first_decision_at_raw,
+                candidate_count_raw,
+                latest_attempted_at_raw,
+                latest_status_raw,
+                latest_snapshot_count_raw,
+                latest_snapshot_sha256_raw,
+                latest_snapshot_complete_raw,
+                retry_count_raw,
+            ) in groups:
+                venue = Venue(str(venue_raw))
+                venue_market_id = str(market_id_raw)
+                candidate_count = int(candidate_count_raw)
+                complete = candidate_count <= MAX_SETTLEMENT_CANDIDATES_PER_MARKET
+                candidate_set_sha256: str | None = None
+                if complete:
+                    candidates = conn.execute(
+                        """
+                        SELECT candidate_id, identity_json
+                        FROM capital_guard_shadow_candidates
+                        WHERE venue = ? AND venue_market_id = ?
+                        ORDER BY decision_at, candidate_id
+                        LIMIT ?
+                        """,
+                        (venue.value, venue_market_id, MAX_SETTLEMENT_CANDIDATES_PER_MARKET),
+                    ).fetchall()
+                    candidate_evidence = [
+                        {
+                            "candidate_id": str(candidate_id_raw),
+                            "identity_sha256": _sha256(str(identity_json_raw)),
+                        }
+                        for candidate_id_raw, identity_json_raw in candidates
+                    ]
+                    candidate_set_sha256 = _sha256(canonical_json(candidate_evidence))
+
+                if latest_attempted_at_raw is None:
+                    latest_attempted_at = None
+                    latest_status = None
+                    latest_snapshot_count = None
+                    latest_snapshot_sha256 = None
+                    latest_snapshot_complete = None
+                else:
+                    latest_attempted_at = _parse_timestamp(str(latest_attempted_at_raw))
+                    latest_status = str(latest_status_raw)
+                    latest_snapshot_count = int(latest_snapshot_count_raw)
+                    latest_snapshot_sha256 = (
+                        None if latest_snapshot_sha256_raw is None else str(latest_snapshot_sha256_raw)
+                    )
+                    latest_snapshot_complete = bool(int(latest_snapshot_complete_raw))
+
+                retry_count = int(retry_count_raw)
+                states.append(
+                    SettlementPollState(
+                        market_key=SettlementMarketKey(venue, venue_market_id),
+                        first_decision_at=_parse_timestamp(str(first_decision_at_raw)),
+                        current_candidate_count=candidate_count,
+                        current_candidate_set_sha256=candidate_set_sha256,
+                        current_candidate_set_complete=complete,
+                        latest_attempted_at=latest_attempted_at,
+                        latest_status=latest_status,
+                        latest_snapshot_count=latest_snapshot_count,
+                        latest_snapshot_sha256=latest_snapshot_sha256,
+                        latest_snapshot_complete=latest_snapshot_complete,
+                        matching_snapshot_retry_count=retry_count,
+                    )
+                )
+            return tuple(states)
 
         return self._read(read)
 
