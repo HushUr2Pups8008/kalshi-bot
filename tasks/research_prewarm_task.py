@@ -82,7 +82,7 @@ class _ResearchPrewarmProviderAdmission:
                 max(started_at, self._next_start)
                 + self._min_start_interval_seconds
             )
-            return await provider(query)
+        return await provider(query)
 
 
 _RESEARCH_PREWARM_PROVIDER_ADMISSION_ATTRIBUTE = (
@@ -130,6 +130,8 @@ class ResearchPrewarmResult:
     research_persisted: bool | None = None
     research_persistence_error: str | None = None
     research_direct_fetch_failures: tuple[str, ...] = ()
+    research_timeout_stage: str | None = None
+    research_provider_error_count: int = 0
 
 
 class ResearchPrewarmTask:
@@ -317,6 +319,10 @@ class ResearchPrewarmTask:
                 ),
                 research_direct_fetch_failures=tuple(
                     getattr(verdict, "research_direct_fetch_failures", ()) or ()
+                ),
+                research_timeout_stage=getattr(verdict, "research_timeout_stage", None),
+                research_provider_error_count=int(
+                    getattr(verdict, "research_provider_error_count", 0) or 0
                 ),
             )
         except Exception as exc:
@@ -904,6 +910,8 @@ async def _write_research_prewarm_result(result: ResearchPrewarmResult) -> None:
         research_persistence_error=result.research_persistence_error,
         research_direct_fetch_failures=list(result.research_direct_fetch_failures),
         research_direct_fetch_failure_count=len(result.research_direct_fetch_failures),
+        research_timeout_stage=result.research_timeout_stage,
+        research_provider_error_count=result.research_provider_error_count,
     )
 
 

@@ -268,6 +268,8 @@ class ResearchVerdict:
     research_persisted: bool | None = None
     research_persistence_error: str | None = None
     research_direct_fetch_failures: tuple[str, ...] = ()
+    research_timeout_stage: str | None = None
+    research_provider_error_count: int = 0
     research_contract_fingerprint: str | None = None
 
     def log_fields(self) -> dict[str, object]:
@@ -305,6 +307,11 @@ class ResearchVerdict:
             fields["research_persisted"] = self.research_persisted
         if self.research_persistence_error:
             fields["research_persistence_error"] = self.research_persistence_error
+        if self.research_timeout_stage:
+            fields["research_timeout_stage"] = self.research_timeout_stage
+        fields["research_provider_error_count"] = int(
+            self.research_provider_error_count
+        )
         if self.research_direct_fetch_failures:
             fields["research_direct_fetch_failures"] = list(
                 self.research_direct_fetch_failures
@@ -6150,11 +6157,17 @@ async def run_research_gate(
     observed_market_price = _market_price_for_side(None, yes_ask, no_ask)
     loop = asyncio.get_running_loop()
     deadline = loop.time() + max(0.001, float(research_timeout_seconds))
+    provider_errors: list[Exception] = []
 
     def remaining_budget() -> float:
         return max(0.0, deadline - loop.time())
 
-    def timeout_verdict(evidence: list[ResearchEvidence], summary: str) -> ResearchVerdict:
+    def timeout_verdict(
+        evidence: list[ResearchEvidence],
+        summary: str,
+        *,
+        stage: str,
+    ) -> ResearchVerdict:
         return ResearchVerdict(
             status=ResearchStatus.CONTINUE_RESEARCHING,
             attempted=True,
@@ -6163,6 +6176,8 @@ async def run_research_gate(
             summary=summary,
             skip_reason="research_timeout",
             market_price=observed_market_price,
+            research_timeout_stage=stage,
+            research_provider_error_count=len(provider_errors),
         )
 
     cached_evidence: list[ResearchEvidence] = []
@@ -6181,7 +6196,6 @@ async def run_research_gate(
     estimated_probability_yes: float | None = None
     decision_grade_counterclaims: tuple[str, ...] = ()
     decision_grade_open_questions: tuple[str, ...] = ()
-    provider_errors: list[Exception] = []
     direct_fetch_failures: list[str] = []
     usable_cached_evidence = _usable_cached_evidence(
         cached_evidence,
@@ -6196,6 +6210,11 @@ async def run_research_gate(
         )
         if open_questions != verdict.open_questions:
             verdict = replace(verdict, open_questions=open_questions)
+        if verdict.research_provider_error_count != len(provider_errors):
+            verdict = replace(
+                verdict,
+                research_provider_error_count=len(provider_errors),
+            )
         if direct_fetch_failures:
             verdict = replace(
                 verdict,
@@ -6351,6 +6370,7 @@ async def run_research_gate(
                     timeout_verdict(
                         evidence,
                         "Research timed out before direct-source fetch completed.",
+                        stage="direct_fetch",
                     )
                 )
             try:
@@ -6364,6 +6384,7 @@ async def run_research_gate(
                         timeout_verdict(
                             evidence,
                             "Research direct-source fetch timed out before enough evidence was retrieved.",
+                            stage="direct_fetch",
                         )
                     )
                 direct_fetch_failures.append(f"{source_class}:{url}:timeout")
@@ -6388,6 +6409,7 @@ async def run_research_gate(
                     timeout_verdict(
                         evidence,
                         "Research timed out before structured direct-source extraction completed.",
+                        stage="structured_official",
                     )
                 )
             try:
@@ -6401,6 +6423,7 @@ async def run_research_gate(
                         timeout_verdict(
                             evidence,
                             "Research structured direct-source extraction timed out.",
+                            stage="structured_official",
                         )
                     )
                 direct_fetch_failures.append(
@@ -6456,6 +6479,7 @@ async def run_research_gate(
                 timeout_verdict(
                     evidence,
                     "Research timed out before search providers completed.",
+                    stage="provider_fanout",
                 )
             )
         try:
@@ -6471,6 +6495,7 @@ async def run_research_gate(
                 timeout_verdict(
                     evidence,
                     "Research search providers timed out before enough evidence was retrieved.",
+                    stage="provider_fanout",
                 )
             )
         for result in evidence_nested:
@@ -6563,6 +6588,7 @@ async def run_research_gate(
                     timeout_verdict(
                         evidence,
                         "Research timed out before adjudication completed.",
+                        stage="adjudication",
                     )
                 )
             try:
@@ -6585,6 +6611,7 @@ async def run_research_gate(
                     timeout_verdict(
                         evidence,
                         "Research adjudication timed out before producing a verdict.",
+                        stage="adjudication",
                     )
                 )
             except Exception:
@@ -6641,6 +6668,7 @@ async def run_research_gate(
                                     timeout_verdict(
                                         evidence,
                                         "Research timed out before side-aware counter search completed.",
+                                        stage="counter_query",
                                     )
                                 )
                             except Exception as exc:

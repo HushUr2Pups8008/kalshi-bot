@@ -604,6 +604,8 @@ class TradeLogger:
         research_persistence_error: str | None = None,
         research_direct_fetch_failures: list[str] | None = None,
         research_direct_fetch_failure_count: int | None = None,
+        research_timeout_stage: str | None = None,
+        research_provider_error_count: int = 0,
     ) -> None:
         record: dict[str, Any] = {
             "type": "RESEARCH_PREWARM_RESULT",
@@ -634,6 +636,12 @@ class TradeLogger:
             record["research_direct_fetch_failure_count"] = int(
                 research_direct_fetch_failure_count
             )
+        if research_timeout_stage:
+            record["research_timeout_stage"] = research_timeout_stage
+        record["research_provider_error_count"] = max(
+            0,
+            int(research_provider_error_count),
+        )
         self._write(record)
 
     def log_opportunity(

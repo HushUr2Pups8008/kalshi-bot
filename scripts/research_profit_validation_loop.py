@@ -72,6 +72,8 @@ class RuntimeEvidence:
     error_critical_samples: list[str]
     trade_log_event_counts: dict[str, int]
     research_status_counts: dict[str, int]
+    research_timeout_stage_counts: dict[str, int]
+    research_provider_error_count: int
     latest_trade_log_ts: str | None
     botcheck_summary: list[str]
 
@@ -461,6 +463,10 @@ def render_markdown(report: ResearchProfitValidationReport) -> str:
             f"- LIVE_ORDER: {report.runtime.live_order_count}",
             f"- PAPER_TRADE: {report.runtime.paper_trade_count}",
             f"- within_cooldown_repeats: {report.runtime.within_cooldown_repeats}",
+            "- research timeout stages: "
+            f"{report.runtime.research_timeout_stage_counts}",
+            "- research provider errors: "
+            f"{report.runtime.research_provider_error_count}",
             f"- bothealth: {report.workflow.bothealth_verdict or 'not run'}",
             f"- ERROR/CRITICAL: {report.runtime.error_critical_count}",
         ]
@@ -539,6 +545,20 @@ def _runtime_evidence(
         or str(record.get("type") or "") == "RESEARCH_PREWARM_RESULT"
         or any(str(key).startswith("research_") for key in record)
     )
+    prewarm_records = [
+        record
+        for record in records
+        if str(record.get("type") or "") == "RESEARCH_PREWARM_RESULT"
+    ]
+    research_timeout_stage_counts = Counter(
+        str(record["research_timeout_stage"])
+        for record in prewarm_records
+        if record.get("research_timeout_stage")
+    )
+    research_provider_error_count = sum(
+        max(0, int(record.get("research_provider_error_count") or 0))
+        for record in prewarm_records
+    )
     latest = max((_parse_ts(record.get("ts")) for record in records), default=None)
     return RuntimeEvidence(
         window_hours=window_hours,
@@ -555,6 +575,8 @@ def _runtime_evidence(
         error_critical_samples=error_samples[-5:],
         trade_log_event_counts=dict(sorted(counts.items())),
         research_status_counts=dict(sorted(research_status_counts.items())),
+        research_timeout_stage_counts=dict(sorted(research_timeout_stage_counts.items())),
+        research_provider_error_count=research_provider_error_count,
         latest_trade_log_ts=_iso(latest),
         botcheck_summary=_parse_botcheck_summary(botcheck_output),
     )

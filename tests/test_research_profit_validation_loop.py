@@ -602,6 +602,8 @@ def test_decision_grade_report_separates_trade_support_from_operational_health(
                 "ticker": "KXPROFIT-26JUL01",
                 "research_status": "decision_grade_candidate",
                 "research_run_id": "rr-profitable",
+                "research_timeout_stage": "provider_fanout",
+                "research_provider_error_count": 3,
             }
         ],
     )
@@ -629,6 +631,8 @@ def test_decision_grade_report_separates_trade_support_from_operational_health(
     assert report.decision_grade.terminal_untradeable == 1
     assert report.decision_grade.terminal_timeout_exhausted == 1
     assert report.funnel.trade_candidates == 1
+    assert report.runtime.research_timeout_stage_counts == {"provider_fanout": 1}
+    assert report.runtime.research_provider_error_count == 3
     assert "- decision-grade candidates: 1" in rendered
     assert "- blocked by missing price: 1" in rendered
     assert "- blocked by no reliable source path: 1" in rendered
@@ -636,6 +640,8 @@ def test_decision_grade_report_separates_trade_support_from_operational_health(
     assert "- blocked by provider error: 1" in rendered
     assert "- blocked by unresolved contradiction: 1" in rendered
     assert "- terminal timeout exhausted: 1" in rendered
+    assert "- research timeout stages: {'provider_fanout': 1}" in rendered
+    assert "- research provider errors: 3" in rendered
     assert any("no reliable source path" in reason for reason in report.reasons)
     assert any("counter-evidence" in reason for reason in report.reasons)
     assert any("official settlement data is pending" in reason for reason in report.reasons)
