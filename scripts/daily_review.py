@@ -1030,6 +1030,7 @@ def build_daily_review(
     zero_edge = skip_breakdown.get("zero_edge", 0)
     duplicate = skip_breakdown.get("duplicate", 0)
     liquidity_skip = skip_breakdown.get("liquidity", 0)
+    risk_gate_skip = skip_breakdown.get("risk_gate", 0)
     other_skip = skip_breakdown.get("other", 0)
 
     lines: list[str] = []
@@ -1360,6 +1361,7 @@ def build_daily_review(
     lines.append(f"  Live orders                      : {live_orders}")
     lines.append(f"  Skipped duplicate position       : {duplicate}")
     lines.append(f"  Skipped liquidity/near-limit     : {liquidity_skip}")
+    lines.append(f"  Skipped risk gate                : {risk_gate_skip}")
     lines.append(f"  Skipped below threshold          : {below_threshold}")
     lines.append(f"  Skipped other                    : {other_skip}")
     if paper_stats.get("total_trades", 0):
@@ -1502,7 +1504,16 @@ def build_daily_review(
         f"  Meaningful signals                : {llm_value.get('meaningful_signals', 0)} ({fmt_pct(llm_value.get('meaningful_signals', 0), llm_rows)})"
     )
     lines.append(
-        f"  Trade candidates                  : {llm_value.get('trade_candidates', 0)} ({fmt_pct(llm_value.get('trade_candidates', 0), llm_rows)})"
+        f"  Model gross-edge candidates (fee unscored): {llm_value.get('trade_candidates', 0)} ({fmt_pct(llm_value.get('trade_candidates', 0), llm_rows)})"
+    )
+    lines.append(
+        f"  Candidates admitted               : {llm_value.get('admitted_trade_candidates', 0)}"
+    )
+    lines.append(
+        f"  Candidates blocked by gates       : {llm_value.get('blocked_trade_candidates', 0)}"
+    )
+    lines.append(
+        f"  Candidates pending                : {llm_value.get('pending_trade_candidates', 0)}"
     )
     lines.append(
         f"  LLM created edge @0.50 market     : {llm_value.get('llm_created_edge', 0)} ({fmt_pct(llm_value.get('llm_created_edge', 0), llm_rows)})"

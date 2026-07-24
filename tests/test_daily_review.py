@@ -276,11 +276,14 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
                 },
             ],
             "llm_value_add": {
-                "llm_rows": 1,
+                "llm_rows": 3,
                 "near_neutral_outputs": 0,
                 "non_zero_edge_outputs": 1,
                 "meaningful_signals": 1,
-                "trade_candidates": 1,
+                "trade_candidates": 3,
+                "admitted_trade_candidates": 1,
+                "blocked_trade_candidates": 1,
+                "pending_trade_candidates": 1,
                 "llm_created_edge": 0,
                 "probability_movement_buckets": Counter({"moderate": 1}),
                 "edge_magnitude_buckets": Counter({"moderate": 1}),
@@ -609,8 +612,11 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     assert "LLM attempted (post-filter)       : 1" in rendered
     assert "LLM skipped (routing)             : 2" in rendered
     assert "Routing skip reasons              : price_band_excluded=2" in rendered
-    assert "Meaningful signals                : 1 (100.0%)" in rendered
-    assert "Trade candidates                  : 1 (100.0%)" in rendered
+    assert "Meaningful signals                : 1 (33.3%)" in rendered
+    assert "Model gross-edge candidates (fee unscored): 3 (100.0%)" in rendered
+    assert "Candidates admitted               : 1" in rendered
+    assert "Candidates blocked by gates       : 1" in rendered
+    assert "Candidates pending                : 1" in rendered
     assert "Top sources by meaningful signal rate" in rendered
     assert "Market price bands by meaningful signal rate" in rendered
     assert "Rare non-neutral cases" in rendered
