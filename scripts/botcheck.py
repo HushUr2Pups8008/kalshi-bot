@@ -33,6 +33,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
+from dotenv import dotenv_values
+
 REPO_ROOT_FOR_IMPORTS = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT_FOR_IMPORTS) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT_FOR_IMPORTS))
@@ -759,22 +761,10 @@ def read_sessions(log_path: Path) -> list[BotSession]:
 
 def _read_env_file_value(path: Path, key: str) -> str | None:
     try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        value = dotenv_values(path).get(key)
     except OSError:
         return None
-    pattern = re.compile(rf"^\s*(?:export\s+)?{re.escape(key)}\s*=\s*(?P<value>.*)\s*$")
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        match = pattern.match(line)
-        if not match:
-            continue
-        value = match.group("value").strip()
-        if value and value[0] in {'"', "'"} and value[-1:] == value[0]:
-            value = value[1:-1]
-        return value
-    return None
+    return value if isinstance(value, str) else None
 
 
 def _research_env_value(repo_root: Path, key: str, default: str) -> tuple[str, str]:
@@ -1071,8 +1061,17 @@ def print_capital_guard_shadow_status(
         if not all(readable for _, readable in runtime_flags):
             print("capital_guard_shadow: unknown (runtime-process-env-unreadable)")
             return
-        values = tuple(value or "false" for value, _ in runtime_flags)
-        sources = ("runtime-process-env", "runtime-process-env")
+        resolved_flags: list[tuple[str, str]] = []
+        for flag_name, (value, _) in zip(flag_names, runtime_flags):
+            if value is not None:
+                resolved_flags.append((value, "runtime-process-env"))
+                continue
+            fallback = _read_env_file_value(repo_root / ".env", flag_name)
+            resolved_flags.append(
+                (fallback or "false", ".env fallback" if fallback else "default fallback")
+            )
+        values = tuple(value for value, _ in resolved_flags)
+        sources = tuple(source for _, source in resolved_flags)
     else:
         configured_flags = tuple(
             _research_env_value(repo_root, flag_name, "false")
@@ -1082,11 +1081,17 @@ def print_capital_guard_shadow_status(
         sources = tuple(source for _, source in configured_flags)
 
     capture_enabled, collection_enabled = map(_env_bool, values)
-    capture_summary = f"capture={'on' if capture_enabled else 'off'} ({sources[0]})"
+    capture_state = (
+        "configured-" if sources[0].endswith(" fallback") else ""
+    ) + ("on" if capture_enabled else "off")
+    collection_state = (
+        "configured-" if sources[1].endswith(" fallback") else ""
+    ) + ("on" if collection_enabled else "off")
+    capture_summary = f"capture={capture_state} ({sources[0]})"
     collection_summary = (
-        f"collection=off (unwired-exact-source; requested=on:{sources[1]})"
+        f"collection={collection_state} ({sources[1]}) unwired-exact-source"
         if collection_enabled
-        else f"collection=off ({sources[1]})"
+        else f"collection={collection_state} ({sources[1]})"
     )
     prefix = f"capital_guard_shadow: {capture_summary} {collection_summary}"
     if not capture_enabled and not collection_enabled:
