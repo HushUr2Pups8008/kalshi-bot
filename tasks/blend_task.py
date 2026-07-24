@@ -116,6 +116,7 @@ class BlendDecisionLogger(Protocol):
         recency_distance: float | None = None,
         lifecycle_id: str | None = None,
         settlement_source_match: bool | None = None,
+        g7_mark_snapshot: dict[str, Any] | None = None,
     ) -> None: ...
 
     def log_skipped(self, **kwargs: Any) -> None: ...
@@ -317,11 +318,27 @@ class BlendTask:
             raise ReadinessEvaluationError(
                 f"readiness evaluation failed for {ticker}: {exc}"
             ) from exc
+        source_meta = (
+            fast_lane_result.signal_meta
+            if isinstance(fast_lane_result.signal_meta, dict)
+            else {}
+        )
+        raw_lifecycle_id = source_meta.get("lifecycle_id")
+        lifecycle_id = (
+            raw_lifecycle_id.strip()
+            if isinstance(raw_lifecycle_id, str) and raw_lifecycle_id.strip()
+            else None
+        )
+        settlement_source_match = strict_optional_bool(
+            source_meta.get("settlement_source_match")
+        )
         await self._emit_gate_summary(
             ticker=ticker,
             readiness=readiness,
             blend_result=blend_result,
             g7_mark_snapshot=g7_mark_snapshot,
+            lifecycle_id=lifecycle_id,
+            settlement_source_match=settlement_source_match,
         )
 
         trade_blocked_reason = (
@@ -354,20 +371,6 @@ class BlendTask:
             or getattr(fast_lane_result.market, "venue", None)
             or getattr(fast_lane_result.market, "report_venue", None)
         ) or "kalshi"
-        source_meta = (
-            fast_lane_result.signal_meta
-            if isinstance(fast_lane_result.signal_meta, dict)
-            else {}
-        )
-        raw_lifecycle_id = source_meta.get("lifecycle_id")
-        lifecycle_id = (
-            raw_lifecycle_id.strip()
-            if isinstance(raw_lifecycle_id, str) and raw_lifecycle_id.strip()
-            else None
-        )
-        settlement_source_match = strict_optional_bool(
-            source_meta.get("settlement_source_match")
-        )
         await self._emit_blend_decision(
             ticker=ticker,
             venue=venue,
@@ -379,6 +382,7 @@ class BlendTask:
             readiness=readiness,
             lifecycle_id=lifecycle_id,
             settlement_source_match=settlement_source_match,
+            g7_mark_snapshot=g7_mark_snapshot,
         )
 
         if trade_blocked_reason is not None:
@@ -704,31 +708,37 @@ class BlendTask:
         readiness: ReadinessDecision,
         lifecycle_id: str | None,
         settlement_source_match: bool | None,
+        g7_mark_snapshot: dict[str, Any] | None,
     ) -> None:
+        decision_kwargs: dict[str, Any] = {
+            "market_ticker": ticker,
+            "fast_lane_p": blend_result.fast_lane_p,
+            "fast_lane_confidence": blend_result.fast_lane_confidence,
+            "accumulation_p": blend_result.accumulation_p,
+            "accumulation_confidence": blend_result.accumulation_confidence,
+            "structural_p": blend_result.structural_p,
+            "structural_confidence": blend_result.structural_confidence,
+            "regime_weights": regime_weights,
+            "regime_confidence": regime_confidence,
+            "blended_p": blend_result.blended_p,
+            "blended_confidence": blend_result.blended_confidence,
+            "disagreement_score": blend_result.disagreement_score,
+            "blend_mode": blend_result.blend_mode,
+            "trade_considered": True,
+            "trade_blocked_reason": trade_blocked_reason,
+            "evidence_ids_contributing": evidence_ids,
+            "venue": venue,
+            "recency_score": readiness.recency_score,
+            "recency_threshold": readiness.recency_threshold,
+            "recency_distance": readiness.recency_distance,
+            "lifecycle_id": lifecycle_id,
+            "settlement_source_match": settlement_source_match,
+        }
+        if g7_mark_snapshot is not None:
+            decision_kwargs["g7_mark_snapshot"] = g7_mark_snapshot
         await write_trade_log_async(
             self._logger.log_blend_decision,
-            market_ticker=ticker,
-            fast_lane_p=blend_result.fast_lane_p,
-            fast_lane_confidence=blend_result.fast_lane_confidence,
-            accumulation_p=blend_result.accumulation_p,
-            accumulation_confidence=blend_result.accumulation_confidence,
-            structural_p=blend_result.structural_p,
-            structural_confidence=blend_result.structural_confidence,
-            regime_weights=regime_weights,
-            regime_confidence=regime_confidence,
-            blended_p=blend_result.blended_p,
-            blended_confidence=blend_result.blended_confidence,
-            disagreement_score=blend_result.disagreement_score,
-            blend_mode=blend_result.blend_mode,
-            trade_considered=True,
-            trade_blocked_reason=trade_blocked_reason,
-            evidence_ids_contributing=evidence_ids,
-            venue=venue,
-            recency_score=readiness.recency_score,
-            recency_threshold=readiness.recency_threshold,
-            recency_distance=readiness.recency_distance,
-            lifecycle_id=lifecycle_id,
-            settlement_source_match=settlement_source_match,
+            **decision_kwargs,
         )
 
     async def _emit_lane_skips(
@@ -762,6 +772,8 @@ class BlendTask:
         readiness: ReadinessDecision,
         blend_result: BlendResult,
         g7_mark_snapshot: dict[str, Any] | None,
+        lifecycle_id: str | None,
+        settlement_source_match: bool | None,
     ) -> None:
         if not hasattr(self._logger, "log_gate_summary"):
             return
@@ -785,6 +797,8 @@ class BlendTask:
             recency_threshold=readiness.recency_threshold,
             recency_distance=readiness.recency_distance,
             g7_mark_snapshot=g7_mark_snapshot,
+            lifecycle_id=lifecycle_id,
+            settlement_source_match=settlement_source_match,
         )
 
     async def _emit_skipped(

@@ -1360,6 +1360,7 @@ class TradeLogger:
         recency_distance: float | None = None,
         lifecycle_id: str | None = None,
         settlement_source_match: bool | None = None,
+        g7_mark_snapshot: dict[str, Any] | None = None,
     ) -> None:
         record = {
             "type": "BLEND_DECISION",
@@ -1388,6 +1389,8 @@ class TradeLogger:
             record["recency_threshold"] = round(float(recency_threshold), 4)
         if recency_distance is not None:
             record["recency_distance"] = round(float(recency_distance), 4)
+        if g7_mark_snapshot is not None:
+            record["g7_mark_snapshot"] = dict(g7_mark_snapshot)
         _promote_lifecycle_context(
             record,
             lifecycle_id=lifecycle_id,
@@ -1658,6 +1661,8 @@ class TradeLogger:
         recency_threshold: float | None = None,
         recency_distance: float | None = None,
         g7_mark_snapshot: dict[str, Any] | None = None,
+        lifecycle_id: str | None = None,
+        settlement_source_match: bool | None = None,
     ) -> None:
         """PROFIT-ALIGN-008 (2026-05-25): consolidated gate-decision diagnostic.
 
@@ -1698,6 +1703,11 @@ class TradeLogger:
             record["recency_distance"] = round(float(recency_distance), 4)
         if g7_mark_snapshot is not None:
             record["g7_mark_snapshot"] = dict(g7_mark_snapshot)
+        _promote_lifecycle_context(
+            record,
+            lifecycle_id=lifecycle_id,
+            settlement_source_match=settlement_source_match,
+        )
         self._write(record)
 
     def log_match_llm_review(

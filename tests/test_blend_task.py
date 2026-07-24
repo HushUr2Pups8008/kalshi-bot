@@ -421,7 +421,14 @@ async def test_g7_mark_snapshot_reaches_gate_summary_and_g7_skipped_once():
         logger=logger,
         open_exposure_drawdown_provider=provider,
         is_paper_mode=True,
-    ).process_fast_lane_result(_analysis())
+    ).process_fast_lane_result(
+        _analysis(
+            signal_meta={
+                "lifecycle_id": "lc-g7-mark",
+                "settlement_source_match": True,
+            }
+        )
+    )
 
     expected = {
         "drawdown_pct": 0.21,
@@ -444,6 +451,11 @@ async def test_g7_mark_snapshot_reaches_gate_summary_and_g7_skipped_once():
     assert result.trade_blocked_reason == "G7_open_exposure_drawdown"
     assert calls == 1
     assert logger.gate_summary_records[0]["g7_mark_snapshot"] == expected
+    assert logger.gate_summary_records[0]["lifecycle_id"] == "lc-g7-mark"
+    assert logger.gate_summary_records[0]["settlement_source_match"] is True
+    assert logger.records[0]["lifecycle_id"] == "lc-g7-mark"
+    assert logger.records[0]["settlement_source_match"] is True
+    assert logger.records[0]["g7_mark_snapshot"] == expected
     assert logger.skipped_records[0]["g7_mark_snapshot"] == expected
 
 
