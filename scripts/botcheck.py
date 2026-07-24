@@ -77,6 +77,9 @@ SIGNAL_FLOW_EVENTS = (
     "PAPER_TRADE",
     "LIVE_ORDER",
 )
+LIVE_SUBMISSION_UNKNOWN_EVENT = "LIVE_SUBMISSION_UNKNOWN"
+LIVE_SUBMISSION_HOLD_FILENAME = "unknown_submission_holds.json"
+LIVE_SUBMISSION_HOLD_SCHEMA_VERSION = 1
 RESEARCH_DOSSIER_MAX_AGE_SECONDS = 6 * 60 * 60
 RESEARCH_REQUIRED_SOURCE_CLASSES = {"resolution_source", "official_primary"}
 WEATHER_SHADOW_ROW_COUNT_LIMIT = 10_000
@@ -142,6 +145,15 @@ class SignalFlowStats:
     research_records: int
     research_status_counts: Counter[str]
     latest_research_ts: datetime | None
+    live_submission_unknown_count: int = 0
+    latest_live_submission_unknown_ts: datetime | None = None
+
+
+@dataclass(frozen=True)
+class LiveSubmissionHoldStats:
+    path: Path
+    status: str
+    held_tickers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -258,6 +270,8 @@ def summarize_signal_flow(
     latest_ts_by_type: dict[str, datetime] = {}
     research_status_counts: Counter[str] = Counter()
     latest_research_ts: datetime | None = None
+    live_submission_unknown_count = 0
+    latest_live_submission_unknown_ts: datetime | None = None
     research_records = 0
     records_kept = 0
 
@@ -267,12 +281,20 @@ def summarize_signal_flow(
         lines_malformed=lines_malformed,
     ):
         event_type = str(record.get("type") or "").strip()
-        if event_type not in SIGNAL_FLOW_EVENTS:
+        if event_type not in SIGNAL_FLOW_EVENTS and event_type != LIVE_SUBMISSION_UNKNOWN_EVENT:
             continue
         ts = _parse_trade_ts(record.get("ts"))
         if ts is not None and ts < since:
             continue
         records_kept += 1
+        if event_type == LIVE_SUBMISSION_UNKNOWN_EVENT:
+            live_submission_unknown_count += 1
+            if ts is not None and (
+                latest_live_submission_unknown_ts is None
+                or ts > latest_live_submission_unknown_ts
+            ):
+                latest_live_submission_unknown_ts = ts
+            continue
         counts[event_type] += 1
         if record.get("research_attempted") is True or any(
             str(key).startswith("research_") for key in record
@@ -300,7 +322,41 @@ def summarize_signal_flow(
         research_records=research_records,
         research_status_counts=research_status_counts,
         latest_research_ts=latest_research_ts,
+        live_submission_unknown_count=live_submission_unknown_count,
+        latest_live_submission_unknown_ts=latest_live_submission_unknown_ts,
     )
+
+
+def summarize_live_submission_holds(path: Path) -> LiveSubmissionHoldStats:
+    """Read the durable live-submission state without importing or mutating it."""
+    try:
+        if path.parent.exists() and not path.parent.is_dir():
+            raise OSError("hold parent is not a directory")
+        temp_path = path.with_suffix(path.suffix + ".tmp")
+        if temp_path.exists():
+            raise OSError("incomplete hold checkpoint")
+        if not path.exists():
+            return LiveSubmissionHoldStats(path=path, status="clear")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("invalid hold checkpoint")
+        if (
+            type(payload.get("version")) is not int
+            or payload["version"] != LIVE_SUBMISSION_HOLD_SCHEMA_VERSION
+        ):
+            raise ValueError("invalid hold checkpoint")
+        held_tickers = payload.get("held_tickers")
+        if not isinstance(held_tickers, list) or any(
+            not isinstance(ticker, str) or not ticker for ticker in held_tickers
+        ):
+            raise ValueError("invalid hold checkpoint")
+        return LiveSubmissionHoldStats(
+            path=path,
+            status="active" if held_tickers else "clear",
+            held_tickers=tuple(sorted(set(held_tickers))),
+        )
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return LiveSubmissionHoldStats(path=path, status="unavailable")
 
 
 def _research_dossier_db_path(repo_root: Path) -> Path:
@@ -1728,17 +1784,45 @@ def print_signal_flow_section(stats: SignalFlowStats, *, now: datetime) -> None:
     print(f"Records    : {stats.records_kept} kept / {stats.lines_total} scanned")
     if stats.lines_malformed:
         print(f"Malformed  : {stats.lines_malformed}")
-    if not stats.counts:
+    if not stats.counts and not stats.live_submission_unknown_count:
         print("Result     : no signal-flow records found in window")
         print()
         return
 
-    for event_type in SIGNAL_FLOW_EVENTS:
-        count = stats.counts.get(event_type, 0)
-        latest = stats.latest_ts_by_type.get(event_type)
+    if stats.counts:
+        for event_type in SIGNAL_FLOW_EVENTS:
+            count = stats.counts.get(event_type, 0)
+            latest = stats.latest_ts_by_type.get(event_type)
+            age = human_duration((now - latest).total_seconds()) if latest is not None else "n/a"
+            latest_text = latest.isoformat() if latest is not None else "n/a"
+            print(f"{event_type:<17}: {count:>5} latest={latest_text} age={age}")
+    if stats.live_submission_unknown_count:
+        latest = stats.latest_live_submission_unknown_ts
         age = human_duration((now - latest).total_seconds()) if latest is not None else "n/a"
         latest_text = latest.isoformat() if latest is not None else "n/a"
-        print(f"{event_type:<17}: {count:>5} latest={latest_text} age={age}")
+        print(
+            "WARNING    : LIVE_SUBMISSION_UNKNOWN="
+            f"{stats.live_submission_unknown_count} latest={latest_text} age={age}; "
+            "reconciliation required"
+        )
+    print()
+
+
+def print_live_submission_hold_section(stats: LiveSubmissionHoldStats) -> None:
+    print("=== Live submission reservations ===")
+    print(f"State file : {stats.path}")
+    if stats.status == "active":
+        print(
+            "WARNING    : active ticker reservations="
+            f"{','.join(stats.held_tickers)}; reconciliation required"
+        )
+    elif stats.status == "unavailable":
+        print(
+            "WARNING    : reservation state unavailable or incomplete; "
+            "reconciliation required"
+        )
+    else:
+        print("Result     : no active live submission reservations")
     print()
 
 
@@ -1965,6 +2049,15 @@ def _default_repo_root() -> Path:
     return home / "vscode" / "kalshi-bot"
 
 
+def _default_live_submission_hold_path(repo_root: Path) -> Path:
+    output_root = Path(
+        os.environ.get("KALSHI_OUTPUT_ROOT")
+        or os.environ.get("KALSHI_LOG_ROOT")
+        or repo_root / "logs"
+    ).expanduser()
+    return output_root / "state" / "live_submission" / LIVE_SUBMISSION_HOLD_FILENAME
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     default_home = _default_repo_root()
@@ -1974,6 +2067,11 @@ def main() -> int:
     parser.add_argument("--main", type=Path, default=Path(os.environ.get("KALSHI_MAIN", default_home / "main.py")))
     parser.add_argument("--log", type=Path, default=Path(os.environ.get("KALSHI_APP_LOG", default_home / "logs/app/bot.log")))
     parser.add_argument("--trades-log", type=Path, default=default_home / "logs/trades")
+    parser.add_argument(
+        "--live-submission-hold",
+        type=Path,
+        default=_default_live_submission_hold_path(default_home),
+    )
     parser.add_argument("--signal-window-hours", type=float, default=24.0)
     args = parser.parse_args()
 
@@ -1993,6 +2091,7 @@ def main() -> int:
         now=now,
         window_hours=args.signal_window_hours,
     )
+    live_submission_holds = summarize_live_submission_holds(args.live_submission_hold)
     research_dossiers = summarize_research_dossiers(default_home, now=now)
 
     print_launchd(args.label, launchd_output, wrapper_pid)
@@ -2000,6 +2099,7 @@ def main() -> int:
     print_caffeinate_section(caffeinates, now_epoch=now_epoch)
     print_last_boot(args.log, sessions, now, current_proc=current_proc, now_epoch=now_epoch)
     print_signal_flow_section(signal_flow, now=now)
+    print_live_submission_hold_section(live_submission_holds)
     print_research_gate_section(
         default_home,
         signal_flow,

@@ -12,8 +12,10 @@ Live mode: tighter checks, live balance verified, source credibility applied.
 import asyncio
 import copy
 import time
+import uuid
 from datetime import datetime, timezone
 from numbers import Real
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 from analysis import SignalAnalysis
@@ -22,6 +24,7 @@ from config import cfg, PAPER_MIN_EDGE, PAPER_BLOCK_SAME_SIDE_DUPLICATE
 from kalshi import OrderResult
 from kalshi.rest_client import KalshiRestClient
 from polymarket.domain_key import pm_domain_key
+from trading.live_submission_hold import LIVE_SUBMISSION_HOLD_PATH, LiveSubmissionHoldStore
 from trading.paper_trader import PaperTrader
 from trading.venue import Venue
 from utils.logger import get_logger, trade_log, write_trade_log_async
@@ -30,6 +33,16 @@ log = get_logger("executor")
 
 # Cooldowns moved to BotConfig (cfg.live_ticker_cooldown / cfg.paper_ticker_cooldown).
 # Read from cfg at call time so .env changes take effect without code edits.
+
+_UNVERIFIED_ORDER_IDS = frozenset({"unknown", "none", "null"})
+
+
+def _is_verified_order_id(order_id: object) -> bool:
+    return (
+        isinstance(order_id, str)
+        and bool(order_id.strip())
+        and order_id.strip().lower() not in _UNVERIFIED_ORDER_IDS
+    )
 
 
 def classify_skip_category(reason: str | None) -> str:
@@ -107,10 +120,20 @@ def _correlated_exposure_prefix(market: Any) -> str:
 class TradeExecutor:
     """Routes validated trade signals to paper or live execution."""
 
-    def __init__(self, rest_client: KalshiRestClient, paper_trader: PaperTrader):
+    def __init__(
+        self,
+        rest_client: KalshiRestClient,
+        paper_trader: PaperTrader,
+        live_submission_hold_path: Path | None = None,
+    ):
         self._rest         = rest_client
         self._paper        = paper_trader
         self._last_traded: dict[str, float] = {}
+        self._live_submission_holds = LiveSubmissionHoldStore(
+            live_submission_hold_path
+            if live_submission_hold_path is not None
+            else LIVE_SUBMISSION_HOLD_PATH
+        )
         # Execution mode frozen at construction -- never re-derived from cfg or DB.
         # cfg.is_paper_trading may be mutated by CLI commands or tests after this
         # point; self._is_paper is intentionally immune to those mutations.
@@ -635,24 +658,22 @@ class TradeExecutor:
         )
         return trade_id
 
-    @staticmethod
-    def _is_retryable_error(error: Optional[str]) -> bool:
-        """Return True for transient errors worth retrying (network, 5xx, rate-limit)."""
-        if not error:
-            return False
-        transient_markers = ("timeout", "429", "500", "502", "503", "504",
-                             "connection", "network", "reset")
-        err_lower = error.lower()
-        return any(m in err_lower for m in transient_markers)
-
     async def _execute_live(self, analysis: SignalAnalysis) -> Optional[str]:
-        """Place a real limit order on Kalshi with exponential backoff on transient errors."""
+        """Place one legacy live order, preserving unknown outcomes for reconciliation."""
         # Hard safety gate: executor initialized in paper mode must never place live orders.
         # This fires only if the routing logic is wrong -- belt-and-suspenders.
         if self._is_paper:
             log.error(
                 "[LIVE_GUARD] BLOCKED live order for %s -- executor initialized in paper mode. "
                 "This is a bug: _execute_live must only be called from live-mode executors.",
+                analysis.market.ticker,
+            )
+            return None
+
+        if not self._live_submission_holds.can_submit(analysis.market.ticker):
+            log.error(
+                "[LIVE_GUARD] BLOCKED live order for %s: unknown submission hold is active "
+                "or unavailable.",
                 analysis.market.ticker,
             )
             return None
@@ -676,64 +697,130 @@ class TradeExecutor:
             return None
 
         cost_dollars = contracts * price_cents / 100.0
+        submission_summary = {
+            "submission_id": uuid.uuid4().hex,
+            "ticker": analysis.market.ticker,
+            "side": analysis.side,
+            "contracts": contracts,
+            "price_cents": price_cents,
+            "cost_dollars": cost_dollars,
+        }
+
+        try:
+            await write_trade_log_async(
+                trade_log.log_live_submission_intent,
+                **submission_summary,
+            )
+        except Exception:
+            log.error(
+                "[LIVE] BLOCKED order for %s: submission intent persistence failed",
+                analysis.market.ticker,
+            )
+            return None
+
+        if not self._live_submission_holds.reserve(analysis.market.ticker):
+            log.error(
+                "[LIVE_GUARD] BLOCKED live order for %s: submission reservation is active "
+                "or could not be persisted; no POST was made.",
+                analysis.market.ticker,
+            )
+            return None
+
+        async def record_unknown_and_hold(
+            outcome: str,
+            *,
+            venue_order_id: str | None = None,
+        ) -> None:
+            if not self._live_submission_holds.hold(analysis.market.ticker):
+                log.error(
+                    "[LIVE_GUARD] Submission reservation persistence failed for %s; "
+                    "blocking later live posts.",
+                    analysis.market.ticker,
+                )
+            unknown_kwargs = {
+                **submission_summary,
+                "outcome": outcome,
+            }
+            if venue_order_id is not None:
+                unknown_kwargs["venue_order_id"] = venue_order_id
+            try:
+                await write_trade_log_async(
+                    trade_log.log_live_submission_unknown,
+                    **unknown_kwargs,
+                )
+            except Exception:
+                log.error(
+                    "[LIVE] Submission outcome persistence failed for %s; manual reconciliation required",
+                    analysis.market.ticker,
+                )
+
         log.info(
-            "[LIVE] Placing order: %s %s %d @ %dc | cost=$%.2f | edge=%+.3f | confidence=%.2f",
+            "[LIVE] Submitting one order: %s %s %d @ %dc | cost=$%.2f | edge=%+.3f | confidence=%.2f",
             analysis.market.ticker, analysis.side.upper(), contracts,
             price_cents, cost_dollars, analysis.edge, analysis.confidence,
         )
 
         loop = asyncio.get_running_loop()
-        last_error: Optional[str] = None
+        try:
+            result: OrderResult = await loop.run_in_executor(
+                None,
+                lambda: self._rest.place_limit_order(
+                    ticker=analysis.market.ticker,
+                    side=analysis.side,
+                    count=contracts,
+                    limit_price=price_cents,
+                ),
+            )
+            result_error = result.error
+        except asyncio.CancelledError:
+            await record_unknown_and_hold("cancelled")
+            raise
+        except Exception:
+            await record_unknown_and_hold("exception")
+            log.error(
+                "[LIVE] Submission outcome unknown after one POST for %s",
+                analysis.market.ticker,
+            )
+            return None
 
-        for attempt in range(3):
-            if attempt > 0:
-                delay = 2 ** (attempt - 1)   # 1s, 2s
-                log.warning(
-                    "[LIVE] Retrying order for %s (attempt %d/3, backoff=%ds): %s",
-                    analysis.market.ticker, attempt + 1, delay, last_error,
-                )
-                await asyncio.sleep(delay)
+        if result_error:
+            await record_unknown_and_hold("error_result")
+            log.error(
+                "[LIVE] Submission outcome unknown after one POST for %s",
+                analysis.market.ticker,
+            )
+            return None
 
-            try:
-                result: OrderResult = await loop.run_in_executor(
-                    None,
-                    lambda: self._rest.place_limit_order(
-                        ticker=analysis.market.ticker,
-                        side=analysis.side,
-                        count=contracts,
-                        limit_price=price_cents,
-                    ),
-                )
-            except Exception as exc:
-                last_error = str(exc)
-                if attempt < 2:
-                    continue
-                log.error("[LIVE] Order failed after 3 attempts (exception): %s", last_error)
-                return None
+        try:
+            order_id = result.order_id
+        except asyncio.CancelledError:
+            await record_unknown_and_hold("cancelled")
+            raise
+        except Exception:
+            await record_unknown_and_hold("unverified_receipt")
+            log.error(
+                "[LIVE] Submission receipt is unverified after one POST for %s",
+                analysis.market.ticker,
+            )
+            return None
 
-            if result.error:
-                last_error = result.error
-                if self._is_retryable_error(result.error) and attempt < 2:
-                    continue
-                # Non-retryable or final attempt
-                log.error(
-                    "[LIVE] Order failed%s: %s",
-                    " after 3 attempts" if attempt == 2 else "",
-                    result.error,
-                )
-                return None
+        if not _is_verified_order_id(order_id):
+            await record_unknown_and_hold("unverified_receipt")
+            log.error(
+                "[LIVE] Submission receipt is unverified after one POST for %s",
+                analysis.market.ticker,
+            )
+            return None
 
-            # Success
+        try:
+            status = result.status
+            filled = result.filled
             live_order_kwargs = {
-                "order_id": result.order_id,
-                "ticker": analysis.market.ticker,
-                "side": analysis.side,
-                "contracts": contracts,
-                "price_cents": price_cents,
-                "cost_dollars": cost_dollars,
-                "status": result.status,
+                "order_id": order_id,
+                **submission_summary,
+                "status": status,
                 "model_probability": analysis.estimated_probability,
-                "market_price": float(analysis.executed_price_cents) if analysis.executed_price_cents is not None else 0.0,
+                "market_price": float(analysis.executed_price_cents),
                 "edge": analysis.edge,
                 "min_edge_threshold": self._min_edge_threshold(analysis),
             }
@@ -741,19 +828,33 @@ class TradeExecutor:
             if signal_meta:
                 live_order_kwargs["signal_meta"] = signal_meta
             await write_trade_log_async(trade_log.log_live_order, **live_order_kwargs)
-            if attempt > 0:
-                log.info(
-                    "[LIVE] Order placed on attempt %d: %s | status=%s | filled=%d",
-                    attempt + 1, result.order_id, result.status, result.filled,
-                )
-            else:
-                log.info(
-                    "[LIVE] Order placed: %s | status=%s | filled=%d",
-                    result.order_id, result.status, result.filled,
-                )
-            return result.order_id
-
-        return None
+        except asyncio.CancelledError:
+            await record_unknown_and_hold(
+                "live_order_journal_failure",
+                venue_order_id=order_id,
+            )
+            raise
+        except Exception:
+            await record_unknown_and_hold(
+                "live_order_journal_failure",
+                venue_order_id=order_id,
+            )
+            log.error(
+                "[LIVE] LIVE_ORDER journal failed after venue response for %s",
+                analysis.market.ticker,
+            )
+            return None
+        if not self._live_submission_holds.release(analysis.market.ticker):
+            log.error(
+                "[LIVE_GUARD] LIVE_ORDER journal is durable for %s, but submission "
+                "reservation release failed; later live posts remain blocked.",
+                analysis.market.ticker,
+            )
+        log.info(
+            "[LIVE] Order placed: %s | status=%s | filled=%d",
+            order_id, status, filled,
+        )
+        return order_id
 
     def status(self) -> dict:
         return {

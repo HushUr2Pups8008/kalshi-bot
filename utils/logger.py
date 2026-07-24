@@ -811,6 +811,64 @@ class TradeLogger:
             record["bankroll_delta_dollars"] = round(bankroll_delta_dollars, 2)
         self._write(record)
 
+    def log_live_submission_intent(
+        self,
+        *,
+        submission_id: str,
+        ticker: str,
+        side: str,
+        contracts: int,
+        price_cents: int,
+        cost_dollars: float,
+    ) -> None:
+        self._write({
+            "type": "LIVE_SUBMISSION_INTENT",
+            "submission_id": submission_id,
+            "ticker": ticker,
+            "side": side,
+            "contracts": contracts,
+            "price_cents": price_cents,
+            "cost_dollars": round(cost_dollars, 2),
+        })
+
+    def log_live_submission_unknown(
+        self,
+        *,
+        submission_id: str,
+        ticker: str,
+        side: str,
+        contracts: int,
+        price_cents: int,
+        cost_dollars: float,
+        outcome: str,
+        venue_order_id: str | None = None,
+    ) -> None:
+        if outcome not in {
+            "exception",
+            "error_result",
+            "cancelled",
+            "live_order_journal_failure",
+            "unverified_receipt",
+        }:
+            raise ValueError("unsupported live submission outcome")
+        record = {
+            "type": "LIVE_SUBMISSION_UNKNOWN",
+            "submission_id": submission_id,
+            "ticker": ticker,
+            "side": side,
+            "contracts": contracts,
+            "price_cents": price_cents,
+            "cost_dollars": round(cost_dollars, 2),
+            "outcome": outcome,
+        }
+        if venue_order_id is not None:
+            if outcome != "live_order_journal_failure":
+                raise ValueError("venue order ID requires a journal failure outcome")
+            if not isinstance(venue_order_id, str) or not venue_order_id.strip():
+                raise ValueError("venue order ID must be a non-empty string")
+            record["venue_order_id"] = venue_order_id.strip()
+        self._write(record)
+
     def log_live_order(
         self,
         *,
@@ -826,6 +884,7 @@ class TradeLogger:
         edge: float | None = None,
         min_edge_threshold: float | None = None,
         signal_meta: dict[str, Any] | None = None,
+        submission_id: str | None = None,
     ) -> None:
         record = {
             "type": "LIVE_ORDER",
@@ -837,6 +896,8 @@ class TradeLogger:
             "cost_dollars": round(cost_dollars, 2),
             "status": status,
         }
+        if submission_id is not None:
+            record["submission_id"] = submission_id
         if model_probability is not None:
             record["model_probability"] = round(model_probability, 4)
         if market_price is not None:

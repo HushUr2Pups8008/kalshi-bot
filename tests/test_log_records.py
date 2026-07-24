@@ -186,6 +186,57 @@ def test_logger_emits_required_only_record():
         _cleanup(tmp)
 
 
+def test_live_submission_records_are_linked_and_sanitized():
+    tmp = make_tmp_dir("live_submission_records")
+    try:
+        log_file = tmp / "trades.jsonl"
+        logger = TradeLogger(log_file)
+        summary = {
+            "submission_id": "a" * 32,
+            "ticker": "KXTEST-25DEC31",
+            "side": "yes",
+            "contracts": 20,
+            "price_cents": 50,
+            "cost_dollars": 10.0,
+        }
+
+        logger.log_live_submission_intent(**summary)
+        logger.log_live_submission_unknown(**summary, outcome="exception")
+        logger.log_live_submission_unknown(
+            **summary,
+            outcome="live_order_journal_failure",
+            venue_order_id="venue-order-123",
+        )
+        logger.log_live_order(
+            order_id="order-123",
+            submission_id=summary["submission_id"],
+            ticker=summary["ticker"],
+            side=summary["side"],
+            contracts=summary["contracts"],
+            price_cents=summary["price_cents"],
+            cost_dollars=summary["cost_dollars"],
+            status="resting",
+        )
+
+        records = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
+        assert [record["type"] for record in records] == [
+            "LIVE_SUBMISSION_INTENT",
+            "LIVE_SUBMISSION_UNKNOWN",
+            "LIVE_SUBMISSION_UNKNOWN",
+            "LIVE_ORDER",
+        ]
+        assert all(record["submission_id"] == summary["submission_id"] for record in records)
+        assert records[1]["outcome"] == "exception"
+        assert "error" not in records[1]
+        assert "venue_order_id" not in records[1]
+        assert records[2]["outcome"] == "live_order_journal_failure"
+        assert records[2]["venue_order_id"] == "venue-order-123"
+        assert "error" not in records[2]
+        assert records[3]["order_id"] == "order-123"
+    finally:
+        _cleanup(tmp)
+
+
 def test_logger_full_payload_snapshot():
     """Snapshot test: full payload emits exactly the locked key set.
 
