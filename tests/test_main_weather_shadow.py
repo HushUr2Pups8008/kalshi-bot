@@ -339,10 +339,14 @@ async def test_run_drains_only_weather_before_existing_cleanup(monkeypatch):
 
     prewarm_task = FakeRuntimeTask("research_prewarm")
     weather_task = FakeRuntimeTask("weather_shadow_capture")
+    capital_guard_task = FakeRuntimeTask("capital_guard_shadow_settlement_collection")
     bot._create_research_prewarm_runtime_task = MagicMock(
         return_value=prewarm_task
     )
     bot._create_weather_shadow_runtime_task = MagicMock(return_value=weather_task)
+    bot._create_capital_guard_shadow_settlement_collection_task = MagicMock(
+        return_value=capital_guard_task
+    )
 
     async def _cancel_targeted():
         events.append("targeted-prewarm-cleanup")
@@ -366,9 +370,11 @@ async def test_run_drains_only_weather_before_existing_cleanup(monkeypatch):
 
     assert global_items.count(weather_task) == 1
     assert global_items.count(prewarm_task) == 1
+    assert global_items.count(capital_guard_task) == 1
     assert drain_items == [weather_task]
     assert weather_task.cancelled is True
     assert prewarm_task.cancelled is True
+    assert capital_guard_task.cancelled is True
     assert all(task.cancelled for task in runtime_tasks)
     assert all(task not in drain_items for task in runtime_tasks)
     assert Counter(task.name for task in global_items) == Counter(
@@ -392,6 +398,7 @@ async def test_run_drains_only_weather_before_existing_cleanup(monkeypatch):
             "structural": 1,
             "research_prewarm": 1,
             "weather_shadow_capture": 1,
+            "capital_guard_shadow_settlement_collection": 1,
         }
     )
     assert events.index("drain:weather_shadow_capture") < events.index(
