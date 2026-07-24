@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Build a deterministic, read-only OOS prerequisite report.
 
-The shadow ledger currently records decision-time entry evidence and current
-authoritative settlement heads. It does not yet contain a committed settlement
-economics, correction-cashflow, executable-mark, baseline, or multi-fill fee
-state contract. This tool therefore never calculates P&L or a promotion
-decision. It reports those missing prerequisites explicitly.
+The shadow ledger records decision-time entry evidence and current authoritative
+settlement heads. Its G7 candidates are counterfactual, so market/account
+settlement receipts cannot establish candidate-specific fee-net P&L without an
+authenticated candidate-to-fill-to-settlement chain. It also lacks correction-
+cashflow, executable-mark, baseline, and multi-fill fee state contracts. This
+tool therefore never calculates P&L or a promotion decision.
 """
 
 from __future__ import annotations
@@ -34,15 +35,16 @@ from trading.capital_guard_shadow import (
 )
 
 
-REPLAY_REPORT_VERSION = 2
+REPLAY_REPORT_VERSION = 4
 _ZERO = Decimal("0")
-_FINANCIAL_PREREQUISITES = (
-    "committed_settlement_economics_contract_missing",
+_IMPLEMENTATION_FINANCIAL_PREREQUISITES = (
+    "authenticated_candidate_fill_settlement_attribution_missing",
     "settlement_correction_cashflow_contract_missing",
     "post_entry_executable_mark_contract_missing",
     "preregistered_counterfactual_baseline_manifest_missing",
     "multi_fill_fee_state_contract_missing",
 )
+_FEE_RECEIPT_COVERAGE_PREREQUISITE = "authoritative_settlement_fee_receipt_coverage_missing"
 
 
 def build_replay_report(
@@ -53,20 +55,18 @@ def build_replay_report(
 ) -> dict[str, object]:
     """Summarize decision-time OOS coverage without evaluating economics."""
     _validate_report_inputs(snapshot=snapshot, oos_start=oos_start, oos_end=oos_end)
-    oos_rows = tuple(
-        candidate
-        for candidate in snapshot.candidates
-        if oos_start <= candidate.decision_at < oos_end
-    )
+    oos_rows = tuple(candidate for candidate in snapshot.candidates if oos_start <= candidate.decision_at < oos_end)
     ordered_rows = tuple(sorted(oos_rows, key=lambda row: (row.decision_at, row.candidate_id)))
     eligible_rows = tuple(row for row in ordered_rows if row.replay_eligible)
     diagnostic_rows = tuple(row for row in ordered_rows if not row.replay_eligible)
     candidate_diagnostics = [_candidate_diagnostic(row) for row in ordered_rows]
     coverage = _coverage(ordered_rows)
+    financial_prerequisites = _financial_prerequisites(coverage)
     failure_reasons = _promotion_failures(
         snapshot=snapshot,
         oos_rows=ordered_rows,
         eligible_rows=eligible_rows,
+        financial_prerequisites=financial_prerequisites,
     )
     report: dict[str, object] = {
         "report_version": REPLAY_REPORT_VERSION,
@@ -95,7 +95,7 @@ def build_replay_report(
             **coverage,
         },
         "candidate_diagnostics": candidate_diagnostics,
-        "financial_prerequisites": list(_FINANCIAL_PREREQUISITES),
+        "financial_prerequisites": financial_prerequisites,
         "promotion": {
             "eligible": False,
             "failure_reasons": failure_reasons,
@@ -137,15 +137,10 @@ def _candidate_diagnostic(
     if observation is None:
         if candidate.latest_quarantine_reason is not None:
             result["current_head_status"] = "settlement_quarantined"
-            result["blocker"] = (
-                "settlement_quarantined:" + candidate.latest_quarantine_reason
-            )
+            result["blocker"] = "settlement_quarantined:" + candidate.latest_quarantine_reason
         elif candidate.latest_settlement_attempt_status is not None:
             result["current_head_status"] = "awaiting_current_authoritative_head"
-            result["blocker"] = (
-                "no_current_authoritative_head:"
-                + candidate.latest_settlement_attempt_status
-            )
+            result["blocker"] = "no_current_authoritative_head:" + candidate.latest_settlement_attempt_status
         else:
             result["current_head_status"] = "missing_current_authoritative_head"
             result["blocker"] = "missing_current_authoritative_head"
@@ -163,10 +158,18 @@ def _candidate_diagnostic(
         result["current_head_status"] = "terminal_head_without_financial_settlement"
         result["blocker"] = "missing_financial_settlement_record"
         result["financial_settlement_present"] = False
-    else:
-        result["current_head_status"] = "terminal_head_with_unverified_financial_settlement"
-        result["blocker"] = "committed_settlement_economics_contract_missing"
+    elif candidate.current_settlement.economics_contract_sha256 is None:
+        result["current_head_status"] = "terminal_head_with_unscorable_financial_settlement"
+        result["blocker"] = "settlement_economics_unscorable:" + str(
+            candidate.current_settlement.economics_unscorable_reason
+        )
         result["financial_settlement_present"] = True
+        result["financial_settlement_economics"] = "unscorable"
+    else:
+        result["current_head_status"] = "terminal_head_with_typed_financial_settlement"
+        result["blocker"] = "settlement_correction_cashflow_contract_missing"
+        result["financial_settlement_present"] = True
+        result["financial_settlement_economics"] = "typed"
     return result
 
 
@@ -181,12 +184,20 @@ def _coverage(
             "recorded_entry_debit_dollars": _ZERO,
             "current_authoritative_head_rows": 0,
             "terminal_authoritative_head_rows": 0,
-            "unverified_financial_settlement_rows": 0,
+            "typed_financial_settlement_rows": 0,
+            "unscorable_financial_settlement_rows": 0,
+            "sole_g7_terminal_authoritative_head_rows": 0,
+            "sole_g7_typed_financial_settlement_rows": 0,
+            "sole_g7_unscorable_financial_settlement_rows": 0,
         }
     )
     current_head_rows = 0
     terminal_head_rows = 0
-    unverified_financial_settlement_rows = 0
+    typed_financial_settlement_rows = 0
+    unscorable_financial_settlement_rows = 0
+    sole_g7_terminal_authoritative_head_rows = 0
+    sole_g7_typed_financial_settlement_rows = 0
+    sole_g7_unscorable_financial_settlement_rows = 0
     recorded_entry_debit = _ZERO
     for candidate in candidates:
         values = by_venue[candidate.venue.value]
@@ -206,24 +217,51 @@ def _coverage(
             continue
         terminal_head_rows += 1
         values["terminal_authoritative_head_rows"] += 1
+        if candidate.replay_eligible:
+            sole_g7_terminal_authoritative_head_rows += 1
+            values["sole_g7_terminal_authoritative_head_rows"] += 1
         if candidate.current_settlement is not None:
-            unverified_financial_settlement_rows += 1
-            values["unverified_financial_settlement_rows"] += 1
+            if candidate.current_settlement.economics_contract_sha256 is None:
+                unscorable_financial_settlement_rows += 1
+                values["unscorable_financial_settlement_rows"] += 1
+                if candidate.replay_eligible:
+                    sole_g7_unscorable_financial_settlement_rows += 1
+                    values["sole_g7_unscorable_financial_settlement_rows"] += 1
+            else:
+                typed_financial_settlement_rows += 1
+                values["typed_financial_settlement_rows"] += 1
+                if candidate.replay_eligible:
+                    sole_g7_typed_financial_settlement_rows += 1
+                    values["sole_g7_typed_financial_settlement_rows"] += 1
     return {
         "recorded_entry_debit_dollars": _decimal_text(recorded_entry_debit),
         "current_authoritative_head_rows": current_head_rows,
         "terminal_authoritative_head_rows": terminal_head_rows,
-        "unverified_financial_settlement_rows": unverified_financial_settlement_rows,
+        "typed_financial_settlement_rows": typed_financial_settlement_rows,
+        "unscorable_financial_settlement_rows": unscorable_financial_settlement_rows,
+        "sole_g7_terminal_authoritative_head_rows": sole_g7_terminal_authoritative_head_rows,
+        "sole_g7_typed_financial_settlement_rows": sole_g7_typed_financial_settlement_rows,
+        "sole_g7_unscorable_financial_settlement_rows": sole_g7_unscorable_financial_settlement_rows,
         "venues": {
             venue: {
                 **values,
-                "recorded_entry_debit_dollars": _decimal_text(
-                    values["recorded_entry_debit_dollars"]
-                ),
+                "recorded_entry_debit_dollars": _decimal_text(values["recorded_entry_debit_dollars"]),
             }
             for venue, values in sorted(by_venue.items())
         },
     }
+
+
+def _financial_prerequisites(coverage: dict[str, object]) -> list[str]:
+    terminal_rows = coverage.get("sole_g7_terminal_authoritative_head_rows")
+    typed_rows = coverage.get("sole_g7_typed_financial_settlement_rows")
+    unscorable_rows = coverage.get("sole_g7_unscorable_financial_settlement_rows")
+    if not all(isinstance(value, int) for value in (terminal_rows, typed_rows, unscorable_rows)):
+        raise TypeError("sole-G7 financial settlement coverage values must be integers")
+    prerequisites = list(_IMPLEMENTATION_FINANCIAL_PREREQUISITES)
+    if terminal_rows == 0 or typed_rows != terminal_rows or unscorable_rows != 0:
+        prerequisites.insert(0, _FEE_RECEIPT_COVERAGE_PREREQUISITE)
+    return prerequisites
 
 
 def _promotion_failures(
@@ -231,8 +269,9 @@ def _promotion_failures(
     snapshot: CapitalGuardShadowReplaySnapshot,
     oos_rows: tuple[CapitalGuardShadowReplayCandidate, ...],
     eligible_rows: tuple[CapitalGuardShadowReplayCandidate, ...],
+    financial_prerequisites: list[str],
 ) -> list[str]:
-    failures = list(_FINANCIAL_PREREQUISITES)
+    failures = list(financial_prerequisites)
     if not oos_rows:
         failures.append("no_oos_candidates")
     if not eligible_rows:
@@ -273,9 +312,7 @@ def _write_report_atomically(
     output = _safe_output_path(db_path, output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     output = _safe_output_path(db_path, output)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{output.name}.", suffix=".tmp", dir=output.parent
-    )
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{output.name}.", suffix=".tmp", dir=output.parent)
     temporary = Path(temporary_name)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
@@ -336,9 +373,7 @@ def main(argv: list[str] | None = None) -> int:
         output_path=output,
         report=report,
     )
-    print(
-        f"{output} promotion_eligible=False report_sha256={report['report_sha256']}"
-    )
+    print(f"{output} promotion_eligible=False report_sha256={report['report_sha256']}")
     return 0
 
 
