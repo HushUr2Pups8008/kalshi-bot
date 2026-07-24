@@ -49,4 +49,3 @@ Tests must prove:
 ## Runtime Acceptance
 
 After merge and restart, verify that the next restart no longer causes a stale-drop burst from the same retained feed items, while fresh-pass events continue and no paper or live orders are enabled.
-
