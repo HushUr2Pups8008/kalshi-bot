@@ -18,7 +18,7 @@ SCHEMA_VERSION: Final = 1
 DEFAULT_PROTOCOL_PATH: Final = (
     Path(__file__).resolve().parents[2] / "docs" / "governance" / "fee-net-shadow-cohort-v1.json"
 )
-SHIPPED_PROTOCOL_SHA256: Final = "576938e981173bdcfc227f40eb6f7bfb40742ced97d4eb82182b18b6b9366eeb"
+SHIPPED_PROTOCOL_SHA256: Final = "77ba2f8267b7a7dfced63b504b8d720cc4d3824df1d417d4c638f4aeb3048648"
 
 _ROOT_KEYS: Final = frozenset(
     {
@@ -44,6 +44,13 @@ _PROVENANCE_KEYS: Final = frozenset(
         "record_mode",
         "required_fields",
         "require_void_refund_policy",
+        "require_zero_settlement_refunds",
+        "execution_price_minimum_dollars",
+        "execution_price_maximum_dollars",
+        "execution_price_increment_dollars",
+        "require_execution_market_and_side_binding",
+        "require_single_paper_account",
+        "require_unique_paper_fill_ids_per_account",
         "require_chronological_replay",
         "protected_history_required",
     }
@@ -98,6 +105,7 @@ _REQUIRED_PROVENANCE_FIELDS: Final = (
     "settlement_payload_sha256",
     "evaluation_payload_sha256",
     "gate_outcomes",
+    "execution",
     "settlement",
     "economics",
     "record_hash",
@@ -107,6 +115,9 @@ _HASH_RE: Final = re.compile(r"^[0-9a-f]{64}$")
 _UTC_RE: Final = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 _DECIMAL_RE: Final = re.compile(r"^-?(?:0|[1-9]\d*)(?:\.\d+)?$")
 _EVIDENCE_SCHEMA_VERSION: Final = 3
+_KALSHI_ENTRY_PRICE_MINIMUM: Final = Decimal("0.01")
+_KALSHI_ENTRY_PRICE_MAXIMUM: Final = Decimal("0.99")
+_KALSHI_ENTRY_PRICE_INCREMENT: Final = Decimal("0.01")
 _EVIDENCE_KEYS: Final = frozenset(
     {
         "evidence_schema_version",
@@ -140,6 +151,7 @@ _EVIDENCE_KEYS: Final = frozenset(
         "account_party_id_sha256",
         "settlement_payload_sha256",
         "evaluation_payload_sha256",
+        "execution",
         "settlement",
         "economics",
         "record_hash",
@@ -151,8 +163,22 @@ _SETTLEMENT_KEYS: Final = frozenset(
         "kind",
         "settled_at_utc",
         "outcome",
+        "payout_per_contract_dollars",
         "void_refund_policy_sha256",
         "void_refund_payload_sha256",
+    }
+)
+_EXECUTION_KEYS: Final = frozenset(
+    {
+        "paper_account_id_sha256",
+        "paper_order_id",
+        "paper_fill_id",
+        "execution_payload_sha256",
+        "venue_market_id",
+        "side",
+        "executed_at_utc",
+        "quantity",
+        "entry_price_dollars",
     }
 )
 _ECONOMICS_KEYS: Final = frozenset(
@@ -213,6 +239,8 @@ class FeeNetShadowEvidenceRecord:
     recorded_at_utc: str
     decision_at_utc: str
     venue_market_id: str
+    paper_account_id_sha256: str
+    paper_fill_id: str
     fee_net_pnl_dollars: str
 
     @property
@@ -375,6 +403,28 @@ def _validate_provenance(raw: object) -> int:
         field_name="provenance.require_void_refund_policy",
     )
     _require_bool(
+        provenance["require_zero_settlement_refunds"],
+        field_name="provenance.require_zero_settlement_refunds",
+    )
+    if provenance["execution_price_minimum_dollars"] != str(_KALSHI_ENTRY_PRICE_MINIMUM):
+        raise FeeNetShadowProtocolError("provenance.execution_price_minimum_dollars must be 0.01")
+    if provenance["execution_price_maximum_dollars"] != str(_KALSHI_ENTRY_PRICE_MAXIMUM):
+        raise FeeNetShadowProtocolError("provenance.execution_price_maximum_dollars must be 0.99")
+    if provenance["execution_price_increment_dollars"] != str(_KALSHI_ENTRY_PRICE_INCREMENT):
+        raise FeeNetShadowProtocolError("provenance.execution_price_increment_dollars must be 0.01")
+    _require_bool(
+        provenance["require_execution_market_and_side_binding"],
+        field_name="provenance.require_execution_market_and_side_binding",
+    )
+    _require_bool(
+        provenance["require_single_paper_account"],
+        field_name="provenance.require_single_paper_account",
+    )
+    _require_bool(
+        provenance["require_unique_paper_fill_ids_per_account"],
+        field_name="provenance.require_unique_paper_fill_ids_per_account",
+    )
+    _require_bool(
         provenance["require_chronological_replay"],
         field_name="provenance.require_chronological_replay",
     )
@@ -523,7 +573,7 @@ def _validate_gate_outcomes(raw: object) -> None:
         raise FeeNetShadowProtocolError("gate_outcomes.G7_open_exposure_drawdown must be failed")
 
 
-def _validate_settlement(raw: object, *, decision_at: datetime) -> datetime:
+def _validate_settlement(raw: object, *, decision_at: datetime) -> tuple[datetime, str, Decimal]:
     settlement = _exact_keys(raw, _SETTLEMENT_KEYS, field_name="settlement")
     if settlement["kind"] == "void":
         raise FeeNetShadowProtocolError("voids are not authorized by the locked protocol")
@@ -536,10 +586,64 @@ def _validate_settlement(raw: object, *, decision_at: datetime) -> datetime:
     settled_at = _canonical_utc(settlement["settled_at_utc"], field_name="settlement.settled_at_utc")
     if settled_at < decision_at:
         raise FeeNetShadowProtocolError("settlement.settled_at_utc must not precede decision_at_utc")
-    return settled_at
+    payout_per_contract = _decimal(
+        settlement["payout_per_contract_dollars"],
+        field_name="settlement.payout_per_contract_dollars",
+        nonnegative=True,
+    )
+    if payout_per_contract != Decimal("1"):
+        raise FeeNetShadowProtocolError("settlement.payout_per_contract_dollars must be 1")
+    return settled_at, str(settlement["outcome"]), payout_per_contract
 
 
-def _validate_economics(raw: object) -> str:
+def _validate_execution(
+    raw: object,
+    *,
+    decision_at: datetime,
+    settled_at: datetime,
+    venue_market_id: str,
+    selected_side: str,
+) -> tuple[str, str, int, Decimal]:
+    execution = _exact_keys(raw, _EXECUTION_KEYS, field_name="execution")
+    paper_account_id_sha256 = _sha256(
+        execution["paper_account_id_sha256"], field_name="execution.paper_account_id_sha256"
+    )
+    _text(execution["paper_order_id"], field_name="execution.paper_order_id")
+    paper_fill_id = _text(execution["paper_fill_id"], field_name="execution.paper_fill_id")
+    _sha256(execution["execution_payload_sha256"], field_name="execution.execution_payload_sha256")
+    if execution["venue_market_id"] != venue_market_id:
+        raise FeeNetShadowProtocolError("execution.venue_market_id must match evidence venue_market_id")
+    if execution["side"] != selected_side:
+        raise FeeNetShadowProtocolError("execution.side must match evidence selected_side")
+    executed_at = _canonical_utc(execution["executed_at_utc"], field_name="execution.executed_at_utc")
+    if executed_at < decision_at or executed_at > settled_at:
+        raise FeeNetShadowProtocolError("execution.executed_at_utc must be between decision_at_utc and settlement")
+    quantity = _integer_at_least(execution["quantity"], field_name="execution.quantity", minimum=1)
+    entry_price = _decimal(
+        execution["entry_price_dollars"],
+        field_name="execution.entry_price_dollars",
+        nonnegative=True,
+    )
+    if (
+        entry_price < _KALSHI_ENTRY_PRICE_MINIMUM
+        or entry_price > _KALSHI_ENTRY_PRICE_MAXIMUM
+        or entry_price % _KALSHI_ENTRY_PRICE_INCREMENT != 0
+    ):
+        raise FeeNetShadowProtocolError(
+            "execution.entry_price_dollars must be a whole-cent Kalshi price in [0.01, 0.99]"
+        )
+    return paper_account_id_sha256, paper_fill_id, quantity, entry_price
+
+
+def _validate_economics(
+    raw: object,
+    *,
+    quantity: int,
+    entry_price: Decimal,
+    selected_side: str,
+    settlement_outcome: str,
+    payout_per_contract: Decimal,
+) -> str:
     economics = _exact_keys(raw, _ECONOMICS_KEYS, field_name="economics")
     gross_entry = _decimal(
         economics["gross_entry_debit_dollars"],
@@ -578,8 +682,21 @@ def _validate_economics(raw: object) -> str:
     )
     gross_pnl = _decimal(economics["gross_pnl_dollars"], field_name="economics.gross_pnl_dollars")
     fee_net_pnl = _decimal(economics["fee_net_pnl_dollars"], field_name="economics.fee_net_pnl_dollars")
+    if settlement_refund != Decimal(0):
+        raise FeeNetShadowProtocolError("economics.settlement_refund_dollars must be zero for a settled-only cohort")
     if gross_entry <= 0:
         raise FeeNetShadowProtocolError("economics.gross_entry_debit_dollars must be positive")
+    if gross_entry != Decimal(quantity) * entry_price:
+        raise FeeNetShadowProtocolError(
+            "economics.gross_entry_debit_dollars does not match execution quantity and price"
+        )
+    expected_gross_payout = (
+        Decimal(quantity) * payout_per_contract if settlement_outcome == selected_side else Decimal(0)
+    )
+    if gross_payout != expected_gross_payout:
+        raise FeeNetShadowProtocolError(
+            "economics.gross_payout_dollars does not match selected side and settlement outcome"
+        )
     if net_entry != gross_entry + entry_fee:
         raise FeeNetShadowProtocolError("economics.net_entry_debit_dollars does not reconcile")
     if net_payout != gross_payout - settlement_fee + settlement_refund:
@@ -657,10 +774,28 @@ def verify_fee_net_shadow_evidence_record(
     for field_name in _RECORD_HASH_FIELDS:
         _sha256(evidence[field_name], field_name=field_name)
     _validate_gate_outcomes(evidence["gate_outcomes"])
-    settled_at = _validate_settlement(evidence["settlement"], decision_at=decision_at)
+    settled_at, settlement_outcome, payout_per_contract = _validate_settlement(
+        evidence["settlement"], decision_at=decision_at
+    )
     if recorded_at < settled_at:
         raise FeeNetShadowProtocolError("recorded_at_utc must not precede settlement.settled_at_utc")
-    fee_net_pnl_dollars = _validate_economics(evidence["economics"])
+    paper_account_id_sha256, paper_fill_id, quantity, entry_price = _validate_execution(
+        evidence["execution"],
+        decision_at=decision_at,
+        settled_at=settled_at,
+        venue_market_id=str(evidence["venue_market_id"]),
+        selected_side=str(evidence["selected_side"]),
+    )
+    if paper_account_id_sha256 != evidence["account_party_id_sha256"]:
+        raise FeeNetShadowProtocolError("execution.paper_account_id_sha256 must match account_party_id_sha256")
+    fee_net_pnl_dollars = _validate_economics(
+        evidence["economics"],
+        quantity=quantity,
+        entry_price=entry_price,
+        selected_side=str(evidence["selected_side"]),
+        settlement_outcome=settlement_outcome,
+        payout_per_contract=payout_per_contract,
+    )
     return FeeNetShadowEvidenceRecord(
         record_id=record_id,
         record_hash=record_hash,
@@ -669,6 +804,8 @@ def verify_fee_net_shadow_evidence_record(
         recorded_at_utc=str(evidence["recorded_at_utc"]),
         decision_at_utc=str(evidence["decision_at_utc"]),
         venue_market_id=str(evidence["venue_market_id"]),
+        paper_account_id_sha256=paper_account_id_sha256,
+        paper_fill_id=paper_fill_id,
         fee_net_pnl_dollars=fee_net_pnl_dollars,
     )
 
@@ -684,6 +821,8 @@ def verify_fee_net_shadow_chain(
     seen_record_hashes: set[str] = set()
     seen_candidate_ids: set[str] = set()
     seen_markets: set[str] = set()
+    seen_paper_fills: set[tuple[str, str]] = set()
+    cohort_paper_account_id_sha256: str | None = None
     verified: list[FeeNetShadowEvidenceRecord] = []
     for raw in records:
         record = verify_fee_net_shadow_evidence_record(
@@ -700,10 +839,20 @@ def verify_fee_net_shadow_chain(
             raise FeeNetShadowProtocolError("evidence chain contains a duplicate candidate")
         if record.venue_market_id in seen_markets:
             raise FeeNetShadowProtocolError("evidence chain contains more than one candidate per market")
+        if (
+            cohort_paper_account_id_sha256 is not None
+            and record.paper_account_id_sha256 != cohort_paper_account_id_sha256
+        ):
+            raise FeeNetShadowProtocolError("evidence chain contains more than one paper account")
+        paper_fill_key = (record.paper_account_id_sha256, record.paper_fill_id)
+        if paper_fill_key in seen_paper_fills:
+            raise FeeNetShadowProtocolError("evidence chain contains a duplicate paper fill")
         seen_record_ids.add(record.record_id)
         seen_record_hashes.add(record.record_hash)
         seen_candidate_ids.add(record.candidate_id)
         seen_markets.add(record.venue_market_id)
+        seen_paper_fills.add(paper_fill_key)
+        cohort_paper_account_id_sha256 = record.paper_account_id_sha256
         verified.append(record)
         expected_previous_record_hash = record.record_hash
         previous_recorded_at = recorded_at

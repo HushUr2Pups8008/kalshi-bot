@@ -55,11 +55,19 @@
       "settlement_payload_sha256",
       "evaluation_payload_sha256",
       "gate_outcomes",
+      "execution",
       "settlement",
       "economics",
       "record_hash"
     ],
     "require_void_refund_policy": true,
+    "require_zero_settlement_refunds": true,
+    "execution_price_minimum_dollars": "0.01",
+    "execution_price_maximum_dollars": "0.99",
+    "execution_price_increment_dollars": "0.01",
+    "require_execution_market_and_side_binding": true,
+    "require_single_paper_account": true,
+    "require_unique_paper_fill_ids_per_account": true,
     "require_chronological_replay": true,
     "protected_history_required": true
   },
@@ -81,5 +89,5 @@
       "seed": 20260724
     }
   },
-  "protocol_hash": "576938e981173bdcfc227f40eb6f7bfb40742ced97d4eb82182b18b6b9366eeb"
+  "protocol_hash": "77ba2f8267b7a7dfced63b504b8d720cc4d3824df1d417d4c638f4aeb3048648"
 }

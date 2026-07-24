@@ -65,10 +65,22 @@ def _record(
         "account_party_id_sha256": _sha(f"{record_id}:account"),
         "settlement_payload_sha256": _sha(f"{record_id}:settlement"),
         "evaluation_payload_sha256": _sha(f"{record_id}:evaluation"),
+        "execution": {
+            "paper_account_id_sha256": _sha(f"{record_id}:account"),
+            "paper_order_id": f"order-{record_id}",
+            "paper_fill_id": f"fill-{record_id}",
+            "execution_payload_sha256": _sha(f"{record_id}:execution"),
+            "venue_market_id": f"KXTEST-{record_id}",
+            "side": "no",
+            "executed_at_utc": decision_at_utc,
+            "quantity": 20,
+            "entry_price_dollars": "0.50",
+        },
         "settlement": {
             "kind": "settled",
             "settled_at_utc": recorded_at_utc,
             "outcome": "no",
+            "payout_per_contract_dollars": "1.00",
             "void_refund_policy_sha256": None,
             "void_refund_payload_sha256": None,
         },
@@ -115,6 +127,8 @@ def test_verifies_a_v3_terminal_fee_net_record_and_linked_chain() -> None:
             recorded_at_utc="2026-08-02T00:00:00Z",
             decision_at_utc="2026-08-01T00:00:00Z",
             venue_market_id="KXTEST-MANUAL",
+            paper_account_id_sha256=_sha("manual-account"),
+            paper_fill_id="fill-manual",
             fee_net_pnl_dollars="0.00",
             promotion_eligible=True,
         )
@@ -127,7 +141,11 @@ def test_verifies_a_v3_terminal_fee_net_record_and_linked_chain() -> None:
         recorded_at_utc="2026-08-04T00:00:00Z",
         previous_record_hash=verified.record_hash,
     )
-    chain = protocol.verify_fee_net_shadow_chain(loaded, [first, second])
+    second_execution = second["execution"]
+    assert isinstance(second_execution, dict)
+    second_execution["paper_account_id_sha256"] = _sha("record-1:account")
+    second["account_party_id_sha256"] = _sha("record-1:account")
+    chain = protocol.verify_fee_net_shadow_chain(loaded, [first, _rehash(second)])
     assert tuple(record.record_id for record in chain) == ("record-1", "record-2")
 
 
@@ -148,6 +166,12 @@ def test_verifies_a_v3_terminal_fee_net_record_and_linked_chain() -> None:
                 {"fee_net_pnl_dollars": "9.71"}
             ),
             "fee_net_pnl_dollars",
+        ),
+        (
+            lambda record: record["economics"].update(  # type: ignore[index,union-attr]
+                {"gross_payout_dollars": "19.00"}
+            ),
+            "gross_payout_dollars",
         ),
         (
             lambda record: record.update({"protocol_hash": _sha("other-protocol")}),
@@ -230,3 +254,103 @@ def test_evidence_remains_promotion_blocked_and_must_be_recorded_after_settlemen
     record = _record(loaded)
     with pytest.raises(protocol.FeeNetShadowProtocolError, match="promotion remains blocked"):
         protocol.assert_fee_net_shadow_promotion_eligible(loaded, [record])
+
+
+def test_evidence_rejects_settled_refunds() -> None:
+    loaded = _protocol()
+
+    record = _record(loaded)
+    settlement = record["settlement"]
+    economics = record["economics"]
+    assert isinstance(settlement, dict)
+    assert isinstance(economics, dict)
+    settlement["outcome"] = "yes"
+    economics.update(
+        {
+            "gross_payout_dollars": "0.00",
+            "settlement_refund_dollars": "100.00",
+            "net_payout_dollars": "99.90",
+            "gross_pnl_dollars": "-10.00",
+            "fee_net_pnl_dollars": "89.70",
+        }
+    )
+    with pytest.raises(protocol.FeeNetShadowProtocolError, match="settlement_refund_dollars must be zero"):
+        protocol.verify_fee_net_shadow_evidence_record(
+            loaded,
+            _rehash(record),
+            expected_previous_record_hash=None,
+        )
+
+
+@pytest.mark.parametrize("entry_price_dollars", ["0.00", "1.00", "0.123"])
+def test_evidence_rejects_non_kalshi_execution_prices(entry_price_dollars: str) -> None:
+    loaded = _protocol()
+    record = _record(loaded)
+    execution = record["execution"]
+    assert isinstance(execution, dict)
+    execution["entry_price_dollars"] = entry_price_dollars
+
+    with pytest.raises(protocol.FeeNetShadowProtocolError, match="whole-cent Kalshi price"):
+        protocol.verify_fee_net_shadow_evidence_record(
+            loaded,
+            _rehash(record),
+            expected_previous_record_hash=None,
+        )
+
+
+def test_evidence_chain_rejects_reused_paper_fills() -> None:
+    loaded = _protocol()
+    first = _record(loaded)
+    second = _record(
+        loaded,
+        record_id="record-2",
+        candidate_id="candidate-2",
+        decision_at_utc="2026-08-03T00:00:00Z",
+        recorded_at_utc="2026-08-04T00:00:00Z",
+        previous_record_hash=str(first["record_hash"]),
+    )
+    first_execution = first["execution"]
+    second_execution = second["execution"]
+    assert isinstance(first_execution, dict)
+    assert isinstance(second_execution, dict)
+    second_execution["paper_account_id_sha256"] = first_execution["paper_account_id_sha256"]
+    second["account_party_id_sha256"] = first["account_party_id_sha256"]
+    second_execution["paper_fill_id"] = first_execution["paper_fill_id"]
+
+    with pytest.raises(protocol.FeeNetShadowProtocolError, match="duplicate paper fill"):
+        protocol.verify_fee_net_shadow_chain(loaded, [first, _rehash(second)])
+
+
+def test_evidence_chain_rejects_mixed_paper_accounts() -> None:
+    loaded = _protocol()
+    first = _record(loaded)
+    second = _record(
+        loaded,
+        record_id="record-2",
+        candidate_id="candidate-2",
+        decision_at_utc="2026-08-03T00:00:00Z",
+        recorded_at_utc="2026-08-04T00:00:00Z",
+        previous_record_hash=str(first["record_hash"]),
+    )
+
+    with pytest.raises(protocol.FeeNetShadowProtocolError, match="more than one paper account"):
+        protocol.verify_fee_net_shadow_chain(loaded, [first, second])
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("venue_market_id", "KXUNRELATED-1"), ("side", "yes")],
+)
+def test_evidence_rejects_execution_that_does_not_match_its_record(field: str, value: str) -> None:
+    loaded = _protocol()
+    record = _record(loaded)
+    execution = record["execution"]
+    assert isinstance(execution, dict)
+    execution[field] = value
+
+    with pytest.raises(protocol.FeeNetShadowProtocolError, match=f"execution.{field} must match evidence"):
+        protocol.verify_fee_net_shadow_evidence_record(
+            loaded,
+            _rehash(record),
+            expected_previous_record_hash=None,
+        )
