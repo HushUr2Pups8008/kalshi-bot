@@ -15,7 +15,9 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import shutil
 import sqlite3
+import tempfile
 from typing import Literal, TypeVar
 
 from trading.fees import (
@@ -46,6 +48,7 @@ CAPITAL_GUARD_SETTLEMENT_ATTEMPT_VERSION = 1
 CAPITAL_GUARD_SHADOW_DB = Path("data/capital_guard_shadow.db")
 MAX_SETTLEMENT_MARKETS_PER_RUN = 100
 MAX_SETTLEMENT_CANDIDATES_PER_MARKET = 1_000
+MAX_REPLAY_SNAPSHOT_FILE_BYTES = 64 * 1024 * 1024
 
 _BUSY_TIMEOUT_MS = 5_000
 _SQLITE_CONNECT = sqlite3.connect
@@ -4136,3 +4139,478 @@ def capital_guard_shadow_schema_contract_matches(
     except (CapitalGuardShadowSchemaError, sqlite3.Error, TypeError, ValueError):
         return False
     return True
+
+
+CAPITAL_GUARD_SHADOW_REPLAY_SNAPSHOT_VERSION = 1
+
+
+class CapitalGuardShadowReplaySnapshotError(RuntimeError):
+    """A read-only shadow replay snapshot cannot be formed safely."""
+
+
+@dataclass(frozen=True)
+class CapitalGuardShadowReplayObservation:
+    observation_sha256: str
+    outcome: Literal["yes", "no", "void", "unresolved"]
+    observed_at: datetime
+    effective_at: datetime
+    source_id: str
+    rules_version: str
+    void_refund_json: str | None
+
+
+@dataclass(frozen=True)
+class CapitalGuardShadowReplaySettlement:
+    settlement_id: str
+    observation_sha256: str
+    outcome: Literal["yes", "no", "void"]
+    settled_at: datetime
+    gross_payout: Decimal
+    settlement_fee: Decimal
+    settlement_refund: Decimal
+    net_payout: Decimal
+    details_json: str
+
+
+@dataclass(frozen=True)
+class CapitalGuardShadowReplayCandidate:
+    candidate_id: str
+    decision_at: datetime
+    venue: Venue
+    venue_market_id: str
+    market_family: str
+    side: Literal["yes", "no"]
+    replay_eligible: bool
+    executable_price: Decimal
+    executable_quantity: Decimal
+    gross_entry_debit: Decimal
+    entry_fee: Decimal
+    net_entry_debit: Decimal
+    fee_schedule_json: str
+    fee_provenance_sha256: str
+    fee_role: FeeRole
+    fee_multiplier: Decimal
+    fee_coefficient: Decimal
+    fee_account_precision: Decimal | None
+    fee_accumulator: Decimal
+    fill_policy_json: str
+    current_observation: CapitalGuardShadowReplayObservation | None
+    current_settlement: CapitalGuardShadowReplaySettlement | None
+    latest_settlement_attempt_status: str | None
+    latest_quarantine_reason: str | None
+
+
+@dataclass(frozen=True)
+class CapitalGuardShadowReplaySnapshot:
+    snapshot_version: int
+    schema_version: int
+    snapshot_sha256: str
+    conflict_count: int
+    settlement_quarantine_count: int
+    candidates: tuple[CapitalGuardShadowReplayCandidate, ...]
+
+
+def read_capital_guard_shadow_replay_snapshot(
+    db_path: Path | str = CAPITAL_GUARD_SHADOW_DB,
+) -> CapitalGuardShadowReplaySnapshot:
+    """Read one validated replay snapshot without opening a writable SQLite handle."""
+    path = Path(db_path)
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    source_signature = _replay_source_signature(path)
+    source_paths = _replay_source_paths(path)
+    with tempfile.TemporaryDirectory(prefix="capital-guard-shadow-replay-") as directory:
+        snapshot_path = Path(directory) / source_paths[0].name
+        for source in source_paths:
+            shutil.copyfile(source, Path(directory) / source.name)
+        if _replay_source_signature(path) != source_signature:
+            raise CapitalGuardShadowReplaySnapshotError(
+                "capital guard shadow ledger changed while replay snapshot was copied"
+            )
+        snapshot = _read_replay_snapshot_copy(snapshot_path)
+    if _replay_source_signature(path) != source_signature:
+        raise CapitalGuardShadowReplaySnapshotError(
+            "capital guard shadow ledger changed while replay snapshot was read"
+        )
+    return snapshot
+
+
+def _read_replay_snapshot_copy(path: Path) -> CapitalGuardShadowReplaySnapshot:
+    try:
+        conn = _SQLITE_CONNECT(
+            f"{path.as_uri()}?mode=ro",
+            uri=True,
+            timeout=_BUSY_TIMEOUT_MS / 1_000,
+            isolation_level=None,
+        )
+    except (OSError, sqlite3.Error) as exc:
+        raise CapitalGuardShadowReplaySnapshotError(
+            "capital guard shadow replay snapshot copy is not readable"
+        ) from exc
+    try:
+        conn.execute("PRAGMA query_only=ON")
+        conn.execute("BEGIN")
+        CapitalGuardShadowStore()._validate_schema(conn)
+        snapshot = _read_replay_snapshot_transaction(conn)
+        conn.commit()
+        return snapshot
+    except CapitalGuardShadowSchemaError:
+        raise
+    except (sqlite3.Error, TypeError, ValueError, KeyError) as exc:
+        raise CapitalGuardShadowReplaySnapshotError(
+            "capital guard shadow replay snapshot is invalid"
+        ) from exc
+    finally:
+        if conn.in_transaction:
+            conn.rollback()
+        conn.close()
+
+
+def _replay_source_paths(path: Path) -> tuple[Path, ...]:
+    source = path.resolve(strict=True)
+    journal = source.with_name(source.name + "-journal")
+    if journal.exists():
+        raise CapitalGuardShadowReplaySnapshotError(
+            "capital guard shadow replay cannot snapshot an active rollback journal"
+        )
+    paths = [source]
+    wal = source.with_name(source.name + "-wal")
+    if wal.exists():
+        paths.append(wal)
+    for item in paths:
+        if item.stat().st_size > MAX_REPLAY_SNAPSHOT_FILE_BYTES:
+            raise CapitalGuardShadowReplaySnapshotError(
+                "capital guard shadow replay input exceeds the bounded snapshot size"
+            )
+    return tuple(paths)
+
+
+def _replay_source_signature(path: Path) -> tuple[tuple[str, int, str], ...]:
+    return tuple(
+        (item.name, item.stat().st_size, _file_sha256(item))
+        for item in _replay_source_paths(path)
+    )
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(64 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _read_replay_snapshot_transaction(
+    conn: sqlite3.Connection,
+) -> CapitalGuardShadowReplaySnapshot:
+    current_heads = _read_current_replay_heads(conn)
+    candidate_links = _read_current_replay_candidate_links(conn, current_heads)
+    settlements = _read_current_replay_settlements(conn, current_heads)
+    latest_attempts = _read_latest_replay_attempts(conn)
+
+    rows = conn.execute(
+        """
+        SELECT candidate_id, decision_at, venue, venue_market_id, market_family,
+               side, replay_eligible, executable_price_dollars,
+               executable_quantity, gross_entry_debit_dollars, entry_fee_dollars,
+               net_entry_debit_dollars, fee_schedule_json, fee_provenance_sha256,
+               fee_role, fee_multiplier, fee_coefficient,
+               fee_account_precision_dollars, fee_accumulator_dollars,
+               fill_policy_json
+        FROM capital_guard_shadow_candidates
+        ORDER BY decision_at, candidate_id
+        """
+    ).fetchall()
+    candidates: list[CapitalGuardShadowReplayCandidate] = []
+    for row in rows:
+        candidate_id = str(row[0])
+        market_key = (str(row[2]), str(row[3]))
+        head = current_heads.get(market_key)
+        if head is not None and candidate_links.get(candidate_id) != head.observation_sha256:
+            head = None
+        settlement = (
+            settlements.get((candidate_id, head.observation_sha256))
+            if head is not None
+            else None
+        )
+        attempt_status, quarantine_reason = latest_attempts.get(market_key, (None, None))
+        candidates.append(
+            CapitalGuardShadowReplayCandidate(
+                candidate_id=candidate_id,
+                decision_at=_parse_timestamp(str(row[1])),
+                venue=Venue(str(row[2])),
+                venue_market_id=str(row[3]),
+                market_family=str(row[4]),
+                side=_replay_candidate_side(str(row[5])),
+                replay_eligible=bool(row[6]),
+                executable_price=_parse_decimal("executable_price", str(row[7])),
+                executable_quantity=_parse_decimal("executable_quantity", str(row[8])),
+                gross_entry_debit=_parse_decimal("gross_entry_debit", str(row[9])),
+                entry_fee=_parse_decimal("entry_fee", str(row[10])),
+                net_entry_debit=_parse_decimal("net_entry_debit", str(row[11])),
+                fee_schedule_json=str(row[12]),
+                fee_provenance_sha256=str(row[13]),
+                fee_role=FeeRole(str(row[14])),
+                fee_multiplier=_parse_decimal("fee_multiplier", str(row[15])),
+                fee_coefficient=_parse_decimal("fee_coefficient", str(row[16])),
+                fee_account_precision=(
+                    None
+                    if row[17] is None
+                    else _parse_decimal("fee_account_precision", str(row[17]))
+                ),
+                fee_accumulator=_parse_decimal("fee_accumulator", str(row[18])),
+                fill_policy_json=str(row[19]),
+                current_observation=head,
+                current_settlement=settlement,
+                latest_settlement_attempt_status=attempt_status,
+                latest_quarantine_reason=quarantine_reason,
+            )
+        )
+
+    conflict_count = int(
+        conn.execute("SELECT COUNT(*) FROM capital_guard_shadow_conflicts").fetchone()[0]
+    )
+    settlement_quarantine_count = int(
+        conn.execute(
+            "SELECT COUNT(*) FROM capital_guard_shadow_settlement_quarantines"
+        ).fetchone()[0]
+    )
+    payload = {
+        "snapshot_version": CAPITAL_GUARD_SHADOW_REPLAY_SNAPSHOT_VERSION,
+        "schema_version": CAPITAL_GUARD_SHADOW_SCHEMA_VERSION,
+        "conflict_count": conflict_count,
+        "settlement_quarantine_count": settlement_quarantine_count,
+        "candidates": [_replay_candidate_payload(candidate) for candidate in candidates],
+    }
+    return CapitalGuardShadowReplaySnapshot(
+        snapshot_version=CAPITAL_GUARD_SHADOW_REPLAY_SNAPSHOT_VERSION,
+        schema_version=CAPITAL_GUARD_SHADOW_SCHEMA_VERSION,
+        snapshot_sha256=_sha256(canonical_json(payload)),
+        conflict_count=conflict_count,
+        settlement_quarantine_count=settlement_quarantine_count,
+        candidates=tuple(candidates),
+    )
+
+
+def _read_current_replay_heads(
+    conn: sqlite3.Connection,
+) -> dict[tuple[str, str], CapitalGuardShadowReplayObservation]:
+    rows = conn.execute(
+        """
+        SELECT o.observation_sha256, o.venue, o.venue_market_id, o.outcome,
+               o.observed_at, o.effective_at, o.source_id, o.rules_version,
+               o.void_refund_json
+        FROM capital_guard_shadow_observations AS o
+        LEFT JOIN capital_guard_shadow_observations AS successor
+          ON successor.supersedes_observation_sha256 = o.observation_sha256
+        WHERE successor.observation_sha256 IS NULL
+        ORDER BY o.venue, o.venue_market_id, o.observation_sha256
+        """
+    ).fetchall()
+    heads: dict[tuple[str, str], CapitalGuardShadowReplayObservation] = {}
+    for row in rows:
+        key = (str(row[1]), str(row[2]))
+        if key in heads:
+            raise CapitalGuardShadowReplaySnapshotError(
+                "capital guard shadow has multiple current observation heads"
+            )
+        heads[key] = CapitalGuardShadowReplayObservation(
+            observation_sha256=str(row[0]),
+            outcome=_replay_observation_outcome(str(row[3])),
+            observed_at=_parse_timestamp(str(row[4])),
+            effective_at=_parse_timestamp(str(row[5])),
+            source_id=str(row[6]),
+            rules_version=str(row[7]),
+            void_refund_json=None if row[8] is None else str(row[8]),
+        )
+    return heads
+
+
+def _read_current_replay_candidate_links(
+    conn: sqlite3.Connection,
+    current_heads: Mapping[tuple[str, str], CapitalGuardShadowReplayObservation],
+) -> dict[str, str]:
+    if not current_heads:
+        return {}
+    head_ids = {head.observation_sha256 for head in current_heads.values()}
+    rows = conn.execute(
+        """
+        SELECT candidate_id, observation_sha256
+        FROM capital_guard_shadow_candidate_observations
+        ORDER BY candidate_id, observation_sha256
+        """
+    ).fetchall()
+    links: dict[str, str] = {}
+    for candidate_id_raw, observation_sha256_raw in rows:
+        candidate_id = str(candidate_id_raw)
+        observation_sha256 = str(observation_sha256_raw)
+        if observation_sha256 not in head_ids:
+            continue
+        previous = links.setdefault(candidate_id, observation_sha256)
+        if previous != observation_sha256:
+            raise CapitalGuardShadowReplaySnapshotError(
+                "candidate is linked to multiple current observation heads"
+            )
+    return links
+
+
+def _read_current_replay_settlements(
+    conn: sqlite3.Connection,
+    current_heads: Mapping[tuple[str, str], CapitalGuardShadowReplayObservation],
+) -> dict[tuple[str, str], CapitalGuardShadowReplaySettlement]:
+    if not current_heads:
+        return {}
+    head_ids = {head.observation_sha256 for head in current_heads.values()}
+    rows = conn.execute(
+        """
+        SELECT settlement_id, candidate_id, observation_sha256, outcome, settled_at,
+               gross_payout_dollars, settlement_fee_dollars,
+               settlement_refund_dollars, net_payout_dollars, details_json
+        FROM capital_guard_shadow_settlements
+        ORDER BY candidate_id, observation_sha256, settlement_id
+        """
+    ).fetchall()
+    settlements: dict[tuple[str, str], CapitalGuardShadowReplaySettlement] = {}
+    for row in rows:
+        candidate_id = str(row[1])
+        observation_sha256 = str(row[2])
+        if observation_sha256 not in head_ids:
+            continue
+        key = (candidate_id, observation_sha256)
+        if key in settlements:
+            raise CapitalGuardShadowReplaySnapshotError(
+                "candidate has multiple financial settlements for current head"
+            )
+        record = ShadowSettlement(
+            candidate_id=candidate_id,
+            observation_sha256=observation_sha256,
+            outcome=_replay_settlement_outcome(str(row[3])),
+            settled_at=_parse_timestamp(str(row[4])),
+            gross_payout=_parse_decimal("gross_payout", str(row[5])),
+            settlement_fee=_parse_decimal("settlement_fee", str(row[6])),
+            settlement_refund=_parse_decimal("settlement_refund", str(row[7])),
+            net_payout=_parse_decimal("net_payout", str(row[8])),
+            details_json=str(row[9]),
+        )
+        settlements[key] = CapitalGuardShadowReplaySettlement(
+            settlement_id=str(row[0]),
+            observation_sha256=record.observation_sha256,
+            outcome=record.outcome,
+            settled_at=record.settled_at,
+            gross_payout=record.gross_payout,
+            settlement_fee=record.settlement_fee,
+            settlement_refund=record.settlement_refund,
+            net_payout=record.net_payout,
+            details_json=record.details_json,
+        )
+    return settlements
+
+
+def _read_latest_replay_attempts(
+    conn: sqlite3.Connection,
+) -> dict[tuple[str, str], tuple[str | None, str | None]]:
+    rows = conn.execute(
+        """
+        SELECT a.venue, a.venue_market_id, a.status, a.attempted_at, a.attempt_id,
+               q.reason_taxonomy
+        FROM capital_guard_shadow_settlement_attempts AS a
+        LEFT JOIN capital_guard_shadow_settlement_quarantines AS q
+          ON q.attempt_id = a.attempt_id
+        ORDER BY a.venue, a.venue_market_id, a.attempted_at DESC, a.attempt_id DESC
+        """
+    ).fetchall()
+    attempts: dict[tuple[str, str], tuple[str | None, str | None]] = {}
+    for row in rows:
+        key = (str(row[0]), str(row[1]))
+        attempts.setdefault(
+            key,
+            (str(row[2]), None if row[5] is None else str(row[5])),
+        )
+    return attempts
+
+
+def _replay_candidate_side(value: str) -> Literal["yes", "no"]:
+    if value not in {"yes", "no"}:
+        raise CapitalGuardShadowReplaySnapshotError("invalid replay candidate side")
+    return value  # type: ignore[return-value]
+
+
+def _replay_observation_outcome(
+    value: str,
+) -> Literal["yes", "no", "void", "unresolved"]:
+    if value not in {"yes", "no", "void", "unresolved"}:
+        raise CapitalGuardShadowReplaySnapshotError("invalid replay observation outcome")
+    return value  # type: ignore[return-value]
+
+
+def _replay_settlement_outcome(value: str) -> Literal["yes", "no", "void"]:
+    if value not in {"yes", "no", "void"}:
+        raise CapitalGuardShadowReplaySnapshotError("invalid replay settlement outcome")
+    return value  # type: ignore[return-value]
+
+
+def _replay_candidate_payload(
+    candidate: CapitalGuardShadowReplayCandidate,
+) -> dict[str, object]:
+    return {
+        "candidate_id": candidate.candidate_id,
+        "decision_at": _timestamp(candidate.decision_at),
+        "venue": candidate.venue.value,
+        "venue_market_id": candidate.venue_market_id,
+        "market_family": candidate.market_family,
+        "side": candidate.side,
+        "replay_eligible": candidate.replay_eligible,
+        "executable_price": _decimal_text(candidate.executable_price),
+        "executable_quantity": _decimal_text(candidate.executable_quantity),
+        "gross_entry_debit": _decimal_text(candidate.gross_entry_debit),
+        "entry_fee": _decimal_text(candidate.entry_fee),
+        "net_entry_debit": _decimal_text(candidate.net_entry_debit),
+        "fee_schedule_json": candidate.fee_schedule_json,
+        "fee_provenance_sha256": candidate.fee_provenance_sha256,
+        "fee_role": candidate.fee_role.value,
+        "fee_multiplier": _decimal_text(candidate.fee_multiplier),
+        "fee_coefficient": _decimal_text(candidate.fee_coefficient),
+        "fee_account_precision": _optional_decimal_text(candidate.fee_account_precision),
+        "fee_accumulator": _decimal_text(candidate.fee_accumulator),
+        "fill_policy_json": candidate.fill_policy_json,
+        "current_observation": _replay_observation_payload(
+            candidate.current_observation
+        ),
+        "current_settlement": _replay_settlement_payload(candidate.current_settlement),
+        "latest_settlement_attempt_status": candidate.latest_settlement_attempt_status,
+        "latest_quarantine_reason": candidate.latest_quarantine_reason,
+    }
+
+
+def _replay_observation_payload(
+    observation: CapitalGuardShadowReplayObservation | None,
+) -> dict[str, object] | None:
+    if observation is None:
+        return None
+    return {
+        "observation_sha256": observation.observation_sha256,
+        "outcome": observation.outcome,
+        "observed_at": _timestamp(observation.observed_at),
+        "effective_at": _timestamp(observation.effective_at),
+        "source_id": observation.source_id,
+        "rules_version": observation.rules_version,
+        "void_refund_json": observation.void_refund_json,
+    }
+
+
+def _replay_settlement_payload(
+    settlement: CapitalGuardShadowReplaySettlement | None,
+) -> dict[str, object] | None:
+    if settlement is None:
+        return None
+    return {
+        "settlement_id": settlement.settlement_id,
+        "observation_sha256": settlement.observation_sha256,
+        "outcome": settlement.outcome,
+        "settled_at": _timestamp(settlement.settled_at),
+        "gross_payout": _decimal_text(settlement.gross_payout),
+        "settlement_fee": _decimal_text(settlement.settlement_fee),
+        "settlement_refund": _decimal_text(settlement.settlement_refund),
+        "net_payout": _decimal_text(settlement.net_payout),
+        "details_json": settlement.details_json,
+    }
