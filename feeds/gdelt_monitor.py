@@ -69,12 +69,14 @@ def _gdelt_url(query: str) -> str:
     return f"{_GDELT_BASE}?{params}"
 
 
-def _parse_seendate(seendate: str) -> datetime:
-    """Parse GDELT seendate format: '20260402T120000Z'."""
+def _parse_seendate(seendate: object) -> datetime | None:
+    """Parse a GDELT source timestamp, or return None when it is unavailable."""
+    if not isinstance(seendate, str):
+        return None
     try:
         return datetime.strptime(seendate, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
-    except (ValueError, TypeError):
-        return datetime.now(timezone.utc)
+    except ValueError:
+        return None
 
 
 def _make_item_id(url: str, title: str) -> str:

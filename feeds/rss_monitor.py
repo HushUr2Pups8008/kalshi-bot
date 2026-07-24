@@ -52,7 +52,7 @@ def _make_id(entry) -> str:
     return hashlib.sha256(key).hexdigest()
 
 
-def _parse_date(entry) -> datetime:
+def _parse_date(entry) -> datetime | None:
     for attr in ("published", "updated"):
         raw = getattr(entry, attr, None)
         if raw:
@@ -60,7 +60,7 @@ def _parse_date(entry) -> datetime:
                 return dateutil_parser.parse(raw, tzinfos=_RSS_TZINFOS).astimezone(timezone.utc)
             except Exception:
                 pass
-    return datetime.now(timezone.utc)
+    return None
 
 
 def _source_name(feed_url: str, feed_title: str) -> str:

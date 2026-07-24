@@ -5,11 +5,13 @@ aggregator (Google News RSS) populates `<source>` at the item level,
 and falls back to the feed-level label for regular publisher feeds.
 """
 
+from collections import OrderedDict
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
 
-from feeds.rss_monitor import _entry_source
+from feeds.rss_monitor import _entry_source, _parse_date
 
 
 class StopAfterOneCycle(Exception):
@@ -37,6 +39,48 @@ async def _run_one_rss_cycle(delivered, seen_state_path, monkeypatch):
             poll_interval=1,
             seen_state_path=seen_state_path,
         )
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        SimpleNamespace(),
+        SimpleNamespace(published="not a timestamp", updated="also not a timestamp"),
+    ],
+)
+def test_parse_date_returns_none_without_a_parseable_source_timestamp(entry):
+    assert _parse_date(entry) is None
+
+
+def test_parse_date_uses_updated_fallback_as_utc_when_published_is_invalid():
+    entry = SimpleNamespace(
+        published="not a timestamp",
+        updated="2026-07-24T06:30:00-06:00",
+    )
+
+    assert _parse_date(entry) == datetime(2026, 7, 24, 12, 30, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_poll_feed_preserves_missing_source_timestamp_as_none(monkeypatch):
+    import feeds.rss_monitor as rss
+
+    entry = SimpleNamespace(
+        link="https://example.test/missing-timestamp",
+        title="missing timestamp",
+        summary="",
+    )
+    monkeypatch.setattr(rss.feedparser, "parse", lambda _url: _parsed(entry))
+
+    delivered = []
+
+    async def callback(item):
+        delivered.append(item)
+
+    await rss.poll_feed("https://example.test/feed", callback, OrderedDict())
+
+    assert len(delivered) == 1
+    assert delivered[0].published is None
 
 
 @pytest.mark.asyncio
