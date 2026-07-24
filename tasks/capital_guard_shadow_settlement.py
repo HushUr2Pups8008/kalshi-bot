@@ -77,11 +77,13 @@ class SettlementPollingPolicy:
         *,
         now: datetime,
     ) -> datetime | None:
-        """Return the next due time, or ``None`` for a terminal current snapshot."""
+        """Return the next due time, or ``None`` for terminal or quarantined state."""
         _require_utc_datetime("now", now)
+        if state.latest_status == "quarantined":
+            return None
         if state.latest_attempted_at is None or not self._snapshot_matches(state):
             return now
-        if state.latest_status in ("terminal", "quarantined"):
+        if state.latest_status == "terminal":
             return None
         retry = self._RETRY_BACKOFFS.get(state.latest_status)
         if retry is None:
@@ -156,7 +158,12 @@ class SettlementPollingPolicy:
 
 
 class CapitalGuardShadowSettlementCollector:
-    """Poll exact market groups without payout, evaluation, or runtime mutation."""
+    """Poll exact market groups without payout, evaluation, or runtime mutation.
+
+    The instance lock serializes routine and audit cycles only within one process.
+    Cross-process coordination needs a durable lease in a v3 schema migration, so
+    production activation remains blocked.
+    """
 
     def __init__(
         self,
@@ -183,6 +190,7 @@ class CapitalGuardShadowSettlementCollector:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._max_candidates_per_market = max_candidates_per_market
         self._polling_policy = SettlementPollingPolicy()
+        self._cycle_lock = asyncio.Lock()
 
     async def run_once(
         self,
@@ -190,7 +198,8 @@ class CapitalGuardShadowSettlementCollector:
         limit: int = MAX_SETTLEMENT_MARKETS_PER_RUN,
     ) -> SettlementCollectionResult:
         """Run the default bounded policy; unchanged terminal state stays suppressed."""
-        return await self._run_once(limit=limit, terminal_correction_audit=False)
+        async with self._cycle_lock:
+            return await self._run_once(limit=limit, terminal_correction_audit=False)
 
     async def audit_terminal_corrections_once(
         self,
@@ -200,9 +209,12 @@ class CapitalGuardShadowSettlementCollector:
         """Explicit bounded audit of unchanged terminal snapshots.
 
         This path is intentionally not runtime-wired. It exists for a future
-        operator/manual correction audit and never bypasses the market cap.
+        operator/manual correction audit and never bypasses the market cap. The
+        instance lock does not provide cross-process exclusivity; a durable lease
+        in a v3 schema migration remains an activation blocker.
         """
-        return await self._run_once(limit=limit, terminal_correction_audit=True)
+        async with self._cycle_lock:
+            return await self._run_once(limit=limit, terminal_correction_audit=True)
 
     async def _run_once(
         self,

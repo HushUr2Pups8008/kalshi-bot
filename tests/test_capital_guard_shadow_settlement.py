@@ -23,6 +23,8 @@ from tests.test_capital_guard_shadow import (
     _append_candidate,
     _json,
     candidate,
+    observation,
+    shadow_settlement,
 )
 from trading.capital_guard_shadow import (
     MAX_SETTLEMENT_CANDIDATES_PER_MARKET,
@@ -289,6 +291,49 @@ def test_terminal_correction_audit_policy_is_bounded_and_snapshot_exact() -> Non
     assert "KXQUARANTINED" not in {key.venue_market_id for key in selected}
 
 
+@pytest.mark.asyncio
+async def test_terminal_audit_skips_market_with_financial_settlement(tmp_path: Path) -> None:
+    store = _initialized_store(tmp_path)
+    record = candidate()
+    candidate_id = _append_candidate(store, record).candidate_id
+    observed = observation(venue_market_id=record.venue_market_id)
+    observation_result = store.append_observation(observed, (candidate_id,))
+    settlement_result = store.append_settlement(
+        shadow_settlement(
+            candidate_id=candidate_id,
+            observation_sha256=observation_result.observation_sha256,
+            observed=observed,
+        )
+    )
+    market_key = SettlementMarketKey(Venue.KALSHI, record.venue_market_id)
+    backlog = store.candidate_settlement_backlog(market_key)
+    assert backlog.prior_authoritative_observation is not None
+    store.record_settlement_attempt(
+        backlog,
+        attempted_at=NOW + timedelta(days=2),
+        status="terminal",
+        observation=backlog.prior_authoritative_observation,
+    )
+    assert store.settlement_poll_states(
+        limit=10,
+        terminal_correction_audit=True,
+        now=NOW + timedelta(days=3),
+    ) == ()
+    market_ref = MarketRef(Venue.KALSHI, record.venue_market_id, record.venue_market_id)
+    source = SequenceSource({market_ref: []})
+    before = _counts(store)
+
+    result = await CapitalGuardShadowSettlementCollector(
+        store=store,
+        source=source,
+        clock=lambda: NOW + timedelta(days=3),
+    ).audit_terminal_corrections_once(limit=10)
+
+    assert result == type(result)()
+    assert source.calls == []
+    assert _counts(store) == before
+
+
 def test_poll_state_projection_reopens_changed_snapshot_after_restart(tmp_path: Path) -> None:
     store = _initialized_store(tmp_path)
     first = candidate()
@@ -352,6 +397,60 @@ def test_poll_state_projection_is_bounded_and_prioritizes_untried_market(tmp_pat
     assert len(states) == MAX_SETTLEMENT_MARKETS_PER_RUN
     assert states[0].market_key.venue_market_id == fresh.venue_market_id
     assert selected == (SettlementMarketKey(Venue.KALSHI, fresh.venue_market_id),)
+
+
+@pytest.mark.asyncio
+async def test_changed_quarantines_do_not_starve_due_work_inside_bounded_scan(tmp_path: Path) -> None:
+    store = _initialized_store(tmp_path)
+    now = NOW + timedelta(days=2)
+    for number in range(MAX_SETTLEMENT_MARKETS_PER_RUN + 1):
+        first = candidate(
+            decision_key=f"quarantine-decision-{number}",
+            lifecycle_id=f"quarantine-lifecycle-{number}",
+            venue_market_id=f"KXQUARANTINE{number:03d}-26JUL15-T50",
+        )
+        _append_candidate(store, first)
+        market_key = SettlementMarketKey(Venue.KALSHI, first.venue_market_id)
+        store.record_settlement_attempt(
+            store.candidate_settlement_backlog(market_key),
+            attempted_at=now,
+            status="quarantined",
+            error_taxonomy="source_drift",
+            error_sha256="e" * 64,
+            quarantine_reason="source_drift",
+        )
+        _append_candidate(
+            store,
+            candidate(
+                decision_key=f"quarantine-late-decision-{number}",
+                lifecycle_id=f"quarantine-late-lifecycle-{number}",
+                venue_market_id=first.venue_market_id,
+            ),
+        )
+    due = candidate(
+        decision_key="due-decision",
+        lifecycle_id="due-lifecycle",
+        venue_market_id="KZZDUE-26JUL15-T50",
+    )
+    _append_candidate(store, due)
+    due_ref = MarketRef(Venue.KALSHI, due.venue_market_id, due.venue_market_id)
+    source = SequenceSource({due_ref: [None]})
+
+    default_states = store.settlement_poll_states(limit=MAX_SETTLEMENT_MARKETS_PER_RUN)
+    states = store.settlement_poll_states(limit=MAX_SETTLEMENT_MARKETS_PER_RUN, now=now)
+    result = await CapitalGuardShadowSettlementCollector(
+        store=store,
+        source=source,
+        clock=lambda: now,
+    ).run_once(limit=MAX_SETTLEMENT_MARKETS_PER_RUN)
+
+    assert len(default_states) == len(states) == MAX_SETTLEMENT_MARKETS_PER_RUN
+    assert due_ref.venue_market_id in {
+        state.market_key.venue_market_id for state in default_states
+    }
+    assert due_ref.venue_market_id in {state.market_key.venue_market_id for state in states}
+    assert result.checked == result.nonterminal == 1
+    assert source.calls == [due_ref]
 
 
 @pytest.mark.asyncio
@@ -479,6 +578,92 @@ async def test_collector_calls_source_only_for_due_markets(tmp_path: Path) -> No
     assert result.checked == 1
     assert result.nonterminal == 1
     assert source.calls == [fresh_ref]
+
+
+@pytest.mark.asyncio
+async def test_quarantined_source_drift_stays_suppressed_after_candidate_change(tmp_path: Path) -> None:
+    store = _initialized_store(tmp_path)
+    first = candidate()
+    _append_candidate(store, first)
+    market_key = SettlementMarketKey(Venue.KALSHI, first.venue_market_id)
+    store.record_settlement_attempt(
+        store.candidate_settlement_backlog(market_key),
+        attempted_at=NOW + timedelta(days=2),
+        status="quarantined",
+        error_taxonomy="source_drift",
+        error_sha256="f" * 64,
+        quarantine_reason="source_drift",
+    )
+    _append_candidate(store, candidate(decision_key="decision-2", lifecycle_id="lifecycle-2"))
+    market_ref = MarketRef(Venue.KALSHI, first.venue_market_id, first.venue_market_id)
+    source = SequenceSource({market_ref: []})
+    before = _counts(store)
+
+    result = await CapitalGuardShadowSettlementCollector(
+        store=store,
+        source=source,
+        clock=lambda: NOW + timedelta(days=3),
+    ).run_once(limit=10)
+
+    assert result == type(result)()
+    assert source.calls == []
+    assert _counts(store) == before
+
+
+@pytest.mark.asyncio
+async def test_collector_serializes_routine_and_terminal_audit_in_process(tmp_path: Path) -> None:
+    store = _initialized_store(tmp_path)
+    record = candidate()
+    _append_candidate(store, record)
+    market_ref = MarketRef(Venue.KALSHI, record.venue_market_id, record.venue_market_id)
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class BlockingSource:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.inflight = 0
+            self.max_inflight = 0
+
+        async def get_settlement_exact(
+            self,
+            requested_ref: MarketRef,
+            *,
+            prior_observation: object | None,
+        ) -> SettlementObservation:
+            assert requested_ref == market_ref
+            self.calls += 1
+            self.inflight += 1
+            self.max_inflight = max(self.max_inflight, self.inflight)
+            try:
+                if self.calls == 1:
+                    started.set()
+                    await release.wait()
+                return _authoritative(requested_ref)
+            finally:
+                self.inflight -= 1
+
+    source = BlockingSource()
+    collector = CapitalGuardShadowSettlementCollector(
+        store=store,
+        source=source,
+        clock=lambda: NOW + timedelta(days=2),
+    )
+    routine = asyncio.create_task(collector.run_once(limit=10))
+    await asyncio.wait_for(started.wait(), timeout=2)
+    audit = asyncio.create_task(collector.audit_terminal_corrections_once(limit=10))
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert source.calls == 1
+    assert source.max_inflight == 1
+    release.set()
+    routine_result, audit_result = await asyncio.gather(routine, audit)
+
+    assert routine_result.terminal == 1
+    assert audit_result.terminal == 1
+    assert source.calls == 2
+    assert source.max_inflight == 1
 
 
 @pytest.mark.asyncio
@@ -1294,6 +1479,14 @@ async def test_ambiguous_identity_quarantines_honestly_without_network(
     assert len(row[3]) == len(row[4]) == 64 and row[5] is None
     assert row[6:] == (2, "identity_ambiguous")
 
+    _append_candidate(store, candidate(decision_key="decision-3", lifecycle_id="lifecycle-3"))
+    before = _counts(store)
+    blocked = await CapitalGuardShadowSettlementCollector(store=store, source=source).run_once(limit=10)
+
+    assert blocked == type(blocked)()
+    assert source.calls == 0
+    assert _counts(store) == before
+
 
 @pytest.mark.asyncio
 async def test_ambiguous_identity_with_invalid_head_quarantines_without_network(
@@ -1380,6 +1573,18 @@ async def test_over_cap_group_records_exact_count_and_sample_not_fake_full_hashe
     assert row[0:3] == (0, None, None)
     assert len(row[3]) == 64
     assert row[4:] == (2, "candidate_group_over_cap")
+
+    _append_candidate(store, candidate(decision_key="decision-3", lifecycle_id="lifecycle-3"))
+    before = _counts(store)
+    blocked = await CapitalGuardShadowSettlementCollector(
+        store=store,
+        source=source,
+        max_candidates_per_market=1,
+    ).run_once(limit=10)
+
+    assert blocked == type(blocked)()
+    assert source.calls == 0
+    assert _counts(store) == before
 
     key = SettlementMarketKey(Venue.KALSHI, candidate().venue_market_id)
     with pytest.raises(ValueError, match="hard bounded"):

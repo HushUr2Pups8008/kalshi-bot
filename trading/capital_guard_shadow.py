@@ -1302,6 +1302,22 @@ class CapitalGuardShadowStore:
                               WHEN projection.current_candidate_count <= ? THEN 1
                               ELSE 0
                           END
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM capital_guard_shadow_candidates candidate
+                          JOIN capital_guard_shadow_settlements settlement
+                            ON settlement.candidate_id = candidate.candidate_id
+                          WHERE candidate.venue = projection.venue
+                            AND candidate.venue_market_id = projection.venue_market_id
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM capital_guard_shadow_candidates candidate
+                          JOIN capital_guard_shadow_evaluations evaluation
+                            ON evaluation.candidate_id = candidate.candidate_id
+                          WHERE candidate.venue = projection.venue
+                            AND candidate.venue_market_id = projection.venue_market_id
+                      )
                 """
                 order_sql = """
                     ORDER BY projection.attempted_at, projection.first_decision_at,
@@ -1314,6 +1330,7 @@ class CapitalGuardShadowStore:
                     order_sql = """
                         ORDER BY
                             CASE
+                                WHEN projection.status = 'quarantined' THEN 3
                                 WHEN projection.attempt_id IS NULL THEN 0
                                 WHEN projection.latest_snapshot_count != projection.current_candidate_count THEN 0
                                 WHEN projection.latest_snapshot_complete !=
@@ -1334,6 +1351,7 @@ class CapitalGuardShadowStore:
                     order_sql = """
                         ORDER BY
                             CASE
+                                WHEN projection.status = 'quarantined' THEN 4
                                 WHEN projection.attempt_id IS NULL THEN 0
                                 WHEN projection.latest_snapshot_count != projection.current_candidate_count THEN 0
                                 WHEN projection.latest_snapshot_complete !=
