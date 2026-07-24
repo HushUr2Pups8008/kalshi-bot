@@ -1,6 +1,7 @@
 """Tests for durable, bounded ingest seen-ID checkpoints."""
 
 import json
+import logging
 from collections import OrderedDict
 from pathlib import Path
 
@@ -79,6 +80,37 @@ def test_load_discards_invalid_ids_and_keeps_newest_valid_values(tmp_path):
     )
 
     assert list(load_seen_ids(path, max_seen=2)) == ["b" * 64, "c" * 64]
+
+
+def test_load_fails_open_when_checkpoint_ids_is_an_object(tmp_path):
+    path = tmp_path / "rss_seen_ids.json"
+    path.write_text(
+        json.dumps({"version": 1, "ids": {"a" * 64: None}}),
+        encoding="utf-8",
+    )
+
+    assert list(load_seen_ids(path, max_seen=5_000)) == []
+
+
+def test_load_moves_duplicate_ids_to_newest_position_before_capping(tmp_path):
+    path = tmp_path / "rss_seen_ids.json"
+    path.write_text(
+        json.dumps({"version": 1, "ids": ["a" * 64, "b" * 64, "a" * 64, "c" * 64]}),
+        encoding="utf-8",
+    )
+
+    assert list(load_seen_ids(path, max_seen=2)) == ["a" * 64, "c" * 64]
+
+
+def test_malformed_checkpoint_fails_open_with_generic_warning(tmp_path, caplog):
+    path = tmp_path / "rss_seen_ids.json"
+    path.write_text("not-json", encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING, logger="feeds.seen_state"):
+        assert list(load_seen_ids(path, max_seen=5_000)) == []
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert messages == ["Unable to load seen-ID checkpoint; starting empty."]
 
 
 def test_checkpoint_replace_failure_cleans_temp_and_preserves_previous_file(tmp_path, monkeypatch):

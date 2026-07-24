@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from collections import OrderedDict
@@ -12,6 +13,7 @@ from pathlib import Path
 
 _SCHEMA_VERSION = 1
 _SHA256_ID = re.compile(r"[0-9a-f]{64}")
+logger = logging.getLogger(__name__)
 
 
 def _bounded_valid_ids(ids: Iterable[object], max_seen: int) -> OrderedDict[str, None]:
@@ -23,6 +25,7 @@ def _bounded_valid_ids(ids: Iterable[object], max_seen: int) -> OrderedDict[str,
     for value in ids:
         if isinstance(value, str) and _SHA256_ID.fullmatch(value):
             valid[value] = None
+            valid.move_to_end(value)
             if len(valid) > max_seen:
                 valid.popitem(last=False)
     return valid
@@ -33,9 +36,13 @@ def load_seen_ids(path: Path, max_seen: int) -> OrderedDict[str, None]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(payload, dict) or payload.get("version") != _SCHEMA_VERSION:
-            return OrderedDict()
-        return _bounded_valid_ids(payload.get("ids", ()), max_seen)
+            raise ValueError("invalid checkpoint schema")
+        ids = payload.get("ids")
+        if not isinstance(ids, list):
+            raise ValueError("invalid checkpoint ids")
+        return _bounded_valid_ids(ids, max_seen)
     except (OSError, TypeError, ValueError):
+        logger.warning("Unable to load seen-ID checkpoint; starting empty.")
         return OrderedDict()
 
 
