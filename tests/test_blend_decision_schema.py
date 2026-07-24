@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -122,3 +123,22 @@ def test_log_blend_decision_emits_optional_venue_when_present(tmp_path: Path):
 
     record = write_mock.call_args.args[0]
     assert record["venue"] == "polymarket_us"
+
+
+def test_log_blend_decision_emits_g7_mark_snapshot(tmp_path: Path):
+    logger = TradeLogger(path=tmp_path / "trades.jsonl")
+    snapshot = {
+        "drawdown_pct": 0.21,
+        "threshold_pct": 0.20,
+        "valuation_basis": "legacy_marked_value_pre_exit_fees",
+        "provider": "scripts.mark_open_positions",
+    }
+    kwargs = _valid_blend_decision_kwargs()
+    kwargs["lifecycle_id"] = "lc-g7-mark"
+    kwargs["g7_mark_snapshot"] = snapshot
+
+    logger.log_blend_decision(**kwargs)
+
+    record = json.loads((tmp_path / "trades.jsonl").read_text(encoding="utf-8"))
+    assert record["lifecycle_id"] == "lc-g7-mark"
+    assert record["g7_mark_snapshot"] == snapshot

@@ -91,6 +91,8 @@ class TestLogGateSummary:
                 "fallback_status": "none",
                 "observed_at": "2026-07-24T00:00:00+00:00",
             },
+            lifecycle_id="lc-g7-mark",
+            settlement_source_match=True,
         )
         import json
         line = (tmp_path / "trades.jsonl").read_text(encoding="utf-8").strip().splitlines()[-1]
@@ -103,6 +105,8 @@ class TestLogGateSummary:
         assert rec["scaled_confidence"] == pytest.approx(0.04)
         assert rec["g7_mark_snapshot"]["drawdown_pct"] == pytest.approx(0.21)
         assert rec["g7_mark_snapshot"]["provider"] == "scripts.mark_open_positions"
+        assert rec["lifecycle_id"] == "lc-g7-mark"
+        assert rec["settlement_source_match"] is True
 
     def test_skipped_writes_g7_mark_snapshot(self, tmp_path):
         from utils.logger import TradeLogger
