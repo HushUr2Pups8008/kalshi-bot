@@ -8,7 +8,7 @@ class NewsItem:
     headline:   str
     url:        str
     source:     str          # e.g. "Reuters", "AP", "r/worldnews"
-    published:  datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    published:  datetime | None = field(default_factory=lambda: datetime.now(timezone.utc))
     body:       str = ""     # summary / snippet if available
     item_id:    str = ""     # dedup hash
     retrieval_mode: str = "rss"
