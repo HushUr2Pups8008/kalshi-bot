@@ -825,6 +825,31 @@ def _build_capital_guard_shadow_capture_sink(
     return CapitalGuardShadowCaptureSink(store)
 
 
+CAPITAL_GUARD_SHADOW_SETTLEMENT_COLLECTION_INTERVAL_SECONDS = 300.0
+
+
+async def _run_capital_guard_shadow_settlement_collection(
+    collector: Any,
+    *,
+    interval_seconds: float = CAPITAL_GUARD_SHADOW_SETTLEMENT_COLLECTION_INTERVAL_SECONDS,
+) -> None:
+    """Drain the isolated settlement backlog serially without affecting runtime flow."""
+    if (
+        isinstance(interval_seconds, bool)
+        or not isinstance(interval_seconds, (int, float))
+        or not math.isfinite(float(interval_seconds))
+        or interval_seconds <= 0
+    ):
+        raise ValueError("interval_seconds must be a finite positive number")
+
+    while True:
+        try:
+            await collector.run_once()
+        except Exception:
+            log.exception("[CAPITAL_GUARD_SHADOW] settlement collection cycle failed")
+        await asyncio.sleep(float(interval_seconds))
+
+
 class TradingBot:
     def __init__(self):
         self.rest          = KalshiRestClient()
@@ -1361,6 +1386,49 @@ class TradingBot:
         return asyncio.create_task(
             supervisor.run(),
             name="weather_shadow_capture",
+        )
+
+    def _create_capital_guard_shadow_settlement_collection_task(
+        self,
+    ) -> asyncio.Task | None:
+        if not bool(
+            getattr(cfg, "enable_capital_guard_shadow_settlement_collection", False)
+        ):
+            return None
+
+        db_path = DATA_DIR / "capital_guard_shadow.db"
+        if not db_path.is_file():
+            log.info(
+                "[CAPITAL_GUARD_SHADOW] settlement collection inactive: isolated DB missing"
+            )
+            return None
+
+        try:
+            from polymarket.public_client import PolymarketPublicClient
+            from tasks.capital_guard_shadow_settlement import (
+                CapitalGuardShadowSettlementCollector,
+            )
+            from trading.authoritative_settlement_source import (
+                AuthoritativeSettlementSource,
+            )
+            from trading.capital_guard_shadow import CapitalGuardShadowStore
+
+            store = CapitalGuardShadowStore(db_path=db_path, existing_only=True)
+            store.initialize()
+            source = AuthoritativeSettlementSource(
+                kalshi_client=self.rest,
+                polymarket_client=PolymarketPublicClient(),
+            )
+            collector = CapitalGuardShadowSettlementCollector(store=store, source=source)
+        except Exception:
+            log.exception(
+                "[CAPITAL_GUARD_SHADOW] settlement collection inactive: setup failed"
+            )
+            return None
+
+        return asyncio.create_task(
+            _run_capital_guard_shadow_settlement_collection(collector),
+            name="capital_guard_shadow_settlement_collection",
         )
 
     async def _run_targeted_research_prewarm(self, market, skip_reason: str) -> None:
@@ -3677,6 +3745,11 @@ class TradingBot:
         weather_shadow_task = self._create_weather_shadow_runtime_task()
         if weather_shadow_task is not None:
             tasks.append(weather_shadow_task)
+        capital_guard_shadow_settlement_task = (
+            self._create_capital_guard_shadow_settlement_collection_task()
+        )
+        if capital_guard_shadow_settlement_task is not None:
+            tasks.append(capital_guard_shadow_settlement_task)
 
         try:
             await asyncio.gather(*tasks)

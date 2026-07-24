@@ -1,8 +1,8 @@
 """Bounded authoritative outcome collection for the isolated shadow store.
 
-Runtime scheduling stays intentionally absent until an exact, total-deadline
-authoritative source is available. The existing venue router is synchronous and
-lossy, so it does not satisfy this module's protocol.
+Runtime scheduling remains default-off and requires an exact, total-deadline
+authoritative source plus an existing isolated store. The existing venue router
+is synchronous and lossy, so it does not satisfy this module's protocol.
 """
 
 from __future__ import annotations
