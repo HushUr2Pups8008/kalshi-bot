@@ -862,6 +862,7 @@ class TradeLogger:
         recency_score: float | None = None,
         recency_threshold: float | None = None,
         recency_distance: float | None = None,
+        g7_mark_snapshot: dict[str, Any] | None = None,
     ) -> None:
         """Emit a SKIPPED trade-log record.
 
@@ -929,6 +930,8 @@ class TradeLogger:
             record["recency_distance"] = round(float(recency_distance), 4)
         if signal_meta:
             record["signal_meta"] = signal_meta
+        if g7_mark_snapshot is not None:
+            record["g7_mark_snapshot"] = dict(g7_mark_snapshot)
         _promote_lifecycle_context(record, signal_meta=signal_meta)
         self._write(record)
 
@@ -1654,6 +1657,7 @@ class TradeLogger:
         recency_score: float | None = None,
         recency_threshold: float | None = None,
         recency_distance: float | None = None,
+        g7_mark_snapshot: dict[str, Any] | None = None,
     ) -> None:
         """PROFIT-ALIGN-008 (2026-05-25): consolidated gate-decision diagnostic.
 
@@ -1692,6 +1696,8 @@ class TradeLogger:
             record["recency_threshold"] = round(float(recency_threshold), 4)
         if recency_distance is not None:
             record["recency_distance"] = round(float(recency_distance), 4)
+        if g7_mark_snapshot is not None:
+            record["g7_mark_snapshot"] = dict(g7_mark_snapshot)
         self._write(record)
 
     def log_match_llm_review(

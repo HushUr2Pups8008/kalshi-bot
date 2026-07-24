@@ -13,10 +13,11 @@ from analysis import SignalAnalysis
 from analysis.decision_blender import BlendResult
 from config import cfg
 from kalshi import KalshiMarket
-from main import _paper_open_exposure_drawdown_pct
+from main import _paper_open_exposure_drawdown_snapshot
 from polymarket.normalizer import normalize_polymarket_market
 from tasks.blend_task import (
     BlendTask,
+    OpenExposureDrawdownSnapshot,
     QueueInsertionError,
     TradeCandidate,
     _regime_confidence,
@@ -388,6 +389,109 @@ async def test_readiness_input_carries_open_exposure_drawdown_from_provider():
 
 
 @pytest.mark.asyncio
+async def test_g7_mark_snapshot_reaches_gate_summary_and_g7_skipped_once():
+    logger = SpyLogger()
+    calls = 0
+    snapshot = OpenExposureDrawdownSnapshot(
+        drawdown_pct=0.21,
+        configured_bankroll=50.0,
+        notional_bankroll=8.76,
+        marked_value=29.59,
+        total_entry_cost=23.50,
+        unknown_entry_cost=0.0,
+        priced_count=11,
+        unpriced_count=0,
+        snapshot_fallback_count=0,
+        valuation_basis="legacy_marked_value_pre_exit_fees",
+        unpriced_positions_valued_at_zero=True,
+        provider="scripts.mark_open_positions",
+        fallback_status="none",
+        observed_at="2026-07-24T00:00:00+00:00",
+        valuation_as_of="2026-07-24T00:00:00+00:00",
+    )
+
+    def provider() -> OpenExposureDrawdownSnapshot:
+        nonlocal calls
+        calls += 1
+        return snapshot
+
+    result = await BlendTask(
+        trading_queue=asyncio.Queue(),
+        store=FakeStore(),
+        logger=logger,
+        open_exposure_drawdown_provider=provider,
+        is_paper_mode=True,
+    ).process_fast_lane_result(_analysis())
+
+    expected = {
+        "drawdown_pct": 0.21,
+        "threshold_pct": 0.2,
+        "configured_bankroll": 50.0,
+        "notional_bankroll": 8.76,
+        "marked_value": 29.59,
+        "total_entry_cost": 23.50,
+        "unknown_entry_cost": 0.0,
+        "priced_count": 11,
+        "unpriced_count": 0,
+        "snapshot_fallback_count": 0,
+        "valuation_basis": "legacy_marked_value_pre_exit_fees",
+        "unpriced_positions_valued_at_zero": True,
+        "provider": "scripts.mark_open_positions",
+        "fallback_status": "none",
+        "observed_at": "2026-07-24T00:00:00+00:00",
+        "valuation_as_of": "2026-07-24T00:00:00+00:00",
+    }
+    assert result.trade_blocked_reason == "G7_open_exposure_drawdown"
+    assert calls == 1
+    assert logger.gate_summary_records[0]["g7_mark_snapshot"] == expected
+    assert logger.skipped_records[0]["g7_mark_snapshot"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("unpriced_count", "snapshot_fallback_count"),
+    ((1, 0), (0, 1)),
+)
+async def test_g7_mark_snapshot_distinguishes_degraded_mark_inputs(
+    unpriced_count: int,
+    snapshot_fallback_count: int,
+):
+    logger = SpyLogger()
+    snapshot = OpenExposureDrawdownSnapshot(
+        drawdown_pct=0.21,
+        configured_bankroll=50.0,
+        notional_bankroll=8.76,
+        marked_value=29.59,
+        total_entry_cost=23.50,
+        unknown_entry_cost=0.0,
+        priced_count=11 - unpriced_count,
+        unpriced_count=unpriced_count,
+        snapshot_fallback_count=snapshot_fallback_count,
+        valuation_basis="legacy_marked_value_pre_exit_fees",
+        unpriced_positions_valued_at_zero=True,
+        provider="scripts.mark_open_positions",
+        fallback_status="degraded_mark",
+        observed_at="2026-07-24T00:00:00+00:00",
+        valuation_as_of="2026-07-24T00:00:00+00:00",
+    )
+
+    result = await BlendTask(
+        trading_queue=asyncio.Queue(),
+        store=FakeStore(),
+        logger=logger,
+        open_exposure_drawdown_provider=lambda: snapshot,
+        is_paper_mode=True,
+    ).process_fast_lane_result(_analysis())
+
+    gate_snapshot = logger.gate_summary_records[0]["g7_mark_snapshot"]
+    assert result.trade_blocked_reason == "G7_open_exposure_drawdown"
+    assert gate_snapshot["fallback_status"] == "degraded_mark"
+    assert gate_snapshot["unpriced_count"] == unpriced_count
+    assert gate_snapshot["snapshot_fallback_count"] == snapshot_fallback_count
+    assert logger.skipped_records[0]["g7_mark_snapshot"] == gate_snapshot
+
+
+@pytest.mark.asyncio
 async def test_capital_guard_capture_runs_after_blend_and_skipped_telemetry():
     events: list[str] = []
     logger = OrderedCaptureLogger(events)
@@ -647,12 +751,13 @@ async def test_computed_polymarket_marks_flow_through_startup_and_bind_g7(
         captured.update(payload)
         return evaluate_readiness(payload, regime_confidence)
 
+    logger = SpyLogger()
     task = BlendTask(
         trading_queue=asyncio.Queue(),
         store=FakeStore(),
-        logger=SpyLogger(),
+        logger=logger,
         readiness_evaluator=capture_and_evaluate,
-        open_exposure_drawdown_provider=lambda: _paper_open_exposure_drawdown_pct(
+        open_exposure_drawdown_provider=lambda: _paper_open_exposure_drawdown_snapshot(
             paper
         ),
         is_paper_mode=True,
@@ -665,6 +770,12 @@ async def test_computed_polymarket_marks_flow_through_startup_and_bind_g7(
 
     assert captured["open_exposure_drawdown_pct"] == pytest.approx(0.233)
     assert result.trade_blocked_reason == "G7_open_exposure_drawdown"
+    snapshot = logger.gate_summary_records[0]["g7_mark_snapshot"]
+    assert snapshot["provider"] == "scripts.mark_open_positions"
+    assert snapshot["drawdown_pct"] == pytest.approx(0.233)
+    assert snapshot["priced_count"] == 2
+    assert snapshot["unpriced_count"] == 0
+    assert logger.skipped_records[0]["g7_mark_snapshot"] == snapshot
 
 
 @pytest.mark.asyncio
@@ -678,10 +789,11 @@ async def test_open_exposure_drawdown_provider_error_fails_closed():
         captured.update(payload)
         return evaluate_readiness(payload, regime_confidence)
 
+    logger = SpyLogger()
     task = BlendTask(
         trading_queue=asyncio.Queue(),
         store=FakeStore(),
-        logger=SpyLogger(),
+        logger=logger,
         readiness_evaluator=capture_and_evaluate,
         open_exposure_drawdown_provider=broken_provider,
         is_paper_mode=True,
@@ -691,6 +803,46 @@ async def test_open_exposure_drawdown_provider_error_fails_closed():
 
     assert result.trade_blocked_reason == "G7_open_exposure_drawdown"
     assert captured["open_exposure_drawdown_pct"] == pytest.approx(1.0)
+    assert logger.gate_summary_records[0]["g7_mark_snapshot"]["drawdown_pct"] == 1.0
+    assert logger.gate_summary_records[0]["g7_mark_snapshot"]["fallback_status"] == "provider_error"
+    assert logger.skipped_records[0]["g7_mark_snapshot"] == logger.gate_summary_records[0]["g7_mark_snapshot"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drawdown_pct", (float("nan"), float("inf"), -0.01))
+async def test_invalid_structured_open_exposure_snapshot_fails_closed(
+    drawdown_pct: float,
+):
+    logger = SpyLogger()
+    snapshot = OpenExposureDrawdownSnapshot(
+        drawdown_pct=drawdown_pct,
+        configured_bankroll=50.0,
+        notional_bankroll=8.76,
+        marked_value=29.59,
+        total_entry_cost=23.50,
+        unknown_entry_cost=0.0,
+        priced_count=11,
+        unpriced_count=0,
+        snapshot_fallback_count=0,
+        valuation_basis="legacy_marked_value_pre_exit_fees",
+        unpriced_positions_valued_at_zero=True,
+        provider="scripts.mark_open_positions",
+        fallback_status="none",
+        observed_at="2026-07-24T00:00:00+00:00",
+        valuation_as_of="2026-07-24T00:00:00+00:00",
+    )
+
+    result = await BlendTask(
+        trading_queue=asyncio.Queue(),
+        store=FakeStore(),
+        logger=logger,
+        open_exposure_drawdown_provider=lambda: snapshot,
+        is_paper_mode=True,
+    ).process_fast_lane_result(_analysis())
+
+    assert result.trade_blocked_reason == "G7_open_exposure_drawdown"
+    assert logger.gate_summary_records[0]["g7_mark_snapshot"]["drawdown_pct"] == 1.0
+    assert logger.gate_summary_records[0]["g7_mark_snapshot"]["fallback_status"] == "provider_error"
 
 
 @pytest.mark.asyncio

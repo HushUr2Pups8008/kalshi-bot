@@ -1,5 +1,7 @@
 import dataclasses
 import io
+import json
+import math
 import shutil
 import sqlite3
 import uuid
@@ -20,6 +22,7 @@ from main import (
     _log_bankroll_summary,
     _log_polymarket_account_summary,
     _paper_open_exposure_drawdown_pct,
+    _paper_open_exposure_drawdown_snapshot,
     _startup_probe_matched_tokens,
     _validate_startup_observability_probe_record,
     async_main,
@@ -100,6 +103,128 @@ def test_paper_open_exposure_drawdown_fails_closed_when_marks_unavailable(monkey
         drawdown = _paper_open_exposure_drawdown_pct(paper)
 
     assert drawdown == pytest.approx(1.0)
+
+
+def test_paper_open_exposure_drawdown_snapshot_preserves_mark_provenance(monkeypatch):
+    monkeypatch.setattr(cfg, "bankroll", 100.0)
+    paper = SimpleNamespace(
+        db_path=Path("paper.db"),
+        get_notional_bankroll=lambda: 70.0,
+    )
+
+    with patch(
+        "scripts.mark_open_positions.compute_open_position_marks",
+        return_value={
+            "marked_value": 9.0,
+            "total_cost": 31.0,
+            "unknown_cost": 0.0,
+            "priced_count": 2,
+            "unpriced_count": 0,
+            "snapshot_fallback_count": 0,
+            "as_of": "2026-07-24T00:00:00+00:00",
+        },
+    ):
+        snapshot = _paper_open_exposure_drawdown_snapshot(paper)
+
+    assert snapshot.drawdown_pct == pytest.approx(0.21)
+    assert snapshot.configured_bankroll == pytest.approx(100.0)
+    assert snapshot.notional_bankroll == pytest.approx(70.0)
+    assert snapshot.marked_value == pytest.approx(9.0)
+    assert snapshot.total_entry_cost == pytest.approx(31.0)
+    assert snapshot.unknown_entry_cost == pytest.approx(0.0)
+    assert snapshot.priced_count == 2
+    assert snapshot.unpriced_count == 0
+    assert snapshot.snapshot_fallback_count == 0
+    assert snapshot.valuation_basis == "legacy_marked_value_pre_exit_fees"
+    assert snapshot.unpriced_positions_valued_at_zero is True
+    assert snapshot.provider == "scripts.mark_open_positions"
+    assert snapshot.fallback_status == "none"
+    assert snapshot.valuation_as_of == "2026-07-24T00:00:00+00:00"
+
+
+def test_paper_open_exposure_drawdown_snapshot_fails_closed_with_status(monkeypatch):
+    monkeypatch.setattr(cfg, "bankroll", 100.0)
+    paper = SimpleNamespace(
+        db_path=Path("paper.db"),
+        get_notional_bankroll=lambda: 70.0,
+    )
+
+    with patch("scripts.mark_open_positions.compute_open_position_marks", return_value=None):
+        snapshot = _paper_open_exposure_drawdown_snapshot(paper)
+
+    assert snapshot.drawdown_pct == pytest.approx(1.0)
+    assert snapshot.provider == "scripts.mark_open_positions"
+    assert snapshot.fallback_status == "marks_unavailable"
+    assert snapshot.marked_value is None
+
+
+def test_paper_open_exposure_drawdown_snapshot_reports_mark_error(monkeypatch):
+    monkeypatch.setattr(cfg, "bankroll", 100.0)
+    paper = SimpleNamespace(
+        db_path=Path("paper.db"),
+        get_notional_bankroll=lambda: 70.0,
+    )
+
+    with patch(
+        "scripts.mark_open_positions.compute_open_position_marks",
+        side_effect=RuntimeError("provider unavailable"),
+    ):
+        snapshot = _paper_open_exposure_drawdown_snapshot(paper)
+
+    assert snapshot.drawdown_pct == pytest.approx(1.0)
+    assert snapshot.provider == "scripts.mark_open_positions"
+    assert snapshot.fallback_status == "mark_error"
+
+
+@pytest.mark.parametrize("configured_bankroll", (float("nan"), float("inf"), float("-inf")))
+def test_paper_open_exposure_drawdown_snapshot_scrubs_nonfinite_configured_bankroll(
+    monkeypatch,
+    configured_bankroll: float,
+):
+    monkeypatch.setattr(cfg, "bankroll", configured_bankroll)
+    paper = SimpleNamespace(
+        db_path=Path("paper.db"),
+        get_notional_bankroll=lambda: 70.0,
+    )
+
+    snapshot = _paper_open_exposure_drawdown_snapshot(paper)
+
+    assert snapshot.drawdown_pct == pytest.approx(1.0)
+    assert snapshot.fallback_status == "invalid_configured_bankroll"
+    assert snapshot.configured_bankroll is None
+    assert json.dumps(snapshot.as_log_record(threshold_pct=0.2), allow_nan=False)
+
+
+@pytest.mark.parametrize(
+    ("notional_bankroll", "marked_value"),
+    ((float("nan"), 9.0), (float("inf"), 9.0), (70.0, float("nan")), (70.0, float("-inf"))),
+)
+def test_paper_open_exposure_drawdown_snapshot_scrubs_nonfinite_mark_values(
+    monkeypatch,
+    notional_bankroll: float,
+    marked_value: float,
+):
+    monkeypatch.setattr(cfg, "bankroll", 100.0)
+    paper = SimpleNamespace(
+        db_path=Path("paper.db"),
+        get_notional_bankroll=lambda: notional_bankroll,
+    )
+
+    with patch(
+        "scripts.mark_open_positions.compute_open_position_marks",
+        return_value={"marked_value": marked_value},
+    ):
+        snapshot = _paper_open_exposure_drawdown_snapshot(paper)
+
+    assert snapshot.drawdown_pct == pytest.approx(1.0)
+    assert snapshot.fallback_status == "invalid_mark"
+    assert snapshot.notional_bankroll == (
+        pytest.approx(notional_bankroll) if math.isfinite(notional_bankroll) else None
+    )
+    assert snapshot.marked_value == (
+        pytest.approx(marked_value) if math.isfinite(marked_value) else None
+    )
+    assert json.dumps(snapshot.as_log_record(threshold_pct=0.2), allow_nan=False)
 
 
 def test_runtime_instance_guard_blocks_second_long_running_instance():

@@ -30,6 +30,7 @@ from tasks.trade_readiness_gate import (
     G1_CONFIDENCE_THRESHOLD,
     G1_FAILSAFE_CONFIDENCE_THRESHOLD,
     G4_REGIME_CONFIDENCE_THRESHOLD,
+    G7_MAX_OPEN_EXPOSURE_DRAWDOWN_PCT,
     ReadinessDecision,
     evaluate_readiness,
 )
@@ -162,7 +163,54 @@ class BlendTaskResult:
 
 
 StructuralStabilityResolver = Callable[[str], bool | Awaitable[bool]]
-OpenExposureDrawdownProvider = Callable[[], float | None | Awaitable[float | None]]
+@dataclass(frozen=True)
+class OpenExposureDrawdownSnapshot:
+    """Compact mark provenance carried with a G7 readiness decision."""
+
+    drawdown_pct: float
+    configured_bankroll: float | None
+    notional_bankroll: float | None
+    marked_value: float | None
+    total_entry_cost: float | None
+    unknown_entry_cost: float | None
+    priced_count: int | None
+    unpriced_count: int | None
+    snapshot_fallback_count: int | None
+    valuation_basis: str
+    unpriced_positions_valued_at_zero: bool | None
+    provider: str
+    fallback_status: str
+    observed_at: str
+    valuation_as_of: str | None
+
+    def as_log_record(self, *, threshold_pct: float) -> dict[str, Any]:
+        return {
+            "drawdown_pct": self.drawdown_pct,
+            "threshold_pct": threshold_pct,
+            "configured_bankroll": self.configured_bankroll,
+            "notional_bankroll": self.notional_bankroll,
+            "marked_value": self.marked_value,
+            "total_entry_cost": self.total_entry_cost,
+            "unknown_entry_cost": self.unknown_entry_cost,
+            "priced_count": self.priced_count,
+            "unpriced_count": self.unpriced_count,
+            "snapshot_fallback_count": self.snapshot_fallback_count,
+            "valuation_basis": self.valuation_basis,
+            "unpriced_positions_valued_at_zero": self.unpriced_positions_valued_at_zero,
+            "provider": self.provider,
+            "fallback_status": self.fallback_status,
+            "observed_at": self.observed_at,
+            "valuation_as_of": self.valuation_as_of,
+        }
+
+
+OpenExposureDrawdownProvider = Callable[
+    [],
+    float
+    | None
+    | OpenExposureDrawdownSnapshot
+    | Awaitable[float | None | OpenExposureDrawdownSnapshot],
+]
 
 
 class CapitalGuardCaptureSinkLike(Protocol):
@@ -238,6 +286,16 @@ class BlendTask:
         )
 
         decision_at = self._now()
+        open_exposure_snapshot = await self._open_exposure_drawdown_snapshot(
+            observed_at=decision_at
+        )
+        g7_mark_snapshot = (
+            open_exposure_snapshot.as_log_record(
+                threshold_pct=G7_MAX_OPEN_EXPOSURE_DRAWDOWN_PCT
+            )
+            if open_exposure_snapshot is not None
+            else None
+        )
         readiness_input = _readiness_input(
             blend_result=blend_result,
             dossier=dossier,
@@ -247,7 +305,11 @@ class BlendTask:
             analysis=fast_lane_result,
             default_min_edge=default_min_edge,
             now=decision_at,
-            open_exposure_drawdown_pct=await self._open_exposure_drawdown_pct(),
+            open_exposure_drawdown_pct=(
+                open_exposure_snapshot.drawdown_pct
+                if open_exposure_snapshot is not None
+                else None
+            ),
         )
         try:
             readiness = self._readiness_evaluator(readiness_input, regime_confidence)
@@ -259,6 +321,7 @@ class BlendTask:
             ticker=ticker,
             readiness=readiness,
             blend_result=blend_result,
+            g7_mark_snapshot=g7_mark_snapshot,
         )
 
         trade_blocked_reason = (
@@ -326,6 +389,7 @@ class BlendTask:
                 trade_blocked_reason=trade_blocked_reason,
                 fast_lane_result=fast_lane_result,
                 venue=venue,
+                g7_mark_snapshot=g7_mark_snapshot,
             )
             await self._capture_capital_guard_shadow(
                 fast_lane_result=fast_lane_result,
@@ -499,7 +563,11 @@ class BlendTask:
             return 1.0
         return self._calibration.get_scaling_factor(lane)
 
-    async def _open_exposure_drawdown_pct(self) -> float | None:
+    async def _open_exposure_drawdown_snapshot(
+        self,
+        *,
+        observed_at: datetime,
+    ) -> OpenExposureDrawdownSnapshot | None:
         provider = self._open_exposure_drawdown_provider
         if provider is None:
             return None
@@ -507,15 +575,61 @@ class BlendTask:
             value = provider()
             if inspect.isawaitable(value):
                 value = await value
+            if isinstance(value, OpenExposureDrawdownSnapshot):
+                drawdown_pct = value.drawdown_pct
+                if (
+                    isinstance(drawdown_pct, bool)
+                    or not isinstance(drawdown_pct, (int, float))
+                    or not math.isfinite(float(drawdown_pct))
+                    or drawdown_pct < 0.0
+                ):
+                    raise ValueError("open exposure drawdown snapshot is invalid")
+                return value
             if value is None:
                 return None
             value = float(value)
             if not math.isfinite(value):
-                return 1.0
-            return max(0.0, value)
+                raise ValueError("open exposure drawdown is non-finite")
+            return OpenExposureDrawdownSnapshot(
+                drawdown_pct=max(0.0, value),
+                configured_bankroll=None,
+                notional_bankroll=None,
+                marked_value=None,
+                total_entry_cost=None,
+                unknown_entry_cost=None,
+                priced_count=None,
+                unpriced_count=None,
+                snapshot_fallback_count=None,
+                valuation_basis="provider_scalar_unattributed",
+                unpriced_positions_valued_at_zero=None,
+                provider="legacy_drawdown_provider",
+                fallback_status="scalar_only",
+                observed_at=observed_at.isoformat(),
+                valuation_as_of=None,
+            )
         except Exception as exc:
             log.warning("open exposure drawdown unavailable; failing readiness closed: %s", exc)
-            return 1.0
+            return OpenExposureDrawdownSnapshot(
+                drawdown_pct=1.0,
+                configured_bankroll=None,
+                notional_bankroll=None,
+                marked_value=None,
+                total_entry_cost=None,
+                unknown_entry_cost=None,
+                priced_count=None,
+                unpriced_count=None,
+                snapshot_fallback_count=None,
+                valuation_basis="unavailable",
+                unpriced_positions_valued_at_zero=None,
+                provider="blend_task",
+                fallback_status="provider_error",
+                observed_at=observed_at.isoformat(),
+                valuation_as_of=None,
+            )
+
+    async def _open_exposure_drawdown_pct(self) -> float | None:
+        snapshot = await self._open_exposure_drawdown_snapshot(observed_at=self._now())
+        return snapshot.drawdown_pct if snapshot is not None else None
 
     # PROFIT-BLENDER-001 fallback heuristics. Tight thresholds by design:
     # a lane is flagged "fallback" only when p is very near 0.5 AND
@@ -647,6 +761,7 @@ class BlendTask:
         ticker: str,
         readiness: ReadinessDecision,
         blend_result: BlendResult,
+        g7_mark_snapshot: dict[str, Any] | None,
     ) -> None:
         if not hasattr(self._logger, "log_gate_summary"):
             return
@@ -669,6 +784,7 @@ class BlendTask:
             recency_score=readiness.recency_score,
             recency_threshold=readiness.recency_threshold,
             recency_distance=readiness.recency_distance,
+            g7_mark_snapshot=g7_mark_snapshot,
         )
 
     async def _emit_skipped(
@@ -680,6 +796,7 @@ class BlendTask:
         trade_blocked_reason: str,
         fast_lane_result: SignalAnalysis,
         venue: str,
+        g7_mark_snapshot: dict[str, Any] | None,
     ) -> None:
         """Emit a SKIPPED record for the blocked-reason early-return path.
 
@@ -738,6 +855,8 @@ class BlendTask:
         signal_meta = fast_lane_result.signal_meta
         if signal_meta:
             skipped_kwargs["signal_meta"] = signal_meta
+        if g7_mark_snapshot is not None:
+            skipped_kwargs["g7_mark_snapshot"] = g7_mark_snapshot
         await write_trade_log_async(
             self._logger.log_skipped,
             **skipped_kwargs,
