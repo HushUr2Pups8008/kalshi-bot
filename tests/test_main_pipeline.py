@@ -2416,6 +2416,63 @@ async def test_process_candidate_logs_research_provider_error(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_process_candidate_persists_provider_error_count_with_real_logger(
+    monkeypatch,
+    tmp_path,
+):
+    """The provider-error path must remain compatible with the JSONL logger."""
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "real_web_research_mode",
+        "production",
+        raising=False,
+    )
+    bot = _make_bot_stub()
+    bot._research_dossier_store = object()
+    bot._schedule_targeted_research_prewarm = MagicMock()
+    news = _make_news()
+    market = _make_market()
+    verdict = ResearchVerdict(
+        status=ResearchStatus.RESEARCH_PROVIDER_ERROR,
+        attempted=True,
+        summary="Research provider failed before the source frontier could be trusted.",
+        skip_reason="research_provider_error",
+        research_timeout_stage="provider_fanout",
+        research_provider_error_count=3,
+    )
+    log_path = tmp_path / "trades.jsonl"
+
+    with patch(
+        "main.estimate_probability",
+        new=AsyncMock(
+            return_value=(
+                market.yes_prob,
+                0.1,
+                [],
+                "No relevant keywords found -- no signal.",
+                "neutral",
+                "none",
+                0.85,
+            )
+        ),
+    ), patch(
+        "main.run_research_gate",
+        new=AsyncMock(return_value=verdict),
+    ), patch(
+        "utils.logger.trade_log",
+        TradeLogger(log_path),
+    ):
+        await bot._process_candidate(news, market, 0.20)
+
+    record = json.loads(log_path.read_text(encoding="utf-8").strip())
+    assert record["type"] == "ANALYSIS_REJECTED"
+    assert record["reason"] == "research_operational_error"
+    assert record["research_timeout_stage"] == "provider_fanout"
+    assert record["research_provider_error_count"] == 3
+
+
+@pytest.mark.asyncio
 async def test_process_candidate_researches_sparse_neutral_keywords_in_production(
     monkeypatch,
 ):
