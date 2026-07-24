@@ -31,6 +31,7 @@ from trading.fees import (
 )
 from trading.settlement import (
     MarketOutcome,
+    SettlementDriftError,
     SettlementObservation,
     VoidRefundContract,
     build_settlement_observation,
@@ -809,6 +810,7 @@ class CurrentAuthoritativeHead:
     void_refund_json: str | None
     void_refund_sha256: str | None
     semantic_sha256: str
+    supersedes_observation_sha256: str | None
 
 
 @dataclass(frozen=True)
@@ -822,6 +824,56 @@ class CandidateSettlementBacklog:
     candidate_set_sha256: str
     identity_set_sha256: str
     current_head_sha256: str | None
+    prior_authoritative_observation: SettlementObservation | None
+    authoritative_head_error: str | None
+
+
+def _rehydrate_current_authoritative_observation(
+    head: CurrentAuthoritativeHead,
+) -> SettlementObservation:
+    """Rebuild and validate the source observation stored by the current head."""
+    try:
+        record = SettlementObservationRecord(
+            venue=head.market_ref.venue,
+            venue_market_id=head.market_ref.venue_market_id,
+            alias=head.market_ref.alias,
+            contract_fingerprint=head.contract_fingerprint,
+            rules_fingerprint=head.rules_fingerprint,
+            settlement_fingerprint=head.settlement_fingerprint,
+            outcome=head.outcome,
+            observed_at=head.observed_at,
+            effective_at=head.effective_at,
+            source_id=head.source_id,
+            rules_version=head.rules_version,
+            authoritative_outcome_json=head.authoritative_outcome_json,
+            source_payload_json=head.source_payload_json,
+            authoritative_payload_sha256=head.authoritative_payload_sha256,
+            authoritative_observation_sha256=head.authoritative_observation_sha256,
+            semantic_sha256=head.semantic_sha256,
+            void_refund_json=head.void_refund_json,
+            void_refund_sha256=head.void_refund_sha256,
+            supersedes_observation_sha256=head.supersedes_observation_sha256,
+        )
+        if _sha256(canonical_json(_observation_payload(record))) != head.observation_sha256:
+            raise ValueError("authoritative head record hash is invalid")
+        observation = build_settlement_observation(
+            market_ref=head.market_ref,
+            outcome=MarketOutcome(head.outcome),
+            authoritative_outcome=json.loads(head.authoritative_outcome_json),
+            authoritative_payload=json.loads(head.source_payload_json),
+            observed_at=head.observed_at,
+            effective_at=head.effective_at,
+            rules_version=head.rules_version,
+            source_id=head.source_id,
+            void_refund=_void_refund_from_json(head.void_refund_json),
+        )
+    except (SettlementDriftError, TypeError, ValueError) as exc:
+        raise ValueError("authoritative head cannot be rehydrated") from exc
+    if observation.payload_sha256 != head.authoritative_payload_sha256:
+        raise ValueError("authoritative head payload hash is invalid")
+    if observation.observation_sha256 != head.authoritative_observation_sha256:
+        raise ValueError("authoritative head source observation hash is invalid")
+    return observation
 
 
 @dataclass(frozen=True)
@@ -1548,13 +1600,26 @@ class CapitalGuardShadowStore:
                 identity_set_sha256=identity_set_sha256,
             )
         market_ref = MarketRef(market_key.venue, market_key.venue_market_id, alias)
-        head = self._current_authoritative_head_transaction(
-            conn,
-            market_key.venue,
-            market_key.venue_market_id,
-            expected_alias=alias,
-        )
-        if head is None:
+        prior_authoritative_observation = None
+        authoritative_head_error = None
+        try:
+            head = self._current_authoritative_head_transaction(
+                conn,
+                market_key.venue,
+                market_key.venue_market_id,
+                expected_alias=alias,
+            )
+        except (SettlementDriftError, TypeError, ValueError):
+            head = None
+            authoritative_head_error = "authoritative_head_invalid"
+        if head is not None:
+            try:
+                prior_authoritative_observation = (
+                    _rehydrate_current_authoritative_observation(head)
+                )
+            except (SettlementDriftError, TypeError, ValueError):
+                authoritative_head_error = "authoritative_head_invalid"
+        if head is None or authoritative_head_error is not None:
             missing = tuple(candidate_ids)
         else:
             linked = {
@@ -1577,7 +1642,13 @@ class CapitalGuardShadowStore:
             missing_link_candidate_ids=missing,
             candidate_set_sha256=candidate_set_sha256,
             identity_set_sha256=identity_set_sha256,
-            current_head_sha256=(head.observation_sha256 if head is not None else None),
+            current_head_sha256=(
+                head.observation_sha256
+                if head is not None and authoritative_head_error is None
+                else None
+            ),
+            prior_authoritative_observation=prior_authoritative_observation,
+            authoritative_head_error=authoritative_head_error,
         )
 
     def _current_authoritative_head_transaction(
@@ -1596,8 +1667,9 @@ class CapitalGuardShadowStore:
                    o.observed_at, o.effective_at, o.source_id, o.rules_version,
                    o.authoritative_outcome_json, o.source_payload_json,
                    o.authoritative_payload_sha256,
-                   o.authoritative_observation_sha256,
-                   o.void_refund_json, o.void_refund_sha256, o.semantic_sha256
+                    o.authoritative_observation_sha256,
+                    o.void_refund_json, o.void_refund_sha256, o.semantic_sha256,
+                    o.supersedes_observation_sha256
             FROM capital_guard_shadow_observations o
             WHERE o.venue = ? AND o.venue_market_id = ?
               AND NOT EXISTS (
@@ -1633,6 +1705,9 @@ class CapitalGuardShadowStore:
             void_refund_json=None if row[14] is None else str(row[14]),
             void_refund_sha256=None if row[15] is None else str(row[15]),
             semantic_sha256=str(row[16]),
+            supersedes_observation_sha256=(
+                None if row[17] is None else str(row[17])
+            ),
         )
 
     def _record_identity_quarantine_transaction(
@@ -1642,11 +1717,16 @@ class CapitalGuardShadowStore:
         *,
         attempted_at: datetime,
     ) -> SettlementAttemptWriteResult:
-        head = self._current_authoritative_head_transaction(
-            conn,
-            error.market_key.venue,
-            error.market_key.venue_market_id,
-        )
+        try:
+            head = self._current_authoritative_head_transaction(
+                conn,
+                error.market_key.venue,
+                error.market_key.venue_market_id,
+            )
+            if head is not None:
+                _rehydrate_current_authoritative_observation(head)
+        except (SettlementDriftError, TypeError, ValueError):
+            head = None
         complete = error.reason_taxonomy != "candidate_group_over_cap"
         payload = _settlement_attempt_payload(
             venue=error.market_key.venue,
@@ -1705,6 +1785,11 @@ class CapitalGuardShadowStore:
             and current.candidate_set_sha256 == backlog.candidate_set_sha256
             and current.identity_set_sha256 == backlog.identity_set_sha256
             and current.current_head_sha256 == backlog.current_head_sha256
+            and (
+                current.prior_authoritative_observation
+                == backlog.prior_authoritative_observation
+            )
+            and current.authoritative_head_error == backlog.authoritative_head_error
         )
         if not state_matches:
             return self._persist_valid_identity_attempt(
@@ -1720,6 +1805,17 @@ class CapitalGuardShadowStore:
                 quarantine_reason="concurrent_state_change",
             )
         assert current is not None
+        if current.authoritative_head_error is not None:
+            return self._persist_valid_identity_attempt(
+                conn,
+                backlog,
+                attempted_at=attempted_at,
+                status="quarantined",
+                head_after_sha256=None,
+                error_taxonomy="source_drift",
+                error_sha256=_sha256(current.authoritative_head_error),
+                quarantine_reason="source_drift",
+            )
 
         market_conflict = _market_has_observation_conflict(conn, market_key)
         if market_conflict:
@@ -1757,10 +1853,7 @@ class CapitalGuardShadowStore:
                 error_sha256=_sha256("source_drift"),
                 quarantine_reason="source_drift",
             )
-        if (
-            observation.market_ref != backlog.market_ref
-            or observation.supersedes_observation_sha256 is not None
-        ):
+        if observation.market_ref != backlog.market_ref:
             return self._persist_valid_identity_attempt(
                 conn,
                 backlog,
@@ -1804,6 +1897,33 @@ class CapitalGuardShadowStore:
             "void_refund_json": void_refund_json,
             "void_refund_sha256": void_refund_sha256,
         }
+        head = self._current_authoritative_head_transaction(
+            conn,
+            backlog.market_ref.venue,
+            backlog.market_ref.venue_market_id,
+            expected_alias=backlog.market_ref.alias,
+        )
+        if head is None:
+            source_lineage_matches = observation.supersedes_observation_sha256 is None
+        elif head.semantic_sha256 == semantic_sha256:
+            source_lineage_matches = observation.supersedes_observation_sha256 is None
+        else:
+            source_lineage_matches = (
+                observation.supersedes_observation_sha256
+                == head.authoritative_observation_sha256
+            )
+        if not source_lineage_matches:
+            return self._persist_valid_identity_attempt(
+                conn,
+                backlog,
+                attempted_at=attempted_at,
+                status="quarantined",
+                head_after_sha256=(head.observation_sha256 if head is not None else None),
+                error_taxonomy="source_drift",
+                error_sha256=_sha256("source_drift"),
+                quarantine_reason="source_drift",
+                **authority,
+            )
         if observation.outcome is MarketOutcome.VOID:
             return self._persist_valid_identity_attempt(
                 conn,
@@ -1827,12 +1947,6 @@ class CapitalGuardShadowStore:
                 quarantine_reason="financial_ambiguity",
             )
 
-        head = self._current_authoritative_head_transaction(
-            conn,
-            backlog.market_ref.venue,
-            backlog.market_ref.venue_market_id,
-            expected_alias=backlog.market_ref.alias,
-        )
         if head is not None and head.semantic_sha256 == semantic_sha256:
             attempt_payload = self._valid_identity_attempt_payload(
                 backlog,

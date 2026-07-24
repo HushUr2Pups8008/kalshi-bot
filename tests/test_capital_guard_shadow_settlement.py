@@ -39,6 +39,7 @@ from trading.fees import (
 from trading.settlement import (
     MarketOutcome,
     SettlementDriftError,
+    SettlementObservation,
     UnsupportedVoidError,
     VoidRefundContract,
     build_settlement_observation,
@@ -56,6 +57,8 @@ def _authoritative(
     observed_at: datetime = NOW + timedelta(days=1),
     effective_at: datetime | None = None,
     payload: object | None = None,
+    previous_observation: SettlementObservation | None = None,
+    supersedes_observation_sha256: str | None = None,
 ):
     return build_settlement_observation(
         market_ref=market_ref,
@@ -81,6 +84,8 @@ def _authoritative(
             if market_ref.venue is Venue.KALSHI
             else "polymarket-us-public-api"
         ),
+        previous_observation=previous_observation,
+        supersedes_observation_sha256=supersedes_observation_sha256,
     )
 
 
@@ -88,13 +93,218 @@ class SequenceSource:
     def __init__(self, values: dict[MarketRef, list[object]]) -> None:
         self.values = values
         self.calls: list[MarketRef] = []
+        self.prior_observations: list[object | None] = []
 
-    async def get_settlement_exact(self, market_ref: MarketRef):
+    async def get_settlement_exact(
+        self,
+        market_ref: MarketRef,
+        *,
+        prior_observation: object | None,
+    ):
         self.calls.append(market_ref)
+        self.prior_observations.append(prior_observation)
         value = self.values[market_ref].pop(0)
         if isinstance(value, BaseException):
             raise value
         return value
+
+
+@pytest.mark.asyncio
+async def test_collector_passes_rehydrated_prior_source_observation(tmp_path: Path) -> None:
+    store = _initialized_store(tmp_path)
+    record = candidate()
+    _append_candidate(store, record)
+    market_ref = MarketRef(Venue.KALSHI, record.venue_market_id, record.venue_market_id)
+    first = _authoritative(market_ref)
+    await CapitalGuardShadowSettlementCollector(
+        store=store, source=SequenceSource({market_ref: [first]})
+    ).run_once()
+    source = SequenceSource({market_ref: [first]})
+
+    result = await CapitalGuardShadowSettlementCollector(
+        store=store, source=source
+    ).run_once()
+
+    assert result.identical_observations == 1
+    assert source.prior_observations[0] is not None
+    assert source.prior_observations[0].observation_sha256 == first.observation_sha256
+
+
+@pytest.mark.asyncio
+async def test_source_correction_links_prior_source_hash_but_store_links_prior_record(
+    tmp_path: Path,
+) -> None:
+    store = _initialized_store(tmp_path)
+    _append_candidate(store, candidate())
+    market_key = store.settlement_market_backlog(limit=1)[0]
+    market_ref = store.candidate_settlement_backlog(market_key, limit=1).market_ref
+    prior = _authoritative(market_ref)
+    await CapitalGuardShadowSettlementCollector(
+        store=store, source=SequenceSource({market_ref: [prior]})
+    ).run_once()
+    prior_head = store.current_authoritative_head(market_ref)
+    assert prior_head is not None
+    correction = build_settlement_observation(
+        market_ref=market_ref,
+        outcome=MarketOutcome.NO,
+        authoritative_outcome="no",
+        authoritative_payload={"market_id": market_ref.venue_market_id, "result": "no"},
+        observed_at=prior.observed_at + timedelta(seconds=1),
+        effective_at=prior.effective_at + timedelta(seconds=1),
+        rules_version=prior.rules_version,
+        source_id=prior.source_id,
+        previous_observation=prior,
+        supersedes_observation_sha256=prior.observation_sha256,
+    )
+    source = SequenceSource({market_ref: [correction]})
+
+    result = await CapitalGuardShadowSettlementCollector(store=store, source=source).run_once()
+
+    assert result.inserted_observations == 1
+    assert source.prior_observations[0] is not None
+    assert source.prior_observations[0].observation_sha256 == prior.observation_sha256
+    with sqlite3.connect(store.db_path) as conn:
+        supersedes = conn.execute(
+            "SELECT supersedes_observation_sha256 "
+            "FROM capital_guard_shadow_observations "
+            "WHERE authoritative_observation_sha256 = ?",
+            (correction.observation_sha256,),
+        ).fetchone()[0]
+    assert supersedes == prior_head.observation_sha256
+    assert supersedes != prior.observation_sha256
+
+
+@pytest.mark.asyncio
+async def test_source_correction_without_prior_source_hash_quarantines(tmp_path: Path) -> None:
+    store = _initialized_store(tmp_path)
+    record = candidate()
+    _append_candidate(store, record)
+    market_ref = MarketRef(Venue.KALSHI, record.venue_market_id, record.venue_market_id)
+    prior = _authoritative(market_ref)
+    await CapitalGuardShadowSettlementCollector(
+        store=store, source=SequenceSource({market_ref: [prior]})
+    ).run_once()
+    unlinked = _authoritative(
+        market_ref,
+        outcome=MarketOutcome.NO,
+        observed_at=prior.observed_at + timedelta(seconds=1),
+        effective_at=prior.effective_at + timedelta(seconds=1),
+    )
+
+    result = await CapitalGuardShadowSettlementCollector(
+        store=store, source=SequenceSource({market_ref: [unlinked]})
+    ).run_once()
+
+    assert result.quarantined == 1
+    assert _counts(store)["capital_guard_shadow_observations"] == 1
+
+
+@pytest.mark.parametrize(
+    "corrupted_field",
+    (
+        "authoritative_observation_sha256",
+        "semantic_sha256",
+        "observation_sha256",
+    ),
+)
+@pytest.mark.asyncio
+async def test_corrupt_authoritative_head_quarantines_before_source_io(
+    corrupted_field: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    store = _initialized_store(tmp_path)
+    record = candidate()
+    _append_candidate(store, record)
+    market_ref = MarketRef(Venue.KALSHI, record.venue_market_id, record.venue_market_id)
+    first = _authoritative(market_ref)
+    await CapitalGuardShadowSettlementCollector(
+        store=store, source=SequenceSource({market_ref: [first]})
+    ).run_once()
+    original = store._current_authoritative_head_transaction
+
+    def corrupt_head(*args: object, **kwargs: object):
+        head = original(*args, **kwargs)
+        return (
+            None
+            if head is None
+            else replace(head, **{corrupted_field: "0" * 64})
+        )
+
+    monkeypatch.setattr(store, "_current_authoritative_head_transaction", corrupt_head)
+    source = SequenceSource({market_ref: [first]})
+
+    result = await CapitalGuardShadowSettlementCollector(store=store, source=source).run_once()
+
+    assert result.quarantined == 1
+    assert source.calls == []
+    backlog = store.candidate_settlement_backlog(
+        SettlementMarketKey(Venue.KALSHI, record.venue_market_id)
+    )
+    direct = store.record_settlement_attempt(
+        backlog,
+        attempted_at=NOW + timedelta(days=2),
+        status="terminal",
+        observation=first,
+    )
+    assert direct.attempt_status == "quarantined"
+    assert _counts(store)["capital_guard_shadow_observations"] == 1
+    with sqlite3.connect(store.db_path) as conn:
+        reason = conn.execute(
+            "SELECT reason_taxonomy FROM capital_guard_shadow_settlement_quarantines"
+        ).fetchone()[0]
+    assert reason == "source_drift"
+
+
+@pytest.mark.parametrize("error_type", (ValueError, SettlementDriftError))
+@pytest.mark.asyncio
+async def test_invalid_authoritative_head_lookup_quarantines_before_source_io(
+    error_type: type[Exception], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    store = _initialized_store(tmp_path)
+    record = candidate()
+    _append_candidate(store, record)
+    market_ref = MarketRef(Venue.KALSHI, record.venue_market_id, record.venue_market_id)
+    first = _authoritative(market_ref)
+    await CapitalGuardShadowSettlementCollector(
+        store=store, source=SequenceSource({market_ref: [first]})
+    ).run_once()
+
+    def invalid_head(*args: object, **kwargs: object):
+        raise error_type("invalid persisted authoritative head")
+
+    monkeypatch.setattr(store, "_current_authoritative_head_transaction", invalid_head)
+    source = SequenceSource({market_ref: [first]})
+
+    result = await CapitalGuardShadowSettlementCollector(store=store, source=source).run_once()
+
+    assert result.quarantined == 1
+    assert source.calls == []
+
+
+@pytest.mark.asyncio
+async def test_void_authoritative_head_without_refund_quarantines_before_source_io(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    store = _initialized_store(tmp_path)
+    record = candidate()
+    _append_candidate(store, record)
+    market_ref = MarketRef(Venue.KALSHI, record.venue_market_id, record.venue_market_id)
+    first = _authoritative(market_ref)
+    await CapitalGuardShadowSettlementCollector(
+        store=store, source=SequenceSource({market_ref: [first]})
+    ).run_once()
+    original = store._current_authoritative_head_transaction
+
+    def invalid_void_head(*args: object, **kwargs: object):
+        head = original(*args, **kwargs)
+        return None if head is None else replace(head, outcome="void")
+
+    monkeypatch.setattr(store, "_current_authoritative_head_transaction", invalid_void_head)
+    source = SequenceSource({market_ref: [first]})
+
+    result = await CapitalGuardShadowSettlementCollector(store=store, source=source).run_once()
+
+    assert result.quarantined == 1
+    assert source.calls == []
 
 
 def _initialized_store(tmp_path: Path) -> CapitalGuardShadowStore:
@@ -304,16 +514,20 @@ async def test_changed_authoritative_evidence_appends_one_successor(
     record = candidate()
     _append_candidate(store, record)
     market_ref = MarketRef(Venue.KALSHI, record.venue_market_id, record.venue_market_id)
+    first = _authoritative(market_ref)
+    correction = _authoritative(
+        market_ref,
+        outcome=MarketOutcome.NO,
+        observed_at=NOW + timedelta(days=1, hours=1),
+        effective_at=NOW + timedelta(days=1, hours=1),
+        previous_observation=first,
+        supersedes_observation_sha256=first.observation_sha256,
+    )
     source = SequenceSource(
         {
             market_ref: [
-                _authoritative(market_ref),
-                _authoritative(
-                    market_ref,
-                    outcome=MarketOutcome.NO,
-                    observed_at=NOW + timedelta(days=1, hours=1),
-                    effective_at=NOW + timedelta(days=1, hours=1),
-                ),
+                first,
+                correction,
             ]
         }
     )
@@ -438,7 +652,9 @@ async def test_post_fetch_candidate_set_race_quarantines_without_observation(
     market_ref = MarketRef(Venue.KALSHI, record.venue_market_id, record.venue_market_id)
 
     class RacingSource:
-        async def get_settlement_exact(self, requested_ref: MarketRef):
+        async def get_settlement_exact(
+            self, requested_ref: MarketRef, *, prior_observation: object | None
+        ):
             added = candidate(
                 decision_key="racing-decision",
                 lifecycle_id="racing-lifecycle",
@@ -473,7 +689,9 @@ async def test_strict_async_source_cancellation_never_appends_after_shutdown(
     release = asyncio.Event()
 
     class BlockingAsyncSource:
-        async def get_settlement_exact(self, requested_ref: MarketRef):
+        async def get_settlement_exact(
+            self, requested_ref: MarketRef, *, prior_observation: object | None
+        ):
             assert requested_ref == market_ref
             started.set()
             await release.wait()
@@ -533,7 +751,9 @@ async def test_ambiguous_identity_quarantines_honestly_without_network(
     class TrapSource:
         calls = 0
 
-        async def get_settlement_exact(self, market_ref: MarketRef):
+        async def get_settlement_exact(
+            self, market_ref: MarketRef, *, prior_observation: object | None
+        ):
             self.calls += 1
             raise AssertionError(market_ref)
 
@@ -557,6 +777,57 @@ async def test_ambiguous_identity_quarantines_honestly_without_network(
 
 
 @pytest.mark.asyncio
+async def test_ambiguous_identity_with_invalid_head_quarantines_without_network(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    store = _initialized_store(tmp_path)
+    first = candidate()
+    second = candidate(
+        decision_key="decision-2",
+        lifecycle_id="lifecycle-2",
+        side="no",
+    )
+    second = replace(
+        second,
+        identity_json=canonical_json(
+            {
+                **json.loads(second.identity_json),
+                "settlement_fingerprint": "settlement-v2",
+            }
+        ),
+    )
+    _append_candidate(store, first)
+    _append_candidate(store, second)
+
+    def invalid_head(*args: object, **kwargs: object):
+        raise ValueError("invalid persisted authoritative head")
+
+    monkeypatch.setattr(store, "_current_authoritative_head_transaction", invalid_head)
+
+    class TrapSource:
+        calls = 0
+
+        async def get_settlement_exact(
+            self, market_ref: MarketRef, *, prior_observation: object | None
+        ):
+            self.calls += 1
+            raise AssertionError(market_ref)
+
+    source = TrapSource()
+    result = await CapitalGuardShadowSettlementCollector(
+        store=store, source=source
+    ).run_once(limit=10)
+
+    assert result.quarantined == 1 and source.calls == 0
+    with sqlite3.connect(store.db_path) as conn:
+        row = conn.execute(
+            "SELECT head_before_sha256, head_after_sha256, error_taxonomy "
+            "FROM capital_guard_shadow_settlement_attempts"
+        ).fetchone()
+    assert row == (None, None, "identity_ambiguous")
+
+
+@pytest.mark.asyncio
 async def test_over_cap_group_records_exact_count_and_sample_not_fake_full_hashes(
     tmp_path: Path,
 ) -> None:
@@ -574,7 +845,9 @@ async def test_over_cap_group_records_exact_count_and_sample_not_fake_full_hashe
     class TrapSource:
         calls = 0
 
-        async def get_settlement_exact(self, market_ref: MarketRef):
+        async def get_settlement_exact(
+            self, market_ref: MarketRef, *, prior_observation: object | None
+        ):
             self.calls += 1
             raise AssertionError(market_ref)
 
@@ -777,6 +1050,8 @@ async def test_equal_or_backward_time_correction_is_quarantined(
         outcome=MarketOutcome.NO,
         observed_at=first.observed_at,
         effective_at=first.effective_at,
+        previous_observation=first,
+        supersedes_observation_sha256=first.observation_sha256,
     )
     source = SequenceSource({market_ref: [first, backward]})
     times = iter([NOW + timedelta(days=2), NOW + timedelta(days=2, minutes=1)])
@@ -837,6 +1112,43 @@ async def test_valid_void_refund_contract_is_bound_then_deferred_without_finance
     assert row[3] == "void_financial_economics_deferred"
 
 
+@pytest.mark.asyncio
+async def test_void_source_correction_without_prior_hash_quarantines_drift(
+    tmp_path: Path,
+) -> None:
+    store = _initialized_store(tmp_path)
+    record = candidate()
+    _append_candidate(store, record)
+    market_ref = MarketRef(Venue.KALSHI, record.venue_market_id, record.venue_market_id)
+    first = _authoritative(market_ref)
+    await CapitalGuardShadowSettlementCollector(
+        store=store, source=SequenceSource({market_ref: [first]})
+    ).run_once()
+    correction_time = first.observed_at + timedelta(hours=1)
+    unlinked_void = build_settlement_observation(
+        market_ref=market_ref,
+        outcome=MarketOutcome.VOID,
+        authoritative_outcome="void",
+        authoritative_payload={"market_id": record.venue_market_id, "result": "void"},
+        observed_at=correction_time,
+        effective_at=correction_time,
+        rules_version="kalshi-settlement-v1",
+        source_id="kalshi-market-api",
+        void_refund=VoidRefundContract(Decimal("50"), False),
+    )
+
+    result = await CapitalGuardShadowSettlementCollector(
+        store=store, source=SequenceSource({market_ref: [unlinked_void]})
+    ).run_once()
+
+    assert result.quarantined == 1
+    with sqlite3.connect(store.db_path) as conn:
+        reason = conn.execute(
+            "SELECT reason_taxonomy FROM capital_guard_shadow_settlement_quarantines"
+        ).fetchone()[0]
+    assert reason == "source_drift"
+
+
 @pytest.mark.parametrize("fatal", [SystemExit("stop"), KeyboardInterrupt()])
 @pytest.mark.asyncio
 async def test_fatal_source_control_flow_never_appends(
@@ -848,7 +1160,9 @@ async def test_fatal_source_control_flow_never_appends(
     _append_candidate(store, record)
 
     class FatalSource:
-        async def get_settlement_exact(self, market_ref: MarketRef):
+        async def get_settlement_exact(
+            self, market_ref: MarketRef, *, prior_observation: object | None
+        ):
             raise fatal
 
     collector = CapitalGuardShadowSettlementCollector(store=store, source=FatalSource())
@@ -1088,7 +1402,9 @@ async def test_current_head_change_during_fetch_quarantines_without_reparenting(
     market_ref = MarketRef(Venue.KALSHI, record.venue_market_id, record.venue_market_id)
 
     class HeadRacingSource:
-        async def get_settlement_exact(self, requested_ref: MarketRef):
+        async def get_settlement_exact(
+            self, requested_ref: MarketRef, *, prior_observation: object | None
+        ):
             store.append_observation(observation(), (candidate_id,))
             return _authoritative(
                 requested_ref,
@@ -1120,19 +1436,23 @@ async def test_concurrent_different_corrections_produce_one_successor_no_fork(
     record = candidate()
     _append_candidate(store, record)
     market_ref = MarketRef(Venue.KALSHI, record.venue_market_id, record.venue_market_id)
-    initial_source = SequenceSource({market_ref: [_authoritative(market_ref)]})
+    root_observation = _authoritative(market_ref)
+    initial_source = SequenceSource({market_ref: [root_observation]})
     await CapitalGuardShadowSettlementCollector(
         store=store, source=initial_source
     ).run_once(limit=10)
     snapshot = store.candidate_settlement_backlog(
         SettlementMarketKey(Venue.KALSHI, record.venue_market_id)
     )
+    assert snapshot.prior_authoritative_observation == root_observation
     correction_time = NOW + timedelta(days=1, hours=1)
     first = _authoritative(
         market_ref,
         outcome=MarketOutcome.NO,
         observed_at=correction_time,
         effective_at=correction_time,
+        previous_observation=snapshot.prior_authoritative_observation,
+        supersedes_observation_sha256=root_observation.observation_sha256,
     )
     second = _authoritative(
         market_ref,
@@ -1144,6 +1464,8 @@ async def test_concurrent_different_corrections_produce_one_successor_no_fork(
             "result": "yes",
             "revision": 2,
         },
+        previous_observation=snapshot.prior_authoritative_observation,
+        supersedes_observation_sha256=root_observation.observation_sha256,
     )
 
     results = await asyncio.gather(
