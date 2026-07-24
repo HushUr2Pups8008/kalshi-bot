@@ -3,15 +3,17 @@ from __future__ import annotations
 import asyncio
 import socket
 import ssl
+import threading
 import time
 import urllib.error
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 import aiohttp
 import pytest
 
 from analysis import research_gate
+from utils import bounded_https
 from utils.bounded_https import fetch_bounded_https_ipv4
 
 
@@ -250,12 +252,44 @@ def _assert_resources_closed(
     assert not sessions[0].active
 
 
+def _telemetry_event(
+    provider_name: str,
+) -> bounded_https.BoundedHTTPSAttemptTelemetry:
+    return bounded_https.BoundedHTTPSAttemptTelemetry(
+        provider_name=provider_name,
+        outcome="success",
+        terminal_stage="complete",
+        budget_ms=500,
+        total_ms=10,
+        admission_wait_ms=0,
+        dns_ms=1,
+        response_headers_ms=1,
+        body_read_ms=1,
+        http_status=200,
+        bytes_read=2,
+        error_class=None,
+    )
+
+
+async def _wait_until(
+    predicate: Callable[[], bool],
+    *,
+    timeout: float = 1.0,
+) -> None:
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        if time.monotonic() >= deadline:
+            pytest.fail("timed out waiting for deferred telemetry")
+        await asyncio.sleep(0.005)
+
+
 @pytest.mark.asyncio
 async def test_no_admission_factory_uses_noop_context() -> None:
     response = _Response(body=b"ok")
     connectors, sessions, connector_factory, session_factory = _transport_factories(
         response
     )
+    telemetry: list[Any] = []
 
     raw = await fetch_bounded_https_ipv4(
         _URL,
@@ -267,10 +301,27 @@ async def test_no_admission_factory_uses_noop_context() -> None:
         resolver_factory=_Resolver,
         connector_factory=connector_factory,
         session_factory=session_factory,
+        telemetry_sink=telemetry.append,
     )
 
     assert raw == b"ok"
     assert response.closed
+    await _wait_until(lambda: len(telemetry) == 1)
+    assert len(telemetry) == 1
+    event = telemetry[0]
+    assert event.provider_name == _PROVIDER
+    assert event.outcome == "success"
+    assert event.terminal_stage == "complete"
+    assert event.budget_ms == 500
+    assert event.total_ms >= 0
+    assert event.admission_wait_ms >= 0
+    assert event.dns_ms is not None
+    assert event.response_headers_ms is not None
+    assert event.body_read_ms is not None
+    assert event.http_status == 200
+    assert event.bytes_read == 2
+    assert event.error_class is None
+    assert _URL not in repr(event)
     _assert_resources_closed(connectors, sessions)
 
 
@@ -280,6 +331,7 @@ async def test_admission_wait_consumes_total_deadline() -> None:
     finalized = asyncio.Event()
     admission = _Admission(delay=0.1, started=started, finalized=finalized)
     resolver = _Resolver()
+    telemetry: list[Any] = []
     before = time.monotonic()
 
     with pytest.raises(TimeoutError):
@@ -292,6 +344,7 @@ async def test_admission_wait_consumes_total_deadline() -> None:
             max_bytes=10,
             admission_factory=lambda: admission,
             resolver_factory=lambda: resolver,
+            telemetry_sink=telemetry.append,
         )
 
     assert time.monotonic() - before < 0.15
@@ -299,6 +352,16 @@ async def test_admission_wait_consumes_total_deadline() -> None:
     assert finalized.is_set()
     assert not admission.entered
     assert resolver.calls == []
+    await _wait_until(lambda: len(telemetry) == 1)
+    assert len(telemetry) == 1
+    event = telemetry[0]
+    assert event.outcome == "timeout"
+    assert event.terminal_stage == "admission"
+    assert event.admission_wait_ms > 0
+    assert event.dns_ms is None
+    assert event.response_headers_ms is None
+    assert event.body_read_ms is None
+    assert event.error_class == "TimeoutError"
 
 
 @pytest.mark.asyncio
@@ -317,6 +380,7 @@ async def test_dns_connect_and_read_share_one_deadline() -> None:
         response,
         enter_delay=0.025,
     )
+    telemetry: list[Any] = []
     before = time.monotonic()
 
     with pytest.raises(TimeoutError):
@@ -330,6 +394,7 @@ async def test_dns_connect_and_read_share_one_deadline() -> None:
             resolver_factory=lambda: resolver,
             connector_factory=connector_factory,
             session_factory=session_factory,
+            telemetry_sink=telemetry.append,
         )
 
     assert time.monotonic() - before < 0.2
@@ -341,7 +406,339 @@ async def test_dns_connect_and_read_share_one_deadline() -> None:
     assert sessions[0].timeout.total == sessions[0].timeout.connect
     assert sessions[0].timeout.total == sessions[0].timeout.sock_connect
     assert sessions[0].timeout.total == sessions[0].timeout.sock_read
+    await _wait_until(lambda: len(telemetry) == 1)
+    assert len(telemetry) == 1
+    event = telemetry[0]
+    assert event.outcome == "timeout"
+    assert event.terminal_stage == "body_read"
+    assert event.dns_ms is not None
+    assert event.response_headers_ms is not None
+    assert event.body_read_ms is not None
     _assert_resources_closed(connectors, sessions)
+
+
+@pytest.mark.asyncio
+async def test_transport_telemetry_labels_dns_timeout() -> None:
+    resolver = _Resolver(delay=0.1)
+    telemetry: list[Any] = []
+
+    with pytest.raises(TimeoutError):
+        await fetch_bounded_https_ipv4(
+            _URL,
+            canonical_host=_HOST,
+            provider_name=_PROVIDER,
+            user_agent=_USER_AGENT,
+            timeout=0.02,
+            max_bytes=10,
+            resolver_factory=lambda: resolver,
+            telemetry_sink=telemetry.append,
+        )
+
+    await _wait_until(lambda: len(telemetry) == 1)
+    assert len(telemetry) == 1
+    event = telemetry[0]
+    assert event.outcome == "timeout"
+    assert event.terminal_stage == "dns"
+    assert event.admission_wait_ms >= 0
+    assert event.dns_ms is not None
+    assert event.response_headers_ms is None
+    assert event.body_read_ms is None
+
+
+@pytest.mark.asyncio
+async def test_transport_telemetry_sink_failure_does_not_change_result() -> None:
+    response = _Response(body=b"ok")
+    connectors, sessions, connector_factory, session_factory = _transport_factories(
+        response
+    )
+
+    sink_called = threading.Event()
+
+    def failing_sink(_event: object) -> None:
+        sink_called.set()
+        raise RuntimeError("private telemetry failure")
+
+    raw = await fetch_bounded_https_ipv4(
+        _URL,
+        canonical_host=_HOST,
+        provider_name=_PROVIDER,
+        user_agent=_USER_AGENT,
+        timeout=0.5,
+        max_bytes=10,
+        resolver_factory=_Resolver,
+        connector_factory=connector_factory,
+        session_factory=session_factory,
+        telemetry_sink=failing_sink,
+    )
+
+    assert raw == b"ok"
+    await _wait_until(sink_called.is_set)
+    _assert_resources_closed(connectors, sessions)
+
+
+@pytest.mark.asyncio
+async def test_transport_telemetry_sink_cancel_does_not_change_result() -> None:
+    response = _Response(body=b"ok")
+    connectors, sessions, connector_factory, session_factory = _transport_factories(
+        response
+    )
+
+    sink_called = threading.Event()
+
+    def cancelling_sink(_event: object) -> None:
+        sink_called.set()
+        raise asyncio.CancelledError("telemetry-only cancellation")
+
+    raw = await fetch_bounded_https_ipv4(
+        _URL,
+        canonical_host=_HOST,
+        provider_name=_PROVIDER,
+        user_agent=_USER_AGENT,
+        timeout=0.5,
+        max_bytes=10,
+        resolver_factory=_Resolver,
+        connector_factory=connector_factory,
+        session_factory=session_factory,
+        telemetry_sink=cancelling_sink,
+    )
+
+    assert raw == b"ok"
+    await _wait_until(sink_called.is_set)
+    _assert_resources_closed(connectors, sessions)
+
+
+@pytest.mark.asyncio
+async def test_telemetry_dispatcher_drops_on_bounded_overflow() -> None:
+    dispatcher = bounded_https._TelemetryDispatcher(capacity=1)
+    loop = asyncio.get_running_loop()
+    release_first = threading.Event()
+    first_started = asyncio.Event()
+    first_finished = asyncio.Event()
+    second_delivered = asyncio.Event()
+    delivered: list[str] = []
+
+    def first_sink(event: bounded_https.BoundedHTTPSAttemptTelemetry) -> None:
+        loop.call_soon_threadsafe(first_started.set)
+        release_first.wait()
+        delivered.append(event.provider_name)
+        loop.call_soon_threadsafe(first_finished.set)
+
+    def second_sink(event: bounded_https.BoundedHTTPSAttemptTelemetry) -> None:
+        delivered.append(event.provider_name)
+        loop.call_soon_threadsafe(second_delivered.set)
+
+    first = _telemetry_event("first")
+    second = _telemetry_event("second")
+    dropped = _telemetry_event("dropped")
+
+    try:
+        assert dispatcher.submit(first_sink, first)
+        await first_started.wait()
+        assert dispatcher.submit(second_sink, second)
+        assert not dispatcher.submit(second_sink, dropped)
+
+        stats = dispatcher.snapshot()
+        assert stats.accepted == 2
+        assert stats.dropped == 1
+        assert stats.worker_alive
+        assert stats.worker_daemon
+        assert not second_delivered.is_set()
+    finally:
+        release_first.set()
+
+    await first_finished.wait()
+    await second_delivered.wait()
+    assert delivered == ["first", "second"]
+
+
+@pytest.mark.asyncio
+async def test_telemetry_dispatcher_survives_sink_base_exception() -> None:
+    dispatcher = bounded_https._TelemetryDispatcher(capacity=2)
+    loop = asyncio.get_running_loop()
+    delivered = asyncio.Event()
+    delivered_provider_names: list[str] = []
+
+    class SinkFailure(BaseException):
+        pass
+
+    def failing_sink(_event: bounded_https.BoundedHTTPSAttemptTelemetry) -> None:
+        raise SinkFailure()
+
+    def healthy_sink(event: bounded_https.BoundedHTTPSAttemptTelemetry) -> None:
+        delivered_provider_names.append(event.provider_name)
+        loop.call_soon_threadsafe(delivered.set)
+
+    assert dispatcher.submit(failing_sink, _telemetry_event("failing"))
+    assert dispatcher.submit(healthy_sink, _telemetry_event("healthy"))
+
+    await delivered.wait()
+    assert delivered_provider_names == ["healthy"]
+    stats = dispatcher.snapshot()
+    assert stats.accepted == 2
+    assert stats.dropped == 0
+
+
+@pytest.mark.asyncio
+async def test_transport_telemetry_avoids_default_executor(monkeypatch: pytest.MonkeyPatch) -> None:
+    response = _Response(body=b"ok")
+    connectors, sessions, connector_factory, session_factory = _transport_factories(
+        response
+    )
+    dispatcher = bounded_https._TelemetryDispatcher(capacity=1)
+    monkeypatch.setattr(bounded_https, "_TELEMETRY_DISPATCHER", dispatcher)
+    loop = asyncio.get_running_loop()
+    delivered = asyncio.Event()
+    telemetry: list[bounded_https.BoundedHTTPSAttemptTelemetry] = []
+
+    def sink(event: bounded_https.BoundedHTTPSAttemptTelemetry) -> None:
+        telemetry.append(event)
+        loop.call_soon_threadsafe(delivered.set)
+
+    def fail_default_executor(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("telemetry must not use the default executor")
+
+    monkeypatch.setattr(loop, "run_in_executor", fail_default_executor)
+
+    raw = await fetch_bounded_https_ipv4(
+        _URL,
+        canonical_host=_HOST,
+        provider_name=_PROVIDER,
+        user_agent=_USER_AGENT,
+        timeout=0.5,
+        max_bytes=10,
+        resolver_factory=_Resolver,
+        connector_factory=connector_factory,
+        session_factory=session_factory,
+        telemetry_sink=sink,
+    )
+
+    assert raw == b"ok"
+    await delivered.wait()
+    assert [event.outcome for event in telemetry] == ["success"]
+    _assert_resources_closed(connectors, sessions)
+
+
+@pytest.mark.asyncio
+async def test_transport_telemetry_blocking_sink_does_not_delay_gather(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = _Response(body=b"ok")
+    connectors, sessions, connector_factory, session_factory = _transport_factories(
+        response
+    )
+    dispatcher = bounded_https._TelemetryDispatcher(capacity=1)
+    monkeypatch.setattr(bounded_https, "_TELEMETRY_DISPATCHER", dispatcher)
+    loop = asyncio.get_running_loop()
+    loop_thread_id = threading.get_ident()
+    release_sink = threading.Event()
+    sink_started = asyncio.Event()
+    sink_finished = asyncio.Event()
+    sink_ran_on_loop = asyncio.Event()
+    telemetry: list[bounded_https.BoundedHTTPSAttemptTelemetry] = []
+
+    def slow_sink(event: bounded_https.BoundedHTTPSAttemptTelemetry) -> None:
+        if threading.get_ident() == loop_thread_id:
+            sink_ran_on_loop.set()
+            return
+        telemetry.append(event)
+        loop.call_soon_threadsafe(sink_started.set)
+        release_sink.wait()
+        loop.call_soon_threadsafe(sink_finished.set)
+
+    try:
+        (raw,) = await asyncio.gather(
+            fetch_bounded_https_ipv4(
+                _URL,
+                canonical_host=_HOST,
+                provider_name=_PROVIDER,
+                user_agent=_USER_AGENT,
+                timeout=0.5,
+                max_bytes=10,
+                resolver_factory=_Resolver,
+                connector_factory=connector_factory,
+                session_factory=session_factory,
+                telemetry_sink=slow_sink,
+            )
+        )
+
+        assert raw == b"ok"
+        assert not sink_ran_on_loop.is_set()
+        await sink_started.wait()
+        assert not sink_finished.is_set()
+        assert [event.outcome for event in telemetry] == ["success"]
+        _assert_resources_closed(connectors, sessions)
+    finally:
+        release_sink.set()
+
+    await sink_finished.wait()
+
+
+@pytest.mark.asyncio
+async def test_transport_telemetry_blocking_sink_does_not_delay_body_read_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body_read_started = asyncio.Event()
+    body_read_finalized = asyncio.Event()
+    response = _Response(
+        content=_Content(
+            blocker=asyncio.Event(),
+            started=body_read_started,
+            finalized=body_read_finalized,
+        )
+    )
+    connectors, sessions, connector_factory, session_factory = _transport_factories(
+        response
+    )
+    dispatcher = bounded_https._TelemetryDispatcher(capacity=1)
+    monkeypatch.setattr(bounded_https, "_TELEMETRY_DISPATCHER", dispatcher)
+    loop = asyncio.get_running_loop()
+    loop_thread_id = threading.get_ident()
+    release_sink = threading.Event()
+    sink_started = asyncio.Event()
+    sink_finished = asyncio.Event()
+    sink_ran_on_loop = asyncio.Event()
+    telemetry: list[bounded_https.BoundedHTTPSAttemptTelemetry] = []
+
+    def slow_sink(event: bounded_https.BoundedHTTPSAttemptTelemetry) -> None:
+        if threading.get_ident() == loop_thread_id:
+            sink_ran_on_loop.set()
+            return
+        telemetry.append(event)
+        loop.call_soon_threadsafe(sink_started.set)
+        release_sink.wait()
+        loop.call_soon_threadsafe(sink_finished.set)
+
+    gathered = asyncio.gather(
+        fetch_bounded_https_ipv4(
+            _URL,
+            canonical_host=_HOST,
+            provider_name=_PROVIDER,
+            user_agent=_USER_AGENT,
+            timeout=0.5,
+            max_bytes=10,
+            resolver_factory=_Resolver,
+            connector_factory=connector_factory,
+            session_factory=session_factory,
+            telemetry_sink=slow_sink,
+        )
+    )
+    try:
+        await body_read_started.wait()
+        gathered.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await gathered
+
+        assert body_read_finalized.is_set()
+        assert response.closed
+        assert not sink_ran_on_loop.is_set()
+        await sink_started.wait()
+        assert not sink_finished.is_set()
+        assert [event.outcome for event in telemetry] == ["cancelled"]
+        _assert_resources_closed(connectors, sessions)
+    finally:
+        release_sink.set()
+
+    await sink_finished.wait()
 
 
 @pytest.mark.asyncio

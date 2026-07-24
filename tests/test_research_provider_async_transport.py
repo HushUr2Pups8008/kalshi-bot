@@ -427,6 +427,58 @@ async def test_generic_web_search_work_is_bounded_and_waiters_cancel_cleanly() -
 
 
 @pytest.mark.asyncio
+async def test_google_and_duckduckgo_transport_emit_distinct_provider_labels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    telemetry: list[Any] = []
+    monkeypatch.setattr(
+        research_gate,
+        "_log_generic_search_transport_event",
+        telemetry.append,
+    )
+
+    google_response = _Response(body=_RSS)
+    google_connectors, google_sessions, google_connector_factory, google_session_factory = (
+        _transport_factories(google_response)
+    )
+    duck_response = _Response(body=_DUCK_HTML)
+    duck_connectors, duck_sessions, duck_connector_factory, duck_session_factory = (
+        _transport_factories(duck_response)
+    )
+
+    await research_gate._fetch_google_news_rss_ipv4(
+        "https://news.google.com/rss/search?q=private-google-query",
+        timeout=0.5,
+        max_bytes=300_000,
+        resolver_factory=_Resolver,
+        connector_factory=google_connector_factory,
+        session_factory=google_session_factory,
+    )
+    await research_gate._fetch_duckduckgo_lite_ipv4(
+        "https://lite.duckduckgo.com/lite/?q=private-duck-query",
+        timeout=0.5,
+        max_bytes=300_000,
+        resolver_factory=_Resolver,
+        connector_factory=duck_connector_factory,
+        session_factory=duck_session_factory,
+    )
+
+    for _ in range(200):
+        if len(telemetry) == 2:
+            break
+        await asyncio.sleep(0.005)
+    assert [(item.provider_name, item.outcome) for item in telemetry] == [
+        ("Google News RSS", "success"),
+        ("DuckDuckGo Lite", "success"),
+    ]
+    assert all(item.terminal_stage == "complete" for item in telemetry)
+    assert "private-google-query" not in repr(telemetry)
+    assert "private-duck-query" not in repr(telemetry)
+    assert all(connector.closed for connector in google_connectors + duck_connectors)
+    assert all(session.closed for session in google_sessions + duck_sessions)
+
+
+@pytest.mark.asyncio
 async def test_canonical_host_is_pinned_without_redirects_and_body_is_bounded() -> None:
     response = _Response()
     connectors, sessions, connector_factory, session_factory = _transport_factories(response)
