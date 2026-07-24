@@ -194,6 +194,44 @@ def _is_transient_request_exception(exc: requests.RequestException) -> bool:
     )
 
 
+def _require_execution_id(value: object, *, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Kalshi {field} must be a non-empty string")
+    return value.strip()
+
+
+def _optional_execution_timestamp(value: object, *, field: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"Kalshi {field} must be a non-negative integer")
+    return value
+
+
+def _optional_execution_limit(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 1_000:
+        raise ValueError("Kalshi fill limit must be an integer from 1 through 1000")
+    return value
+
+
+def _optional_execution_cursor(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or value == "":
+        raise ValueError("Kalshi fill cursor must be a non-empty string")
+    return value
+
+
+def _optional_execution_subaccount(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 63:
+        raise ValueError("Kalshi fill subaccount must be an integer from 0 through 63")
+    return value
+
+
 class KalshiSigningError(RuntimeError):
     """Raised when RSA-PSS signing fails with credentials configured."""
 
@@ -742,6 +780,73 @@ class KalshiRestClient:
         except Exception as exc:
             log.warning("get_open_positions failed: %s", exc)
             return []
+
+    # ── Authenticated execution receipts ─────────────────────────────────────
+
+    def get_order_receipt(self, order_id: str) -> dict[str, Any]:
+        """Fetch one explicit official order receipt without following redirects."""
+        requested_order_id = _require_execution_id(order_id, field="order_id")
+        endpoint = "/portfolio/orders/" + urllib.parse.quote(requested_order_id, safe="")
+        data = self._request("GET", endpoint, allow_redirects=False)
+        if not isinstance(data, dict):
+            raise ValueError("Kalshi order receipt response must be an object")
+
+        order = data.get("order")
+        if not isinstance(order, dict):
+            raise ValueError("Kalshi order receipt response missing order object")
+        returned_order_id = _require_execution_id(order.get("order_id"), field="order receipt order_id")
+        if returned_order_id != requested_order_id:
+            raise ValueError("Kalshi order receipt order_id mismatch")
+        return order
+
+    def get_fills_page(
+        self,
+        *,
+        order_id: str,
+        min_ts: int | None = None,
+        max_ts: int | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+        subaccount: int | None = None,
+    ) -> tuple[list[object], str | None]:
+        """Fetch one receipt page for one explicit order without following redirects."""
+        requested_order_id = _require_execution_id(order_id, field="order_id")
+        requested_min_ts = _optional_execution_timestamp(min_ts, field="min_ts")
+        requested_max_ts = _optional_execution_timestamp(max_ts, field="max_ts")
+        if (
+            requested_min_ts is not None
+            and requested_max_ts is not None
+            and requested_min_ts > requested_max_ts
+        ):
+            raise ValueError("Kalshi fill min_ts must not exceed max_ts")
+
+        params: dict[str, Any] = {"order_id": requested_order_id}
+        optional_params = {
+            "min_ts": requested_min_ts,
+            "max_ts": requested_max_ts,
+            "limit": _optional_execution_limit(limit),
+            "cursor": _optional_execution_cursor(cursor),
+            "subaccount": _optional_execution_subaccount(subaccount),
+        }
+        params.update({key: value for key, value in optional_params.items() if value is not None})
+
+        data = self._request(
+            "GET",
+            "/portfolio/fills",
+            params=params,
+            allow_redirects=False,
+        )
+        if not isinstance(data, dict):
+            raise ValueError("Kalshi fills response must be an object")
+
+        raw_fills = data.get("fills")
+        next_cursor = data.get("cursor")
+        if not isinstance(raw_fills, list) or not isinstance(next_cursor, str):
+            raise ValueError("Kalshi fills response has invalid pagination")
+
+        # Preserve unexpected receipt payloads verbatim so the dedicated ledger
+        # can durably quarantine them instead of discarding exchange evidence.
+        return raw_fills, next_cursor or None
 
     # ── Order placement ───────────────────────────────────────────────────────
 
