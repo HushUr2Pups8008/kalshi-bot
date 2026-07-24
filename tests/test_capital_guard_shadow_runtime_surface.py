@@ -134,7 +134,7 @@ def test_capital_guard_shadow_status_collector_only_missing_does_not_create_db(
 
     assert capsys.readouterr().out.strip() == (
         "capital_guard_shadow: capture=off (process-env) "
-        "collection=off (unwired-exact-source; requested=on:process-env) db=missing"
+        "collection=on (process-env) unwired-exact-source db=missing"
     )
     assert not db_path.exists()
 

@@ -2749,3 +2749,104 @@ def test_runtime_history_finds_legacy_bracket_BOOT_marker():
     assert sessions[0].version == "0.29.50"
     assert sessions[0].pid == 12345
     assert sessions[0].boot_ts == datetime(2026, 5, 9, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def test_capital_guard_shadow_status_uses_dotenv_when_running_env_omits_flags(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    for key in (
+        "ENABLE_CAPITAL_GUARD_SHADOW_CAPTURE",
+        "ENABLE_CAPITAL_GUARD_SHADOW_SETTLEMENT_COLLECTION",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            (
+                "ENABLE_CAPITAL_GUARD_SHADOW_CAPTURE=true",
+                "ENABLE_CAPITAL_GUARD_SHADOW_SETTLEMENT_COLLECTION=false",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    proc = _bot_proc(pid=2468)
+    monkeypatch.setattr(
+        botcheck,
+        "run_command",
+        lambda args: "/python main.py UNRELATED_FLAG=true",
+    )
+
+    botcheck.print_capital_guard_shadow_status(tmp_path, current_proc=proc)
+
+    assert capsys.readouterr().out.strip() == (
+        "capital_guard_shadow: capture=configured-on (.env fallback) "
+        "collection=configured-off (.env fallback) db=missing"
+    )
+
+
+def test_capital_guard_shadow_status_mixes_runtime_and_dotenv_provenance(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    for key in (
+        "ENABLE_CAPITAL_GUARD_SHADOW_CAPTURE",
+        "ENABLE_CAPITAL_GUARD_SHADOW_SETTLEMENT_COLLECTION",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    (tmp_path / ".env").write_text(
+        "ENABLE_CAPITAL_GUARD_SHADOW_SETTLEMENT_COLLECTION=true\n",
+        encoding="utf-8",
+    )
+    proc = _bot_proc(pid=2468)
+    monkeypatch.setattr(
+        botcheck,
+        "run_command",
+        lambda args: (
+            "/python main.py "
+            "ENABLE_CAPITAL_GUARD_SHADOW_CAPTURE=false "
+            "UNRELATED_FLAG=true"
+        ),
+    )
+
+    botcheck.print_capital_guard_shadow_status(tmp_path, current_proc=proc)
+
+    assert capsys.readouterr().out.strip() == (
+        "capital_guard_shadow: capture=off (runtime-process-env) "
+        "collection=configured-on (.env fallback) unwired-exact-source db=missing"
+    )
+
+
+def test_read_env_file_value_uses_last_duplicate_dotenv_declaration(tmp_path):
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "ENABLE_CAPITAL_GUARD_SHADOW_CAPTURE=false\n"
+        "ENABLE_CAPITAL_GUARD_SHADOW_CAPTURE=true\n",
+        encoding="utf-8",
+    )
+
+    assert (
+        botcheck._read_env_file_value(
+            env_path,
+            "ENABLE_CAPITAL_GUARD_SHADOW_CAPTURE",
+        )
+        == "true"
+    )
+
+
+def test_read_env_file_value_strips_dotenv_inline_comment(tmp_path):
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "ENABLE_CAPITAL_GUARD_SHADOW_CAPTURE=true # isolated only\n",
+        encoding="utf-8",
+    )
+
+    assert (
+        botcheck._read_env_file_value(
+            env_path,
+            "ENABLE_CAPITAL_GUARD_SHADOW_CAPTURE",
+        )
+        == "true"
+    )
