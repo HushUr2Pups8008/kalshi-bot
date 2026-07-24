@@ -1492,8 +1492,10 @@ def test_white_house_action_search_only_locks_at_contract_snapshot(monkeypatch):
         "2026 through Jul 18, 2026 checked at 10:00 AM ET on Jul 19, 2026"
     )
 
+    before_snapshot = datetime(2026, 7, 19, 13, 59, tzinfo=timezone.utc)
     pre_cutoff = _white_house_presidential_actions_search(
-        ResearchQuery(base.format(threshold=1), "official_resolution", "official_primary")
+        ResearchQuery(base.format(threshold=1), "official_resolution", "official_primary"),
+        now=before_snapshot,
     )
     locked = _white_house_presidential_actions_search(
         ResearchQuery(base.format(threshold=1), "official_resolution", "official_primary"),
@@ -1509,7 +1511,8 @@ def test_white_house_action_search_only_locks_at_contract_snapshot(monkeypatch):
         now=datetime(2026, 7, 19, 14, 0, 10, tzinfo=timezone.utc),
     )
     pending = _white_house_presidential_actions_search(
-        ResearchQuery(base.format(threshold=5), "official_resolution", "official_primary")
+        ResearchQuery(base.format(threshold=5), "official_resolution", "official_primary"),
+        now=before_snapshot,
     )
 
     assert pre_cutoff[0].supports_direction == "neutral"

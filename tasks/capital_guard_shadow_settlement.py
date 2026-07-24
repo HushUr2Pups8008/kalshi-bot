@@ -36,6 +36,8 @@ class StrictAsyncAuthoritativeSettlementSource(Protocol):
     async def get_settlement_exact(
         self,
         market_ref: MarketRef,
+        *,
+        prior_observation: SettlementObservation | None,
     ) -> SettlementObservation | None: ...
 
 
@@ -114,9 +116,21 @@ class CapitalGuardShadowSettlementCollector:
                 continue
 
             counts["checked"] += 1
+            if backlog.authoritative_head_error is not None:
+                result = self._store.record_settlement_attempt(
+                    backlog,
+                    attempted_at=attempted_at,
+                    status="quarantined",
+                    error_taxonomy="source_drift",
+                    error_sha256=_error_sha256("source_drift"),
+                    quarantine_reason="source_drift",
+                )
+                self._count_write_result(counts, result)
+                continue
             try:
                 observation = await self._source.get_settlement_exact(
-                    backlog.market_ref
+                    backlog.market_ref,
+                    prior_observation=backlog.prior_authoritative_observation,
                 )
             except SettlementNotFound as exc:
                 result = self._store.record_settlement_attempt(
