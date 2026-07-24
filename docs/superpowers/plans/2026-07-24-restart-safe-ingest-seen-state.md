@@ -233,11 +233,16 @@ async def run_rss_monitor(
     seen = load_seen_ids(seen_state_path, MAX_SEEN)
     while True:
         await asyncio.gather(*(poll_feed(url, callback, seen) for url in feeds), return_exceptions=True)
-        checkpoint_seen_ids(seen_state_path, seen, MAX_SEEN)
+        try:
+            checkpoint_seen_ids(seen_state_path, seen, MAX_SEEN)
+        except OSError:
+            log.warning(
+                "RSS seen-state checkpoint failed; retaining in-memory cache and will retry"
+            )
         await asyncio.sleep(poll_interval)
 ~~~
 
-Let a checkpoint OSError propagate to the monitor's existing task supervisor rather than silently reporting a successful durable checkpoint. The prior in-memory data remains valid for the current process.
+Catch only `OSError` around `checkpoint_seen_ids`. Log a generic warning that the monitor retains its in-memory cache and will retry, without a path, IDs, payload, or exception detail; then continue to sleep and retry on the next completed cycle.
 
 - [ ] **Step 5: Run RSS tests to verify GREEN**
 

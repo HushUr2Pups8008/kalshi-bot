@@ -173,6 +173,11 @@ async def run_rss_monitor(
     while True:
         tasks = [poll_feed(url, callback, seen) for url in feeds]
         await asyncio.gather(*tasks, return_exceptions=True)
-        checkpoint_seen_ids(seen_state_path, seen, MAX_SEEN)
+        try:
+            checkpoint_seen_ids(seen_state_path, seen, MAX_SEEN)
+        except OSError:
+            log.warning(
+                "RSS seen-state checkpoint failed; retaining in-memory cache and will retry"
+            )
         log.debug("RSS poll cycle complete, sleeping %ds", poll_interval)
         await asyncio.sleep(poll_interval)

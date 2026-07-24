@@ -24,10 +24,10 @@ Separate files avoid a cross-monitor read-modify-write race: primary RSS, fade-t
 
 1. A monitor starts and loads its own bounded ID cache.
 2. Existing poll_feed logic continues to mark each unseen item before invoking its callback.
-3. At the successful end of every monitor poll cycle, the monitor checkpoints its cache atomically.
+3. At the successful end of every monitor poll cycle, the monitor checkpoints its cache atomically. An RSS checkpoint `OSError` retains the in-memory cache, logs a generic retry warning, and continues to the next cycle.
 4. A later process starts with the checkpointed IDs, so retained old entries are suppressed before reaching the freshness gate.
 
-The checkpoint happens after the cycle. A crash before the checkpoint can re-deliver an item, which is preferable to losing a fresh item. Existing callback-failure semantics remain unchanged.
+The checkpoint happens after the cycle. A crash before the checkpoint can re-deliver an item, which is preferable to losing a fresh item. An RSS checkpoint `OSError` fails open: it retains the cache for monitor-lifetime deduplication, sleeps normally, and retries on the next completed cycle. Its warning contains no path, IDs, payload, or exception detail. Existing callback-failure semantics remain unchanged.
 
 ## Non-Goals
 
