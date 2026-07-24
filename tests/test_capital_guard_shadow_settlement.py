@@ -11,6 +11,7 @@ import sqlite3
 
 import pytest
 
+from kalshi import KalshiMarket
 from polymarket.settlement_reconciler import SettlementNotFound
 from tasks.capital_guard_shadow_settlement import (
     CapitalGuardShadowSettlementCollector,
@@ -29,6 +30,7 @@ from trading.capital_guard_shadow import (
     SettlementMarketKey,
     canonical_json,
 )
+from trading.authoritative_settlement_source import AuthoritativeSettlementSource
 from trading.fees import (
     POLYMARKET_US_2026_07_01,
     FeeRole,
@@ -172,6 +174,96 @@ async def test_source_correction_links_prior_source_hash_but_store_links_prior_r
         ).fetchone()[0]
     assert supersedes == prior_head.observation_sha256
     assert supersedes != prior.observation_sha256
+
+
+@pytest.mark.asyncio
+async def test_authoritative_source_correction_keeps_source_and_store_lineage_distinct(
+    tmp_path: Path,
+) -> None:
+    store = _initialized_store(tmp_path)
+    record = candidate()
+    _append_candidate(store, record)
+    market_ref = MarketRef(Venue.KALSHI, record.venue_market_id, record.venue_market_id)
+
+    def market(result: str) -> KalshiMarket:
+        return KalshiMarket(
+            ticker=record.venue_market_id,
+            title="authoritative correction test",
+            yes_bid=0.0,
+            yes_ask=0.0,
+            yes_price=0.0,
+            volume=0,
+            open_interest=0,
+            close_time="2026-07-23T00:00:00+00:00",
+            status="settled",
+            result=result,
+            expiration_time="2026-07-23T00:00:00+00:00",
+            raw_payload_hash="a" * 64,
+        )
+
+    class KalshiClient:
+        def __init__(self) -> None:
+            self.values = [market("yes"), market("no")]
+
+        async def get_market_exact_bounded(
+            self, ticker: str, *, timeout_seconds: float
+        ) -> KalshiMarket:
+            assert ticker == record.venue_market_id
+            assert timeout_seconds > 0
+            return self.values.pop(0)
+
+    class RecordingSource:
+        def __init__(self, adapter: AuthoritativeSettlementSource) -> None:
+            self.adapter = adapter
+            self.observations: list[SettlementObservation] = []
+
+        async def get_settlement_exact(
+            self,
+            requested_ref: MarketRef,
+            *,
+            prior_observation: SettlementObservation | None,
+        ) -> SettlementObservation | None:
+            observation = await self.adapter.get_settlement_exact(
+                requested_ref, prior_observation=prior_observation
+            )
+            if observation is not None:
+                self.observations.append(observation)
+            return observation
+
+    times = iter(
+        (
+            NOW + timedelta(days=1),
+            NOW + timedelta(days=1, minutes=1),
+            NOW + timedelta(days=1, minutes=2),
+        )
+    )
+    source = RecordingSource(
+        AuthoritativeSettlementSource(
+            kalshi_client=KalshiClient(),
+            polymarket_client=object(),
+            clock=lambda: next(times),
+        )
+    )
+    collector = CapitalGuardShadowSettlementCollector(store=store, source=source)
+
+    first_result = await collector.run_once()
+    second_result = await collector.run_once()
+
+    assert first_result.inserted_observations == second_result.inserted_observations == 1
+    assert len(source.observations) == 2
+    assert (
+        source.observations[1].supersedes_observation_sha256
+        == source.observations[0].observation_sha256
+    )
+    with sqlite3.connect(store.db_path) as conn:
+        rows = conn.execute(
+            "SELECT observation_sha256, authoritative_observation_sha256, "
+            "supersedes_observation_sha256 "
+            "FROM capital_guard_shadow_observations ORDER BY observed_at"
+        ).fetchall()
+    assert rows[1][2] == rows[0][0]
+    assert rows[1][2] != source.observations[0].observation_sha256
+    assert rows[1][1] == source.observations[1].observation_sha256
 
 
 @pytest.mark.asyncio

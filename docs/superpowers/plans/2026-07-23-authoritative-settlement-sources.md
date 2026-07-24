@@ -22,8 +22,8 @@
 - Runtime databases, `.env`, `data/matcher_token_weights.json`, `logs/backups/`, and `logs/state/` stay out of commits.
 - Each bounded client validates its own finite positive timeout and strict configured base before an injected or real fetcher. It supplies a named positive byte cap on every call; it never falls back to the legacy synchronous requests clients.
 - At the source boundary, malformed client payload, endpoint schema, slug, ID, and response identity validation failures become `SettlementDriftError`; they must reach the collector's `source_drift` quarantine taxonomy rather than `internal_source_error`.
-- Polymarket rejects any conflicting `id`, `market_id`, or `marketId` before enriching a settlement payload. It canonicalizes the verified ID to `MarketRef.venue_market_id` before normalization so numeric/string representation variation cannot create a correction.
-- For an unchanged authoritative payload, the source reuses the prior observation's `effective_at` while recording a new `observed_at`. It assigns a new effective time only after a semantic change, then links the new source observation to the prior source hash.
+- Polymarket rejects any conflicting `id`, `market_id`, or `marketId` before enriching a settlement payload. It accepts only an exact canonical string or non-boolean integer decimal representation of the verified ID, then injects `MarketRef.venue_market_id` before normalization so representation variation cannot create a correction.
+- For an unchanged authoritative payload, the source reuses the prior observation's `effective_at` while recording a new `observed_at`. It assigns a new effective time only after a semantic change, then links the new source observation to the prior source hash. A prior observation with a different venue source ID or rules version is source drift before I/O, not a correction candidate.
 
 ---
 
@@ -494,7 +494,7 @@ async def test_source_disambiguates_polymarket_settlement_404_with_one_deadline(
 async def test_source_confirms_polymarket_canonical_identity_for_settlement_200():
     client = FakePolymarketClient(
         settlement={"slug": "exact", "settlement": 1},
-        market={"slug": "exact", "id": 42},
+        market={"slug": "exact", "id": "42"},
     )
     source = AuthoritativeSettlementSource(
         kalshi_client=FailingKalshiClient(),
@@ -507,7 +507,7 @@ async def test_source_confirms_polymarket_canonical_identity_for_settlement_200(
         MarketRef(Venue.POLYMARKET_US, "42", "exact"), prior_observation=None
     )
     assert observation is not None
-    assert observation.authoritative_payload["id"] == "42"
+    assert json.loads(observation.canonical_payload_json)["id"] == "42"
     assert len(client.timeout_arguments) == 2
     assert client.timeout_arguments[1] < client.timeout_arguments[0]
 ```

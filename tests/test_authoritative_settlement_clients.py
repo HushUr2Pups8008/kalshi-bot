@@ -2,11 +2,22 @@ from __future__ import annotations
 
 import json
 import urllib.error
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from kalshi import KalshiMarket
 from kalshi.rest_client import KalshiRestClient
 from polymarket.public_client import PolymarketPublicClient
+from polymarket.settlement import normalize_polymarket_settlement
+from polymarket.settlement_reconciler import SettlementNotFound
+from trading.authoritative_settlement_source import (
+    POLYMARKET_SETTLEMENT_RULES_VERSION,
+    POLYMARKET_SETTLEMENT_SOURCE_ID,
+    AuthoritativeSettlementSource,
+)
+from trading.settlement import MarketOutcome, SettlementDriftError
+from trading.venue import MarketRef, Venue
 
 
 def _kalshi_market_payload(ticker: str) -> bytes:
@@ -510,3 +521,456 @@ async def test_polymarket_bounded_exact_reads_propagate_non_404_statuses(
         )
 
     assert exc_info.value.code == status
+
+
+UTC = timezone.utc
+SOURCE_NOW = datetime(2026, 7, 23, 18, 0, tzinfo=UTC)
+
+
+def _source_kalshi_market(
+    *,
+    ticker: str = "KXTEST-1",
+    status: str = "settled",
+    result: str = "yes",
+) -> KalshiMarket:
+    return KalshiMarket(
+        ticker=ticker,
+        title="Authoritative source test market",
+        yes_bid=0.0,
+        yes_ask=0.0,
+        yes_price=0.0,
+        volume=0,
+        open_interest=0,
+        close_time="2026-07-23T17:00:00+00:00",
+        status=status,
+        result=result,
+        expiration_time="2026-07-23T17:00:00+00:00",
+        raw_payload_hash="a" * 64,
+    )
+
+
+class _FakeKalshiClient:
+    def __init__(self, values: list[object]) -> None:
+        self.values = values
+        self.calls: list[tuple[str, float]] = []
+
+    async def get_market_exact_bounded(
+        self, ticker: str, *, timeout_seconds: float
+    ) -> KalshiMarket | None:
+        self.calls.append((ticker, timeout_seconds))
+        value = self.values.pop(0)
+        if isinstance(value, BaseException):
+            raise value
+        return value  # type: ignore[return-value]
+
+
+class _FakePolymarketClient:
+    def __init__(self, settlements: list[object], markets: list[object]) -> None:
+        self.settlements = settlements
+        self.markets = markets
+        self.settlement_calls: list[tuple[str, float]] = []
+        self.market_calls: list[tuple[str, float]] = []
+
+    async def get_market_settlement_exact_bounded(
+        self, slug: str, *, timeout_seconds: float
+    ) -> dict[str, object] | None:
+        self.settlement_calls.append((slug, timeout_seconds))
+        value = self.settlements.pop(0)
+        if isinstance(value, BaseException):
+            raise value
+        return value  # type: ignore[return-value]
+
+    async def get_market_by_slug_exact_bounded(
+        self, slug: str, *, timeout_seconds: float
+    ) -> dict[str, object] | None:
+        self.market_calls.append((slug, timeout_seconds))
+        value = self.markets.pop(0)
+        if isinstance(value, BaseException):
+            raise value
+        return value  # type: ignore[return-value]
+
+
+def _source(
+    kalshi: _FakeKalshiClient,
+    polymarket: _FakePolymarketClient,
+    *,
+    clock=lambda: SOURCE_NOW,
+    monotonic=lambda: 0.0,
+    timeout_seconds: float = 3.0,
+) -> AuthoritativeSettlementSource:
+    return AuthoritativeSettlementSource(
+        kalshi_client=kalshi,
+        polymarket_client=polymarket,
+        clock=clock,
+        monotonic=monotonic,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status",
+    (
+        "initialized",
+        "inactive",
+        "active",
+        "closed",
+        "determined",
+        "disputed",
+        "amended",
+        "unopened",
+        "open",
+        "paused",
+    ),
+)
+async def test_source_returns_none_only_for_known_kalshi_nonterminal_statuses(
+    status: str,
+) -> None:
+    kalshi = _FakeKalshiClient([_source_kalshi_market(status=status)])
+    polymarket = _FakePolymarketClient([], [])
+
+    observation = await _source(kalshi, polymarket).get_settlement_exact(
+        MarketRef(Venue.KALSHI, "KXTEST-1", "KXTEST-1"), prior_observation=None
+    )
+
+    assert observation is None
+    assert kalshi.calls == [("KXTEST-1", 3.0)]
+
+
+@pytest.mark.asyncio
+async def test_source_normalizes_exact_terminal_kalshi_market() -> None:
+    kalshi = _FakeKalshiClient([_source_kalshi_market()])
+    polymarket = _FakePolymarketClient([], [])
+
+    observation = await _source(kalshi, polymarket).get_settlement_exact(
+        MarketRef(Venue.KALSHI, "KXTEST-1", "KXTEST-1"), prior_observation=None
+    )
+
+    assert observation is not None
+    assert observation.outcome is MarketOutcome.YES
+    assert observation.source_id == "kalshi-market-api"
+
+
+@pytest.mark.asyncio
+async def test_source_rejects_kalshi_alias_or_returned_ticker_mismatch() -> None:
+    kalshi = _FakeKalshiClient([_source_kalshi_market(ticker="KXOTHER-1")])
+    polymarket = _FakePolymarketClient([], [])
+    source = _source(kalshi, polymarket)
+
+    with pytest.raises(SettlementDriftError, match="alias"):
+        await source.get_settlement_exact(
+            MarketRef(Venue.KALSHI, "KXTEST-1", "other"), prior_observation=None
+        )
+    assert kalshi.calls == []
+
+    with pytest.raises(SettlementDriftError, match="ticker"):
+        await source.get_settlement_exact(
+            MarketRef(Venue.KALSHI, "KXTEST-1", "KXTEST-1"), prior_observation=None
+        )
+
+
+@pytest.mark.asyncio
+async def test_source_rejects_unknown_or_missing_kalshi_terminal_state() -> None:
+    kalshi = _FakeKalshiClient(
+        [_source_kalshi_market(status="mystery"), None]
+    )
+    polymarket = _FakePolymarketClient([], [])
+    source = _source(kalshi, polymarket)
+    ref = MarketRef(Venue.KALSHI, "KXTEST-1", "KXTEST-1")
+
+    with pytest.raises(SettlementDriftError, match="status"):
+        await source.get_settlement_exact(ref, prior_observation=None)
+    with pytest.raises(SettlementNotFound):
+        await source.get_settlement_exact(ref, prior_observation=None)
+
+
+@pytest.mark.asyncio
+async def test_source_converts_only_kalshi_client_value_error_to_drift() -> None:
+    kalshi = _FakeKalshiClient([ValueError("malformed"), TimeoutError("slow")])
+    polymarket = _FakePolymarketClient([], [])
+    source = _source(kalshi, polymarket)
+    ref = MarketRef(Venue.KALSHI, "KXTEST-1", "KXTEST-1")
+
+    with pytest.raises(SettlementDriftError):
+        await source.get_settlement_exact(ref, prior_observation=None)
+    with pytest.raises(TimeoutError, match="slow"):
+        await source.get_settlement_exact(ref, prior_observation=None)
+
+
+@pytest.mark.asyncio
+async def test_source_confirms_polymarket_identity_for_settlement() -> None:
+    kalshi = _FakeKalshiClient([])
+    polymarket = _FakePolymarketClient(
+        [{"slug": "exact", "settlement": 1}],
+        [{"slug": "exact", "id": "42"}],
+    )
+    ticks = iter((0.0, 0.1, 0.2))
+    source = _source(kalshi, polymarket, monotonic=lambda: next(ticks))
+
+    observation = await source.get_settlement_exact(
+        MarketRef(Venue.POLYMARKET_US, "42", "exact"), prior_observation=None
+    )
+
+    assert observation is not None
+    assert observation.outcome is MarketOutcome.YES
+    assert json.loads(observation.canonical_payload_json)["id"] == "42"
+    assert polymarket.settlement_calls == [("exact", 2.9)]
+    assert polymarket.market_calls == [("exact", 2.8)]
+
+
+@pytest.mark.asyncio
+async def test_source_returns_none_for_polymarket_404_only_after_identity_read() -> None:
+    kalshi = _FakeKalshiClient([])
+    polymarket = _FakePolymarketClient(
+        [None], [{"slug": "exact", "id": "42"}]
+    )
+    source = _source(kalshi, polymarket)
+
+    observation = await source.get_settlement_exact(
+        MarketRef(Venue.POLYMARKET_US, "42", "exact"), prior_observation=None
+    )
+
+    assert observation is None
+    assert len(polymarket.settlement_calls) == len(polymarket.market_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_source_fails_closed_for_polymarket_unresolved_identity_paths() -> None:
+    ref = MarketRef(Venue.POLYMARKET_US, "42", "exact")
+
+    with pytest.raises(SettlementNotFound):
+        await _source(
+            _FakeKalshiClient([]), _FakePolymarketClient([None], [None])
+        ).get_settlement_exact(ref, prior_observation=None)
+    with pytest.raises(SettlementDriftError, match="identity"):
+        await _source(
+            _FakeKalshiClient([]),
+            _FakePolymarketClient(
+                [{"slug": "exact", "settlement": 1}], [None]
+            ),
+        ).get_settlement_exact(ref, prior_observation=None)
+    with pytest.raises(SettlementDriftError, match="identity"):
+        await _source(
+            _FakeKalshiClient([]),
+            _FakePolymarketClient(
+                [{"slug": "exact", "settlement": 1}],
+                [{"slug": "exact", "id": "43"}],
+            ),
+        ).get_settlement_exact(ref, prior_observation=None)
+
+
+@pytest.mark.asyncio
+async def test_source_rejects_polymarket_conflicting_settlement_id_before_normalizing() -> None:
+    source = _source(
+        _FakeKalshiClient([]),
+        _FakePolymarketClient(
+            [{"slug": "exact", "settlement": 1, "marketId": "43"}],
+            [{"slug": "exact", "id": "42"}],
+        ),
+    )
+
+    with pytest.raises(SettlementDriftError, match="canonical"):
+        await source.get_settlement_exact(
+            MarketRef(Venue.POLYMARKET_US, "42", "exact"), prior_observation=None
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", ("id", "market_id", "marketId"))
+async def test_source_canonicalizes_equivalent_numeric_polymarket_settlement_ids(
+    key: str,
+) -> None:
+    source = _source(
+        _FakeKalshiClient([]),
+        _FakePolymarketClient(
+            [{"slug": "exact", "settlement": 1, key: 42}],
+            [{"slug": "exact", "id": "42"}],
+        ),
+    )
+
+    observation = await source.get_settlement_exact(
+        MarketRef(Venue.POLYMARKET_US, "42", "exact"), prior_observation=None
+    )
+
+    assert observation is not None
+    payload = json.loads(observation.canonical_payload_json)
+    assert payload["id"] == "42"
+    assert "market_id" not in payload and "marketId" not in payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", (True, 42.0, "042", " 42", "42 "))
+async def test_source_rejects_noncanonical_polymarket_settlement_ids(
+    value: object,
+) -> None:
+    source = _source(
+        _FakeKalshiClient([]),
+        _FakePolymarketClient(
+            [{"slug": "exact", "settlement": 1, "id": value}],
+            [{"slug": "exact", "id": "42"}],
+        ),
+    )
+
+    with pytest.raises(SettlementDriftError, match="canonical"):
+        await source.get_settlement_exact(
+            MarketRef(Venue.POLYMARKET_US, "42", "exact"), prior_observation=None
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "market_ref",
+    (
+        MarketRef(Venue.POLYMARKET_US, "not-numeric", "exact"),
+        MarketRef(Venue.POLYMARKET_US, "42", "bad/slug"),
+    ),
+)
+async def test_source_rejects_invalid_polymarket_identity_before_io(
+    market_ref: MarketRef,
+) -> None:
+    polymarket = _FakePolymarketClient([], [])
+
+    with pytest.raises(SettlementDriftError):
+        await _source(_FakeKalshiClient([]), polymarket).get_settlement_exact(
+            market_ref, prior_observation=None
+        )
+
+    assert polymarket.settlement_calls == polymarket.market_calls == []
+
+
+@pytest.mark.asyncio
+async def test_source_rejects_non_text_polymarket_alias_before_io() -> None:
+    polymarket = _FakePolymarketClient([], [])
+
+    with pytest.raises(SettlementDriftError, match="slug"):
+        await _source(_FakeKalshiClient([]), polymarket).get_settlement_exact(
+            MarketRef(Venue.POLYMARKET_US, "42", None),  # type: ignore[arg-type]
+            prior_observation=None,
+        )
+
+    assert polymarket.settlement_calls == polymarket.market_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("rules_version", "source_id"),
+    (
+        (POLYMARKET_SETTLEMENT_RULES_VERSION, "foreign-source"),
+        ("foreign-rules", POLYMARKET_SETTLEMENT_SOURCE_ID),
+    ),
+)
+async def test_source_rejects_foreign_prior_provenance_before_io(
+    rules_version: str,
+    source_id: str,
+) -> None:
+    ref = MarketRef(Venue.POLYMARKET_US, "42", "exact")
+    prior = normalize_polymarket_settlement(
+        ref,
+        {"slug": "exact", "id": "42", "settlement": 1},
+        observed_at=SOURCE_NOW,
+        effective_at=SOURCE_NOW,
+        rules_version=rules_version,
+        source_id=source_id,
+    )
+    polymarket = _FakePolymarketClient([], [])
+
+    with pytest.raises(SettlementDriftError, match="provenance"):
+        await _source(_FakeKalshiClient([]), polymarket).get_settlement_exact(
+            ref, prior_observation=prior
+        )
+
+    assert polymarket.settlement_calls == polymarket.market_calls == []
+
+
+@pytest.mark.asyncio
+async def test_source_rejects_non_exact_polymarket_settlement_slug() -> None:
+    source = _source(
+        _FakeKalshiClient([]),
+        _FakePolymarketClient(
+            [{"slug": "other", "settlement": 1}],
+            [{"slug": "exact", "id": "42"}],
+        ),
+    )
+
+    with pytest.raises(SettlementDriftError, match="alias"):
+        await source.get_settlement_exact(
+            MarketRef(Venue.POLYMARKET_US, "42", "exact"), prior_observation=None
+        )
+
+
+@pytest.mark.asyncio
+async def test_source_polymarket_deadline_stops_before_second_read() -> None:
+    polymarket = _FakePolymarketClient(
+        [None], [{"slug": "exact", "id": "42"}]
+    )
+    ticks = iter((0.0, 0.0, 1.0))
+    source = _source(
+        _FakeKalshiClient([]),
+        polymarket,
+        monotonic=lambda: next(ticks),
+        timeout_seconds=0.5,
+    )
+
+    with pytest.raises(TimeoutError, match="deadline"):
+        await source.get_settlement_exact(
+            MarketRef(Venue.POLYMARKET_US, "42", "exact"), prior_observation=None
+        )
+    assert len(polymarket.settlement_calls) == 1
+    assert polymarket.market_calls == []
+
+
+@pytest.mark.asyncio
+async def test_source_converts_only_polymarket_client_value_error_to_drift() -> None:
+    ref = MarketRef(Venue.POLYMARKET_US, "42", "exact")
+    source = _source(
+        _FakeKalshiClient([]),
+        _FakePolymarketClient([ValueError("malformed"), TimeoutError("slow")], []),
+    )
+
+    with pytest.raises(SettlementDriftError):
+        await source.get_settlement_exact(ref, prior_observation=None)
+    with pytest.raises(TimeoutError, match="slow"):
+        await source.get_settlement_exact(ref, prior_observation=None)
+
+
+@pytest.mark.asyncio
+async def test_source_stabilizes_identical_polymarket_poll_and_links_change() -> None:
+    kalshi = _FakeKalshiClient([])
+    polymarket = _FakePolymarketClient(
+        [
+            {"slug": "exact", "settlement": 1},
+            {"slug": "exact", "settlement": 1},
+            {"slug": "exact", "settlement": 0},
+        ],
+        [
+            {"slug": "exact", "id": "42"},
+            {"slug": "exact", "id": "42"},
+            {"slug": "exact", "id": "42"},
+        ],
+    )
+    times = iter(
+        (
+            SOURCE_NOW,
+            SOURCE_NOW + timedelta(minutes=1),
+            SOURCE_NOW + timedelta(minutes=2),
+            SOURCE_NOW + timedelta(minutes=3),
+        )
+    )
+    source = _source(kalshi, polymarket, clock=lambda: next(times))
+    ref = MarketRef(Venue.POLYMARKET_US, "42", "exact")
+
+    first = await source.get_settlement_exact(ref, prior_observation=None)
+    assert first is not None
+    identical = await source.get_settlement_exact(ref, prior_observation=first)
+    changed = await source.get_settlement_exact(ref, prior_observation=first)
+
+    assert identical is not None
+    assert identical.observation_sha256 == first.observation_sha256
+    assert identical.supersedes_observation_sha256 is None
+    assert identical.effective_at == first.effective_at
+    assert changed is not None
+    assert changed.outcome is MarketOutcome.NO
+    assert changed.supersedes_observation_sha256 == first.observation_sha256
+    assert changed.observed_at == changed.effective_at == SOURCE_NOW + timedelta(
+        minutes=3
+    )
