@@ -42,9 +42,10 @@ from analysis.generic_search_circuit import (
 )
 from config import cfg
 from utils.bounded_https import (
+    BoundedHTTPSAttemptTelemetry,
     _validated_global_ipv4_addresses as _shared_validated_global_ipv4_addresses,
+    fetch_bounded_https_ipv4,
 )
-from utils.bounded_https import fetch_bounded_https_ipv4
 from utils.logger import get_logger
 from utils.research_gaps import research_gap_query_intent, research_questions_for_skip
 from utils.research_evidence_quality import (
@@ -62,6 +63,11 @@ from utils.research_evidence_quality import (
 log = get_logger("research_gate")
 _GENERIC_SEARCH_CIRCUIT: GenericSearchCircuit | None = None
 _GENERIC_WEB_SEARCH_MAX_CONCURRENCY = 4
+_GENERIC_WEB_SEARCH_SLOW_ADMISSION_MS = 100
+_GENERIC_SEARCH_TRANSPORT_PROVIDER_LABELS = {
+    "Google News RSS": "google_news_rss",
+    "DuckDuckGo Lite": "duckduckgo_lite",
+}
 
 
 @dataclass(frozen=True)
@@ -127,6 +133,40 @@ def _reset_generic_web_search_work_limiters_for_tests() -> None:
         ):
             raise RuntimeError("cannot reset active generic web search work limiters")
         _GENERIC_WEB_SEARCH_WORK_LIMITERS.clear()
+
+
+def _log_generic_search_transport_event(event: BoundedHTTPSAttemptTelemetry) -> None:
+    provider = _GENERIC_SEARCH_TRANSPORT_PROVIDER_LABELS.get(
+        event.provider_name,
+        "other",
+    )
+    if event.outcome in {"timeout", "error"}:
+        log_method = log.warning
+    elif event.outcome == "success" and (
+        event.admission_wait_ms < _GENERIC_WEB_SEARCH_SLOW_ADMISSION_MS
+    ):
+        log_method = log.debug
+    else:
+        log_method = log.info
+    log_method(
+        "[GENERIC_SEARCH_TRANSPORT] provider=%s outcome=%s terminal_stage=%s "
+        "budget_ms=%d total_ms=%d admission_wait_ms=%d dns_ms=%s "
+        "response_headers_ms=%s body_read_ms=%s http_status=%s bytes_read=%s "
+        "error_class=%s limiter_capacity=%d",
+        provider,
+        event.outcome,
+        event.terminal_stage,
+        event.budget_ms,
+        event.total_ms,
+        event.admission_wait_ms,
+        event.dns_ms,
+        event.response_headers_ms,
+        event.body_read_ms,
+        event.http_status,
+        event.bytes_read,
+        event.error_class,
+        _GENERIC_WEB_SEARCH_MAX_CONCURRENCY,
+    )
 
 
 def _log_generic_search_circuit_event(event: GenericSearchCircuitEvent) -> None:
@@ -3471,6 +3511,7 @@ async def _fetch_bounded_https_ipv4(
         resolver_factory=resolver_factory,
         connector_factory=connector_factory,
         session_factory=session_factory,
+        telemetry_sink=_log_generic_search_transport_event,
     )
 
 
