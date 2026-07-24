@@ -111,7 +111,11 @@ from kalshi.websocket_client import KalshiWebSocketClient
 from kalshi.source_hints import build_market_source_hint_diagnostics
 from analysis.evidence_types import Evidence
 from tasks.accumulation_task import AccumulationTask
-from tasks.blend_task import BlendTask, TradeCandidate
+from tasks.blend_task import (
+    BlendTask,
+    OpenExposureDrawdownSnapshot,
+    TradeCandidate,
+)
 from tasks.calibration_task import CalibrationTask
 from tasks.structural_task import StructuralTask
 from trading.executor import TradeExecutor
@@ -895,7 +899,7 @@ class TradingBot:
         self._blend_task = BlendTask(
             trading_queue=self._trading_queue,
             calibration=self._calibration_task,
-            open_exposure_drawdown_provider=lambda: _paper_open_exposure_drawdown_pct(
+            open_exposure_drawdown_provider=lambda: _paper_open_exposure_drawdown_snapshot(
                 self.paper
             ),
             capital_guard_capture_sink=self._capital_guard_shadow_capture_sink,
@@ -2355,7 +2359,7 @@ class TradingBot:
             calibration=self._calibration_task,
             logger=trade_log,
             is_paper_mode=True,
-            open_exposure_drawdown_provider=lambda: _paper_open_exposure_drawdown_pct(
+            open_exposure_drawdown_provider=lambda: _paper_open_exposure_drawdown_snapshot(
                 self.paper
             ),
             capital_guard_capture_sink=getattr(
@@ -3896,30 +3900,155 @@ async def async_main() -> None:
         runtime_guard.release()
 
 
-def _paper_open_exposure_drawdown_pct(paper: PaperTrader) -> float:
-    """Return conservative MTM drawdown for pre-entry readiness gating."""
-    if cfg.bankroll <= 0:
-        return 1.0
+def _paper_open_exposure_drawdown_snapshot(
+    paper: PaperTrader,
+) -> OpenExposureDrawdownSnapshot:
+    """Return the conservative G7 input with compact mark provenance."""
+    observed_at = datetime.now(timezone.utc).isoformat()
+    provider = "scripts.mark_open_positions"
+    try:
+        configured_bankroll = float(cfg.bankroll)
+    except (TypeError, ValueError):
+        configured_bankroll = None
+    if (
+        configured_bankroll is None
+        or not math.isfinite(configured_bankroll)
+        or configured_bankroll <= 0
+    ):
+        return _paper_open_exposure_drawdown_fallback(
+            configured_bankroll=_finite_float_or_none(configured_bankroll),
+            fallback_status="invalid_configured_bankroll",
+            observed_at=observed_at,
+        )
 
     from scripts.mark_open_positions import compute_open_position_marks
 
     try:
         marks = compute_open_position_marks(paper.db_path)
-        notional = paper.get_notional_bankroll()
-        marked_value = None if marks is None else marks.get("marked_value", 0.0)
-        marked_value = float(marked_value)
+        if marks is None:
+            return _paper_open_exposure_drawdown_fallback(
+                configured_bankroll=configured_bankroll,
+                fallback_status="marks_unavailable",
+                observed_at=observed_at,
+            )
+        notional_bankroll = float(paper.get_notional_bankroll())
+        marked_value = float(marks.get("marked_value", 0.0))
     except Exception as exc:
         log.warning(
             "Open exposure drawdown unavailable; readiness will fail closed: %s",
             exc,
         )
-        return 1.0
+        return _paper_open_exposure_drawdown_fallback(
+            configured_bankroll=configured_bankroll,
+            fallback_status="mark_error",
+            observed_at=observed_at,
+        )
 
-    if not math.isfinite(notional) or not math.isfinite(marked_value):
-        return 1.0
+    if not math.isfinite(notional_bankroll) or not math.isfinite(marked_value):
+        return _paper_open_exposure_drawdown_fallback(
+            configured_bankroll=configured_bankroll,
+            notional_bankroll=_finite_float_or_none(notional_bankroll),
+            marked_value=_finite_float_or_none(marked_value),
+            fallback_status="invalid_mark",
+            observed_at=observed_at,
+        )
 
-    mtm_equity = notional + marked_value
-    return max(0.0, (cfg.bankroll - mtm_equity) / cfg.bankroll)
+    priced_count = _nonnegative_mark_count(marks, "priced_count")
+    unpriced_count = _nonnegative_mark_count(marks, "unpriced_count")
+    snapshot_fallback_count = _nonnegative_mark_count(
+        marks,
+        "snapshot_fallback_count",
+    )
+    if unpriced_count is None or snapshot_fallback_count is None:
+        fallback_status = "mark_metadata_unavailable"
+    elif unpriced_count > 0 or snapshot_fallback_count > 0:
+        fallback_status = "degraded_mark"
+    else:
+        fallback_status = "none"
+    mtm_equity = notional_bankroll + marked_value
+    return OpenExposureDrawdownSnapshot(
+        drawdown_pct=max(
+            0.0,
+            (configured_bankroll - mtm_equity) / configured_bankroll,
+        ),
+        configured_bankroll=configured_bankroll,
+        notional_bankroll=notional_bankroll,
+        marked_value=marked_value,
+        total_entry_cost=_optional_mark_float(marks, "total_cost"),
+        unknown_entry_cost=_optional_mark_float(marks, "unknown_cost"),
+        priced_count=priced_count,
+        unpriced_count=unpriced_count,
+        snapshot_fallback_count=snapshot_fallback_count,
+        valuation_basis="legacy_marked_value_pre_exit_fees",
+        unpriced_positions_valued_at_zero=True,
+        provider=provider,
+        fallback_status=fallback_status,
+        observed_at=observed_at,
+        valuation_as_of=_optional_mark_text(marks, "as_of"),
+    )
+
+
+def _paper_open_exposure_drawdown_pct(paper: PaperTrader) -> float:
+    """Return the scalar G7 value for legacy callers."""
+    return _paper_open_exposure_drawdown_snapshot(paper).drawdown_pct
+
+
+def _paper_open_exposure_drawdown_fallback(
+    *,
+    configured_bankroll: float | None,
+    fallback_status: str,
+    observed_at: str,
+    notional_bankroll: float | None = None,
+    marked_value: float | None = None,
+) -> OpenExposureDrawdownSnapshot:
+    return OpenExposureDrawdownSnapshot(
+        drawdown_pct=1.0,
+        configured_bankroll=configured_bankroll,
+        notional_bankroll=notional_bankroll,
+        marked_value=marked_value,
+        total_entry_cost=None,
+        unknown_entry_cost=None,
+        priced_count=None,
+        unpriced_count=None,
+        snapshot_fallback_count=None,
+        valuation_basis="unavailable",
+        unpriced_positions_valued_at_zero=None,
+        provider="scripts.mark_open_positions",
+        fallback_status=fallback_status,
+        observed_at=observed_at,
+        valuation_as_of=None,
+    )
+
+
+def _finite_float_or_none(value: float | None) -> float | None:
+    return value if value is not None and math.isfinite(value) else None
+
+
+def _optional_mark_float(marks: dict, key: str) -> float | None:
+    value = marks.get(key)
+    if value is None:
+        return None
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _nonnegative_mark_count(marks: dict, key: str) -> int | None:
+    value = marks.get(key)
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
+
+
+def _optional_mark_text(marks: dict, key: str) -> str | None:
+    value = marks.get(key)
+    return value if isinstance(value, str) and value.strip() else None
 
 
 def _check_go_live_gates(paper: PaperTrader) -> list[str]:

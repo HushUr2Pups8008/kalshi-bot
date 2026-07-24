@@ -84,6 +84,13 @@ class TestLogGateSummary:
             g1_threshold=0.10,
             g4_threshold=0.20,
             gate_chain=["G4: rc=0.15 < 0.20 FAIL", "G1: sc=0.04 < 0.10 FAIL (fail-safe)"],
+            g7_mark_snapshot={
+                "drawdown_pct": 0.21,
+                "threshold_pct": 0.20,
+                "provider": "scripts.mark_open_positions",
+                "fallback_status": "none",
+                "observed_at": "2026-07-24T00:00:00+00:00",
+            },
         )
         import json
         line = (tmp_path / "trades.jsonl").read_text(encoding="utf-8").strip().splitlines()[-1]
@@ -94,6 +101,31 @@ class TestLogGateSummary:
             "G4: rc=0.15 < 0.20 FAIL", "G1: sc=0.04 < 0.10 FAIL (fail-safe)"
         ]
         assert rec["scaled_confidence"] == pytest.approx(0.04)
+        assert rec["g7_mark_snapshot"]["drawdown_pct"] == pytest.approx(0.21)
+        assert rec["g7_mark_snapshot"]["provider"] == "scripts.mark_open_positions"
+
+    def test_skipped_writes_g7_mark_snapshot(self, tmp_path):
+        from utils.logger import TradeLogger
+
+        tl = TradeLogger(tmp_path / "trades.jsonl")
+        tl.log_skipped(
+            reason="G7_open_exposure_drawdown",
+            ticker="KXTRUMPIRAN-26JUN01",
+            g7_mark_snapshot={
+                "drawdown_pct": 1.0,
+                "threshold_pct": 0.20,
+                "provider": "scripts.mark_open_positions",
+                "fallback_status": "mark_error",
+                "observed_at": "2026-07-24T00:00:00+00:00",
+            },
+        )
+
+        import json
+        line = (tmp_path / "trades.jsonl").read_text(encoding="utf-8").strip()
+        rec = json.loads(line)
+        assert rec["type"] == "SKIPPED"
+        assert rec["g7_mark_snapshot"]["drawdown_pct"] == pytest.approx(1.0)
+        assert rec["g7_mark_snapshot"]["fallback_status"] == "mark_error"
 
 
 # ---------------------------------------------------------------------------
