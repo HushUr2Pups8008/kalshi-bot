@@ -76,16 +76,8 @@ def _authoritative(
         ),
         observed_at=observed_at,
         effective_at=effective_at or observed_at,
-        rules_version=(
-            "kalshi-settlement-v1"
-            if market_ref.venue is Venue.KALSHI
-            else "polymarket-us-settlement-v1"
-        ),
-        source_id=(
-            "kalshi-market-api"
-            if market_ref.venue is Venue.KALSHI
-            else "polymarket-us-public-api"
-        ),
+        rules_version=("kalshi-settlement-v1" if market_ref.venue is Venue.KALSHI else "polymarket-us-settlement-v1"),
+        source_id=("kalshi-market-api" if market_ref.venue is Venue.KALSHI else "polymarket-us-public-api"),
         previous_observation=previous_observation,
         supersedes_observation_sha256=supersedes_observation_sha256,
     )
@@ -118,14 +110,10 @@ async def test_collector_passes_rehydrated_prior_source_observation(tmp_path: Pa
     _append_candidate(store, record)
     market_ref = MarketRef(Venue.KALSHI, record.venue_market_id, record.venue_market_id)
     first = _authoritative(market_ref)
-    await CapitalGuardShadowSettlementCollector(
-        store=store, source=SequenceSource({market_ref: [first]})
-    ).run_once()
+    await CapitalGuardShadowSettlementCollector(store=store, source=SequenceSource({market_ref: [first]})).run_once()
     source = SequenceSource({market_ref: [first]})
 
-    result = await CapitalGuardShadowSettlementCollector(
-        store=store, source=source
-    ).run_once()
+    result = await CapitalGuardShadowSettlementCollector(store=store, source=source).run_once()
 
     assert result.identical_observations == 1
     assert source.prior_observations[0] is not None
@@ -141,9 +129,7 @@ async def test_source_correction_links_prior_source_hash_but_store_links_prior_r
     market_key = store.settlement_market_backlog(limit=1)[0]
     market_ref = store.candidate_settlement_backlog(market_key, limit=1).market_ref
     prior = _authoritative(market_ref)
-    await CapitalGuardShadowSettlementCollector(
-        store=store, source=SequenceSource({market_ref: [prior]})
-    ).run_once()
+    await CapitalGuardShadowSettlementCollector(store=store, source=SequenceSource({market_ref: [prior]})).run_once()
     prior_head = store.current_authoritative_head(market_ref)
     assert prior_head is not None
     correction = build_settlement_observation(
@@ -205,9 +191,7 @@ async def test_authoritative_source_correction_keeps_source_and_store_lineage_di
         def __init__(self) -> None:
             self.values = [market("yes"), market("no")]
 
-        async def get_market_exact_bounded(
-            self, ticker: str, *, timeout_seconds: float
-        ) -> KalshiMarket:
+        async def get_market_exact_bounded(self, ticker: str, *, timeout_seconds: float) -> KalshiMarket:
             assert ticker == record.venue_market_id
             assert timeout_seconds > 0
             return self.values.pop(0)
@@ -223,9 +207,7 @@ async def test_authoritative_source_correction_keeps_source_and_store_lineage_di
             *,
             prior_observation: SettlementObservation | None,
         ) -> SettlementObservation | None:
-            observation = await self.adapter.get_settlement_exact(
-                requested_ref, prior_observation=prior_observation
-            )
+            observation = await self.adapter.get_settlement_exact(requested_ref, prior_observation=prior_observation)
             if observation is not None:
                 self.observations.append(observation)
             return observation
@@ -251,10 +233,7 @@ async def test_authoritative_source_correction_keeps_source_and_store_lineage_di
 
     assert first_result.inserted_observations == second_result.inserted_observations == 1
     assert len(source.observations) == 2
-    assert (
-        source.observations[1].supersedes_observation_sha256
-        == source.observations[0].observation_sha256
-    )
+    assert source.observations[1].supersedes_observation_sha256 == source.observations[0].observation_sha256
     with sqlite3.connect(store.db_path) as conn:
         rows = conn.execute(
             "SELECT observation_sha256, authoritative_observation_sha256, "
@@ -273,9 +252,7 @@ async def test_source_correction_without_prior_source_hash_quarantines(tmp_path:
     _append_candidate(store, record)
     market_ref = MarketRef(Venue.KALSHI, record.venue_market_id, record.venue_market_id)
     prior = _authoritative(market_ref)
-    await CapitalGuardShadowSettlementCollector(
-        store=store, source=SequenceSource({market_ref: [prior]})
-    ).run_once()
+    await CapitalGuardShadowSettlementCollector(store=store, source=SequenceSource({market_ref: [prior]})).run_once()
     unlinked = _authoritative(
         market_ref,
         outcome=MarketOutcome.NO,
@@ -308,18 +285,12 @@ async def test_corrupt_authoritative_head_quarantines_before_source_io(
     _append_candidate(store, record)
     market_ref = MarketRef(Venue.KALSHI, record.venue_market_id, record.venue_market_id)
     first = _authoritative(market_ref)
-    await CapitalGuardShadowSettlementCollector(
-        store=store, source=SequenceSource({market_ref: [first]})
-    ).run_once()
+    await CapitalGuardShadowSettlementCollector(store=store, source=SequenceSource({market_ref: [first]})).run_once()
     original = store._current_authoritative_head_transaction
 
     def corrupt_head(*args: object, **kwargs: object):
         head = original(*args, **kwargs)
-        return (
-            None
-            if head is None
-            else replace(head, **{corrupted_field: "0" * 64})
-        )
+        return None if head is None else replace(head, **{corrupted_field: "0" * 64})
 
     monkeypatch.setattr(store, "_current_authoritative_head_transaction", corrupt_head)
     source = SequenceSource({market_ref: [first]})
@@ -328,9 +299,7 @@ async def test_corrupt_authoritative_head_quarantines_before_source_io(
 
     assert result.quarantined == 1
     assert source.calls == []
-    backlog = store.candidate_settlement_backlog(
-        SettlementMarketKey(Venue.KALSHI, record.venue_market_id)
-    )
+    backlog = store.candidate_settlement_backlog(SettlementMarketKey(Venue.KALSHI, record.venue_market_id))
     direct = store.record_settlement_attempt(
         backlog,
         attempted_at=NOW + timedelta(days=2),
@@ -340,9 +309,7 @@ async def test_corrupt_authoritative_head_quarantines_before_source_io(
     assert direct.attempt_status == "quarantined"
     assert _counts(store)["capital_guard_shadow_observations"] == 1
     with sqlite3.connect(store.db_path) as conn:
-        reason = conn.execute(
-            "SELECT reason_taxonomy FROM capital_guard_shadow_settlement_quarantines"
-        ).fetchone()[0]
+        reason = conn.execute("SELECT reason_taxonomy FROM capital_guard_shadow_settlement_quarantines").fetchone()[0]
     assert reason == "source_drift"
 
 
@@ -356,9 +323,7 @@ async def test_invalid_authoritative_head_lookup_quarantines_before_source_io(
     _append_candidate(store, record)
     market_ref = MarketRef(Venue.KALSHI, record.venue_market_id, record.venue_market_id)
     first = _authoritative(market_ref)
-    await CapitalGuardShadowSettlementCollector(
-        store=store, source=SequenceSource({market_ref: [first]})
-    ).run_once()
+    await CapitalGuardShadowSettlementCollector(store=store, source=SequenceSource({market_ref: [first]})).run_once()
 
     def invalid_head(*args: object, **kwargs: object):
         raise error_type("invalid persisted authoritative head")
@@ -381,9 +346,7 @@ async def test_void_authoritative_head_without_refund_quarantines_before_source_
     _append_candidate(store, record)
     market_ref = MarketRef(Venue.KALSHI, record.venue_market_id, record.venue_market_id)
     first = _authoritative(market_ref)
-    await CapitalGuardShadowSettlementCollector(
-        store=store, source=SequenceSource({market_ref: [first]})
-    ).run_once()
+    await CapitalGuardShadowSettlementCollector(store=store, source=SequenceSource({market_ref: [first]})).run_once()
     original = store._current_authoritative_head_transaction
 
     def invalid_void_head(*args: object, **kwargs: object):
@@ -447,9 +410,7 @@ def _polymarket_candidate():
         book_source="polymarket-us-orderbook-v1",
         fee_schedule_json=schedule_json,
         fee_provenance_json=provenance_json,
-        fee_provenance_sha256=hashlib.sha256(
-            provenance_json.encode("utf-8")
-        ).hexdigest(),
+        fee_provenance_sha256=hashlib.sha256(provenance_json.encode("utf-8")).hexdigest(),
         fee_formula_type=fee_type_for_schedule(POLYMARKET_US_2026_07_01),
         fee_coefficient=coefficient,
         fee_account_precision=None,
@@ -466,10 +427,7 @@ def _counts(store: CapitalGuardShadowStore) -> dict[str, int]:
         "capital_guard_shadow_evaluations",
     )
     with sqlite3.connect(store.db_path) as conn:
-        return {
-            table: int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-            for table in tables
-        }
+        return {table: int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]) for table in tables}
 
 
 def test_settlement_backlog_is_bounded_grouped_and_exact(tmp_path: Path) -> None:
@@ -492,9 +450,7 @@ def test_settlement_backlog_is_bounded_grouped_and_exact(tmp_path: Path) -> None
     backlog = store.candidate_settlement_backlog(keys[0], limit=10)
 
     assert keys == (SettlementMarketKey(Venue.KALSHI, first.venue_market_id),)
-    assert backlog.market_ref == MarketRef(
-        Venue.KALSHI, first.venue_market_id, first.venue_market_id
-    )
+    assert backlog.market_ref == MarketRef(Venue.KALSHI, first.venue_market_id, first.venue_market_id)
     assert len(backlog.candidate_ids) == 2
     assert backlog.missing_link_candidate_ids == backlog.candidate_ids
     assert len(backlog.candidate_set_sha256) == 64
@@ -528,9 +484,7 @@ def test_candidate_backlog_rejects_ambiguous_same_market_identity(
     _append_candidate(store, second)
 
     with pytest.raises(CapitalGuardShadowIdentityError, match="ambiguous"):
-        store.candidate_settlement_backlog(
-            SettlementMarketKey(Venue.KALSHI, first.venue_market_id), limit=10
-        )
+        store.candidate_settlement_backlog(SettlementMarketKey(Venue.KALSHI, first.venue_market_id), limit=10)
 
 
 @pytest.mark.asyncio
@@ -590,10 +544,7 @@ async def test_terminal_poll_appends_one_market_observation_links_all_and_is_sem
     assert {row.candidate_id for row in store.current_head_settlements(market_ref)} == set()
     with sqlite3.connect(store.db_path) as conn:
         linked = {
-            str(row[0])
-            for row in conn.execute(
-                "SELECT candidate_id FROM capital_guard_shadow_candidate_observations"
-            )
+            str(row[0]) for row in conn.execute("SELECT candidate_id FROM capital_guard_shadow_candidate_observations")
         }
     assert linked == {first_id, second_id, third_id}
 
@@ -684,15 +635,12 @@ async def test_nonterminal_not_found_transport_internal_and_quarantine_are_isola
         statuses = {
             str(row[0]): int(row[1])
             for row in conn.execute(
-                "SELECT status, COUNT(*) FROM capital_guard_shadow_settlement_attempts "
-                "GROUP BY status"
+                "SELECT status, COUNT(*) FROM capital_guard_shadow_settlement_attempts GROUP BY status"
             )
         }
         serialized = "\n".join(
             str(value)
-            for row in conn.execute(
-                "SELECT * FROM capital_guard_shadow_settlement_attempts"
-            )
+            for row in conn.execute("SELECT * FROM capital_guard_shadow_settlement_attempts")
             for value in row
         )
     assert statuses == {
@@ -714,9 +662,7 @@ async def test_void_is_quarantined_without_observation_or_financial_rows(
     record = candidate()
     _append_candidate(store, record)
     market_ref = MarketRef(Venue.KALSHI, record.venue_market_id, record.venue_market_id)
-    source = SequenceSource(
-        {market_ref: [UnsupportedVoidError("refund economics unknown")]}
-    )
+    source = SequenceSource({market_ref: [UnsupportedVoidError("refund economics unknown")]})
     collector = CapitalGuardShadowSettlementCollector(store=store, source=source)
 
     result = await collector.run_once(limit=10)
@@ -728,9 +674,7 @@ async def test_void_is_quarantined_without_observation_or_financial_rows(
     assert counts["capital_guard_shadow_settlements"] == 0
     assert counts["capital_guard_shadow_evaluations"] == 0
     with sqlite3.connect(store.db_path) as conn:
-        reason = conn.execute(
-            "SELECT reason_taxonomy FROM capital_guard_shadow_settlement_quarantines"
-        ).fetchone()[0]
+        reason = conn.execute("SELECT reason_taxonomy FROM capital_guard_shadow_settlement_quarantines").fetchone()[0]
     assert reason == "missing_void_refund_contract"
 
 
@@ -744,9 +688,7 @@ async def test_post_fetch_candidate_set_race_quarantines_without_observation(
     market_ref = MarketRef(Venue.KALSHI, record.venue_market_id, record.venue_market_id)
 
     class RacingSource:
-        async def get_settlement_exact(
-            self, requested_ref: MarketRef, *, prior_observation: object | None
-        ):
+        async def get_settlement_exact(self, requested_ref: MarketRef, *, prior_observation: object | None):
             added = candidate(
                 decision_key="racing-decision",
                 lifecycle_id="racing-lifecycle",
@@ -763,9 +705,7 @@ async def test_post_fetch_candidate_set_race_quarantines_without_observation(
     counts = _counts(store)
     assert counts["capital_guard_shadow_observations"] == 0
     with sqlite3.connect(store.db_path) as conn:
-        reason = conn.execute(
-            "SELECT reason_taxonomy FROM capital_guard_shadow_settlement_quarantines"
-        ).fetchone()[0]
+        reason = conn.execute("SELECT reason_taxonomy FROM capital_guard_shadow_settlement_quarantines").fetchone()[0]
     assert reason == "concurrent_state_change"
 
 
@@ -781,17 +721,13 @@ async def test_strict_async_source_cancellation_never_appends_after_shutdown(
     release = asyncio.Event()
 
     class BlockingAsyncSource:
-        async def get_settlement_exact(
-            self, requested_ref: MarketRef, *, prior_observation: object | None
-        ):
+        async def get_settlement_exact(self, requested_ref: MarketRef, *, prior_observation: object | None):
             assert requested_ref == market_ref
             started.set()
             await release.wait()
             return _authoritative(requested_ref)
 
-    collector = CapitalGuardShadowSettlementCollector(
-        store=store, source=BlockingAsyncSource()
-    )
+    collector = CapitalGuardShadowSettlementCollector(store=store, source=BlockingAsyncSource())
     task = asyncio.create_task(collector.run_once(limit=10))
     await asyncio.wait_for(started.wait(), timeout=2)
     task.cancel()
@@ -843,16 +779,12 @@ async def test_ambiguous_identity_quarantines_honestly_without_network(
     class TrapSource:
         calls = 0
 
-        async def get_settlement_exact(
-            self, market_ref: MarketRef, *, prior_observation: object | None
-        ):
+        async def get_settlement_exact(self, market_ref: MarketRef, *, prior_observation: object | None):
             self.calls += 1
             raise AssertionError(market_ref)
 
     source = TrapSource()
-    result = await CapitalGuardShadowSettlementCollector(
-        store=store, source=source
-    ).run_once(limit=10)
+    result = await CapitalGuardShadowSettlementCollector(store=store, source=source).run_once(limit=10)
 
     assert result.quarantined == 1 and source.calls == 0
     with sqlite3.connect(store.db_path) as conn:
@@ -899,22 +831,17 @@ async def test_ambiguous_identity_with_invalid_head_quarantines_without_network(
     class TrapSource:
         calls = 0
 
-        async def get_settlement_exact(
-            self, market_ref: MarketRef, *, prior_observation: object | None
-        ):
+        async def get_settlement_exact(self, market_ref: MarketRef, *, prior_observation: object | None):
             self.calls += 1
             raise AssertionError(market_ref)
 
     source = TrapSource()
-    result = await CapitalGuardShadowSettlementCollector(
-        store=store, source=source
-    ).run_once(limit=10)
+    result = await CapitalGuardShadowSettlementCollector(store=store, source=source).run_once(limit=10)
 
     assert result.quarantined == 1 and source.calls == 0
     with sqlite3.connect(store.db_path) as conn:
         row = conn.execute(
-            "SELECT head_before_sha256, head_after_sha256, error_taxonomy "
-            "FROM capital_guard_shadow_settlement_attempts"
+            "SELECT head_before_sha256, head_after_sha256, error_taxonomy FROM capital_guard_shadow_settlement_attempts"
         ).fetchone()
     assert row == (None, None, "identity_ambiguous")
 
@@ -937,9 +864,7 @@ async def test_over_cap_group_records_exact_count_and_sample_not_fake_full_hashe
     class TrapSource:
         calls = 0
 
-        async def get_settlement_exact(
-            self, market_ref: MarketRef, *, prior_observation: object | None
-        ):
+        async def get_settlement_exact(self, market_ref: MarketRef, *, prior_observation: object | None):
             self.calls += 1
             raise AssertionError(market_ref)
 
@@ -963,9 +888,7 @@ async def test_over_cap_group_records_exact_count_and_sample_not_fake_full_hashe
 
     key = SettlementMarketKey(Venue.KALSHI, candidate().venue_market_id)
     with pytest.raises(ValueError, match="hard bounded"):
-        store.candidate_settlement_backlog(
-            key, limit=MAX_SETTLEMENT_CANDIDATES_PER_MARKET + 1
-        )
+        store.candidate_settlement_backlog(key, limit=MAX_SETTLEMENT_CANDIDATES_PER_MARKET + 1)
     with pytest.raises(ValueError, match="hard bounded"):
         store.settlement_market_backlog(limit=MAX_SETTLEMENT_MARKETS_PER_RUN + 1)
 
@@ -975,9 +898,7 @@ def test_polymarket_numeric_id_and_slug_alias_remain_separate(tmp_path: Path) ->
     record = _polymarket_candidate()
     _append_candidate(store, record)
 
-    backlog = store.candidate_settlement_backlog(
-        SettlementMarketKey(Venue.POLYMARKET_US, record.venue_market_id)
-    )
+    backlog = store.candidate_settlement_backlog(SettlementMarketKey(Venue.POLYMARKET_US, record.venue_market_id))
 
     assert backlog.market_ref == MarketRef(
         Venue.POLYMARKET_US,
@@ -993,9 +914,7 @@ def test_attempt_exact_retry_and_changed_payload_collision_commit_evidence_only(
     store = _initialized_store(tmp_path)
     record = candidate()
     _append_candidate(store, record)
-    backlog = store.candidate_settlement_backlog(
-        SettlementMarketKey(Venue.KALSHI, record.venue_market_id)
-    )
+    backlog = store.candidate_settlement_backlog(SettlementMarketKey(Venue.KALSHI, record.venue_market_id))
     attempted_at = NOW + timedelta(days=2)
 
     first = store.record_settlement_attempt(
@@ -1032,8 +951,7 @@ def test_attempt_exact_retry_and_changed_payload_collision_commit_evidence_only(
     assert counts["capital_guard_shadow_candidate_observations"] == 0
     with sqlite3.connect(store.db_path) as conn:
         conflict_count = conn.execute(
-            "SELECT COUNT(*) FROM capital_guard_shadow_conflicts "
-            "WHERE entity_type='settlement_attempt'"
+            "SELECT COUNT(*) FROM capital_guard_shadow_conflicts WHERE entity_type='settlement_attempt'"
         ).fetchone()[0]
     assert conflict_count == 1
 
@@ -1045,9 +963,7 @@ def test_terminal_attempt_collision_preflight_prevents_head_and_link_mutation(
     record = candidate()
     _append_candidate(store, record)
     market_ref = MarketRef(Venue.KALSHI, record.venue_market_id, record.venue_market_id)
-    backlog = store.candidate_settlement_backlog(
-        SettlementMarketKey(Venue.KALSHI, record.venue_market_id)
-    )
+    backlog = store.candidate_settlement_backlog(SettlementMarketKey(Venue.KALSHI, record.venue_market_id))
     attempted_at = NOW + timedelta(days=2)
     store.record_settlement_attempt(
         backlog,
@@ -1101,12 +1017,8 @@ async def test_semantic_retry_preserves_original_source_times_and_links_late_can
             ]
         }
     )
-    times = iter(
-        [NOW + timedelta(days=2), NOW + timedelta(days=2, minutes=30)]
-    )
-    collector = CapitalGuardShadowSettlementCollector(
-        store=store, source=source, clock=lambda: next(times)
-    )
+    times = iter([NOW + timedelta(days=2), NOW + timedelta(days=2, minutes=30)])
+    collector = CapitalGuardShadowSettlementCollector(store=store, source=source, clock=lambda: next(times))
     await collector.run_once(limit=10)
     late = candidate(
         decision_key="late-decision",
@@ -1125,7 +1037,7 @@ async def test_semantic_retry_preserves_original_source_times_and_links_late_can
             "WHERE candidate_id = ? AND observation_sha256 = ?",
             (late_id, head.observation_sha256),
         ).fetchone()[0]
-    assert linked_at == "2026-07-17T13:00:00.000000Z"
+    assert linked_at == "2026-07-17T05:00:00.000000Z"
 
 
 @pytest.mark.asyncio
@@ -1147,9 +1059,7 @@ async def test_equal_or_backward_time_correction_is_quarantined(
     )
     source = SequenceSource({market_ref: [first, backward]})
     times = iter([NOW + timedelta(days=2), NOW + timedelta(days=2, minutes=1)])
-    collector = CapitalGuardShadowSettlementCollector(
-        store=store, source=source, clock=lambda: next(times)
-    )
+    collector = CapitalGuardShadowSettlementCollector(store=store, source=source, clock=lambda: next(times))
 
     await collector.run_once(limit=10)
     result = await collector.run_once(limit=10)
@@ -1157,9 +1067,7 @@ async def test_equal_or_backward_time_correction_is_quarantined(
     assert result.quarantined == 1
     assert _counts(store)["capital_guard_shadow_observations"] == 1
     with sqlite3.connect(store.db_path) as conn:
-        reason = conn.execute(
-            "SELECT reason_taxonomy FROM capital_guard_shadow_settlement_quarantines"
-        ).fetchone()[0]
+        reason = conn.execute("SELECT reason_taxonomy FROM capital_guard_shadow_settlement_quarantines").fetchone()[0]
     assert reason == "backward_time"
 
 
@@ -1185,9 +1093,7 @@ async def test_valid_void_refund_contract_is_bound_then_deferred_without_finance
     )
     source = SequenceSource({market_ref: [void]})
 
-    result = await CapitalGuardShadowSettlementCollector(
-        store=store, source=source
-    ).run_once(limit=10)
+    result = await CapitalGuardShadowSettlementCollector(store=store, source=source).run_once(limit=10)
 
     assert result.quarantined == 1
     counts = _counts(store)
@@ -1213,9 +1119,7 @@ async def test_void_source_correction_without_prior_hash_quarantines_drift(
     _append_candidate(store, record)
     market_ref = MarketRef(Venue.KALSHI, record.venue_market_id, record.venue_market_id)
     first = _authoritative(market_ref)
-    await CapitalGuardShadowSettlementCollector(
-        store=store, source=SequenceSource({market_ref: [first]})
-    ).run_once()
+    await CapitalGuardShadowSettlementCollector(store=store, source=SequenceSource({market_ref: [first]})).run_once()
     correction_time = first.observed_at + timedelta(hours=1)
     unlinked_void = build_settlement_observation(
         market_ref=market_ref,
@@ -1235,9 +1139,7 @@ async def test_void_source_correction_without_prior_hash_quarantines_drift(
 
     assert result.quarantined == 1
     with sqlite3.connect(store.db_path) as conn:
-        reason = conn.execute(
-            "SELECT reason_taxonomy FROM capital_guard_shadow_settlement_quarantines"
-        ).fetchone()[0]
+        reason = conn.execute("SELECT reason_taxonomy FROM capital_guard_shadow_settlement_quarantines").fetchone()[0]
     assert reason == "source_drift"
 
 
@@ -1252,9 +1154,7 @@ async def test_fatal_source_control_flow_never_appends(
     _append_candidate(store, record)
 
     class FatalSource:
-        async def get_settlement_exact(
-            self, market_ref: MarketRef, *, prior_observation: object | None
-        ):
+        async def get_settlement_exact(self, market_ref: MarketRef, *, prior_observation: object | None):
             raise fatal
 
     collector = CapitalGuardShadowSettlementCollector(store=store, source=FatalSource())
@@ -1280,17 +1180,11 @@ async def test_forged_source_supersedes_and_alias_mismatch_quarantine(
     for record in records:
         _append_candidate(store, record)
     refs = [MarketRef(Venue.KALSHI, r.venue_market_id, r.venue_market_id) for r in records]
-    forged = replace(
-        _authoritative(refs[0]), supersedes_observation_sha256="f" * 64
-    )
-    wrong_alias = _authoritative(
-        MarketRef(Venue.KALSHI, refs[1].venue_market_id, "WRONG-ALIAS")
-    )
+    forged = replace(_authoritative(refs[0]), supersedes_observation_sha256="f" * 64)
+    wrong_alias = _authoritative(MarketRef(Venue.KALSHI, refs[1].venue_market_id, "WRONG-ALIAS"))
     source = SequenceSource({refs[0]: [forged], refs[1]: [wrong_alias]})
 
-    result = await CapitalGuardShadowSettlementCollector(
-        store=store, source=source
-    ).run_once(limit=10)
+    result = await CapitalGuardShadowSettlementCollector(store=store, source=source).run_once(limit=10)
 
     assert result.quarantined == 2
     assert _counts(store)["capital_guard_shadow_observations"] == 0
@@ -1343,9 +1237,7 @@ def test_direct_append_rejects_cross_contract_identity_and_backward_effective_ti
             correction_base.alias,
         ),
         outcome=MarketOutcome.NO,
-        authoritative_outcome=json.loads(
-            correction_base.authoritative_outcome_json
-        ),
+        authoritative_outcome=json.loads(correction_base.authoritative_outcome_json),
         authoritative_payload=json.loads(correction_base.source_payload_json),
         observed_at=correction_base.observed_at,
         effective_at=backward_effective,
@@ -1355,9 +1247,7 @@ def test_direct_append_rejects_cross_contract_identity_and_backward_effective_ti
     backward = replace(
         correction_base,
         effective_at=backward_effective,
-        authoritative_observation_sha256=(
-            backward_authoritative.observation_sha256
-        ),
+        authoritative_observation_sha256=(backward_authoritative.observation_sha256),
     )
     with pytest.raises(ValueError, match="effective_at"):
         store.append_observation(backward, (result.candidate_id,))
@@ -1416,18 +1306,14 @@ def test_schema_rejects_manufactured_terminal_attempt_and_v1_is_not_repaired(
         )
     with sqlite3.connect(legacy) as conn:
         before = (
-            conn.execute(
-                "SELECT type, name, sql FROM sqlite_schema ORDER BY type, name"
-            ).fetchall(),
+            conn.execute("SELECT type, name, sql FROM sqlite_schema ORDER BY type, name").fetchall(),
             conn.execute("SELECT * FROM capital_guard_shadow_schema_meta").fetchall(),
         )
     with pytest.raises(RuntimeError, match="schema drift"):
         CapitalGuardShadowStore(legacy).initialize(applied_at=NOW)
     with sqlite3.connect(legacy) as conn:
         after = (
-            conn.execute(
-                "SELECT type, name, sql FROM sqlite_schema ORDER BY type, name"
-            ).fetchall(),
+            conn.execute("SELECT type, name, sql FROM sqlite_schema ORDER BY type, name").fetchall(),
             conn.execute("SELECT * FROM capital_guard_shadow_schema_meta").fetchall(),
         )
     assert after == before
@@ -1440,9 +1326,7 @@ def test_attempt_and_quarantine_are_append_only_and_failure_rolls_back(
     store = _initialized_store(tmp_path)
     record = candidate()
     _append_candidate(store, record)
-    backlog = store.candidate_settlement_backlog(
-        SettlementMarketKey(Venue.KALSHI, record.venue_market_id)
-    )
+    backlog = store.candidate_settlement_backlog(SettlementMarketKey(Venue.KALSHI, record.venue_market_id))
     inserted = store.record_settlement_attempt(
         backlog,
         attempted_at=NOW + timedelta(days=2),
@@ -1453,13 +1337,9 @@ def test_attempt_and_quarantine_are_append_only_and_failure_rolls_back(
     )
     with sqlite3.connect(store.db_path) as conn:
         with pytest.raises(sqlite3.IntegrityError, match="append-only"):
-            conn.execute(
-                "UPDATE capital_guard_shadow_settlement_attempts SET status='nonterminal'"
-            )
+            conn.execute("UPDATE capital_guard_shadow_settlement_attempts SET status='nonterminal'")
         with pytest.raises(sqlite3.IntegrityError, match="append-only"):
-            conn.execute(
-                "DELETE FROM capital_guard_shadow_settlement_quarantines"
-            )
+            conn.execute("DELETE FROM capital_guard_shadow_settlement_quarantines")
 
     real = store._persist_settlement_attempt_transaction
 
@@ -1494,9 +1374,7 @@ async def test_current_head_change_during_fetch_quarantines_without_reparenting(
     market_ref = MarketRef(Venue.KALSHI, record.venue_market_id, record.venue_market_id)
 
     class HeadRacingSource:
-        async def get_settlement_exact(
-            self, requested_ref: MarketRef, *, prior_observation: object | None
-        ):
+        async def get_settlement_exact(self, requested_ref: MarketRef, *, prior_observation: object | None):
             store.append_observation(observation(), (candidate_id,))
             return _authoritative(
                 requested_ref,
@@ -1505,18 +1383,14 @@ async def test_current_head_change_during_fetch_quarantines_without_reparenting(
                 effective_at=NOW + timedelta(days=1, hours=1),
             )
 
-    result = await CapitalGuardShadowSettlementCollector(
-        store=store, source=HeadRacingSource()
-    ).run_once(limit=10)
+    result = await CapitalGuardShadowSettlementCollector(store=store, source=HeadRacingSource()).run_once(limit=10)
 
     assert result.quarantined == 1
     assert _counts(store)["capital_guard_shadow_observations"] == 1
     head = store.current_authoritative_head(market_ref)
     assert head.outcome == "yes"
     with sqlite3.connect(store.db_path) as conn:
-        reason = conn.execute(
-            "SELECT reason_taxonomy FROM capital_guard_shadow_settlement_quarantines"
-        ).fetchone()[0]
+        reason = conn.execute("SELECT reason_taxonomy FROM capital_guard_shadow_settlement_quarantines").fetchone()[0]
     assert reason == "concurrent_state_change"
 
 
@@ -1530,12 +1404,8 @@ async def test_concurrent_different_corrections_produce_one_successor_no_fork(
     market_ref = MarketRef(Venue.KALSHI, record.venue_market_id, record.venue_market_id)
     root_observation = _authoritative(market_ref)
     initial_source = SequenceSource({market_ref: [root_observation]})
-    await CapitalGuardShadowSettlementCollector(
-        store=store, source=initial_source
-    ).run_once(limit=10)
-    snapshot = store.candidate_settlement_backlog(
-        SettlementMarketKey(Venue.KALSHI, record.venue_market_id)
-    )
+    await CapitalGuardShadowSettlementCollector(store=store, source=initial_source).run_once(limit=10)
+    snapshot = store.candidate_settlement_backlog(SettlementMarketKey(Venue.KALSHI, record.venue_market_id))
     assert snapshot.prior_authoritative_observation == root_observation
     correction_time = NOW + timedelta(days=1, hours=1)
     first = _authoritative(
@@ -1583,12 +1453,10 @@ async def test_concurrent_different_corrections_produce_one_successor_no_fork(
     ]
     with sqlite3.connect(store.db_path) as conn:
         rows = conn.execute(
-            "SELECT observation_sha256, supersedes_observation_sha256 "
-            "FROM capital_guard_shadow_observations"
+            "SELECT observation_sha256, supersedes_observation_sha256 FROM capital_guard_shadow_observations"
         ).fetchall()
         correction_conflicts = conn.execute(
-            "SELECT COUNT(*) FROM capital_guard_shadow_conflicts "
-            "WHERE entity_type='observation_correction'"
+            "SELECT COUNT(*) FROM capital_guard_shadow_conflicts WHERE entity_type='observation_correction'"
         ).fetchone()[0]
     assert len(rows) == 2
     root = next(row[0] for row in rows if row[1] is None)
@@ -1605,9 +1473,7 @@ def test_lock_timeout_rolls_back_without_attempt_or_observation(
     store = _initialized_store(tmp_path)
     record = candidate()
     _append_candidate(store, record)
-    backlog = store.candidate_settlement_backlog(
-        SettlementMarketKey(Venue.KALSHI, record.venue_market_id)
-    )
+    backlog = store.candidate_settlement_backlog(SettlementMarketKey(Venue.KALSHI, record.venue_market_id))
     monkeypatch.setattr(shadow_module, "_BUSY_TIMEOUT_MS", 10)
     blocker = sqlite3.connect(store.db_path, isolation_level=None)
     blocker.execute("BEGIN IMMEDIATE")
@@ -1638,9 +1504,7 @@ async def test_restart_semantic_idempotency_keeps_one_head(
     payload = {"market_id": record.venue_market_id, "result": "yes"}
     await CapitalGuardShadowSettlementCollector(
         store=store,
-        source=SequenceSource(
-            {market_ref: [_authoritative(market_ref, payload=payload)]}
-        ),
+        source=SequenceSource({market_ref: [_authoritative(market_ref, payload=payload)]}),
         clock=lambda: NOW + timedelta(days=2),
     ).run_once(limit=10)
     restarted = CapitalGuardShadowStore(store.db_path, existing_only=True)

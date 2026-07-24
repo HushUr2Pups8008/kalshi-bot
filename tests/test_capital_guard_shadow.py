@@ -40,11 +40,17 @@ from trading.settlement import (
     VoidRefundContract,
     build_settlement_observation,
 )
+from trading.settlement_economics import (
+    KALSHI_FIX_MISC_FEE_RECEIPT_V1,
+    SettlementEconomicsBinding,
+    SettlementEconomicsContract,
+    VoidSettlementRefundPolicy,
+)
 from trading.venue import MarketRef, Venue
 
 
 UTC = timezone.utc
-NOW = datetime(2026, 7, 15, 12, 30, tzinfo=UTC)
+NOW = datetime(2026, 7, 15, 4, 30, tzinfo=UTC)
 D = Decimal
 TABLES = {
     "capital_guard_shadow_schema_meta",
@@ -80,10 +86,7 @@ def candidate(
     blocker: str | None = None,
     price: Decimal = D("0.42"),
 ) -> CapitalGuardCandidate:
-    failed_gates = {
-        failure.split("_", 1)[0]
-        for failure in failures
-    }
+    failed_gates = {failure.split("_", 1)[0] for failure in failures}
     gate_inputs = {
         "schema_version": 1,
         "gates": {
@@ -136,9 +139,7 @@ def candidate(
             gate: {
                 "applied": True,
                 "failure_reasons": [
-                    failure
-                    for failure in failures
-                    if failure == gate or failure.startswith(f"{gate}_")
+                    failure for failure in failures if failure == gate or failure.startswith(f"{gate}_")
                 ],
                 "passed": gate not in failed_gates,
             }
@@ -150,9 +151,7 @@ def candidate(
         {
             "account_precision_dollars": "0.0001",
             "accumulator_dollars": "0",
-            "coefficient": _dtext(
-                fee_coefficient_for(KALSHI_GENERAL_2026_07_07, FeeRole.TAKER)
-            ),
+            "coefficient": _dtext(fee_coefficient_for(KALSHI_GENERAL_2026_07_07, FeeRole.TAKER)),
             "effective_at": KALSHI_GENERAL_2026_07_07.effective_from.isoformat(),
             "fee_multiplier": "1",
             "fee_role": "taker",
@@ -242,15 +241,11 @@ def candidate(
         fee_formula_type=fee_type_for_schedule(KALSHI_GENERAL_2026_07_07),
         fee_role=FeeRole.TAKER,
         fee_multiplier=D("1"),
-        fee_coefficient=fee_coefficient_for(
-            KALSHI_GENERAL_2026_07_07, FeeRole.TAKER
-        ),
+        fee_coefficient=fee_coefficient_for(KALSHI_GENERAL_2026_07_07, FeeRole.TAKER),
         fee_account_precision=D("0.0001"),
         fee_accumulator=D("0"),
         fee_provenance_json=fee_provenance_json,
-        fee_provenance_sha256=hashlib.sha256(
-            fee_provenance_json.encode("utf-8")
-        ).hexdigest(),
+        fee_provenance_sha256=hashlib.sha256(fee_provenance_json.encode("utf-8")).hexdigest(),
     )
 
 
@@ -296,12 +291,40 @@ def observation(
     venue_market_id: str = "KXTEST-26JUL15-T50",
     observed_at: datetime = NOW + timedelta(days=1),
     supersedes: str | None = None,
+    settlement_fee: Decimal = D("0"),
 ) -> SettlementObservationRecord:
     effective_at = observed_at - timedelta(minutes=1)
-    payload = {"market_id": venue_market_id, "result": outcome}
-    void_refund = (
-        VoidRefundContract(D("100"), True) if outcome == "void" else None
-    )
+    fee_message = {
+        "MarketSettlementReportID": "shadow-test-settlement-report",
+        "NoMarketSettlementPartyIDs": [
+            {
+                "LongQty": "5",
+                "MarketSettlementPartyID": "shadow-test-account",
+                "MarketSettlementPartyRole": "24",
+                "MiscFees": [
+                    {
+                        "MiscFeeAmt": _dtext(settlement_fee),
+                        "MiscFeeBasis": "0",
+                        "MiscFeeCurr": "USD",
+                        "MiscFeeType": "4",
+                    }
+                ],
+                "NoMiscFees": "1",
+                "ShortQty": "0",
+            }
+        ],
+        "Symbol": venue_market_id,
+    }
+    fee_message_json = canonical_json(fee_message)
+    payload = {
+        "market_id": venue_market_id,
+        "result": outcome,
+        "settlement_fee_receipt": {
+            "message": fee_message,
+            "message_sha256": hashlib.sha256(fee_message_json.encode("utf-8")).hexdigest(),
+        },
+    }
+    void_refund = VoidRefundContract(D("100"), True) if outcome == "void" else None
     authoritative = build_settlement_observation(
         market_ref=MarketRef(Venue.KALSHI, venue_market_id, venue_market_id),
         outcome=MarketOutcome(outcome),
@@ -310,12 +333,10 @@ def observation(
         observed_at=observed_at,
         effective_at=effective_at,
         rules_version="kalshi-settlement-v1",
-        source_id="kalshi-settlement-api-v1",
+        source_id="kalshi-fix-market-settlement-v1",
         void_refund=void_refund,
     )
-    void_refund_json, void_refund_sha256 = shadow_module._void_refund_payload(
-        void_refund
-    )
+    void_refund_json, void_refund_sha256 = shadow_module._void_refund_payload(void_refund)
     semantic_sha256 = shadow_module._source_settlement_semantic_sha256(
         authoritative,
         contract_fingerprint="contract-v1",
@@ -332,7 +353,7 @@ def observation(
         outcome=outcome,
         observed_at=observed_at,
         effective_at=effective_at,
-        source_id="kalshi-settlement-api-v1",
+        source_id="kalshi-fix-market-settlement-v1",
         rules_version="kalshi-settlement-v1",
         authoritative_outcome_json=authoritative.authoritative_outcome_json,
         source_payload_json=authoritative.canonical_payload_json,
@@ -342,6 +363,41 @@ def observation(
         void_refund_json=void_refund_json,
         void_refund_sha256=void_refund_sha256,
         supersedes_observation_sha256=supersedes,
+    )
+
+
+def shadow_settlement(
+    *,
+    candidate_id: str,
+    observation_sha256: str,
+    observed: SettlementObservationRecord,
+    settled_at: datetime | None = None,
+    economics_contract: SettlementEconomicsContract | None = None,
+) -> ShadowSettlement:
+    return ShadowSettlement(
+        candidate_id=candidate_id,
+        observation_sha256=observation_sha256,
+        outcome=observed.outcome,
+        settled_at=observed.effective_at if settled_at is None else settled_at,
+        economics_contract=(
+            economics_contract
+            if economics_contract is not None
+            else SettlementEconomicsContract(
+                settlement_fee_receipt_profile=KALSHI_FIX_MISC_FEE_RECEIPT_V1,
+                void_refund_policy=None,
+            )
+        ),
+        economics_binding=SettlementEconomicsBinding(
+            venue=observed.venue,
+            venue_market_id=observed.venue_market_id,
+            account_party_id_sha256=hashlib.sha256(b"shadow-test-account").hexdigest(),
+            contract_fingerprint=observed.contract_fingerprint,
+            rules_fingerprint=observed.rules_fingerprint,
+            settlement_fingerprint=observed.settlement_fingerprint,
+            authoritative_observation_sha256=observed.authoritative_observation_sha256,
+            authoritative_payload_sha256=observed.authoritative_payload_sha256,
+            source_id=observed.source_id,
+        ),
     )
 
 
@@ -450,50 +506,38 @@ def test_initialize_is_idempotent_and_applies_exact_schema(tmp_path: Path) -> No
         objects = {
             (str(row[0]), str(row[1]))
             for row in conn.execute(
-                "SELECT type, name FROM sqlite_schema "
-                "WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name"
+                "SELECT type, name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name"
             )
         }
         meta = conn.execute(
-            "SELECT schema_version, ddl_sha256, applied_at "
-            "FROM capital_guard_shadow_schema_meta"
+            "SELECT schema_version, ddl_sha256, applied_at FROM capital_guard_shadow_schema_meta"
         ).fetchone()
-        foreign_keys = conn.execute(
-            "PRAGMA foreign_key_list(capital_guard_shadow_candidate_observations)"
-        ).fetchall()
-        candidate_foreign_keys = conn.execute(
-            "PRAGMA foreign_key_list(capital_guard_shadow_candidates)"
-        ).fetchall()
+        foreign_keys = conn.execute("PRAGMA foreign_key_list(capital_guard_shadow_candidate_observations)").fetchall()
+        candidate_foreign_keys = conn.execute("PRAGMA foreign_key_list(capital_guard_shadow_candidates)").fetchall()
 
     assert {name for kind, name in objects if kind == "table"} == TABLES
     assert len([1 for kind, _ in objects if kind == "trigger"]) == len(TABLES) * 2
     assert meta == (
         CAPITAL_GUARD_SHADOW_SCHEMA_VERSION,
         CAPITAL_GUARD_SHADOW_DDL_SHA256,
-        "2026-07-15T12:30:00.000000Z",
+        "2026-07-15T04:30:00.000000Z",
     )
     assert {row[2] for row in foreign_keys} == {
         "capital_guard_shadow_candidates",
         "capital_guard_shadow_observations",
     }
-    assert {row[2] for row in candidate_foreign_keys} == {
-        "capital_guard_shadow_capture_attempts"
-    }
+    assert {row[2] for row in candidate_foreign_keys} == {"capital_guard_shadow_capture_attempts"}
 
 
 def test_initialize_rejects_partial_or_drifted_schema_without_repair(tmp_path: Path) -> None:
     partial = tmp_path / "partial.db"
     with sqlite3.connect(partial) as conn:
-        conn.execute(
-            "CREATE TABLE capital_guard_shadow_candidates (candidate_id TEXT PRIMARY KEY)"
-        )
+        conn.execute("CREATE TABLE capital_guard_shadow_candidates (candidate_id TEXT PRIMARY KEY)")
 
     with pytest.raises(CapitalGuardShadowSchemaError, match="schema drift"):
         CapitalGuardShadowStore(partial).initialize(applied_at=NOW)
 
-    assert _rows(partial, "SELECT name FROM sqlite_schema WHERE type='table'") == [
-        ("capital_guard_shadow_candidates",)
-    ]
+    assert _rows(partial, "SELECT name FROM sqlite_schema WHERE type='table'") == [("capital_guard_shadow_candidates",)]
 
     valid = tmp_path / "valid.db"
     store = CapitalGuardShadowStore(valid)
@@ -515,9 +559,7 @@ def test_connection_pragmas_foreign_keys_and_append_only_triggers(tmp_path: Path
         assert conn.execute("PRAGMA journal_mode").fetchone() == ("wal",)
         assert 0 < conn.execute("PRAGMA busy_timeout").fetchone()[0] < 60_000
         with pytest.raises(sqlite3.IntegrityError, match="append-only"):
-            conn.execute(
-                "UPDATE capital_guard_shadow_candidates SET market_family='tampered'"
-            )
+            conn.execute("UPDATE capital_guard_shadow_candidates SET market_family='tampered'")
         with pytest.raises(sqlite3.IntegrityError, match="append-only"):
             conn.execute(
                 "DELETE FROM capital_guard_shadow_candidates WHERE candidate_id=?",
@@ -575,7 +617,7 @@ def test_capture_attempt_retains_unscorable_denominator_evidence(
         (
             _json(
                 {
-                    "decision_at": "2026-07-15T12:30:00.000000Z",
+                    "decision_at": "2026-07-15T04:30:00.000000Z",
                     "lifecycle_id": "lifecycle-1",
                     "schema_version": 1,
                     "side": "yes",
@@ -615,9 +657,7 @@ def test_candidate_requires_one_matching_scorable_capture_attempt(
     with pytest.raises(ValueError, match="capture attempt"):
         store.append_candidate(record)
 
-    attempt = store.append_capture_attempt(
-        capture_attempt(record, requested_stake=D("2.10"))
-    )
+    attempt = store.append_capture_attempt(capture_attempt(record, requested_stake=D("2.10")))
     inserted = store.append_candidate(record)
     retry = store.append_candidate(record)
 
@@ -628,9 +668,7 @@ def test_candidate_requires_one_matching_scorable_capture_attempt(
     ) == [(attempt.capture_attempt_id,)]
 
     mismatch = candidate(lifecycle_id="stake-mismatch")
-    store.append_capture_attempt(
-        capture_attempt(mismatch, requested_stake=D("2.11"))
-    )
+    store.append_capture_attempt(capture_attempt(mismatch, requested_stake=D("2.11")))
     with pytest.raises(ValueError, match="requested stake"):
         store.append_candidate(mismatch)
 
@@ -663,7 +701,7 @@ def test_replay_eligibility_is_computed_from_exact_gate_state(tmp_path: Path) ->
             decision_key="other",
             lifecycle_id="lifecycle-other",
             failures=("G3_disagreement_score", "G7_open_exposure_drawdown"),
-        )
+        ),
     )
     blocker = _append_candidate(
         store,
@@ -671,7 +709,7 @@ def test_replay_eligibility_is_computed_from_exact_gate_state(tmp_path: Path) ->
             decision_key="blocked",
             lifecycle_id="lifecycle-blocked",
             blocker="missing_fee_provenance",
-        )
+        ),
     )
 
     rows = dict(
@@ -725,9 +763,7 @@ def test_fast_lane_empty_g2_and_optional_g7_market_inputs_remain_scorable(
         ("fee_provenance_sha256", "not-a-hash", "SHA-256"),
     ],
 )
-def test_candidate_contract_rejects_unscorable_values(
-    field: str, value: object, error: str
-) -> None:
+def test_candidate_contract_rejects_unscorable_values(field: str, value: object, error: str) -> None:
     with pytest.raises(ValueError, match=error):
         replace(candidate(), **{field: value})
 
@@ -778,9 +814,7 @@ def test_observation_corrections_append_and_link_by_hash(tmp_path: Path) -> None
         observed_at=NOW + timedelta(days=1, minutes=5),
         supersedes=first.observation_sha256,
     )
-    correction = store.append_observation(
-        correction_record, (candidate_result.candidate_id,)
-    )
+    correction = store.append_observation(correction_record, (candidate_result.candidate_id,))
 
     assert (first.status, retry.status, correction.status) == (
         "inserted",
@@ -819,50 +853,69 @@ def test_observation_rejects_cross_market_links_and_invalid_correction(tmp_path:
     assert _rows(store.db_path, "SELECT * FROM capital_guard_shadow_observations") == []
 
 
-def test_state_dependent_money_lives_only_in_settlement_and_evaluation(tmp_path: Path) -> None:
+def test_observation_rejects_candidate_decided_after_outcome_was_observed(
+    tmp_path: Path,
+) -> None:
+    store = CapitalGuardShadowStore(tmp_path / "shadow.db")
+    store.initialize(applied_at=NOW)
+    known = observation()
+    late_candidate = replace(
+        candidate(),
+        decision_at=known.observed_at,
+        captured_at=known.observed_at + timedelta(seconds=1),
+        book_observed_at=known.observed_at - timedelta(milliseconds=1),
+    )
+    late_result = _append_candidate(store, late_candidate)
+
+    with pytest.raises(ValueError, match="observed outcome"):
+        store.append_observation(known, (late_result.candidate_id,))
+
+    assert _rows(store.db_path, "SELECT * FROM capital_guard_shadow_observations") == []
+    assert (
+        _rows(
+            store.db_path,
+            "SELECT * FROM capital_guard_shadow_candidate_observations",
+        )
+        == []
+    )
+
+
+def test_counterfactual_shadow_candidate_cannot_persist_fee_net_pnl(tmp_path: Path) -> None:
     store = CapitalGuardShadowStore(tmp_path / "shadow.db")
     store.initialize(applied_at=NOW)
     candidate_record = candidate()
     candidate_result = _append_candidate(store, candidate_record)
-    observed = store.append_observation(
-        observation(), (candidate_result.candidate_id,)
-    )
-    settlement = ShadowSettlement(
+    observation_record = observation()
+    observed = store.append_observation(observation_record, (candidate_result.candidate_id,))
+    settlement_record = shadow_settlement(
         candidate_id=candidate_result.candidate_id,
         observation_sha256=observed.observation_sha256,
-        outcome="yes",
-        settled_at=NOW + timedelta(days=1, minutes=2),
-        gross_payout=D("5"),
-        settlement_fee=D("0"),
-        settlement_refund=D("0"),
-        net_payout=D("5"),
-        details_json=_json({"settlement_version": 1}),
+        observed=observation_record,
     )
-    settlement_result = store.append_settlement(settlement)
+    settlement_result = store.append_settlement(settlement_record)
     evaluation = _settled_evaluation(
         candidate_record,
         candidate_result.candidate_id,
         settlement_result.settlement_id,
     )
-    evaluation_result = store.append_evaluation(evaluation)
+    with pytest.raises(ValueError, match="attributed execution receipt"):
+        store.append_evaluation(evaluation)
 
-    assert settlement_result.status == evaluation_result.status == "inserted"
+    assert settlement_result.status == "inserted"
+    assert _rows(store.db_path, "SELECT * FROM capital_guard_shadow_evaluations") == []
     with sqlite3.connect(store.db_path) as conn:
-        candidate_columns = {
-            row[1] for row in conn.execute("PRAGMA table_info(capital_guard_shadow_candidates)")
+        candidate_columns = {row[1] for row in conn.execute("PRAGMA table_info(capital_guard_shadow_candidates)")}
+        settlement_columns = {row[1] for row in conn.execute("PRAGMA table_info(capital_guard_shadow_settlements)")}
+        evaluation_columns = {row[1] for row in conn.execute("PRAGMA table_info(capital_guard_shadow_evaluations)")}
+    assert (
+        not {
+            "outcome",
+            "fee_net_pnl_dollars",
+            "gross_pnl_dollars",
+            "settlement_fee_dollars",
         }
-        settlement_columns = {
-            row[1] for row in conn.execute("PRAGMA table_info(capital_guard_shadow_settlements)")
-        }
-        evaluation_columns = {
-            row[1] for row in conn.execute("PRAGMA table_info(capital_guard_shadow_evaluations)")
-        }
-    assert not {
-        "outcome",
-        "fee_net_pnl_dollars",
-        "gross_pnl_dollars",
-        "settlement_fee_dollars",
-    } & candidate_columns
+        & candidate_columns
+    )
     assert {
         "book_method",
         "fee_provenance_json",
@@ -872,9 +925,221 @@ def test_state_dependent_money_lives_only_in_settlement_and_evaluation(tmp_path:
     assert {"entry_fee_dollars", "fee_net_pnl_dollars"} <= evaluation_columns
 
 
-def test_transaction_fault_rolls_back_and_closes_connection(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_typed_settlement_derives_immutable_cashflows_and_blocks_second_economics(
+    tmp_path: Path,
 ) -> None:
+    store = CapitalGuardShadowStore(tmp_path / "shadow.db")
+    store.initialize(applied_at=NOW)
+    candidate_record = candidate()
+    candidate_result = _append_candidate(store, candidate_record)
+    observation_record = observation()
+    observed = store.append_observation(observation_record, (candidate_result.candidate_id,))
+    record = shadow_settlement(
+        candidate_id=candidate_result.candidate_id,
+        observation_sha256=observed.observation_sha256,
+        observed=observation_record,
+    )
+
+    result = store.append_settlement(record)
+
+    assert _rows(
+        store.db_path,
+        "SELECT gross_payout_dollars, settlement_fee_dollars, "
+        "settlement_refund_dollars, net_payout_dollars FROM capital_guard_shadow_settlements",
+    ) == [("5", "0", "0", "5")]
+    details = json.loads(
+        _rows(
+            store.db_path,
+            "SELECT details_json FROM capital_guard_shadow_settlements",
+        )[0][0]
+    )
+    assert details["binding"] == {
+        "account_party_id_sha256": hashlib.sha256(b"shadow-test-account").hexdigest(),
+        "authoritative_observation_sha256": observation_record.authoritative_observation_sha256,
+        "authoritative_payload_sha256": observation_record.authoritative_payload_sha256,
+        "contract_fingerprint": "contract-v1",
+        "rules_fingerprint": "rules-v1",
+        "settlement_fingerprint": "settlement-v1",
+        "source_id": "kalshi-fix-market-settlement-v1",
+        "venue": "kalshi",
+        "venue_market_id": observation_record.venue_market_id,
+    }
+    assert details["cashflows"]["net_payout_dollars"] == "5"
+    assert result.status == "inserted"
+    assert "gross_payout" not in ShadowSettlement.__dataclass_fields__
+
+    changed_contract = replace(
+        record.economics_contract,
+        void_refund_policy=VoidSettlementRefundPolicy(
+            kind="entry_debit",
+            refund_cents_per_contract=None,
+            refunds_entry_fee=False,
+        ),
+    )
+    with pytest.raises(ValueError, match="already exists"):
+        store.append_settlement(replace(record, economics_contract=changed_contract))
+    assert _rows(
+        store.db_path,
+        "SELECT settlement_id FROM capital_guard_shadow_settlements",
+    ) == [(result.settlement_id,)]
+
+
+def test_typed_settlement_rejects_binding_that_differs_from_observation(
+    tmp_path: Path,
+) -> None:
+    store = CapitalGuardShadowStore(tmp_path / "shadow.db")
+    store.initialize(applied_at=NOW)
+    candidate_result = _append_candidate(store, candidate())
+    observation_record = observation()
+    observed = store.append_observation(observation_record, (candidate_result.candidate_id,))
+    record = shadow_settlement(
+        candidate_id=candidate_result.candidate_id,
+        observation_sha256=observed.observation_sha256,
+        observed=observation_record,
+    )
+
+    with pytest.raises(ValueError, match="binding"):
+        store.append_settlement(
+            replace(
+                record,
+                economics_binding=replace(
+                    record.economics_binding,
+                    rules_fingerprint="rules-v2",
+                ),
+            )
+        )
+    assert _rows(store.db_path, "SELECT * FROM capital_guard_shadow_settlements") == []
+
+
+def test_settlement_rejects_time_that_is_not_authoritative_effective_time(
+    tmp_path: Path,
+) -> None:
+    store = CapitalGuardShadowStore(tmp_path / "shadow.db")
+    store.initialize(applied_at=NOW)
+    candidate_result = _append_candidate(store, candidate())
+    observed_record = observation()
+    observed = store.append_observation(observed_record, (candidate_result.candidate_id,))
+
+    with pytest.raises(ValueError, match="settled_at.*effective_at"):
+        store.append_settlement(
+            shadow_settlement(
+                candidate_id=candidate_result.candidate_id,
+                observation_sha256=observed.observation_sha256,
+                observed=observed_record,
+                settled_at=observed_record.observed_at + timedelta(seconds=1),
+            )
+        )
+
+    assert _rows(store.db_path, "SELECT * FROM capital_guard_shadow_settlements") == []
+
+
+def test_settlement_rejects_candidate_decided_after_authoritative_effective_time(
+    tmp_path: Path,
+) -> None:
+    store = CapitalGuardShadowStore(tmp_path / "shadow.db")
+    store.initialize(applied_at=NOW)
+    observed_record = observation(observed_at=NOW + timedelta(minutes=10))
+    late_decision_at = observed_record.effective_at + timedelta(seconds=1)
+    late_candidate = replace(
+        candidate(),
+        decision_at=late_decision_at,
+        captured_at=late_decision_at + timedelta(seconds=1),
+        book_observed_at=late_decision_at - timedelta(milliseconds=1),
+    )
+    candidate_result = _append_candidate(store, late_candidate)
+    observed = store.append_observation(observed_record, (candidate_result.candidate_id,))
+
+    with pytest.raises(ValueError, match="decision_at.*effective_at"):
+        store.append_settlement(
+            shadow_settlement(
+                candidate_id=candidate_result.candidate_id,
+                observation_sha256=observed.observation_sha256,
+                observed=observed_record,
+            )
+        )
+
+    assert _rows(store.db_path, "SELECT * FROM capital_guard_shadow_settlements") == []
+
+
+def test_candidate_cannot_receive_second_financial_settlement_after_correction(
+    tmp_path: Path,
+) -> None:
+    store = CapitalGuardShadowStore(tmp_path / "shadow.db")
+    store.initialize(applied_at=NOW)
+    candidate_result = _append_candidate(store, candidate())
+    first_record = observation()
+    first = store.append_observation(first_record, (candidate_result.candidate_id,))
+    store.append_settlement(
+        shadow_settlement(
+            candidate_id=candidate_result.candidate_id,
+            observation_sha256=first.observation_sha256,
+            observed=first_record,
+        )
+    )
+    correction_record = observation(
+        outcome="no",
+        observed_at=first_record.observed_at + timedelta(minutes=1),
+        supersedes=first.observation_sha256,
+    )
+    correction = store.append_observation(correction_record, (candidate_result.candidate_id,))
+
+    with pytest.raises(ValueError, match="correction cashflow contract"):
+        store.append_settlement(
+            shadow_settlement(
+                candidate_id=candidate_result.candidate_id,
+                observation_sha256=correction.observation_sha256,
+                observed=correction_record,
+            )
+        )
+
+    assert len(_rows(store.db_path, "SELECT * FROM capital_guard_shadow_settlements")) == 1
+
+
+def test_legacy_raw_settlement_cannot_receive_fee_net_evaluation(tmp_path: Path) -> None:
+    store = CapitalGuardShadowStore(tmp_path / "shadow.db")
+    store.initialize(applied_at=NOW)
+    candidate_record = candidate()
+    candidate_result = _append_candidate(store, candidate_record)
+    observation_record = observation()
+    observed = store.append_observation(observation_record, (candidate_result.candidate_id,))
+    settlement_id = "d" * 64
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO capital_guard_shadow_settlements (
+                settlement_id, candidate_id, observation_sha256, outcome,
+                settled_at, gross_payout_dollars, settlement_fee_dollars,
+                settlement_refund_dollars, net_payout_dollars, details_json,
+                payload_sha256
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                settlement_id,
+                candidate_result.candidate_id,
+                observed.observation_sha256,
+                "yes",
+                shadow_module._timestamp(NOW + timedelta(days=1, minutes=2)),
+                "5",
+                "0",
+                "0",
+                "5",
+                _json({"schema_version": 1}),
+                "e" * 64,
+            ),
+        )
+
+    with pytest.raises(ValueError, match="unscorable|economics|settled_at"):
+        store.append_evaluation(
+            _settled_evaluation(
+                candidate_record,
+                candidate_result.candidate_id,
+                settlement_id,
+            )
+        )
+    assert _rows(store.db_path, "SELECT * FROM capital_guard_shadow_evaluations") == []
+
+
+def test_transaction_fault_rolls_back_and_closes_connection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store = CapitalGuardShadowStore(tmp_path / "shadow.db")
     store.initialize(applied_at=NOW)
     real_connect = shadow_module._SQLITE_CONNECT
@@ -961,9 +1226,7 @@ def test_concurrent_distinct_observation_roots_leave_one_quarantined_lineage(
 
     assert sorted(result.status for result in results) == ["conflict", "inserted"]
     assert len(_rows(db_path, "SELECT * FROM capital_guard_shadow_observations")) == 1
-    assert len(
-        _rows(db_path, "SELECT * FROM capital_guard_shadow_candidate_observations")
-    ) == 1
+    assert len(_rows(db_path, "SELECT * FROM capital_guard_shadow_candidate_observations")) == 1
     assert _rows(
         db_path,
         "SELECT entity_type FROM capital_guard_shadow_conflicts",
@@ -1031,61 +1294,14 @@ def test_canonical_identity_claim_does_not_trust_upstream_decision_key(
 
     first = _append_candidate(store, candidate(decision_key="upstream-a"))
     same_claim = _append_candidate(store, candidate(decision_key="upstream-b"))
-    other_market = _append_candidate(
-        store,
-        candidate(decision_key="upstream-a", venue_market_id="KXTEST-OTHER")
-    )
-    other_lifecycle = _append_candidate(
-        store,
-        candidate(decision_key="upstream-a", lifecycle_id="lifecycle-2")
-    )
+    other_market = _append_candidate(store, candidate(decision_key="upstream-a", venue_market_id="KXTEST-OTHER"))
+    other_lifecycle = _append_candidate(store, candidate(decision_key="upstream-a", lifecycle_id="lifecycle-2"))
 
     assert first.status == "inserted"
     assert same_claim.status == "conflict"
     assert same_claim.candidate_id == first.candidate_id
     assert other_market.status == other_lifecycle.status == "inserted"
     assert len({first.candidate_id, other_market.candidate_id, other_lifecycle.candidate_id}) == 3
-
-
-@pytest.mark.parametrize(
-    ("outcome", "gross_payout", "refund", "error"),
-    [
-        ("yes", D("0"), D("0"), "winning side"),
-        ("no", D("5"), D("0"), "losing side"),
-        ("void", D("1"), D("0"), "void payout"),
-        ("void", D("0"), D("3"), "immutable entry debit"),
-        ("yes", D("5"), D("1"), "combine positive payout"),
-    ],
-)
-def test_settlement_rejects_impossible_side_payout_and_refund_states(
-    tmp_path: Path,
-    outcome: str,
-    gross_payout: Decimal,
-    refund: Decimal,
-    error: str,
-) -> None:
-    store = CapitalGuardShadowStore(tmp_path / "shadow.db")
-    store.initialize(applied_at=NOW)
-    result = _append_candidate(store, candidate())
-    observed = store.append_observation(
-        observation(outcome=outcome), (result.candidate_id,)
-    )
-    settlement = ShadowSettlement(
-        candidate_id=result.candidate_id,
-        observation_sha256=observed.observation_sha256,
-        outcome=outcome,
-        settled_at=NOW + timedelta(days=1, minutes=2),
-        gross_payout=gross_payout,
-        settlement_fee=D("0"),
-        settlement_refund=refund,
-        net_payout=gross_payout + refund,
-        details_json=_json({"settlement_version": 1}),
-    )
-
-    with pytest.raises(ValueError, match=error):
-        store.append_settlement(settlement)
-
-    assert _rows(store.db_path, "SELECT * FROM capital_guard_shadow_settlements") == []
 
 
 @pytest.mark.parametrize(
@@ -1111,20 +1327,13 @@ def test_evaluation_rejects_invented_money_and_state_transitions(
     store.initialize(applied_at=NOW)
     candidate_record = candidate()
     candidate_result = _append_candidate(store, candidate_record)
-    observed = store.append_observation(
-        observation(), (candidate_result.candidate_id,)
-    )
+    observation_record = observation()
+    observed = store.append_observation(observation_record, (candidate_result.candidate_id,))
     settlement_result = store.append_settlement(
-        ShadowSettlement(
+        shadow_settlement(
             candidate_id=candidate_result.candidate_id,
             observation_sha256=observed.observation_sha256,
-            outcome="yes",
-            settled_at=NOW + timedelta(days=1, minutes=2),
-            gross_payout=D("5"),
-            settlement_fee=D("0"),
-            settlement_refund=D("0"),
-            net_payout=D("5"),
-            details_json=_json({"settlement_version": 1}),
+            observed=observation_record,
         )
     )
     evaluation = _settled_evaluation(
@@ -1174,9 +1383,8 @@ def test_distinct_second_observation_root_quarantines_market_and_never_links(
     store = CapitalGuardShadowStore(tmp_path / "shadow.db")
     store.initialize(applied_at=NOW)
     candidate_result = _append_candidate(store, candidate())
-    initial = store.append_observation(
-        observation(), (candidate_result.candidate_id,)
-    )
+    initial_record = observation()
+    initial = store.append_observation(initial_record, (candidate_result.candidate_id,))
     second_root = store.append_observation(
         observation(
             outcome="no",
@@ -1199,16 +1407,11 @@ def test_distinct_second_observation_root_quarantines_market_and_never_links(
 
     with pytest.raises(ValueError, match="ambiguous observation root"):
         store.append_settlement(
-            ShadowSettlement(
+            shadow_settlement(
                 candidate_id=candidate_result.candidate_id,
                 observation_sha256=initial.observation_sha256,
-                outcome="yes",
-                settled_at=NOW + timedelta(days=1, minutes=6),
-                gross_payout=D("5"),
-                settlement_fee=D("0"),
-                settlement_refund=D("0"),
-                net_payout=D("5"),
-                details_json=_json({"settlement_version": 1}),
+                observed=initial_record,
+                settled_at=initial_record.effective_at,
             )
         )
 
@@ -1220,20 +1423,13 @@ def test_observation_ambiguity_after_settlement_poisons_evaluation(
     store.initialize(applied_at=NOW)
     record = candidate()
     candidate_result = _append_candidate(store, record)
-    initial = store.append_observation(
-        observation(), (candidate_result.candidate_id,)
-    )
+    initial_record = observation()
+    initial = store.append_observation(initial_record, (candidate_result.candidate_id,))
     settlement = store.append_settlement(
-        ShadowSettlement(
+        shadow_settlement(
             candidate_id=candidate_result.candidate_id,
             observation_sha256=initial.observation_sha256,
-            outcome="yes",
-            settled_at=NOW + timedelta(days=1, minutes=2),
-            gross_payout=D("5"),
-            settlement_fee=D("0"),
-            settlement_refund=D("0"),
-            net_payout=D("5"),
-            details_json=_json({"settlement_version": 1}),
+            observed=initial_record,
         )
     )
     conflict = store.append_observation(
@@ -1262,28 +1458,23 @@ def test_correction_chain_has_one_successor_and_settles_only_unambiguous_head(
     store = CapitalGuardShadowStore(tmp_path / "shadow.db")
     store.initialize(applied_at=NOW)
     candidate_result = _append_candidate(store, candidate())
-    initial = store.append_observation(
-        observation(), (candidate_result.candidate_id,)
+    initial_record = observation()
+    initial = store.append_observation(initial_record, (candidate_result.candidate_id,))
+    correction_record = observation(
+        outcome="no",
+        observed_at=NOW + timedelta(days=1, minutes=5),
+        supersedes=initial.observation_sha256,
     )
     correction = store.append_observation(
-        observation(
-            outcome="no",
-            observed_at=NOW + timedelta(days=1, minutes=5),
-            supersedes=initial.observation_sha256,
-        ),
+        correction_record,
         (candidate_result.candidate_id,),
     )
 
-    stale = ShadowSettlement(
+    stale = shadow_settlement(
         candidate_id=candidate_result.candidate_id,
         observation_sha256=initial.observation_sha256,
-        outcome="yes",
-        settled_at=NOW + timedelta(days=1, minutes=6),
-        gross_payout=D("5"),
-        settlement_fee=D("0"),
-        settlement_refund=D("0"),
-        net_payout=D("5"),
-        details_json=_json({"settlement_version": 1}),
+        observed=initial_record,
+        settled_at=initial_record.effective_at,
     )
     with pytest.raises(ValueError, match="current observation head"):
         store.append_settlement(stale)
@@ -1300,16 +1491,11 @@ def test_correction_chain_has_one_successor_and_settles_only_unambiguous_head(
     assert branch.conflict_id is not None
     assert len(_rows(store.db_path, "SELECT * FROM capital_guard_shadow_observations")) == 2
 
-    ambiguous_head = ShadowSettlement(
+    ambiguous_head = shadow_settlement(
         candidate_id=candidate_result.candidate_id,
         observation_sha256=correction.observation_sha256,
-        outcome="no",
-        settled_at=NOW + timedelta(days=1, minutes=8),
-        gross_payout=D("0"),
-        settlement_fee=D("0"),
-        settlement_refund=D("0"),
-        net_payout=D("0"),
-        details_json=_json({"settlement_version": 1}),
+        observed=correction_record,
+        settled_at=correction_record.effective_at,
     )
     with pytest.raises(ValueError, match="ambiguous correction chain"):
         store.append_settlement(ambiguous_head)

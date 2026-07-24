@@ -38,6 +38,17 @@ from trading.settlement import (
     VoidRefundContract,
     build_settlement_observation,
 )
+from trading.settlement_economics import (
+    SettlementCashflows,
+    SettlementEconomicsBinding,
+    SettlementEconomicsContract,
+    SettlementEconomicsUnscorableError,
+    derive_settlement_cashflows,
+    derive_settlement_fee_receipt,
+    deserialize_settlement_economics_evidence,
+    serialize_settlement_economics_evidence,
+    validate_settlement_economics_contract,
+)
 from trading.venue import MarketRef, Venue
 
 
@@ -565,25 +576,17 @@ _INDEX_STATEMENTS: tuple[tuple[str, str], ...] = (
 
 _TABLE_NAMES = tuple(name for name, _statement in _TABLE_STATEMENTS)
 _TRIGGER_STATEMENTS = _immutable_triggers(_TABLE_NAMES)
-CAPITAL_GUARD_SHADOW_TARGET_STATEMENTS = (
-    _TABLE_STATEMENTS + _INDEX_STATEMENTS + _TRIGGER_STATEMENTS
-)
+CAPITAL_GUARD_SHADOW_TARGET_STATEMENTS = _TABLE_STATEMENTS + _INDEX_STATEMENTS + _TRIGGER_STATEMENTS
 _DDL_CONTRACT = "\n".join(
-    f"-- {name}\n{statement.strip()};"
-    for name, statement in CAPITAL_GUARD_SHADOW_TARGET_STATEMENTS
+    f"-- {name}\n{statement.strip()};" for name, statement in CAPITAL_GUARD_SHADOW_TARGET_STATEMENTS
 )
-CAPITAL_GUARD_SHADOW_DDL_SHA256 = hashlib.sha256(
-    _DDL_CONTRACT.encode("utf-8")
-).hexdigest()
+CAPITAL_GUARD_SHADOW_DDL_SHA256 = hashlib.sha256(_DDL_CONTRACT.encode("utf-8")).hexdigest()
 _TARGET_OBJECT_TYPES = {
     **{name: "table" for name, _statement in _TABLE_STATEMENTS},
     **{name: "index" for name, _statement in _INDEX_STATEMENTS},
     **{name: "trigger" for name, _statement in _TRIGGER_STATEMENTS},
 }
-_TARGET_SQL = {
-    name: _normalize_schema_sql(statement)
-    for name, statement in CAPITAL_GUARD_SHADOW_TARGET_STATEMENTS
-}
+_TARGET_SQL = {name: _normalize_schema_sql(statement) for name, statement in CAPITAL_GUARD_SHADOW_TARGET_STATEMENTS}
 
 
 @dataclass(frozen=True)
@@ -765,9 +768,7 @@ class CapitalGuardCandidate:
             raise ValueError("Kalshi fee_account_precision is not pinned")
         if self.venue is Venue.POLYMARKET_US and self.fee_account_precision is not None:
             raise ValueError("Polymarket fee_account_precision must be absent")
-        if self.venue is Venue.POLYMARKET_US and (
-            self.fee_multiplier != 1 or self.fee_accumulator != 0
-        ):
+        if self.venue is Venue.POLYMARKET_US and (self.fee_multiplier != 1 or self.fee_accumulator != 0):
             raise ValueError("Polymarket fee provenance requires multiplier=1 and accumulator=0")
         _validate_fee_provenance_json(self)
         _entry_accounting(self)
@@ -931,13 +932,9 @@ class SettlementObservationRecord:
         _require_utc_datetime("effective_at", self.effective_at)
         if self.effective_at > self.observed_at:
             raise ValueError("effective_at must not follow observed_at")
-        _require_canonical_json_value(
-            "authoritative_outcome_json", self.authoritative_outcome_json
-        )
+        _require_canonical_json_value("authoritative_outcome_json", self.authoritative_outcome_json)
         _require_canonical_object("source_payload_json", self.source_payload_json)
-        _require_sha256(
-            "authoritative_payload_sha256", self.authoritative_payload_sha256
-        )
+        _require_sha256("authoritative_payload_sha256", self.authoritative_payload_sha256)
         if _sha256(self.source_payload_json) != self.authoritative_payload_sha256:
             raise ValueError("authoritative payload hash does not match source payload")
         _require_sha256("semantic_sha256", self.semantic_sha256)
@@ -971,11 +968,8 @@ class ShadowSettlement:
     observation_sha256: str
     outcome: Literal["yes", "no", "void"]
     settled_at: datetime
-    gross_payout: Decimal
-    settlement_fee: Decimal
-    settlement_refund: Decimal
-    net_payout: Decimal
-    details_json: str
+    economics_contract: SettlementEconomicsContract
+    economics_binding: SettlementEconomicsBinding
 
     def __post_init__(self) -> None:
         _require_sha256("candidate_id", self.candidate_id)
@@ -983,19 +977,10 @@ class ShadowSettlement:
         if self.outcome not in ("yes", "no", "void"):
             raise ValueError("unsupported settlement outcome")
         _require_utc_datetime("settled_at", self.settled_at)
-        for name in (
-            "gross_payout",
-            "settlement_fee",
-            "settlement_refund",
-            "net_payout",
-        ):
-            value = getattr(self, name)
-            _require_decimal(name, value)
-            if value < 0:
-                raise ValueError(f"{name} must be nonnegative")
-        if self.net_payout != self.gross_payout - self.settlement_fee + self.settlement_refund:
-            raise ValueError("net_payout does not reconcile")
-        _require_canonical_object("details_json", self.details_json)
+        if not isinstance(self.economics_contract, SettlementEconomicsContract):
+            raise TypeError("economics_contract must be SettlementEconomicsContract")
+        if not isinstance(self.economics_binding, SettlementEconomicsBinding):
+            raise TypeError("economics_binding must be SettlementEconomicsBinding")
 
 
 @dataclass(frozen=True)
@@ -1141,9 +1126,7 @@ class CapitalGuardShadowStore:
             existing = _user_schema_objects(conn)
             if not existing:
                 if self.existing_only:
-                    raise CapitalGuardShadowSchemaError(
-                        "capital guard shadow schema drift"
-                    )
+                    raise CapitalGuardShadowSchemaError("capital guard shadow schema drift")
                 for _name, statement in CAPITAL_GUARD_SHADOW_TARGET_STATEMENTS:
                     conn.execute(statement)
                 conn.execute(
@@ -1175,9 +1158,7 @@ class CapitalGuardShadowStore:
     ) -> CaptureAttemptWriteResult:
         if not isinstance(record, CapitalGuardCaptureAttempt):
             raise TypeError("record must be CapitalGuardCaptureAttempt")
-        return self._write(
-            lambda conn: self._append_capture_attempt_transaction(conn, record)
-        )
+        return self._write(lambda conn: self._append_capture_attempt_transaction(conn, record))
 
     def append_observation(
         self,
@@ -1191,20 +1172,14 @@ class CapitalGuardShadowStore:
             raise ValueError("at least one candidate_id is required")
         for candidate_id in normalized_ids:
             _require_sha256("candidate_id", candidate_id)
-        return self._write(
-            lambda conn: self._append_observation_transaction(
-                conn, record, normalized_ids
-            )
-        )
+        return self._write(lambda conn: self._append_observation_transaction(conn, record, normalized_ids))
 
     def settlement_market_backlog(
         self,
         *,
         limit: int = MAX_SETTLEMENT_MARKETS_PER_RUN,
     ) -> tuple[SettlementMarketKey, ...]:
-        _require_bounded_limit(
-            "limit", limit, maximum=MAX_SETTLEMENT_MARKETS_PER_RUN
-        )
+        _require_bounded_limit("limit", limit, maximum=MAX_SETTLEMENT_MARKETS_PER_RUN)
 
         def read(conn: sqlite3.Connection) -> tuple[SettlementMarketKey, ...]:
             self._validate_schema(conn)
@@ -1223,9 +1198,7 @@ class CapitalGuardShadowStore:
                 """,
                 (limit,),
             ).fetchall()
-            return tuple(
-                SettlementMarketKey(Venue(str(row[0])), str(row[1])) for row in rows
-            )
+            return tuple(SettlementMarketKey(Venue(str(row[0])), str(row[1])) for row in rows)
 
         return self._read(read)
 
@@ -1237,14 +1210,8 @@ class CapitalGuardShadowStore:
     ) -> CandidateSettlementBacklog:
         if not isinstance(market_key, SettlementMarketKey):
             raise TypeError("market_key must be SettlementMarketKey")
-        _require_bounded_limit(
-            "limit", limit, maximum=MAX_SETTLEMENT_CANDIDATES_PER_MARKET
-        )
-        return self._read(
-            lambda conn: self._candidate_settlement_backlog_transaction(
-                conn, market_key, limit=limit
-            )
-        )
+        _require_bounded_limit("limit", limit, maximum=MAX_SETTLEMENT_CANDIDATES_PER_MARKET)
+        return self._read(lambda conn: self._candidate_settlement_backlog_transaction(conn, market_key, limit=limit))
 
     def current_authoritative_head(
         self,
@@ -1254,7 +1221,9 @@ class CapitalGuardShadowStore:
             raise TypeError("market_ref must be MarketRef")
         return self._read(
             lambda conn: self._current_authoritative_head_transaction(
-                conn, market_ref.venue, market_ref.venue_market_id,
+                conn,
+                market_ref.venue,
+                market_ref.venue_market_id,
                 expected_alias=market_ref.alias,
             )
         )
@@ -1267,9 +1236,7 @@ class CapitalGuardShadowStore:
     ) -> tuple[CurrentHeadSettlement, ...]:
         if not isinstance(market_ref, MarketRef):
             raise TypeError("market_ref must be MarketRef")
-        _require_bounded_limit(
-            "limit", limit, maximum=MAX_SETTLEMENT_CANDIDATES_PER_MARKET
-        )
+        _require_bounded_limit("limit", limit, maximum=MAX_SETTLEMENT_CANDIDATES_PER_MARKET)
 
         def read(conn: sqlite3.Connection) -> tuple[CurrentHeadSettlement, ...]:
             self._validate_schema(conn)
@@ -1351,9 +1318,7 @@ class CapitalGuardShadowStore:
             raise TypeError("error must be CapitalGuardShadowIdentityError")
         _require_utc_datetime("attempted_at", attempted_at)
         return self._write(
-            lambda conn: self._record_identity_quarantine_transaction(
-                conn, error, attempted_at=attempted_at
-            )
+            lambda conn: self._record_identity_quarantine_transaction(conn, error, attempted_at=attempted_at)
         )
 
     def append_settlement(self, record: ShadowSettlement) -> SettlementWriteResult:
@@ -1379,14 +1344,8 @@ class CapitalGuardShadowStore:
             for table in _TABLE_NAMES:
                 if table == "capital_guard_shadow_schema_meta":
                     continue
-                columns = [
-                    str(row[1])
-                    for row in conn.execute(f"PRAGMA table_info({table})")
-                ]
-                records = [
-                    dict(zip(columns, row, strict=True))
-                    for row in conn.execute(f"SELECT * FROM {table}")
-                ]
+                columns = [str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")]
+                records = [dict(zip(columns, row, strict=True)) for row in conn.execute(f"SELECT * FROM {table}")]
                 tables[table] = sorted(records, key=canonical_json)
             return _sha256(canonical_json(content))
 
@@ -1451,8 +1410,7 @@ class CapitalGuardShadowStore:
             if kind != _TARGET_OBJECT_TYPES[name] or _normalize_schema_sql(sql) != _TARGET_SQL[name]:
                 raise CapitalGuardShadowSchemaError("capital guard shadow schema drift")
         meta = conn.execute(
-            "SELECT schema_version, ddl_sha256, applied_at "
-            "FROM capital_guard_shadow_schema_meta"
+            "SELECT schema_version, ddl_sha256, applied_at FROM capital_guard_shadow_schema_meta"
         ).fetchall()
         if len(meta) != 1 or meta[0][0:2] != (
             CAPITAL_GUARD_SHADOW_SCHEMA_VERSION,
@@ -1476,8 +1434,7 @@ class CapitalGuardShadowStore:
         self._validate_schema(conn)
         count = int(
             conn.execute(
-                "SELECT COUNT(*) FROM capital_guard_shadow_candidates "
-                "WHERE venue = ? AND venue_market_id = ?",
+                "SELECT COUNT(*) FROM capital_guard_shadow_candidates WHERE venue = ? AND venue_market_id = ?",
                 (market_key.venue.value, market_key.venue_market_id),
             ).fetchone()[0]
         )
@@ -1494,10 +1451,7 @@ class CapitalGuardShadowStore:
             (market_key.venue.value, market_key.venue_market_id, limit + 1),
         ).fetchall()
         if count > limit:
-            sample = [
-                {"candidate_id": str(row[0]), "identity_sha256": _sha256(str(row[1]))}
-                for row in rows
-            ]
+            sample = [{"candidate_id": str(row[0]), "identity_sha256": _sha256(str(row[1]))} for row in rows]
             raise CapitalGuardShadowIdentityError(
                 "candidate settlement backlog exceeds bounded limit",
                 market_key=market_key,
@@ -1519,9 +1473,7 @@ class CapitalGuardShadowStore:
         ]
         candidate_set_sha256 = _sha256(canonical_json(candidate_evidence))
         raw_identity_set_sha256 = _sha256(
-            canonical_json(
-                sorted({evidence["identity_sha256"] for evidence in candidate_evidence})
-            )
+            canonical_json(sorted({evidence["identity_sha256"] for evidence in candidate_evidence}))
         )
         for _candidate_id_raw, identity_json_raw in rows:
             identity_json = str(identity_json_raw)
@@ -1543,9 +1495,7 @@ class CapitalGuardShadowStore:
                     identity["venue"] != market_key.venue.value
                     or identity["venue_market_id"] != market_key.venue_market_id
                 ):
-                    raise ValueError(
-                        "identity_json does not match candidate market"
-                    )
+                    raise ValueError("identity_json does not match candidate market")
             except (KeyError, TypeError, ValueError) as exc:
                 raise CapitalGuardShadowIdentityError(
                     "candidate settlement identity is ambiguous",
@@ -1578,9 +1528,7 @@ class CapitalGuardShadowStore:
                     ) from exc
             identities.append(singular)
 
-        identity_set = sorted(
-            {canonical_json(identity) for identity in identities}
-        )
+        identity_set = sorted({canonical_json(identity) for identity in identities})
         identity_set_sha256 = _sha256(canonical_json(identity_set))
         if len(identity_set) != 1:
             raise CapitalGuardShadowIdentityError(
@@ -1617,9 +1565,7 @@ class CapitalGuardShadowStore:
             authoritative_head_error = "authoritative_head_invalid"
         if head is not None:
             try:
-                prior_authoritative_observation = (
-                    _rehydrate_current_authoritative_observation(head)
-                )
+                prior_authoritative_observation = _rehydrate_current_authoritative_observation(head)
             except (SettlementDriftError, TypeError, ValueError):
                 authoritative_head_error = "authoritative_head_invalid"
         if head is None or authoritative_head_error is not None:
@@ -1628,14 +1574,11 @@ class CapitalGuardShadowStore:
             linked = {
                 str(row[0])
                 for row in conn.execute(
-                    "SELECT candidate_id FROM capital_guard_shadow_candidate_observations "
-                    "WHERE observation_sha256 = ?",
+                    "SELECT candidate_id FROM capital_guard_shadow_candidate_observations WHERE observation_sha256 = ?",
                     (head.observation_sha256,),
                 )
             }
-            missing = tuple(
-                candidate_id for candidate_id in candidate_ids if candidate_id not in linked
-            )
+            missing = tuple(candidate_id for candidate_id in candidate_ids if candidate_id not in linked)
         return CandidateSettlementBacklog(
             market_ref=market_ref,
             contract_fingerprint=str(identity["contract_fingerprint"]),
@@ -1646,9 +1589,7 @@ class CapitalGuardShadowStore:
             candidate_set_sha256=candidate_set_sha256,
             identity_set_sha256=identity_set_sha256,
             current_head_sha256=(
-                head.observation_sha256
-                if head is not None and authoritative_head_error is None
-                else None
+                head.observation_sha256 if head is not None and authoritative_head_error is None else None
             ),
             prior_authoritative_observation=prior_authoritative_observation,
             authoritative_head_error=authoritative_head_error,
@@ -1708,9 +1649,7 @@ class CapitalGuardShadowStore:
             void_refund_json=None if row[14] is None else str(row[14]),
             void_refund_sha256=None if row[15] is None else str(row[15]),
             semantic_sha256=str(row[16]),
-            supersedes_observation_sha256=(
-                None if row[17] is None else str(row[17])
-            ),
+            supersedes_observation_sha256=(None if row[17] is None else str(row[17])),
         )
 
     def _record_identity_quarantine_transaction(
@@ -1768,9 +1707,7 @@ class CapitalGuardShadowStore:
         error_sha256: str | None,
         quarantine_reason: str | None,
     ) -> SettlementAttemptWriteResult:
-        market_key = SettlementMarketKey(
-            backlog.market_ref.venue, backlog.market_ref.venue_market_id
-        )
+        market_key = SettlementMarketKey(backlog.market_ref.venue, backlog.market_ref.venue_market_id)
         try:
             current = self._candidate_settlement_backlog_transaction(
                 conn,
@@ -1788,10 +1725,7 @@ class CapitalGuardShadowStore:
             and current.candidate_set_sha256 == backlog.candidate_set_sha256
             and current.identity_set_sha256 == backlog.identity_set_sha256
             and current.current_head_sha256 == backlog.current_head_sha256
-            and (
-                current.prior_authoritative_observation
-                == backlog.prior_authoritative_observation
-            )
+            and (current.prior_authoritative_observation == backlog.prior_authoritative_observation)
             and current.authoritative_head_error == backlog.authoritative_head_error
         )
         if not state_matches:
@@ -1800,9 +1734,7 @@ class CapitalGuardShadowStore:
                 backlog,
                 attempted_at=attempted_at,
                 status="quarantined",
-                head_after_sha256=(
-                    current.current_head_sha256 if current is not None else None
-                ),
+                head_after_sha256=(current.current_head_sha256 if current is not None else None),
                 error_taxonomy="concurrent_state_change",
                 error_sha256=_sha256("concurrent_state_change"),
                 quarantine_reason="concurrent_state_change",
@@ -1880,9 +1812,7 @@ class CapitalGuardShadowStore:
                 quarantine_reason="source_drift",
             )
 
-        void_refund_json, void_refund_sha256 = _void_refund_payload(
-            observation.void_refund
-        )
+        void_refund_json, void_refund_sha256 = _void_refund_payload(observation.void_refund)
         semantic_sha256 = _source_settlement_semantic_sha256(
             observation,
             contract_fingerprint=backlog.contract_fingerprint,
@@ -1911,10 +1841,7 @@ class CapitalGuardShadowStore:
         elif head.semantic_sha256 == semantic_sha256:
             source_lineage_matches = observation.supersedes_observation_sha256 is None
         else:
-            source_lineage_matches = (
-                observation.supersedes_observation_sha256
-                == head.authoritative_observation_sha256
-            )
+            source_lineage_matches = observation.supersedes_observation_sha256 == head.authoritative_observation_sha256
         if not source_lineage_matches:
             return self._persist_valid_identity_attempt(
                 conn,
@@ -1958,9 +1885,7 @@ class CapitalGuardShadowStore:
                 head_after_sha256=head.observation_sha256,
                 **authority,
             )
-            preflight = self._preflight_settlement_attempt_transaction(
-                conn, attempt_payload
-            )
+            preflight = self._preflight_settlement_attempt_transaction(conn, attempt_payload)
             if preflight is not None:
                 return preflight
             self._link_candidates_transaction(
@@ -1969,9 +1894,7 @@ class CapitalGuardShadowStore:
                 current.missing_link_candidate_ids,
                 linked_at=attempted_at,
             )
-            persisted = self._persist_settlement_attempt_transaction(
-                conn, attempt_payload, quarantine_reason=None
-            )
+            persisted = self._persist_settlement_attempt_transaction(conn, attempt_payload, quarantine_reason=None)
             return SettlementAttemptWriteResult(
                 status=persisted.status,
                 attempt_id=persisted.attempt_id,
@@ -1980,8 +1903,7 @@ class CapitalGuardShadowStore:
                 observation_sha256=head.observation_sha256,
             )
         if head is not None and (
-            observation.observed_at <= head.observed_at
-            or observation.effective_at < head.effective_at
+            observation.observed_at <= head.observed_at or observation.effective_at < head.effective_at
         ):
             return self._persist_valid_identity_attempt(
                 conn,
@@ -2012,13 +1934,9 @@ class CapitalGuardShadowStore:
             authoritative_payload_sha256=observation.payload_sha256,
             authoritative_observation_sha256=observation.observation_sha256,
             semantic_sha256=semantic_sha256,
-            supersedes_observation_sha256=(
-                head.observation_sha256 if head is not None else None
-            ),
+            supersedes_observation_sha256=(head.observation_sha256 if head is not None else None),
         )
-        predicted_observation_sha256 = _sha256(
-            canonical_json(_observation_payload(record))
-        )
+        predicted_observation_sha256 = _sha256(canonical_json(_observation_payload(record)))
         attempt_payload = self._valid_identity_attempt_payload(
             backlog,
             attempted_at=attempted_at,
@@ -2026,14 +1944,10 @@ class CapitalGuardShadowStore:
             head_after_sha256=predicted_observation_sha256,
             **authority,
         )
-        preflight = self._preflight_settlement_attempt_transaction(
-            conn, attempt_payload
-        )
+        preflight = self._preflight_settlement_attempt_transaction(conn, attempt_payload)
         if preflight is not None:
             return preflight
-        observed = self._append_observation_transaction(
-            conn, record, current.candidate_ids
-        )
+        observed = self._append_observation_transaction(conn, record, current.candidate_ids)
         if observed.status == "conflict":
             return self._persist_valid_identity_attempt(
                 conn,
@@ -2046,9 +1960,7 @@ class CapitalGuardShadowStore:
                 quarantine_reason="observation_fork",
                 **authority,
             )
-        persisted = self._persist_settlement_attempt_transaction(
-            conn, attempt_payload, quarantine_reason=None
-        )
+        persisted = self._persist_settlement_attempt_transaction(conn, attempt_payload, quarantine_reason=None)
         return SettlementAttemptWriteResult(
             status=persisted.status,
             attempt_id=persisted.attempt_id,
@@ -2097,9 +2009,7 @@ class CapitalGuardShadowStore:
             void_refund_json=void_refund_json,
             void_refund_sha256=void_refund_sha256,
         )
-        result = self._persist_settlement_attempt_transaction(
-            conn, payload, quarantine_reason=quarantine_reason
-        )
+        result = self._persist_settlement_attempt_transaction(conn, payload, quarantine_reason=quarantine_reason)
         if result.status == "conflict":
             return result
         return SettlementAttemptWriteResult(
@@ -2165,16 +2075,13 @@ class CapitalGuardShadowStore:
         attempt_id = _settlement_attempt_id(payload)
         payload_sha256 = _sha256(canonical_json(payload))
         existing = conn.execute(
-            "SELECT payload_sha256, status FROM capital_guard_shadow_settlement_attempts "
-            "WHERE attempt_id = ?",
+            "SELECT payload_sha256, status FROM capital_guard_shadow_settlement_attempts WHERE attempt_id = ?",
             (attempt_id,),
         ).fetchone()
         if existing is None:
             return None
         if str(existing[0]) == payload_sha256:
-            return SettlementAttemptWriteResult(
-                "identical", attempt_id, str(existing[1])
-            )
+            return SettlementAttemptWriteResult("identical", attempt_id, str(existing[1]))
         conflict_id = _insert_conflict(
             conn,
             entity_type="settlement_attempt",
@@ -2183,9 +2090,7 @@ class CapitalGuardShadowStore:
             incoming_sha256=payload_sha256,
             created_at=_parse_timestamp(str(payload["attempted_at"])),
         )
-        return SettlementAttemptWriteResult(
-            "conflict", attempt_id, str(existing[1]), conflict_id=conflict_id
-        )
+        return SettlementAttemptWriteResult("conflict", attempt_id, str(existing[1]), conflict_id=conflict_id)
 
     def _persist_settlement_attempt_transaction(
         self,
@@ -2197,15 +2102,12 @@ class CapitalGuardShadowStore:
         attempt_id = _settlement_attempt_id(payload)
         payload_sha256 = _sha256(canonical_json(payload))
         existing = conn.execute(
-            "SELECT payload_sha256, status FROM capital_guard_shadow_settlement_attempts "
-            "WHERE attempt_id = ?",
+            "SELECT payload_sha256, status FROM capital_guard_shadow_settlement_attempts WHERE attempt_id = ?",
             (attempt_id,),
         ).fetchone()
         if existing is not None:
             if str(existing[0]) == payload_sha256:
-                return SettlementAttemptWriteResult(
-                    "identical", attempt_id, str(existing[1])
-                )
+                return SettlementAttemptWriteResult("identical", attempt_id, str(existing[1]))
             conflict_id = _insert_conflict(
                 conn,
                 entity_type="settlement_attempt",
@@ -2214,9 +2116,7 @@ class CapitalGuardShadowStore:
                 incoming_sha256=payload_sha256,
                 created_at=_parse_timestamp(str(payload["attempted_at"])),
             )
-            return SettlementAttemptWriteResult(
-                "conflict", attempt_id, str(existing[1]), conflict_id=conflict_id
-            )
+            return SettlementAttemptWriteResult("conflict", attempt_id, str(existing[1]), conflict_id=conflict_id)
 
         columns = tuple(payload)
         conn.execute(
@@ -2243,9 +2143,7 @@ class CapitalGuardShadowStore:
                     payload["attempted_at"],
                 ),
             )
-        return SettlementAttemptWriteResult(
-            "inserted", attempt_id, str(payload["status"])
-        )
+        return SettlementAttemptWriteResult("inserted", attempt_id, str(payload["status"]))
 
     def _link_candidates_transaction(
         self,
@@ -2276,8 +2174,7 @@ class CapitalGuardShadowStore:
         payload_sha256 = _sha256(canonical_json(values))
         candidate_id = _candidate_id(record)
         existing = conn.execute(
-            "SELECT candidate_id, payload_sha256 FROM capital_guard_shadow_candidates "
-            "WHERE candidate_id = ?",
+            "SELECT candidate_id, payload_sha256 FROM capital_guard_shadow_candidates WHERE candidate_id = ?",
             (candidate_id,),
         ).fetchone()
         if existing is None:
@@ -2294,9 +2191,7 @@ class CapitalGuardShadowStore:
             incoming_sha256=payload_sha256,
             created_at=record.captured_at,
         )
-        return CandidateWriteResult(
-            "conflict", str(existing[0]), payload_sha256, conflict_id
-        )
+        return CandidateWriteResult("conflict", str(existing[0]), payload_sha256, conflict_id)
 
     def _append_capture_attempt_transaction(
         self,
@@ -2505,7 +2400,7 @@ class CapitalGuardShadowStore:
         observation_sha256 = _sha256(canonical_json(payload))
         for candidate_id in candidate_ids:
             candidate = conn.execute(
-                "SELECT venue, venue_market_id, identity_json "
+                "SELECT venue, venue_market_id, identity_json, decision_at "
                 "FROM capital_guard_shadow_candidates "
                 "WHERE candidate_id = ?",
                 (candidate_id,),
@@ -2514,6 +2409,8 @@ class CapitalGuardShadowStore:
                 raise ValueError("candidate_id does not exist")
             if tuple(candidate[0:2]) != (record.venue.value, record.venue_market_id):
                 raise ValueError("observation market identity does not match candidate")
+            if _parse_timestamp(str(candidate[3])) >= record.observed_at:
+                raise ValueError("candidate decision_at must precede observed outcome")
             identity = _require_canonical_object("identity_json", str(candidate[2]))
             expected_identity = {
                 "alias": record.alias,
@@ -2521,13 +2418,8 @@ class CapitalGuardShadowStore:
                 "rules_fingerprint": record.rules_fingerprint,
                 "settlement_fingerprint": record.settlement_fingerprint,
             }
-            if any(
-                identity.get(key) != value
-                for key, value in expected_identity.items()
-            ):
-                raise ValueError(
-                    "observation contract identity does not match candidate"
-                )
+            if any(identity.get(key) != value for key, value in expected_identity.items()):
+                raise ValueError("observation contract identity does not match candidate")
         market_key = _observation_market_key(record.venue, record.venue_market_id)
         root = conn.execute(
             """
@@ -2568,9 +2460,7 @@ class CapitalGuardShadowStore:
             if _parse_timestamp(str(superseded[2])) >= record.observed_at:
                 raise ValueError("correction must follow superseded observation")
             if _parse_timestamp(str(superseded[3])) > record.effective_at:
-                raise ValueError(
-                    "correction effective_at must not precede superseded observation"
-                )
+                raise ValueError("correction effective_at must not precede superseded observation")
             successor = conn.execute(
                 "SELECT observation_sha256 FROM capital_guard_shadow_observations "
                 "WHERE supersedes_observation_sha256 = ?",
@@ -2585,13 +2475,10 @@ class CapitalGuardShadowStore:
                     incoming_sha256=observation_sha256,
                     created_at=record.observed_at,
                 )
-                return ObservationWriteResult(
-                    "conflict", observation_sha256, conflict_id
-                )
+                return ObservationWriteResult("conflict", observation_sha256, conflict_id)
 
         existing = conn.execute(
-            "SELECT 1 FROM capital_guard_shadow_observations "
-            "WHERE observation_sha256 = ?",
+            "SELECT 1 FROM capital_guard_shadow_observations WHERE observation_sha256 = ?",
             (observation_sha256,),
         ).fetchone()
         if existing is None:
@@ -2653,9 +2540,19 @@ class CapitalGuardShadowStore:
     ) -> SettlementWriteResult:
         joined = conn.execute(
             """
-            SELECT c.side, c.executable_quantity, c.gross_entry_debit_dollars,
-                   c.entry_fee_dollars, c.net_entry_debit_dollars,
-                   o.outcome, o.effective_at
+            SELECT c.side, c.executable_quantity, c.executable_price_dollars,
+                   c.decision_at, c.fee_schedule_json, c.fee_formula_type,
+                   c.fee_role, c.fee_multiplier, c.fee_coefficient,
+                   c.fee_account_precision_dollars, c.fee_accumulator_dollars,
+                   c.fill_policy_json, c.gross_entry_debit_dollars,
+                   c.entry_fee_dollars, c.net_entry_debit_dollars, c.venue,
+                   c.identity_json, o.outcome, o.effective_at, o.venue,
+                    o.contract_fingerprint, o.rules_fingerprint,
+                    o.settlement_fingerprint,
+                    o.authoritative_observation_sha256, o.void_refund_json,
+                    o.authoritative_payload_sha256, o.source_id,
+                    o.source_payload_json, c.venue_market_id,
+                    o.venue_market_id, o.alias
             FROM capital_guard_shadow_candidates c
             JOIN capital_guard_shadow_candidate_observations l
               ON l.candidate_id = c.candidate_id
@@ -2667,50 +2564,98 @@ class CapitalGuardShadowStore:
         ).fetchone()
         if joined is None:
             raise ValueError("settlement requires a linked candidate observation")
-        if str(joined[5]) != record.outcome:
+        if str(joined[17]) != record.outcome:
             raise ValueError("settlement outcome does not match observation")
-        if record.settled_at < _parse_timestamp(str(joined[6])):
-            raise ValueError("settled_at must not precede observation effective_at")
+        authoritative_settled_at = _parse_timestamp(str(joined[18]))
+        if record.settled_at != authoritative_settled_at:
+            raise ValueError("settled_at must equal authoritative effective_at")
+        if _parse_timestamp(str(joined[3])) >= authoritative_settled_at:
+            raise ValueError("candidate decision_at must precede authoritative effective_at")
         _require_unambiguous_observation_head(
             conn,
             record.candidate_id,
             record.observation_sha256,
         )
-        quantity = _parse_decimal("candidate.executable_quantity", str(joined[1]))
-        net_entry_debit = _parse_decimal(
-            "candidate.net_entry_debit_dollars", str(joined[4])
+        binding = SettlementEconomicsBinding(
+            venue=Venue(str(joined[19])),
+            venue_market_id=str(joined[29]),
+            account_party_id_sha256=record.economics_binding.account_party_id_sha256,
+            contract_fingerprint=str(joined[20]),
+            rules_fingerprint=str(joined[21]),
+            settlement_fingerprint=str(joined[22]),
+            authoritative_observation_sha256=str(joined[23]),
+            authoritative_payload_sha256=str(joined[25]),
+            source_id=str(joined[26]),
         )
-        if record.gross_payout > 0 and record.settlement_refund > 0:
-            raise ValueError("settlement cannot combine positive payout and refund")
-        if record.settlement_fee > record.gross_payout + record.settlement_refund:
-            raise ValueError("settlement fee exceeds contractual proceeds")
-        if record.outcome == "void":
-            if record.gross_payout != 0:
-                raise ValueError("void payout must be zero")
-            if record.settlement_refund > net_entry_debit:
-                raise ValueError("void refund exceeds immutable entry debit")
-            if record.net_payout > net_entry_debit:
-                raise ValueError("void net payout exceeds immutable entry debit")
-        else:
-            winning_side = str(joined[0]) == record.outcome
-            if winning_side and record.gross_payout != quantity:
-                raise ValueError("winning side gross payout must equal quantity")
-            if not winning_side and record.gross_payout != 0:
-                raise ValueError("losing side gross payout must be zero")
-            if record.settlement_refund != 0:
-                raise ValueError("directional settlement refund must be zero")
-            if record.net_payout > record.gross_payout:
-                raise ValueError("directional net payout exceeds gross payout")
-        payload = _settlement_payload(record)
+        if record.economics_binding != binding:
+            raise ValueError("settlement economics binding does not match linked observation")
+        candidate_identity = _require_canonical_object("candidate.identity_json", str(joined[16]))
+        expected_identity = {
+            "alias": str(joined[30]),
+            "contract_fingerprint": binding.contract_fingerprint,
+            "rules_fingerprint": binding.rules_fingerprint,
+            "settlement_fingerprint": binding.settlement_fingerprint,
+            "venue": binding.venue.value,
+            "venue_market_id": binding.venue_market_id,
+        }
+        if any(candidate_identity.get(key) != value for key, value in expected_identity.items()):
+            raise ValueError("candidate contract identity does not match observation")
+        if str(joined[15]) != binding.venue.value:
+            raise ValueError("candidate venue does not match settlement observation")
+        if str(joined[28]) != binding.venue_market_id:
+            raise ValueError("candidate market identity does not match settlement observation")
+        _gross_entry_debit, entry_fee, _net_entry_debit = _entry_accounting_from_persisted_values(
+            decision_at=str(joined[3]),
+            executable_price=str(joined[2]),
+            executable_quantity=str(joined[1]),
+            fee_schedule_json=str(joined[4]),
+            fee_formula_type=str(joined[5]),
+            fee_role=str(joined[6]),
+            fee_multiplier=str(joined[7]),
+            fee_coefficient=str(joined[8]),
+            fee_account_precision=(None if joined[9] is None else str(joined[9])),
+            fee_accumulator=str(joined[10]),
+            fill_policy_json=str(joined[11]),
+            persisted_gross_entry_debit=str(joined[12]),
+            persisted_entry_fee=str(joined[13]),
+            persisted_net_entry_debit=str(joined[14]),
+        )
+        fee_receipt = derive_settlement_fee_receipt(
+            contract=record.economics_contract,
+            binding=binding,
+            source_payload_json=str(joined[27]),
+        )
+        cashflows = derive_settlement_cashflows(
+            contract=record.economics_contract,
+            binding=binding,
+            outcome=MarketOutcome(record.outcome),
+            held_side=str(joined[0]),
+            quantity=_parse_decimal("candidate.executable_quantity", str(joined[1])),
+            entry_price=_parse_decimal("candidate.executable_price", str(joined[2])),
+            entry_fee=entry_fee,
+            void_refund=_void_refund_from_json(None if joined[24] is None else str(joined[24])),
+            fee_receipt=fee_receipt,
+        )
+        details_json = serialize_settlement_economics_evidence(
+            contract=record.economics_contract,
+            binding=binding,
+            fee_receipt=fee_receipt,
+            cashflows=cashflows,
+        )
+        payload = _settlement_payload(record, cashflows, details_json)
         payload_sha256 = _sha256(canonical_json(payload))
-        settlement_id = _stable_id(
-            "capital-guard-settlement-v1", payload_sha256
-        )
+        settlement_id = _stable_id("capital-guard-settlement-v1", payload_sha256)
         existing = conn.execute(
-            "SELECT payload_sha256 FROM capital_guard_shadow_settlements "
-            "WHERE settlement_id = ?",
-            (settlement_id,),
+            "SELECT settlement_id, observation_sha256, payload_sha256 "
+            "FROM capital_guard_shadow_settlements WHERE candidate_id = ?",
+            (record.candidate_id,),
         ).fetchone()
+        if existing is not None:
+            if str(existing[1]) != record.observation_sha256:
+                raise ValueError("candidate settlement correction cashflow contract is required")
+            if str(existing[2]) != payload_sha256:
+                raise ValueError("financial settlement already exists for candidate observation")
+            return SettlementWriteResult("identical", str(existing[0]))
         if existing is None:
             conn.execute(
                 """
@@ -2731,13 +2676,11 @@ class CapitalGuardShadowStore:
                     payload["settlement_fee_dollars"],
                     payload["settlement_refund_dollars"],
                     payload["net_payout_dollars"],
-                    record.details_json,
+                    details_json,
                     payload_sha256,
                 ),
             )
-        return SettlementWriteResult(
-            "identical" if existing is not None else "inserted", settlement_id
-        )
+        return SettlementWriteResult("inserted", settlement_id)
 
     def _append_evaluation_transaction(
         self,
@@ -2753,7 +2696,8 @@ class CapitalGuardShadowStore:
                    fee_coefficient, fee_account_precision_dollars,
                    fee_accumulator_dollars, fill_policy_json,
                    gross_entry_debit_dollars, entry_fee_dollars,
-                   net_entry_debit_dollars
+                   net_entry_debit_dollars, side, venue, venue_market_id,
+                   identity_json
             FROM capital_guard_shadow_candidates
             """
             "WHERE candidate_id = ?",
@@ -2766,94 +2710,139 @@ class CapitalGuardShadowStore:
         if record.settlement_id is not None:
             settlement = conn.execute(
                 """
-                SELECT candidate_id, settled_at, gross_payout_dollars,
-                       settlement_fee_dollars, settlement_refund_dollars,
-                       net_payout_dollars, observation_sha256
-                FROM capital_guard_shadow_settlements
+                SELECT s.candidate_id, s.settled_at, s.gross_payout_dollars,
+                       s.settlement_fee_dollars, s.settlement_refund_dollars,
+                       s.net_payout_dollars, s.observation_sha256, s.details_json,
+                       o.outcome, o.venue, o.contract_fingerprint,
+                       o.rules_fingerprint, o.settlement_fingerprint,
+                   o.authoritative_observation_sha256, o.void_refund_json,
+                   s.outcome, o.authoritative_payload_sha256, o.source_id,
+                   o.source_payload_json, o.effective_at, o.venue_market_id,
+                   o.alias
+                FROM capital_guard_shadow_settlements AS s
+                JOIN capital_guard_shadow_observations AS o
+                  ON o.observation_sha256 = s.observation_sha256
                 """
-                "WHERE settlement_id = ?",
+                "WHERE s.settlement_id = ?",
                 (record.settlement_id,),
             ).fetchone()
             if settlement is None or str(settlement[0]) != record.candidate_id:
                 raise ValueError("evaluation settlement does not match candidate")
             if record.evaluated_at < _parse_timestamp(str(settlement[1])):
                 raise ValueError("evaluated_at must not precede settled_at")
+            if _parse_timestamp(str(settlement[1])) != _parse_timestamp(str(settlement[19])):
+                raise ValueError("settled_at does not match authoritative effective_at")
+            if _parse_timestamp(str(candidate[0])) >= _parse_timestamp(str(settlement[19])):
+                raise ValueError("candidate decision_at must precede authoritative effective_at")
             _require_unambiguous_observation_head(
                 conn,
                 record.candidate_id,
                 str(settlement[6]),
             )
+            if str(settlement[15]) != str(settlement[8]):
+                raise ValueError("settlement outcome does not match observation")
         if record.status == "settled":
             assert record.entry_fee is not None
             assert record.gross_pnl is not None
             assert record.settlement_fee is not None
             assert record.settlement_refund is not None
             assert record.fee_net_pnl is not None
-            schedule = deserialize_fee_schedule(str(candidate[3]))
-            if fee_type_for_schedule(schedule) != str(candidate[4]):
-                raise ValueError("candidate pinned fee formula does not match")
-            price = _parse_decimal("candidate.executable_price", str(candidate[1]))
-            quantity = _parse_decimal("candidate.executable_quantity", str(candidate[2]))
-            multiplier = _parse_decimal("candidate.fee_multiplier", str(candidate[6]))
-            coefficient = _parse_decimal("candidate.fee_coefficient", str(candidate[7]))
-            precision = (
-                None
-                if candidate[8] is None
-                else _parse_decimal("candidate.fee_account_precision", str(candidate[8]))
+            assert settlement is not None
+            gross_entry_debit, entry_fee, net_entry_debit = _entry_accounting_from_persisted_values(
+                decision_at=str(candidate[0]),
+                executable_price=str(candidate[1]),
+                executable_quantity=str(candidate[2]),
+                fee_schedule_json=str(candidate[3]),
+                fee_formula_type=str(candidate[4]),
+                fee_role=str(candidate[5]),
+                fee_multiplier=str(candidate[6]),
+                fee_coefficient=str(candidate[7]),
+                fee_account_precision=(None if candidate[8] is None else str(candidate[8])),
+                fee_accumulator=str(candidate[9]),
+                fill_policy_json=str(candidate[10]),
+                persisted_gross_entry_debit=str(candidate[11]),
+                persisted_entry_fee=str(candidate[12]),
+                persisted_net_entry_debit=str(candidate[13]),
             )
-            accumulator = _parse_decimal("candidate.fee_accumulator", str(candidate[9]))
-            fill_policy = _require_canonical_object(
-                "candidate.fill_policy_json", str(candidate[10])
-            )
-            gross_entry_debit = quantity * price
-            quote = quote_fee(
-                FeeContext(
-                    schedule_id=schedule,
-                    role=FeeRole(str(candidate[5])),
-                    quantity=quantity,
-                    price=price,
-                    signed_revenue=-gross_entry_debit,
-                    order_id=str(fill_policy["order_id"]),
-                    accumulator=accumulator,
-                    multiplier=multiplier,
-                    coefficient=coefficient,
-                    account_precision=precision,
-                    timestamp=_parse_timestamp(str(candidate[0])),
+            try:
+                evidence = deserialize_settlement_economics_evidence(str(settlement[7]))
+                binding = SettlementEconomicsBinding(
+                    venue=Venue(str(settlement[9])),
+                    venue_market_id=str(settlement[20]),
+                    account_party_id_sha256=evidence.binding.account_party_id_sha256,
+                    contract_fingerprint=str(settlement[10]),
+                    rules_fingerprint=str(settlement[11]),
+                    settlement_fingerprint=str(settlement[12]),
+                    authoritative_observation_sha256=str(settlement[13]),
+                    authoritative_payload_sha256=str(settlement[16]),
+                    source_id=str(settlement[17]),
                 )
-            )
-            net_entry_debit = gross_entry_debit + quote.net_fee
-            persisted_entry = tuple(
-                _parse_decimal(name, str(value))
-                for name, value in zip(
-                    (
-                        "candidate.gross_entry_debit",
-                        "candidate.entry_fee",
-                        "candidate.net_entry_debit",
-                    ),
-                    candidate[11:14],
-                    strict=True,
+                if evidence.binding != binding:
+                    raise SettlementEconomicsUnscorableError("settlement economics binding does not match observation")
+                if str(candidate[15]) != binding.venue.value:
+                    raise SettlementEconomicsUnscorableError("candidate venue does not match settlement observation")
+                if str(candidate[16]) != binding.venue_market_id:
+                    raise SettlementEconomicsUnscorableError(
+                        "candidate market identity does not match settlement observation"
+                    )
+                candidate_identity = _require_canonical_object("candidate.identity_json", str(candidate[17]))
+                expected_identity = {
+                    "alias": str(settlement[21]),
+                    "contract_fingerprint": binding.contract_fingerprint,
+                    "rules_fingerprint": binding.rules_fingerprint,
+                    "settlement_fingerprint": binding.settlement_fingerprint,
+                    "venue": binding.venue.value,
+                    "venue_market_id": binding.venue_market_id,
+                }
+                if any(candidate_identity.get(key) != value for key, value in expected_identity.items()):
+                    raise SettlementEconomicsUnscorableError(
+                        "candidate contract identity does not match settlement observation"
+                    )
+                validate_settlement_economics_contract(
+                    evidence.contract,
+                    venue=binding.venue,
                 )
-            )
-            if persisted_entry != (
-                gross_entry_debit,
-                quote.net_fee,
-                net_entry_debit,
+                fee_receipt = derive_settlement_fee_receipt(
+                    contract=evidence.contract,
+                    binding=binding,
+                    source_payload_json=str(settlement[18]),
+                )
+                cashflows = derive_settlement_cashflows(
+                    contract=evidence.contract,
+                    binding=binding,
+                    outcome=MarketOutcome(str(settlement[8])),
+                    held_side=str(candidate[14]),
+                    quantity=_parse_decimal("candidate.executable_quantity", str(candidate[2])),
+                    entry_price=_parse_decimal("candidate.executable_price", str(candidate[1])),
+                    entry_fee=entry_fee,
+                    void_refund=_void_refund_from_json(None if settlement[14] is None else str(settlement[14])),
+                    fee_receipt=fee_receipt,
+                )
+                persisted_cashflows = SettlementCashflows(
+                    outcome=str(settlement[8]),
+                    gross_payout=_parse_decimal("settlement.gross_payout", str(settlement[2])),
+                    settlement_fee=_parse_decimal("settlement.settlement_fee", str(settlement[3])),
+                    settlement_refund=_parse_decimal("settlement.settlement_refund", str(settlement[4])),
+                    net_payout=_parse_decimal("settlement.net_payout", str(settlement[5])),
+                )
+            except SettlementEconomicsUnscorableError as exc:
+                raise ValueError("settlement economics evidence is unscorable") from exc
+            if (
+                evidence.fee_receipt != fee_receipt
+                or evidence.cashflows != cashflows
+                or cashflows != persisted_cashflows
             ):
-                raise ValueError("candidate pinned fee computation does not match")
-            gross_payout = _parse_decimal("settlement.gross_payout", str(settlement[2]))
-            settlement_fee = _parse_decimal("settlement.settlement_fee", str(settlement[3]))
-            settlement_refund = _parse_decimal("settlement.settlement_refund", str(settlement[4]))
-            net_payout = _parse_decimal("settlement.net_payout", str(settlement[5]))
-            if record.entry_fee != quote.net_fee:
+                raise ValueError("settlement economics cashflows do not match pinned inputs")
+            if record.entry_fee != entry_fee:
                 raise ValueError("evaluation entry_fee does not match pinned fee computation")
-            if record.settlement_fee != settlement_fee:
+            if record.settlement_fee != cashflows.settlement_fee:
                 raise ValueError("evaluation settlement_fee does not match cited settlement")
-            if record.settlement_refund != settlement_refund:
+            if record.settlement_refund != cashflows.settlement_refund:
                 raise ValueError("evaluation settlement_refund does not match cited settlement")
-            expected_gross_pnl = gross_payout + settlement_refund - gross_entry_debit
+            expected_gross_pnl = cashflows.gross_payout + cashflows.settlement_refund - gross_entry_debit
             if record.gross_pnl != expected_gross_pnl:
                 raise ValueError("evaluation gross_pnl does not reconcile")
-            expected_fee_net_pnl = net_payout - net_entry_debit
+            expected_fee_net_pnl = cashflows.net_payout - net_entry_debit
             if record.fee_net_pnl != expected_fee_net_pnl:
                 raise ValueError("evaluation fee_net_pnl does not reconcile")
             if record.bankroll_after != record.bankroll_before + record.fee_net_pnl:
@@ -2864,20 +2853,18 @@ class CapitalGuardShadowStore:
                 raise ValueError("open exposure conservation does not reconcile")
             if record.high_water_mark < max(record.bankroll_before, record.bankroll_after):
                 raise ValueError("high water mark does not reconcile")
-            if record.drawdown_after != max(
-                D0, record.high_water_mark - record.bankroll_after
-            ):
+            if record.drawdown_after != max(D0, record.high_water_mark - record.bankroll_after):
                 raise ValueError("drawdown conservation does not reconcile")
             if record.worst_case_loss != net_entry_debit:
                 raise ValueError("worst-case risk does not match immutable entry debit")
+            # Shadow candidates are counterfactual and have no immutable venue
+            # order/fill receipt. Never persist their modeled cashflow as fee-net P&L.
+            raise ValueError("counterfactual shadow candidate lacks attributed execution receipt")
         payload = _evaluation_payload(record)
         payload_sha256 = _sha256(canonical_json(payload))
-        evaluation_id = _stable_id(
-            "capital-guard-evaluation-v1", payload_sha256
-        )
+        evaluation_id = _stable_id("capital-guard-evaluation-v1", payload_sha256)
         existing = conn.execute(
-            "SELECT payload_sha256 FROM capital_guard_shadow_evaluations "
-            "WHERE evaluation_id = ?",
+            "SELECT payload_sha256 FROM capital_guard_shadow_evaluations WHERE evaluation_id = ?",
             (evaluation_id,),
         ).fetchone()
         if existing is None:
@@ -2917,9 +2904,7 @@ class CapitalGuardShadowStore:
                     payload_sha256,
                 ),
             )
-        return EvaluationWriteResult(
-            "identical" if existing is not None else "inserted", evaluation_id
-        )
+        return EvaluationWriteResult("identical" if existing is not None else "inserted", evaluation_id)
 
 
 def _claim_identity_json(
@@ -2965,9 +2950,7 @@ def _capture_attempt_payload(
         "market_family": record.market_family,
         "non_gate_blocker": record.non_gate_blocker,
         "ordered_failures_json": canonical_json(list(record.ordered_failures)),
-        "ordered_unscorable_reasons_json": canonical_json(
-            list(record.ordered_unscorable_reasons)
-        ),
+        "ordered_unscorable_reasons_json": canonical_json(list(record.ordered_unscorable_reasons)),
         "partial_artifacts_json": record.partial_artifacts_json,
         "requested_stake_dollars": _optional_decimal_text(record.requested_stake),
         "scorable": record.scorable,
@@ -3114,9 +3097,7 @@ def _source_settlement_semantic_sha256(
     rules_fingerprint: str,
     settlement_fingerprint: str,
 ) -> str:
-    void_refund_json, void_refund_sha256 = _void_refund_payload(
-        observation.void_refund
-    )
+    void_refund_json, void_refund_sha256 = _void_refund_payload(observation.void_refund)
     return _sha256(
         canonical_json(
             {
@@ -3167,9 +3148,7 @@ def _void_refund_payload(
         return None, None
     payload = canonical_json(
         {
-            "refund_cents_per_contract": _decimal_text(
-                refund.refund_cents_per_contract
-            ),
+            "refund_cents_per_contract": _decimal_text(refund.refund_cents_per_contract),
             "refunds_entry_fee": refund.refunds_entry_fee,
             "schema_version": 1,
         }
@@ -3186,9 +3165,7 @@ def _void_refund_from_json(value: str | None) -> VoidRefundContract | None:
         payload,
         {"refund_cents_per_contract", "refunds_entry_fee", "schema_version"},
     )
-    if payload["schema_version"] != 1 or not isinstance(
-        payload["refunds_entry_fee"], bool
-    ):
+    if payload["schema_version"] != 1 or not isinstance(payload["refunds_entry_fee"], bool):
         raise ValueError("void_refund_json has an unsupported contract")
     return VoidRefundContract(
         refund_cents_per_contract=_require_decimal_text_value(
@@ -3319,8 +3296,7 @@ def _require_unambiguous_observation_head(
     if _observation_root_is_ambiguous(conn, market_key):
         raise ValueError("settlement has an ambiguous observation root")
     successor = conn.execute(
-        "SELECT 1 FROM capital_guard_shadow_observations "
-        "WHERE supersedes_observation_sha256 = ? LIMIT 1",
+        "SELECT 1 FROM capital_guard_shadow_observations WHERE supersedes_observation_sha256 = ? LIMIT 1",
         (observation_sha256,),
     ).fetchone()
     if successor is not None:
@@ -3349,17 +3325,21 @@ def _require_unambiguous_observation_head(
         raise ValueError("settlement has an ambiguous correction chain")
 
 
-def _settlement_payload(record: ShadowSettlement) -> dict[str, object]:
+def _settlement_payload(
+    record: ShadowSettlement,
+    cashflows: SettlementCashflows,
+    details_json: str,
+) -> dict[str, object]:
     return {
         "candidate_id": record.candidate_id,
-        "details_json": record.details_json,
-        "gross_payout_dollars": _decimal_text(record.gross_payout),
-        "net_payout_dollars": _decimal_text(record.net_payout),
+        "details_json": details_json,
+        "gross_payout_dollars": _decimal_text(cashflows.gross_payout),
+        "net_payout_dollars": _decimal_text(cashflows.net_payout),
         "observation_sha256": record.observation_sha256,
         "outcome": record.outcome,
         "settled_at": _timestamp(record.settled_at),
-        "settlement_fee_dollars": _decimal_text(record.settlement_fee),
-        "settlement_refund_dollars": _decimal_text(record.settlement_refund),
+        "settlement_fee_dollars": _decimal_text(cashflows.settlement_fee),
+        "settlement_refund_dollars": _decimal_text(cashflows.settlement_refund),
     }
 
 
@@ -3498,9 +3478,7 @@ def _validate_gate_inputs_json(value: str, side: str) -> dict[str, object]:
             raise ValueError(f"gate_inputs_json.{gate} is not a typed object")
         _require_exact_keys(f"gate_inputs_json.{gate}", gate_input, expected_keys[gate])
         for field in decimal_fields.get(gate, set()):
-            _require_decimal_text_value(
-                f"gate_inputs_json.{gate}.{field}", gate_input[field]
-            )
+            _require_decimal_text_value(f"gate_inputs_json.{gate}.{field}", gate_input[field])
     g2 = gates["G2"]
     assert isinstance(g2, dict)
     source_classes = g2["evidence_source_classes"]
@@ -3551,17 +3529,11 @@ def _validate_gate_results_json(value: str) -> dict[str, object]:
         if not isinstance(result["applied"], bool) or not isinstance(result["passed"], bool):
             raise ValueError(f"gate_results_json.{gate} is not complete typed evidence")
         failure_reasons = result["failure_reasons"]
-        if not isinstance(failure_reasons, list) or len(set(failure_reasons)) != len(
-            failure_reasons
-        ):
+        if not isinstance(failure_reasons, list) or len(set(failure_reasons)) != len(failure_reasons):
             raise ValueError("gate result failure_reasons are not a typed unique list")
         for failure_reason in failure_reasons:
-            _require_text(
-                f"gate_results_json.{gate}.failure_reasons item", failure_reason
-            )
-            if not (
-                failure_reason == gate or failure_reason.startswith(f"{gate}_")
-            ):
+            _require_text(f"gate_results_json.{gate}.failure_reasons item", failure_reason)
+            if not (failure_reason == gate or failure_reason.startswith(f"{gate}_")):
                 raise ValueError("gate result failure_reason identifies the wrong gate")
         if result["passed"] is bool(failure_reasons):
             raise ValueError("gate result passed and failure_reasons disagree")
@@ -3577,9 +3549,7 @@ def _validate_gate_decision_consistency(
     typed_inputs = {gate: inputs[gate] for gate in _GATE_NAMES}
     typed_results = {gate: results[gate] for gate in _GATE_NAMES}
     if any(
-        not isinstance(typed_inputs[gate], dict)
-        or not isinstance(typed_results[gate], dict)
-        for gate in _GATE_NAMES
+        not isinstance(typed_inputs[gate], dict) or not isinstance(typed_results[gate], dict) for gate in _GATE_NAMES
     ):
         raise ValueError("gate evidence is not typed")
     gate_inputs = {gate: typed_inputs[gate] for gate in _GATE_NAMES}
@@ -3593,9 +3563,7 @@ def _validate_gate_decision_consistency(
         raise ValueError("G1 scaled confidence does not reconcile")
     expected_failures: dict[str, list[str]] = {
         "G1": (
-            []
-            if scaled >= _require_decimal_text_value("G1.threshold", g1["threshold"])
-            else ["G1_blended_confidence"]
+            [] if scaled >= _require_decimal_text_value("G1.threshold", g1["threshold"]) else ["G1_blended_confidence"]
         ),
         "G2": [],
         "G3": [],
@@ -3607,9 +3575,7 @@ def _validate_gate_decision_consistency(
     g2 = gate_inputs["G2"]
     source_lane = str(g2["source_lane"])
     accumulation = source_lane != "fast"
-    if accumulation and len(set(g2["evidence_source_classes"])) < int(
-        g2["minimum_source_classes"]
-    ):
+    if accumulation and len(set(g2["evidence_source_classes"])) < int(g2["minimum_source_classes"]):
         expected_failures["G2"].append("G2_evidence_source_class_diversity")
     g3 = gate_inputs["G3"]
     if _require_decimal_text_value("G3.disagreement_score", g3["disagreement_score"]) > _require_decimal_text_value(
@@ -3632,9 +3598,7 @@ def _validate_gate_decision_consistency(
     g7 = gate_inputs["G7"]
     if _require_decimal_text_value(
         "G7.open_exposure_drawdown_pct", g7["open_exposure_drawdown_pct"]
-    ) > _require_decimal_text_value(
-        "G7.max_open_exposure_drawdown_pct", g7["max_open_exposure_drawdown_pct"]
-    ):
+    ) > _require_decimal_text_value("G7.max_open_exposure_drawdown_pct", g7["max_open_exposure_drawdown_pct"]):
         expected_failures["G7"].append("G7_open_exposure_drawdown")
     liquidity = _optional_decimal_text_value(
         "G7.market_liquidity_dollars",
@@ -3645,12 +3609,9 @@ def _validate_gate_decision_consistency(
         g7["minimum_market_liquidity_dollars"],
     ):
         expected_failures["G7"].append("G7_zero_liquidity")
-    momentum = _optional_decimal_text_value(
-        "G7.market_price_momentum_cents", g7["market_price_momentum_cents"]
-    )
+    momentum = _optional_decimal_text_value("G7.market_price_momentum_cents", g7["market_price_momentum_cents"])
     if momentum is not None and (
-        (g7["intended_side"] == "yes" and momentum < 0)
-        or (g7["intended_side"] == "no" and momentum > 0)
+        (g7["intended_side"] == "yes" and momentum < 0) or (g7["intended_side"] == "no" and momentum > 0)
     ):
         expected_failures["G7"].append("G7_adverse_price_momentum")
 
@@ -3699,9 +3660,7 @@ def _validate_identity_json(record: CapitalGuardCandidate) -> None:
 
 def _validate_book_json(record: CapitalGuardCandidate) -> None:
     book = _require_canonical_object("executable_book_json", record.executable_book_json)
-    _require_exact_keys(
-        "executable_book_json", book, {"asks", "bids", "schema_version", "side"}
-    )
+    _require_exact_keys("executable_book_json", book, {"asks", "bids", "schema_version", "side"})
     _require_schema_version("executable_book_json", book)
     if book["side"] != record.side:
         raise ValueError("executable_book_json side does not match candidate")
@@ -3783,9 +3742,7 @@ def _validate_sizing_json(record: CapitalGuardCandidate) -> None:
             "requested_quantity",
         )
     }
-    if values["bankroll_dollars"] <= 0 or any(
-        values[name] < 0 for name in values if name != "bankroll_dollars"
-    ):
+    if values["bankroll_dollars"] <= 0 or any(values[name] < 0 for name in values if name != "bankroll_dollars"):
         raise ValueError("sizing_json values are outside contractual bounds")
     gross_debit = record.executable_price * record.executable_quantity
     if values["requested_quantity"] != record.executable_quantity:
@@ -3800,9 +3757,7 @@ def _validate_sizing_json(record: CapitalGuardCandidate) -> None:
         raise ValueError("sizing_json capped_dollars exceeds Kelly stake")
     if values["capped_dollars"] < gross_debit:
         raise ValueError("sizing_json capped_dollars cannot fund the candidate")
-    if min(
-        values["max_position_dollars"], values["max_ticker_exposure_dollars"]
-    ) < gross_debit:
+    if min(values["max_position_dollars"], values["max_ticker_exposure_dollars"]) < gross_debit:
         raise ValueError("sizing_json caps cannot fund the candidate")
     if sizing["quantity_method"] != "floor_to_step":
         raise ValueError("sizing_json quantity_method is unsupported")
@@ -3813,9 +3768,7 @@ def _validate_sizing_json(record: CapitalGuardCandidate) -> None:
 
 
 def _validate_fee_provenance_json(record: CapitalGuardCandidate) -> None:
-    provenance = _require_canonical_object(
-        "fee_provenance_json", record.fee_provenance_json
-    )
+    provenance = _require_canonical_object("fee_provenance_json", record.fee_provenance_json)
     _require_exact_keys(
         "fee_provenance_json",
         provenance,
@@ -3844,18 +3797,23 @@ def _validate_fee_provenance_json(record: CapitalGuardCandidate) -> None:
         raise ValueError("fee provenance type does not match candidate")
     if provenance["fee_role"] != record.fee_role.value:
         raise ValueError("fee provenance role does not match candidate")
-    if _require_decimal_text_value(
-        "fee_provenance_json.fee_multiplier", provenance["fee_multiplier"]
-    ) != record.fee_multiplier:
+    if (
+        _require_decimal_text_value("fee_provenance_json.fee_multiplier", provenance["fee_multiplier"])
+        != record.fee_multiplier
+    ):
         raise ValueError("fee provenance multiplier does not match candidate")
-    if _require_decimal_text_value(
-        "fee_provenance_json.coefficient", provenance["coefficient"]
-    ) != record.fee_coefficient:
+    if (
+        _require_decimal_text_value("fee_provenance_json.coefficient", provenance["coefficient"])
+        != record.fee_coefficient
+    ):
         raise ValueError("fee provenance coefficient does not match candidate")
-    if _require_decimal_text_value(
-        "fee_provenance_json.accumulator_dollars",
-        provenance["accumulator_dollars"],
-    ) != record.fee_accumulator:
+    if (
+        _require_decimal_text_value(
+            "fee_provenance_json.accumulator_dollars",
+            provenance["accumulator_dollars"],
+        )
+        != record.fee_accumulator
+    ):
         raise ValueError("fee provenance accumulator does not match candidate")
     account_precision = provenance["account_precision_dollars"]
     if account_precision is None:
@@ -3917,13 +3875,12 @@ def _validate_fill_policy_json(record: CapitalGuardCandidate) -> None:
         _require_sha256(f"fill_policy_json.{key}", fill[key])
     if fill["book_payload_sha256"] != record.book_payload_sha256:
         raise ValueError("fill_policy_json book provenance does not match candidate")
-    if _require_decimal_text_value(
-        "fill_policy_json.price_limit_dollars", fill["price_limit_dollars"]
-    ) != record.executable_price:
+    if (
+        _require_decimal_text_value("fill_policy_json.price_limit_dollars", fill["price_limit_dollars"])
+        != record.executable_price
+    ):
         raise ValueError("fill_policy_json price limit does not match candidate")
-    if _require_decimal_text_value(
-        "fill_policy_json.quantity", fill["quantity"]
-    ) != record.executable_quantity:
+    if _require_decimal_text_value("fill_policy_json.quantity", fill["quantity"]) != record.executable_quantity:
         raise ValueError("fill_policy_json quantity does not match candidate")
 
 
@@ -3951,6 +3908,66 @@ def _entry_accounting(
     net_entry_debit = gross_entry_debit + quote.net_fee
     if net_entry_debit < 0:
         raise ValueError("net entry debit must be nonnegative")
+    return gross_entry_debit, quote.net_fee, net_entry_debit
+
+
+def _entry_accounting_from_persisted_values(
+    *,
+    decision_at: str,
+    executable_price: str,
+    executable_quantity: str,
+    fee_schedule_json: str,
+    fee_formula_type: str,
+    fee_role: str,
+    fee_multiplier: str,
+    fee_coefficient: str,
+    fee_account_precision: str | None,
+    fee_accumulator: str,
+    fill_policy_json: str,
+    persisted_gross_entry_debit: str,
+    persisted_entry_fee: str,
+    persisted_net_entry_debit: str,
+) -> tuple[Decimal, Decimal, Decimal]:
+    """Re-quote the candidate's immutable entry before any financial settlement."""
+
+    schedule = deserialize_fee_schedule(fee_schedule_json)
+    if fee_type_for_schedule(schedule) != fee_formula_type:
+        raise ValueError("candidate pinned fee formula does not match")
+    price = _parse_decimal("candidate.executable_price", executable_price)
+    quantity = _parse_decimal("candidate.executable_quantity", executable_quantity)
+    multiplier = _parse_decimal("candidate.fee_multiplier", fee_multiplier)
+    coefficient = _parse_decimal("candidate.fee_coefficient", fee_coefficient)
+    precision = (
+        None
+        if fee_account_precision is None
+        else _parse_decimal("candidate.fee_account_precision", fee_account_precision)
+    )
+    accumulator = _parse_decimal("candidate.fee_accumulator", fee_accumulator)
+    fill_policy = _require_canonical_object("candidate.fill_policy_json", fill_policy_json)
+    gross_entry_debit = quantity * price
+    quote = quote_fee(
+        FeeContext(
+            schedule_id=schedule,
+            role=FeeRole(fee_role),
+            quantity=quantity,
+            price=price,
+            signed_revenue=-gross_entry_debit,
+            order_id=str(fill_policy["order_id"]),
+            accumulator=accumulator,
+            multiplier=multiplier,
+            coefficient=coefficient,
+            account_precision=precision,
+            timestamp=_parse_timestamp(decision_at),
+        )
+    )
+    net_entry_debit = gross_entry_debit + quote.net_fee
+    persisted = (
+        _parse_decimal("candidate.gross_entry_debit", persisted_gross_entry_debit),
+        _parse_decimal("candidate.entry_fee", persisted_entry_fee),
+        _parse_decimal("candidate.net_entry_debit", persisted_net_entry_debit),
+    )
+    if persisted != (gross_entry_debit, quote.net_fee, net_entry_debit):
+        raise ValueError("candidate pinned fee computation does not match")
     return gross_entry_debit, quote.net_fee, net_entry_debit
 
 
@@ -4007,14 +4024,8 @@ def _validate_partial_artifacts_json(value: str) -> None:
             raise ValueError("unavailable partial artifact cannot carry a payload hash")
 
 
-def _validate_failure_results(
-    failures: tuple[str, ...], gate_results: Mapping[str, object]
-) -> None:
-    actual_failures = tuple(
-        failure
-        for gate in _GATE_NAMES
-        for failure in gate_results[gate]["failure_reasons"]
-    )
+def _validate_failure_results(failures: tuple[str, ...], gate_results: Mapping[str, object]) -> None:
+    actual_failures = tuple(failure for gate in _GATE_NAMES for failure in gate_results[gate]["failure_reasons"])
     if failures != actual_failures:
         raise ValueError("ordered_failures and gate_results_json disagree in content or order")
 
@@ -4124,8 +4135,7 @@ def _user_schema_objects(
     return tuple(
         (str(kind), str(name), str(sql))
         for kind, name, sql in conn.execute(
-            "SELECT type, name, sql FROM sqlite_schema "
-            "WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name"
+            "SELECT type, name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name"
         )
     )
 
@@ -4141,7 +4151,7 @@ def capital_guard_shadow_schema_contract_matches(
     return True
 
 
-CAPITAL_GUARD_SHADOW_REPLAY_SNAPSHOT_VERSION = 1
+CAPITAL_GUARD_SHADOW_REPLAY_SNAPSHOT_VERSION = 2
 
 
 class CapitalGuardShadowReplaySnapshotError(RuntimeError):
@@ -4151,11 +4161,20 @@ class CapitalGuardShadowReplaySnapshotError(RuntimeError):
 @dataclass(frozen=True)
 class CapitalGuardShadowReplayObservation:
     observation_sha256: str
+    venue: Venue
+    venue_market_id: str
+    alias: str
+    contract_fingerprint: str
+    rules_fingerprint: str
+    settlement_fingerprint: str
     outcome: Literal["yes", "no", "void", "unresolved"]
     observed_at: datetime
     effective_at: datetime
     source_id: str
     rules_version: str
+    source_payload_json: str
+    authoritative_payload_sha256: str
+    authoritative_observation_sha256: str
     void_refund_json: str | None
 
 
@@ -4170,6 +4189,8 @@ class CapitalGuardShadowReplaySettlement:
     settlement_refund: Decimal
     net_payout: Decimal
     details_json: str
+    economics_contract_sha256: str | None
+    economics_unscorable_reason: str | None
 
 
 @dataclass(frozen=True)
@@ -4257,9 +4278,7 @@ def _read_replay_snapshot_copy(path: Path) -> CapitalGuardShadowReplaySnapshot:
     except CapitalGuardShadowSchemaError:
         raise
     except (sqlite3.Error, TypeError, ValueError, KeyError) as exc:
-        raise CapitalGuardShadowReplaySnapshotError(
-            "capital guard shadow replay snapshot is invalid"
-        ) from exc
+        raise CapitalGuardShadowReplaySnapshotError("capital guard shadow replay snapshot is invalid") from exc
     finally:
         if conn.in_transaction:
             conn.rollback()
@@ -4286,10 +4305,7 @@ def _replay_source_paths(path: Path) -> tuple[Path, ...]:
 
 
 def _replay_source_signature(path: Path) -> tuple[tuple[str, int, str], ...]:
-    return tuple(
-        (item.name, item.stat().st_size, _file_sha256(item))
-        for item in _replay_source_paths(path)
-    )
+    return tuple((item.name, item.stat().st_size, _file_sha256(item)) for item in _replay_source_paths(path))
 
 
 def _file_sha256(path: Path) -> str:
@@ -4328,11 +4344,7 @@ def _read_replay_snapshot_transaction(
         head = current_heads.get(market_key)
         if head is not None and candidate_links.get(candidate_id) != head.observation_sha256:
             head = None
-        settlement = (
-            settlements.get((candidate_id, head.observation_sha256))
-            if head is not None
-            else None
-        )
+        settlement = settlements.get((candidate_id, head.observation_sha256)) if head is not None else None
         attempt_status, quarantine_reason = latest_attempts.get(market_key, (None, None))
         candidates.append(
             CapitalGuardShadowReplayCandidate(
@@ -4354,9 +4366,7 @@ def _read_replay_snapshot_transaction(
                 fee_multiplier=_parse_decimal("fee_multiplier", str(row[15])),
                 fee_coefficient=_parse_decimal("fee_coefficient", str(row[16])),
                 fee_account_precision=(
-                    None
-                    if row[17] is None
-                    else _parse_decimal("fee_account_precision", str(row[17]))
+                    None if row[17] is None else _parse_decimal("fee_account_precision", str(row[17]))
                 ),
                 fee_accumulator=_parse_decimal("fee_accumulator", str(row[18])),
                 fill_policy_json=str(row[19]),
@@ -4367,13 +4377,9 @@ def _read_replay_snapshot_transaction(
             )
         )
 
-    conflict_count = int(
-        conn.execute("SELECT COUNT(*) FROM capital_guard_shadow_conflicts").fetchone()[0]
-    )
+    conflict_count = int(conn.execute("SELECT COUNT(*) FROM capital_guard_shadow_conflicts").fetchone()[0])
     settlement_quarantine_count = int(
-        conn.execute(
-            "SELECT COUNT(*) FROM capital_guard_shadow_settlement_quarantines"
-        ).fetchone()[0]
+        conn.execute("SELECT COUNT(*) FROM capital_guard_shadow_settlement_quarantines").fetchone()[0]
     )
     payload = {
         "snapshot_version": CAPITAL_GUARD_SHADOW_REPLAY_SNAPSHOT_VERSION,
@@ -4397,9 +4403,13 @@ def _read_current_replay_heads(
 ) -> dict[tuple[str, str], CapitalGuardShadowReplayObservation]:
     rows = conn.execute(
         """
-        SELECT o.observation_sha256, o.venue, o.venue_market_id, o.outcome,
-               o.observed_at, o.effective_at, o.source_id, o.rules_version,
-               o.void_refund_json
+        SELECT o.observation_sha256, o.venue, o.venue_market_id,
+               o.contract_fingerprint, o.rules_fingerprint,
+               o.settlement_fingerprint, o.outcome, o.observed_at,
+               o.effective_at, o.source_id, o.rules_version,
+               o.source_payload_json, o.authoritative_payload_sha256,
+               o.authoritative_observation_sha256, o.void_refund_json,
+               o.alias
         FROM capital_guard_shadow_observations AS o
         LEFT JOIN capital_guard_shadow_observations AS successor
           ON successor.supersedes_observation_sha256 = o.observation_sha256
@@ -4411,17 +4421,24 @@ def _read_current_replay_heads(
     for row in rows:
         key = (str(row[1]), str(row[2]))
         if key in heads:
-            raise CapitalGuardShadowReplaySnapshotError(
-                "capital guard shadow has multiple current observation heads"
-            )
+            raise CapitalGuardShadowReplaySnapshotError("capital guard shadow has multiple current observation heads")
         heads[key] = CapitalGuardShadowReplayObservation(
             observation_sha256=str(row[0]),
-            outcome=_replay_observation_outcome(str(row[3])),
-            observed_at=_parse_timestamp(str(row[4])),
-            effective_at=_parse_timestamp(str(row[5])),
-            source_id=str(row[6]),
-            rules_version=str(row[7]),
-            void_refund_json=None if row[8] is None else str(row[8]),
+            venue=Venue(str(row[1])),
+            venue_market_id=str(row[2]),
+            alias=str(row[15]),
+            contract_fingerprint=str(row[3]),
+            rules_fingerprint=str(row[4]),
+            settlement_fingerprint=str(row[5]),
+            outcome=_replay_observation_outcome(str(row[6])),
+            observed_at=_parse_timestamp(str(row[7])),
+            effective_at=_parse_timestamp(str(row[8])),
+            source_id=str(row[9]),
+            rules_version=str(row[10]),
+            source_payload_json=str(row[11]),
+            authoritative_payload_sha256=str(row[12]),
+            authoritative_observation_sha256=str(row[13]),
+            void_refund_json=None if row[14] is None else str(row[14]),
         )
     return heads
 
@@ -4448,9 +4465,7 @@ def _read_current_replay_candidate_links(
             continue
         previous = links.setdefault(candidate_id, observation_sha256)
         if previous != observation_sha256:
-            raise CapitalGuardShadowReplaySnapshotError(
-                "candidate is linked to multiple current observation heads"
-            )
+            raise CapitalGuardShadowReplaySnapshotError("candidate is linked to multiple current observation heads")
     return links
 
 
@@ -4461,49 +4476,299 @@ def _read_current_replay_settlements(
     if not current_heads:
         return {}
     head_ids = {head.observation_sha256 for head in current_heads.values()}
-    rows = conn.execute(
+    cursor = conn.execute(
         """
-        SELECT settlement_id, candidate_id, observation_sha256, outcome, settled_at,
-               gross_payout_dollars, settlement_fee_dollars,
-               settlement_refund_dollars, net_payout_dollars, details_json
-        FROM capital_guard_shadow_settlements
-        ORDER BY candidate_id, observation_sha256, settlement_id
+        SELECT s.settlement_id AS settlement_id,
+               s.candidate_id AS candidate_id,
+               s.observation_sha256 AS observation_sha256,
+               s.outcome AS settlement_outcome,
+               s.settled_at AS settled_at,
+               s.gross_payout_dollars AS gross_payout_dollars,
+               s.settlement_fee_dollars AS settlement_fee_dollars,
+               s.settlement_refund_dollars AS settlement_refund_dollars,
+               s.net_payout_dollars AS net_payout_dollars,
+               s.details_json AS details_json,
+               s.payload_sha256 AS payload_sha256,
+               o.venue AS observation_venue,
+               o.venue_market_id AS observation_venue_market_id,
+               o.alias AS observation_alias,
+               o.contract_fingerprint AS contract_fingerprint,
+               o.rules_fingerprint AS rules_fingerprint,
+               o.settlement_fingerprint AS settlement_fingerprint,
+               o.authoritative_observation_sha256 AS authoritative_observation_sha256,
+               o.authoritative_payload_sha256 AS authoritative_payload_sha256,
+               o.source_id AS source_id,
+               o.source_payload_json AS source_payload_json,
+               o.outcome AS observation_outcome,
+               o.effective_at AS observation_effective_at,
+               o.observed_at AS observation_observed_at,
+               o.void_refund_json AS void_refund_json,
+               c.side AS candidate_side,
+               c.venue AS candidate_venue,
+               c.venue_market_id AS candidate_venue_market_id,
+               c.identity_json AS candidate_identity_json,
+               c.decision_at AS candidate_decision_at,
+               c.executable_quantity AS executable_quantity,
+               c.executable_price_dollars AS executable_price_dollars,
+               c.fee_schedule_json AS fee_schedule_json,
+               c.fee_formula_type AS fee_formula_type,
+               c.fee_role AS fee_role,
+               c.fee_multiplier AS fee_multiplier,
+               c.fee_coefficient AS fee_coefficient,
+               c.fee_account_precision_dollars AS fee_account_precision_dollars,
+               c.fee_accumulator_dollars AS fee_accumulator_dollars,
+               c.fill_policy_json AS fill_policy_json,
+               c.gross_entry_debit_dollars AS gross_entry_debit_dollars,
+               c.entry_fee_dollars AS entry_fee_dollars,
+               c.net_entry_debit_dollars AS net_entry_debit_dollars
+        FROM capital_guard_shadow_settlements AS s
+        JOIN capital_guard_shadow_observations AS o
+          ON o.observation_sha256 = s.observation_sha256
+        JOIN capital_guard_shadow_candidates AS c
+          ON c.candidate_id = s.candidate_id
+        ORDER BY s.candidate_id, s.observation_sha256, s.settlement_id
         """
-    ).fetchall()
+    )
+    columns = tuple(str(item[0]) for item in cursor.description)
+    rows = tuple(dict(zip(columns, row, strict=True)) for row in cursor.fetchall())
+    settlement_count_by_candidate: dict[str, int] = {}
+    for row in rows:
+        candidate_id = str(row["candidate_id"])
+        settlement_count_by_candidate[candidate_id] = settlement_count_by_candidate.get(candidate_id, 0) + 1
+        if settlement_count_by_candidate[candidate_id] > 1:
+            raise CapitalGuardShadowReplaySnapshotError("candidate has multiple financial settlements")
     settlements: dict[tuple[str, str], CapitalGuardShadowReplaySettlement] = {}
     for row in rows:
-        candidate_id = str(row[1])
-        observation_sha256 = str(row[2])
+        candidate_id = str(row["candidate_id"])
+        observation_sha256 = str(row["observation_sha256"])
         if observation_sha256 not in head_ids:
             continue
         key = (candidate_id, observation_sha256)
         if key in settlements:
-            raise CapitalGuardShadowReplaySnapshotError(
-                "candidate has multiple financial settlements for current head"
-            )
+            raise CapitalGuardShadowReplaySnapshotError("candidate has multiple financial settlements for current head")
+        settled_at = _parse_timestamp(str(row["settled_at"]))
+        outcome = _replay_settlement_outcome(str(row["settlement_outcome"]))
+        gross_payout = _parse_decimal("gross_payout", str(row["gross_payout_dollars"]))
+        settlement_fee = _parse_decimal("settlement_fee", str(row["settlement_fee_dollars"]))
+        settlement_refund = _parse_decimal("settlement_refund", str(row["settlement_refund_dollars"]))
+        net_payout = _parse_decimal("net_payout", str(row["net_payout_dollars"]))
+        details_json = str(row["details_json"])
+        economics_contract_sha256, economics_unscorable_reason = _replay_settlement_economics_status(
+            settlement_id=str(row["settlement_id"]),
+            candidate_id=candidate_id,
+            observation_sha256=observation_sha256,
+            details_json=details_json,
+            payload_sha256=str(row["payload_sha256"]),
+            settled_at=settled_at,
+            outcome=outcome,
+            gross_payout=gross_payout,
+            settlement_fee=settlement_fee,
+            settlement_refund=settlement_refund,
+            net_payout=net_payout,
+            observation_venue=Venue(str(row["observation_venue"])),
+            observation_venue_market_id=str(row["observation_venue_market_id"]),
+            observation_alias=str(row["observation_alias"]),
+            contract_fingerprint=str(row["contract_fingerprint"]),
+            rules_fingerprint=str(row["rules_fingerprint"]),
+            settlement_fingerprint=str(row["settlement_fingerprint"]),
+            authoritative_observation_sha256=str(row["authoritative_observation_sha256"]),
+            authoritative_payload_sha256=str(row["authoritative_payload_sha256"]),
+            source_id=str(row["source_id"]),
+            source_payload_json=str(row["source_payload_json"]),
+            observation_outcome=str(row["observation_outcome"]),
+            observation_effective_at=_parse_timestamp(str(row["observation_effective_at"])),
+            observation_observed_at=_parse_timestamp(str(row["observation_observed_at"])),
+            void_refund_json=(None if row["void_refund_json"] is None else str(row["void_refund_json"])),
+            candidate_side=str(row["candidate_side"]),
+            candidate_venue=Venue(str(row["candidate_venue"])),
+            candidate_venue_market_id=str(row["candidate_venue_market_id"]),
+            candidate_identity_json=str(row["candidate_identity_json"]),
+            candidate_decision_at=_parse_timestamp(str(row["candidate_decision_at"])),
+            executable_quantity=_parse_decimal("candidate.executable_quantity", str(row["executable_quantity"])),
+            executable_price=_parse_decimal("candidate.executable_price", str(row["executable_price_dollars"])),
+            fee_schedule_json=str(row["fee_schedule_json"]),
+            fee_formula_type=str(row["fee_formula_type"]),
+            fee_role=str(row["fee_role"]),
+            fee_multiplier=str(row["fee_multiplier"]),
+            fee_coefficient=str(row["fee_coefficient"]),
+            fee_account_precision=(
+                None if row["fee_account_precision_dollars"] is None else str(row["fee_account_precision_dollars"])
+            ),
+            fee_accumulator=str(row["fee_accumulator_dollars"]),
+            fill_policy_json=str(row["fill_policy_json"]),
+            persisted_gross_entry_debit=str(row["gross_entry_debit_dollars"]),
+            persisted_entry_fee=str(row["entry_fee_dollars"]),
+            persisted_net_entry_debit=str(row["net_entry_debit_dollars"]),
+        )
+        settlements[key] = CapitalGuardShadowReplaySettlement(
+            settlement_id=str(row["settlement_id"]),
+            observation_sha256=observation_sha256,
+            outcome=outcome,
+            settled_at=settled_at,
+            gross_payout=gross_payout,
+            settlement_fee=settlement_fee,
+            settlement_refund=settlement_refund,
+            net_payout=net_payout,
+            details_json=details_json,
+            economics_contract_sha256=economics_contract_sha256,
+            economics_unscorable_reason=economics_unscorable_reason,
+        )
+    return settlements
+
+
+def _replay_settlement_economics_status(
+    *,
+    settlement_id: str,
+    candidate_id: str,
+    observation_sha256: str,
+    details_json: str,
+    payload_sha256: str,
+    settled_at: datetime,
+    outcome: Literal["yes", "no", "void"],
+    gross_payout: Decimal,
+    settlement_fee: Decimal,
+    settlement_refund: Decimal,
+    net_payout: Decimal,
+    observation_venue: Venue,
+    observation_venue_market_id: str,
+    observation_alias: str,
+    contract_fingerprint: str,
+    rules_fingerprint: str,
+    settlement_fingerprint: str,
+    authoritative_observation_sha256: str,
+    authoritative_payload_sha256: str,
+    source_id: str,
+    source_payload_json: str,
+    observation_outcome: str,
+    observation_effective_at: datetime,
+    observation_observed_at: datetime,
+    void_refund_json: str | None,
+    candidate_side: str,
+    candidate_venue: Venue,
+    candidate_venue_market_id: str,
+    candidate_identity_json: str,
+    candidate_decision_at: datetime,
+    executable_quantity: Decimal,
+    executable_price: Decimal,
+    fee_schedule_json: str,
+    fee_formula_type: str,
+    fee_role: str,
+    fee_multiplier: str,
+    fee_coefficient: str,
+    fee_account_precision: str | None,
+    fee_accumulator: str,
+    fill_policy_json: str,
+    persisted_gross_entry_debit: str,
+    persisted_entry_fee: str,
+    persisted_net_entry_debit: str,
+) -> tuple[str | None, str | None]:
+    """Revalidate rows without treating a counterfactual shadow fill as realized P&L."""
+
+    try:
+        if outcome != observation_outcome:
+            raise SettlementEconomicsUnscorableError("settlement outcome does not match observation")
+        if settled_at != observation_effective_at:
+            raise SettlementEconomicsUnscorableError("settled_at does not match authoritative effective_at")
+        if candidate_decision_at >= observation_observed_at:
+            raise SettlementEconomicsUnscorableError("candidate decision does not precede observed outcome")
+        if candidate_decision_at >= observation_effective_at:
+            raise SettlementEconomicsUnscorableError("candidate decision does not precede authoritative effective_at")
+        if candidate_venue is not observation_venue:
+            raise SettlementEconomicsUnscorableError("candidate venue does not match observation")
+        if candidate_venue_market_id != observation_venue_market_id:
+            raise SettlementEconomicsUnscorableError("candidate market identity does not match observation")
+        candidate_identity = _require_canonical_object("candidate.identity_json", candidate_identity_json)
+        expected_identity = {
+            "alias": observation_alias,
+            "contract_fingerprint": contract_fingerprint,
+            "rules_fingerprint": rules_fingerprint,
+            "settlement_fingerprint": settlement_fingerprint,
+            "venue": observation_venue.value,
+            "venue_market_id": observation_venue_market_id,
+        }
+        if any(candidate_identity.get(key) != value for key, value in expected_identity.items()):
+            raise SettlementEconomicsUnscorableError("candidate contract identity does not match observation")
+        evidence = deserialize_settlement_economics_evidence(details_json)
+        binding = SettlementEconomicsBinding(
+            venue=observation_venue,
+            venue_market_id=observation_venue_market_id,
+            account_party_id_sha256=evidence.binding.account_party_id_sha256,
+            contract_fingerprint=contract_fingerprint,
+            rules_fingerprint=rules_fingerprint,
+            settlement_fingerprint=settlement_fingerprint,
+            authoritative_observation_sha256=authoritative_observation_sha256,
+            authoritative_payload_sha256=authoritative_payload_sha256,
+            source_id=source_id,
+        )
+        if evidence.binding != binding:
+            raise SettlementEconomicsUnscorableError("settlement economics binding does not match observation")
+        validate_settlement_economics_contract(
+            evidence.contract,
+            venue=observation_venue,
+        )
+        fee_receipt = derive_settlement_fee_receipt(
+            contract=evidence.contract,
+            binding=binding,
+            source_payload_json=source_payload_json,
+        )
+        _gross_entry_debit, entry_fee, _net_entry_debit = _entry_accounting_from_persisted_values(
+            decision_at=_timestamp(candidate_decision_at),
+            executable_price=_decimal_text(executable_price),
+            executable_quantity=_decimal_text(executable_quantity),
+            fee_schedule_json=fee_schedule_json,
+            fee_formula_type=fee_formula_type,
+            fee_role=fee_role,
+            fee_multiplier=fee_multiplier,
+            fee_coefficient=fee_coefficient,
+            fee_account_precision=fee_account_precision,
+            fee_accumulator=fee_accumulator,
+            fill_policy_json=fill_policy_json,
+            persisted_gross_entry_debit=persisted_gross_entry_debit,
+            persisted_entry_fee=persisted_entry_fee,
+            persisted_net_entry_debit=persisted_net_entry_debit,
+        )
+        cashflows = derive_settlement_cashflows(
+            contract=evidence.contract,
+            binding=binding,
+            outcome=MarketOutcome(outcome),
+            held_side=candidate_side,
+            quantity=executable_quantity,
+            entry_price=executable_price,
+            entry_fee=entry_fee,
+            void_refund=_void_refund_from_json(void_refund_json),
+            fee_receipt=fee_receipt,
+        )
+        persisted_cashflows = SettlementCashflows(
+            outcome=outcome,
+            gross_payout=gross_payout,
+            settlement_fee=settlement_fee,
+            settlement_refund=settlement_refund,
+            net_payout=net_payout,
+        )
+        if evidence.fee_receipt != fee_receipt or evidence.cashflows != cashflows or cashflows != persisted_cashflows:
+            raise SettlementEconomicsUnscorableError("settlement economics cashflows do not match persisted settlement")
         record = ShadowSettlement(
             candidate_id=candidate_id,
             observation_sha256=observation_sha256,
-            outcome=_replay_settlement_outcome(str(row[3])),
-            settled_at=_parse_timestamp(str(row[4])),
-            gross_payout=_parse_decimal("gross_payout", str(row[5])),
-            settlement_fee=_parse_decimal("settlement_fee", str(row[6])),
-            settlement_refund=_parse_decimal("settlement_refund", str(row[7])),
-            net_payout=_parse_decimal("net_payout", str(row[8])),
-            details_json=str(row[9]),
+            outcome=outcome,
+            settled_at=settled_at,
+            economics_contract=evidence.contract,
+            economics_binding=binding,
         )
-        settlements[key] = CapitalGuardShadowReplaySettlement(
-            settlement_id=str(row[0]),
-            observation_sha256=record.observation_sha256,
-            outcome=record.outcome,
-            settled_at=record.settled_at,
-            gross_payout=record.gross_payout,
-            settlement_fee=record.settlement_fee,
-            settlement_refund=record.settlement_refund,
-            net_payout=record.net_payout,
-            details_json=record.details_json,
-        )
-    return settlements
+        payload = _settlement_payload(record, cashflows, details_json)
+        expected_payload_sha256 = _sha256(canonical_json(payload))
+        if payload_sha256 != expected_payload_sha256:
+            raise SettlementEconomicsUnscorableError("settlement payload hash does not match immutable settlement")
+        expected_settlement_id = _stable_id("capital-guard-settlement-v1", expected_payload_sha256)
+        if settlement_id != expected_settlement_id:
+            raise SettlementEconomicsUnscorableError("settlement id does not match immutable settlement")
+    except (SettlementEconomicsUnscorableError, ValueError, TypeError, KeyError):
+        return None, "legacy_or_invalid_settlement_economics"
+    # A G7 shadow candidate has no venue order/fill identity. A market/account
+    # settlement report can validate market-level fee data, but cannot attribute
+    # it to this hypothetical fill. Keep the row visible and unscorable until an
+    # authenticated candidate-to-fill-to-settlement adapter exists.
+    return None, "counterfactual_shadow_candidate_lacks_attributed_execution_receipt"
 
 
 def _read_latest_replay_attempts(
@@ -4573,9 +4838,7 @@ def _replay_candidate_payload(
         "fee_account_precision": _optional_decimal_text(candidate.fee_account_precision),
         "fee_accumulator": _decimal_text(candidate.fee_accumulator),
         "fill_policy_json": candidate.fill_policy_json,
-        "current_observation": _replay_observation_payload(
-            candidate.current_observation
-        ),
+        "current_observation": _replay_observation_payload(candidate.current_observation),
         "current_settlement": _replay_settlement_payload(candidate.current_settlement),
         "latest_settlement_attempt_status": candidate.latest_settlement_attempt_status,
         "latest_quarantine_reason": candidate.latest_quarantine_reason,
@@ -4588,11 +4851,20 @@ def _replay_observation_payload(
     if observation is None:
         return None
     return {
+        "authoritative_observation_sha256": observation.authoritative_observation_sha256,
+        "authoritative_payload_sha256": observation.authoritative_payload_sha256,
+        "contract_fingerprint": observation.contract_fingerprint,
+        "effective_at": _timestamp(observation.effective_at),
         "observation_sha256": observation.observation_sha256,
         "outcome": observation.outcome,
         "observed_at": _timestamp(observation.observed_at),
-        "effective_at": _timestamp(observation.effective_at),
+        "rules_fingerprint": observation.rules_fingerprint,
         "source_id": observation.source_id,
+        "source_payload_json": observation.source_payload_json,
+        "settlement_fingerprint": observation.settlement_fingerprint,
+        "venue": observation.venue.value,
+        "venue_market_id": observation.venue_market_id,
+        "alias": observation.alias,
         "rules_version": observation.rules_version,
         "void_refund_json": observation.void_refund_json,
     }

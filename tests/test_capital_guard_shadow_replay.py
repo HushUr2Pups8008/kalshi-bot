@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import timedelta
-from decimal import Decimal
 import json
 import os
 from pathlib import Path
@@ -11,6 +10,7 @@ import sqlite3
 import pytest
 
 from scripts.capital_guard_shadow_replay import (
+    _financial_prerequisites,
     _safe_output_path,
     build_replay_report,
     main,
@@ -21,11 +21,12 @@ from tests.test_capital_guard_shadow import (
     candidate,
     capture_attempt,
     observation,
+    shadow_settlement,
 )
 from trading.capital_guard_shadow import (
     CapitalGuardShadowStore,
     CapitalGuardShadowReplaySnapshotError,
-    ShadowSettlement,
+    SettlementObservationRecord,
     canonical_json,
     read_capital_guard_shadow_replay_snapshot,
 )
@@ -64,21 +65,15 @@ def _append_settlement(
     *,
     candidate_id: str,
     observation_sha256: str,
-    outcome: str,
-    settled_at,
-    gross_payout: Decimal,
+    observed: SettlementObservationRecord,
+    settled_at=None,
 ) -> None:
     store.append_settlement(
-        ShadowSettlement(
+        shadow_settlement(
             candidate_id=candidate_id,
             observation_sha256=observation_sha256,
-            outcome=outcome,
+            observed=observed,
             settled_at=settled_at,
-            gross_payout=gross_payout,
-            settlement_fee=Decimal("0"),
-            settlement_refund=Decimal("0"),
-            net_payout=gross_payout,
-            details_json=canonical_json({"schema_version": 1}),
         )
     )
 
@@ -86,6 +81,26 @@ def _append_settlement(
 def _sidecars(path: Path) -> dict[str, bytes]:
     paths = [path, path.with_name(path.name + "-wal"), path.with_name(path.name + "-shm")]
     return {str(item): item.read_bytes() for item in paths if item.exists()}
+
+
+def test_fee_receipt_prerequisite_requires_complete_sole_g7_terminal_coverage() -> None:
+    mixed_prerequisites = _financial_prerequisites(
+        {
+            "sole_g7_terminal_authoritative_head_rows": 2,
+            "sole_g7_typed_financial_settlement_rows": 1,
+            "sole_g7_unscorable_financial_settlement_rows": 1,
+        }
+    )
+    complete_prerequisites = _financial_prerequisites(
+        {
+            "sole_g7_terminal_authoritative_head_rows": 2,
+            "sole_g7_typed_financial_settlement_rows": 2,
+            "sole_g7_unscorable_financial_settlement_rows": 0,
+        }
+    )
+
+    assert "authoritative_settlement_fee_receipt_coverage_missing" in mixed_prerequisites
+    assert "authoritative_settlement_fee_receipt_coverage_missing" not in complete_prerequisites
 
 
 def test_snapshot_is_read_only_and_selects_only_the_current_correction_head(
@@ -104,18 +119,14 @@ def test_snapshot_is_read_only_and_selects_only_the_current_correction_head(
         outcome="yes",
         observed_at=NOW + timedelta(minutes=1),
     )
-    first_sha = store.append_observation(
-        first, candidate_ids=(candidate_id,)
-    ).observation_sha256
+    first_sha = store.append_observation(first, candidate_ids=(candidate_id,)).observation_sha256
     corrected = observation(
         venue_market_id=record.venue_market_id,
         outcome="no",
         observed_at=NOW + timedelta(minutes=2),
         supersedes=first_sha,
     )
-    corrected_sha = store.append_observation(
-        corrected, candidate_ids=(candidate_id,)
-    ).observation_sha256
+    corrected_sha = store.append_observation(corrected, candidate_ids=(candidate_id,)).observation_sha256
     before = _sidecars(store.db_path)
 
     snapshot = read_capital_guard_shadow_replay_snapshot(store.db_path)
@@ -195,7 +206,8 @@ def test_report_uses_decision_time_oos_boundary_and_is_always_fail_closed(
     assert report["promotion"] == {
         "eligible": False,
         "failure_reasons": [
-            "committed_settlement_economics_contract_missing",
+            "authoritative_settlement_fee_receipt_coverage_missing",
+            "authenticated_candidate_fill_settlement_attribution_missing",
             "settlement_correction_cashflow_contract_missing",
             "post_entry_executable_mark_contract_missing",
             "preregistered_counterfactual_baseline_manifest_missing",
@@ -234,7 +246,7 @@ def test_report_keeps_other_gate_rows_as_diagnostics_only(tmp_path: Path) -> Non
     assert scopes == ["sole_g7_candidate", "nonsole_g7_diagnostic"]
 
 
-def test_report_marks_financial_settlement_as_unverified_without_reading_amounts(
+def test_report_keeps_counterfactual_shadow_settlement_unscorable(
     tmp_path: Path,
 ) -> None:
     store = _store(tmp_path)
@@ -248,18 +260,15 @@ def test_report_marks_financial_settlement_as_unverified_without_reading_amounts
     head = observation(
         venue_market_id=record.venue_market_id,
         outcome="yes",
-        observed_at=NOW + timedelta(minutes=1),
+        observed_at=NOW + timedelta(minutes=2),
     )
-    head_sha = store.append_observation(
-        head, candidate_ids=(candidate_id,)
-    ).observation_sha256
+    head_sha = store.append_observation(head, candidate_ids=(candidate_id,)).observation_sha256
     _append_settlement(
         store,
         candidate_id=candidate_id,
         observation_sha256=head_sha,
-        outcome="yes",
-        settled_at=NOW + timedelta(minutes=2),
-        gross_payout=record.executable_quantity,
+        observed=head,
+        settled_at=head.effective_at,
     )
 
     report = build_replay_report(
@@ -269,14 +278,218 @@ def test_report_marks_financial_settlement_as_unverified_without_reading_amounts
     )
 
     diagnostic = report["candidate_diagnostics"][0]
-    assert diagnostic["current_head_status"] == (
-        "terminal_head_with_unverified_financial_settlement"
-    )
+    current = read_capital_guard_shadow_replay_snapshot(store.db_path).candidates[0].current_settlement
+    assert current is not None
+    assert current.economics_contract_sha256 is None
+    assert current.economics_unscorable_reason == ("counterfactual_shadow_candidate_lacks_attributed_execution_receipt")
+    assert diagnostic["current_head_status"] == ("terminal_head_with_unscorable_financial_settlement")
     assert diagnostic["financial_settlement_present"] is True
+    assert diagnostic["financial_settlement_economics"] == "unscorable"
+    assert report["coverage"]["typed_financial_settlement_rows"] == 0
+    assert report["coverage"]["unscorable_financial_settlement_rows"] == 1
+    assert "authoritative_settlement_fee_receipt_coverage_missing" in report["financial_prerequisites"]
+    assert "committed_settlement_economics_contract_missing" not in report["financial_prerequisites"]
+    assert "settlement_correction_cashflow_contract_missing" in report["financial_prerequisites"]
     serialized = json.dumps(report, sort_keys=True)
     assert "pnl" not in serialized.lower()
     assert "gross_payout" not in serialized
-    assert "settlement_fee" not in serialized
+    assert "settlement_fee_dollars" not in serialized
+
+
+def test_legacy_financial_settlement_stays_readable_but_unscorable(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    record = _candidate_at(
+        decision_key="replay-legacy-settlement",
+        lifecycle_id="replay-legacy-settlement",
+        venue_market_id="REPLAY-LEGACY-SETTLEMENT",
+        at=NOW,
+    )
+    candidate_id = _append_candidate(store, record).candidate_id
+    head = observation(
+        venue_market_id=record.venue_market_id,
+        outcome="yes",
+        observed_at=NOW + timedelta(minutes=2),
+    )
+    head_sha = store.append_observation(head, candidate_ids=(candidate_id,)).observation_sha256
+    settlement_id = "d" * 64
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO capital_guard_shadow_settlements (
+                settlement_id, candidate_id, observation_sha256, outcome,
+                settled_at, gross_payout_dollars, settlement_fee_dollars,
+                settlement_refund_dollars, net_payout_dollars, details_json,
+                payload_sha256
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                settlement_id,
+                candidate_id,
+                head_sha,
+                "yes",
+                "2026-07-24T04:32:00.000000Z",
+                "5",
+                "0",
+                "0",
+                "5",
+                '{"schema_version":1}',
+                "e" * 64,
+            ),
+        )
+
+    snapshot = read_capital_guard_shadow_replay_snapshot(store.db_path)
+    current = snapshot.candidates[0].current_settlement
+    report = build_replay_report(
+        snapshot,
+        oos_start=NOW,
+        oos_end=NOW + timedelta(days=1),
+    )
+
+    assert current is not None
+    assert current.economics_contract_sha256 is None
+    assert current.economics_unscorable_reason == "legacy_or_invalid_settlement_economics"
+    assert report["coverage"]["unscorable_financial_settlement_rows"] == 1
+    assert report["candidate_diagnostics"][0]["current_head_status"] == (
+        "terminal_head_with_unscorable_financial_settlement"
+    )
+    assert report["promotion"]["eligible"] is False
+
+
+def test_replay_rejects_forged_cashflows_even_when_envelope_matches_row(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    record = _candidate_at(
+        decision_key="replay-forged-cashflow",
+        lifecycle_id="replay-forged-cashflow",
+        venue_market_id="REPLAY-FORGED-CASHFLOW",
+        at=NOW,
+    )
+    candidate_id = _append_candidate(store, record).candidate_id
+    forged_record = _candidate_at(
+        decision_key="replay-forged-cashflow-raw",
+        lifecycle_id="replay-forged-cashflow-raw",
+        venue_market_id=record.venue_market_id,
+        at=NOW + timedelta(seconds=1),
+    )
+    forged_candidate_id = _append_candidate(store, forged_record).candidate_id
+    head = observation(
+        venue_market_id=record.venue_market_id,
+        outcome="yes",
+        observed_at=NOW + timedelta(minutes=2),
+    )
+    head_sha = store.append_observation(head, candidate_ids=(candidate_id, forged_candidate_id)).observation_sha256
+    settlement = store.append_settlement(
+        shadow_settlement(
+            candidate_id=candidate_id,
+            observation_sha256=head_sha,
+            observed=head,
+        )
+    )
+    with sqlite3.connect(store.db_path) as conn:
+        current_details = json.loads(
+            conn.execute(
+                "SELECT details_json FROM capital_guard_shadow_settlements WHERE settlement_id = ?",
+                (settlement.settlement_id,),
+            ).fetchone()[0]
+        )
+        current_details["cashflows"]["gross_payout_dollars"] = "6"
+        current_details["cashflows"]["net_payout_dollars"] = "6"
+        details_json = canonical_json(current_details)
+        conn.execute(
+            """
+            INSERT INTO capital_guard_shadow_settlements (
+                settlement_id, candidate_id, observation_sha256, outcome,
+                settled_at, gross_payout_dollars, settlement_fee_dollars,
+                settlement_refund_dollars, net_payout_dollars, details_json,
+                payload_sha256
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "d" * 64,
+                forged_candidate_id,
+                head_sha,
+                "yes",
+                head.effective_at.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                "6",
+                "0",
+                "0",
+                "6",
+                details_json,
+                "f" * 64,
+            ),
+        )
+
+    current = read_capital_guard_shadow_replay_snapshot(store.db_path).candidates[1].current_settlement
+
+    assert current is not None
+    assert current.economics_contract_sha256 is None
+    assert current.economics_unscorable_reason == "legacy_or_invalid_settlement_economics"
+
+
+def test_replay_rejects_tampered_settlement_payload_hash(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    record = _candidate_at(
+        decision_key="replay-tampered-payload",
+        lifecycle_id="replay-tampered-payload",
+        venue_market_id="REPLAY-TAMPERED-PAYLOAD",
+        at=NOW,
+    )
+    candidate_id = _append_candidate(store, record).candidate_id
+    forged_record = _candidate_at(
+        decision_key="replay-tampered-payload-raw",
+        lifecycle_id="replay-tampered-payload-raw",
+        venue_market_id=record.venue_market_id,
+        at=NOW + timedelta(seconds=1),
+    )
+    forged_candidate_id = _append_candidate(store, forged_record).candidate_id
+    head = observation(
+        venue_market_id=record.venue_market_id,
+        outcome="yes",
+        observed_at=NOW + timedelta(minutes=2),
+    )
+    head_sha = store.append_observation(head, candidate_ids=(candidate_id, forged_candidate_id)).observation_sha256
+    settlement = store.append_settlement(
+        shadow_settlement(
+            candidate_id=candidate_id,
+            observation_sha256=head_sha,
+            observed=head,
+        )
+    )
+    with sqlite3.connect(store.db_path) as conn:
+        details_json = conn.execute(
+            "SELECT details_json FROM capital_guard_shadow_settlements WHERE settlement_id = ?",
+            (settlement.settlement_id,),
+        ).fetchone()[0]
+        conn.execute(
+            """
+            INSERT INTO capital_guard_shadow_settlements (
+                settlement_id, candidate_id, observation_sha256, outcome,
+                settled_at, gross_payout_dollars, settlement_fee_dollars,
+                settlement_refund_dollars, net_payout_dollars, details_json,
+                payload_sha256
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "e" * 64,
+                forged_candidate_id,
+                head_sha,
+                "yes",
+                head.effective_at.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                "5",
+                "0",
+                "0",
+                "5",
+                details_json,
+                "f" * 64,
+            ),
+        )
+
+    current = read_capital_guard_shadow_replay_snapshot(store.db_path).candidates[1].current_settlement
+
+    assert current is not None
+    assert current.economics_contract_sha256 is None
+    assert current.economics_unscorable_reason == "legacy_or_invalid_settlement_economics"
 
 
 def test_report_uses_current_head_diagnostic_after_correction(tmp_path: Path) -> None:
@@ -293,18 +506,14 @@ def test_report_uses_current_head_diagnostic_after_correction(tmp_path: Path) ->
         outcome="yes",
         observed_at=NOW + timedelta(minutes=1),
     )
-    first_sha = store.append_observation(
-        first, candidate_ids=(candidate_id,)
-    ).observation_sha256
+    first_sha = store.append_observation(first, candidate_ids=(candidate_id,)).observation_sha256
     corrected = observation(
         venue_market_id=record.venue_market_id,
         outcome="no",
         observed_at=NOW + timedelta(minutes=2),
         supersedes=first_sha,
     )
-    corrected_sha = store.append_observation(
-        corrected, candidate_ids=(candidate_id,)
-    ).observation_sha256
+    corrected_sha = store.append_observation(corrected, candidate_ids=(candidate_id,)).observation_sha256
 
     report = build_replay_report(
         read_capital_guard_shadow_replay_snapshot(store.db_path),
@@ -343,18 +552,21 @@ def test_cli_writes_safe_report_without_mutating_source(tmp_path: Path) -> None:
     output = tmp_path / "reports" / "replay.json"
     before = _sidecars(store.db_path)
 
-    assert main(
-        [
-            "--db",
-            str(store.db_path),
-            "--oos-start",
-            NOW.isoformat(),
-            "--oos-end",
-            (NOW + timedelta(days=1)).isoformat(),
-            "--output",
-            str(output),
-        ]
-    ) == 0
+    assert (
+        main(
+            [
+                "--db",
+                str(store.db_path),
+                "--oos-start",
+                NOW.isoformat(),
+                "--oos-end",
+                (NOW + timedelta(days=1)).isoformat(),
+                "--output",
+                str(output),
+            ]
+        )
+        == 0
+    )
 
     assert _sidecars(store.db_path) == before
     report = json.loads(output.read_text(encoding="utf-8"))
