@@ -29,6 +29,7 @@ logs/tests/
 logs/governance/
 logs/edge_replay/
 logs/state/ingest_seen/
+logs/state/live_submission/
 
 # Test temp directories
 tests/_tmp_*/

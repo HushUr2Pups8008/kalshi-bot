@@ -28,8 +28,10 @@ from scripts.botcheck import (
     print_bot_section,
     print_caffeinate_section,
     print_last_boot,
+    print_live_submission_hold_section,
     print_signal_flow_section,
     session_duration,
+    summarize_live_submission_holds,
     summarize_research_dossiers,
     summarize_signal_flow,
 )
@@ -181,6 +183,76 @@ def test_print_signal_flow_section_surfaces_pipeline_counts(capsys, tmp_path):
     assert "OPPORTUNITY      :     1" in out
     assert "BLEND_DECISION   :     1" in out
     assert "latest=2026-05-10T22:30:00+00:00 age=30m 00s" in out
+
+
+def test_signal_flow_warns_on_recent_unknown_live_submission(capsys, tmp_path):
+    trades = tmp_path / "trades.jsonl"
+    write_jsonl(
+        trades,
+        [
+            {
+                "type": "LIVE_SUBMISSION_UNKNOWN",
+                "ts": "2026-05-10T22:30:00+00:00",
+            },
+        ],
+    )
+    now = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
+    stats = summarize_signal_flow(trades, now=now, window_hours=24)
+
+    assert stats.live_submission_unknown_count == 1
+    print_signal_flow_section(stats, now=now)
+
+    out = capsys.readouterr().out
+    assert "WARNING" in out
+    assert "LIVE_SUBMISSION_UNKNOWN=1" in out
+    assert "reconciliation required" in out
+    assert "no signal-flow records found" not in out
+
+
+def test_live_submission_hold_warns_without_unknown_jsonl(capsys, tmp_path):
+    hold_path = tmp_path / "state" / "live_submission" / "unknown_submission_holds.json"
+    hold_path.parent.mkdir(parents=True)
+    hold_path.write_text(
+        '{"version":1,"held_tickers":["KXTEST-25DEC31"]}',
+        encoding="utf-8",
+    )
+
+    stats = summarize_live_submission_holds(hold_path)
+
+    assert stats.status == "active"
+    assert stats.held_tickers == ("KXTEST-25DEC31",)
+    print_live_submission_hold_section(stats)
+    out = capsys.readouterr().out
+    assert "WARNING" in out
+    assert "KXTEST-25DEC31" in out
+    assert "reconciliation required" in out
+
+
+@pytest.mark.parametrize("checkpoint_kind", ["corrupt", "temp"])
+def test_live_submission_hold_unavailable_state_warns_fail_closed(
+    capsys,
+    tmp_path,
+    checkpoint_kind,
+):
+    hold_path = tmp_path / "state" / "live_submission" / "unknown_submission_holds.json"
+    hold_path.parent.mkdir(parents=True)
+    if checkpoint_kind == "corrupt":
+        checkpoint_path = hold_path
+        checkpoint_path.write_text("{not-json", encoding="utf-8")
+    else:
+        checkpoint_path = hold_path.with_suffix(".json.tmp")
+        checkpoint_path.write_text('{"version":1,"held_tickers":[]}', encoding="utf-8")
+    before = checkpoint_path.read_text(encoding="utf-8")
+
+    stats = summarize_live_submission_holds(hold_path)
+
+    assert stats.status == "unavailable"
+    assert checkpoint_path.read_text(encoding="utf-8") == before
+    print_live_submission_hold_section(stats)
+    out = capsys.readouterr().out
+    assert "WARNING" in out
+    assert "reconciliation required" in out
+    assert "no active live submission reservations" not in out
 
 
 def test_print_research_gate_section_surfaces_mode_and_research_rows(

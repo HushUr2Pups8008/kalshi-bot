@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
+from unittest.mock import MagicMock
 
 import pytest
 import requests
 
+import kalshi.rest_client as rest_client_module
 from kalshi.rest_client import (
     KalshiRestClient,
     _is_transient_request_exception,
@@ -29,6 +31,71 @@ def _http_error(status: int, body: bytes) -> requests.HTTPError:
 def _only_record(caplog) -> logging.LogRecord:
     assert len(caplog.records) == 1
     return caplog.records[0]
+
+
+def test_rest_client_retry_policy_explicitly_excludes_post(monkeypatch) -> None:
+    retry_kwargs: dict[str, object] = {}
+
+    class CapturingRetry:
+        def __init__(self, **kwargs) -> None:  # noqa: ANN003
+            retry_kwargs.update(kwargs)
+
+    class CapturingAdapter:
+        def __init__(self, *, max_retries) -> None:  # noqa: ANN001
+            self.max_retries = max_retries
+
+    monkeypatch.setattr(rest_client_module, "Retry", CapturingRetry)
+    monkeypatch.setattr(rest_client_module, "HTTPAdapter", CapturingAdapter)
+
+    KalshiRestClient()
+
+    allowed_methods = retry_kwargs["allowed_methods"]
+    assert allowed_methods == frozenset({"DELETE", "GET", "HEAD", "OPTIONS", "PUT", "TRACE"})
+    assert "POST" not in allowed_methods
+
+
+def test_legacy_order_post_disables_redirects() -> None:
+    client = KalshiRestClient()
+    response = MagicMock()
+    response.status_code = 200
+    response.text = '{"order": {"order_id": "order-123"}}'
+    response.json.return_value = {"order": {"order_id": "order-123"}}
+    client._session.request = MagicMock(return_value=response)  # noqa: SLF001
+
+    result = client.place_limit_order(
+        ticker="KXTEST-25DEC31",
+        side="yes",
+        count=2,
+        limit_price=50,
+    )
+
+    assert result.order_id == "order-123"
+    request_kwargs = client._session.request.call_args.kwargs  # noqa: SLF001
+    assert request_kwargs["allow_redirects"] is False
+
+
+def test_legacy_order_redirect_is_sanitized_error(caplog) -> None:
+    client = KalshiRestClient()
+    response = MagicMock()
+    response.status_code = 307
+    response.text = '{"Authorization":"redirect-secret"}'
+    response.json.return_value = {"order": {"order_id": "wrong-order"}}
+    client._session.request = MagicMock(return_value=response)  # noqa: SLF001
+
+    with caplog.at_level(logging.ERROR, logger="kalshi_rest"):
+        result = client.place_limit_order(
+            ticker="KXTEST-25DEC31",
+            side="yes",
+            count=2,
+            limit_price=50,
+        )
+
+    assert result.order_id == ""
+    assert result.error == "unexpected redirect response"
+    response.json.assert_not_called()
+    assert "redirect-secret" not in caplog.text
+    request_kwargs = client._session.request.call_args.kwargs  # noqa: SLF001
+    assert request_kwargs["allow_redirects"] is False
 
 
 def test_transient_request_exception_logs_warning_context(caplog) -> None:

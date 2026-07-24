@@ -233,6 +233,9 @@ class KalshiRestClient:
             total=3,
             backoff_factor=0.5,
             status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=frozenset(
+                {"DELETE", "GET", "HEAD", "OPTIONS", "PUT", "TRACE"}
+            ),
         )
         self._session.mount("https://", HTTPAdapter(max_retries=retry))
 
@@ -287,6 +290,8 @@ class KalshiRestClient:
         endpoint: str,
         params: dict | None = None,
         payload: dict | None = None,
+        *,
+        allow_redirects: bool | None = None,
     ) -> dict[str, Any]:
         # Primitive rate-limit guard
         elapsed = time.monotonic() - self._last_req_time
@@ -299,26 +304,32 @@ class KalshiRestClient:
         headers     = self._headers(method, path, body_str)
 
         try:
-            resp = self._session.request(
-                method,
-                url,
-                headers=headers,
-                params=params,
-                data=body_str if body_str else None,
-                timeout=10,
-            )
+            request_kwargs: dict[str, Any] = {
+                "headers": headers,
+                "params": params,
+                "data": body_str if body_str else None,
+                "timeout": 10,
+            }
+            if allow_redirects is not None:
+                request_kwargs["allow_redirects"] = allow_redirects
+            resp = self._session.request(method, url, **request_kwargs)
             self._last_req_time = time.monotonic()
+            if 300 <= resp.status_code < 400:
+                raise requests.HTTPError("unexpected redirect response", response=resp)
             resp.raise_for_status()
             return resp.json() if resp.text else {}
         except requests.HTTPError as exc:
             # Log status + sanitized body: strip any echoed auth/signature fields.
             status = exc.response.status_code
-            body = exc.response.text[:300] if exc.response.text else ""
-            for sensitive in ("KALSHI-ACCESS-KEY", "KALSHI-ACCESS-SIGNATURE",
-                              "Authorization", "signature", "api_key"):
-                if sensitive.lower() in body.lower():
-                    body = "(response body redacted -- may contain credentials)"
-                    break
+            if 300 <= status < 400:
+                body = "(redirect response body omitted)"
+            else:
+                body = exc.response.text[:300] if exc.response.text else ""
+                for sensitive in ("KALSHI-ACCESS-KEY", "KALSHI-ACCESS-SIGNATURE",
+                                  "Authorization", "signature", "api_key"):
+                    if sensitive.lower() in body.lower():
+                        body = "(response body redacted -- may contain credentials)"
+                        break
             is_transient = _is_transient_http_status(status)
             log_fn = log.warning if is_transient else log.error
             log_fn(
@@ -759,7 +770,12 @@ class KalshiRestClient:
             payload["expiration_ts"] = expiration_ts
 
         try:
-            data = self._request("POST", "/portfolio/orders", payload=payload)
+            data = self._request(
+                "POST",
+                "/portfolio/orders",
+                payload=payload,
+                allow_redirects=False,
+            )
             order = data.get("order", data)
             cost = count * limit_price / 100.0
             return OrderResult(

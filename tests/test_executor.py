@@ -2,14 +2,19 @@
 Tests for trading/executor.py
 
 Covers: live loss limit breach triggers halt, halt persists across subsequent calls,
-        session start balance seeded on first balance check, retry logic on transient errors.
+        session start balance seeded on first balance check, and durable live submissions.
 """
+
+import asyncio
+import logging
+import threading
 
 import pytest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import config as _cfg_module
+import trading.live_submission_hold as hold_module
 from trading.executor import TradeExecutor, classify_skip_category
 from trading.venue import Venue
 
@@ -29,7 +34,12 @@ def test_classify_skip_category_groups_controllable_executor_reasons():
     assert classify_skip_category("market is not tradeable: price unavailable") == "liquidity"
     assert classify_skip_category("edge +0.0100 below min_edge 0.04") == "other"
 
-def _make_executor(monkeypatch, bankroll=500.0, loss_limit_pct=0.10):
+def _make_executor(
+    monkeypatch,
+    bankroll=500.0,
+    loss_limit_pct=0.10,
+    live_submission_hold_path=None,
+):
     monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", False)
     monkeypatch.setattr(_cfg_module.cfg, "bankroll", bankroll)
     monkeypatch.setattr(_cfg_module.cfg, "live_loss_limit_pct", loss_limit_pct)
@@ -50,7 +60,11 @@ def _make_executor(monkeypatch, bankroll=500.0, loss_limit_pct=0.10):
     paper.portfolio.is_concentration_ok.return_value = True
     paper.portfolio.exposure.return_value = 0.0
 
-    ex = TradeExecutor(rest, paper)
+    ex = TradeExecutor(
+        rest,
+        paper,
+        live_submission_hold_path=live_submission_hold_path,
+    )
     return ex, rest, paper
 
 
@@ -190,30 +204,23 @@ class TestLiveLossLimit:
 
 
 # ---------------------------------------------------------------------------
-# Retry logic
+# Live submission safety
 # ---------------------------------------------------------------------------
 
-class TestOrderRetry:
-    def test_is_retryable_transient(self):
-        assert TradeExecutor._is_retryable_error("connection timeout")
-        assert TradeExecutor._is_retryable_error("HTTP 503 Service Unavailable")
-        assert TradeExecutor._is_retryable_error("HTTP 429 Too Many Requests")
-        assert TradeExecutor._is_retryable_error("network reset by peer")
-
-    def test_is_retryable_permanent(self):
-        assert not TradeExecutor._is_retryable_error("HTTP 400 Bad Request")
-        assert not TradeExecutor._is_retryable_error("HTTP 403 Forbidden")
-        assert not TradeExecutor._is_retryable_error(None)
-        assert not TradeExecutor._is_retryable_error("")
+class TestLiveSubmissionNoRetry:
 
     @pytest.mark.asyncio
-    async def test_execute_live_succeeds_on_first_attempt(self, monkeypatch):
+    async def test_execute_live_succeeds_on_first_attempt(self, monkeypatch, tmp_path):
         monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", False)
         monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
 
         rest  = MagicMock()
         paper = MagicMock()
-        ex    = TradeExecutor(rest, paper)
+        ex    = TradeExecutor(
+            rest,
+            paper,
+            live_submission_hold_path=tmp_path / "unknown_submission_holds.json",
+        )
 
         result = MagicMock()
         result.error     = None
@@ -223,82 +230,486 @@ class TestOrderRetry:
         rest.place_limit_order.return_value = result
 
         analysis = _make_analysis()
-        with patch("trading.executor.trade_log"):
+        with patch("trading.executor.trade_log") as trade_log_mock:
             order_id = await ex._execute_live(analysis)
 
         assert order_id == "test-order-123"
-        assert rest.place_limit_order.call_count == 1
+        rest.place_limit_order.assert_called_once()
+        trade_log_mock.log_live_submission_intent.assert_called_once()
+        intent_kwargs = trade_log_mock.log_live_submission_intent.call_args.kwargs
+        live_order_kwargs = trade_log_mock.log_live_order.call_args.kwargs
+        assert intent_kwargs["submission_id"] == live_order_kwargs["submission_id"]
+        assert len(intent_kwargs["submission_id"]) == 32
 
     @pytest.mark.asyncio
-    async def test_execute_live_retries_on_transient_error(self, monkeypatch):
+    async def test_fresh_executor_blocks_while_initial_post_is_reserved(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        hold_path = tmp_path / "unknown_submission_holds.json"
+        ex, rest, _ = _make_executor(
+            monkeypatch,
+            live_submission_hold_path=hold_path,
+        )
+        post_started = asyncio.Event()
+        release_post = threading.Event()
+        loop = asyncio.get_running_loop()
+
+        def blocking_post(**_kwargs):
+            loop.call_soon_threadsafe(post_started.set)
+            release_post.wait(timeout=5)
+            return MagicMock(error=None, order_id="first-order", status="resting", filled=0)
+
+        rest.place_limit_order.side_effect = blocking_post
+        analysis = _make_analysis()
+        with patch("trading.executor.trade_log") as trade_log_mock:
+            task = asyncio.create_task(ex._execute_live(analysis))
+            await asyncio.wait_for(post_started.wait(), timeout=1)
+
+            fresh_ex, fresh_rest, _ = _make_executor(
+                monkeypatch,
+                live_submission_hold_path=hold_path,
+            )
+            assert await fresh_ex._execute_live(analysis) is None
+            fresh_rest.place_limit_order.assert_not_called()
+            assert trade_log_mock.log_live_submission_intent.call_count == 1
+
+            release_post.set()
+            assert await asyncio.wait_for(task, timeout=1) == "first-order"
+
+        rest.place_limit_order.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_successful_durable_journal_releases_reservation(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        hold_path = tmp_path / "unknown_submission_holds.json"
+        ex, rest, _ = _make_executor(
+            monkeypatch,
+            live_submission_hold_path=hold_path,
+        )
+        rest.place_limit_order.return_value = MagicMock(
+            error=None,
+            order_id="first-order",
+            status="resting",
+            filled=0,
+        )
+        analysis = _make_analysis()
+        journal_checked = False
+
+        with patch("trading.executor.trade_log") as trade_log_mock:
+            async def durable_write(writer, *args, **kwargs):
+                nonlocal journal_checked
+                if writer is trade_log_mock.log_live_order:
+                    journal_checked = True
+                    blocked_ex, blocked_rest, _ = _make_executor(
+                        monkeypatch,
+                        live_submission_hold_path=hold_path,
+                    )
+                    assert await blocked_ex._execute_live(analysis) is None
+                    blocked_rest.place_limit_order.assert_not_called()
+                return writer(*args, **kwargs)
+
+            with patch(
+                "trading.executor.write_trade_log_async",
+                side_effect=durable_write,
+            ):
+                assert await ex._execute_live(analysis) == "first-order"
+
+            trade_log_mock.log_live_order.assert_called_once()
+
+        assert journal_checked
+
+        fresh_ex, fresh_rest, _ = _make_executor(
+            monkeypatch,
+            live_submission_hold_path=hold_path,
+        )
+        fresh_rest.place_limit_order.return_value = MagicMock(
+            error=None,
+            order_id="second-order",
+            status="resting",
+            filled=0,
+        )
+        with patch("trading.executor.trade_log"):
+            assert await fresh_ex._execute_live(analysis) == "second-order"
+
+        fresh_rest.place_limit_order.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_reservation_persistence_failure_makes_zero_posts(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        hold_path = tmp_path / "unknown_submission_holds.json"
+        ex, rest, _ = _make_executor(
+            monkeypatch,
+            live_submission_hold_path=hold_path,
+        )
+
+        def fail_replace(*_args):
+            raise OSError("reservation replace unavailable")
+
+        monkeypatch.setattr(hold_module.os, "replace", fail_replace)
+        with patch("trading.executor.trade_log") as trade_log_mock:
+            assert await ex._execute_live(_make_analysis()) is None
+
+        trade_log_mock.log_live_submission_intent.assert_called_once()
+        trade_log_mock.log_live_submission_unknown.assert_not_called()
+        rest.place_limit_order.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_release_failure_keeps_reservation_and_is_observable(
+        self,
+        monkeypatch,
+        tmp_path,
+        caplog,
+    ):
+        hold_path = tmp_path / "unknown_submission_holds.json"
+        ex, rest, _ = _make_executor(
+            monkeypatch,
+            live_submission_hold_path=hold_path,
+        )
+        rest.place_limit_order.return_value = MagicMock(
+            error=None,
+            order_id="accepted-order",
+            status="resting",
+            filled=0,
+        )
+        real_replace = hold_module.os.replace
+        replace_calls = 0
+
+        def fail_release_replace(*args):
+            nonlocal replace_calls
+            replace_calls += 1
+            if replace_calls == 2:
+                raise OSError("release replace unavailable")
+            return real_replace(*args)
+
+        monkeypatch.setattr(hold_module.os, "replace", fail_release_replace)
+        with caplog.at_level(logging.ERROR, logger="executor"):
+            with patch("trading.executor.trade_log"):
+                assert await ex._execute_live(_make_analysis()) == "accepted-order"
+
+        assert "reservation release failed" in caplog.text
+        fresh_ex, fresh_rest, _ = _make_executor(
+            monkeypatch,
+            live_submission_hold_path=hold_path,
+        )
+        assert await fresh_ex._execute_live(_make_analysis()) is None
+        fresh_rest.place_limit_order.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("error", [
+        "HTTP 429 Too Many Requests: internal request detail",
+        "HTTP 503 Service Unavailable: internal request detail",
+        "unexpected redirect response",
+    ])
+    async def test_execute_live_error_result_holds_ticker_across_executors(
+        self,
+        monkeypatch,
+        tmp_path,
+        error,
+    ):
         monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", False)
         monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
 
         rest  = MagicMock()
         paper = MagicMock()
-        ex    = TradeExecutor(rest, paper)
+        hold_path = tmp_path / "unknown_submission_holds.json"
+        ex = TradeExecutor(
+            rest,
+            paper,
+            live_submission_hold_path=hold_path,
+        )
 
         fail_result = MagicMock()
-        fail_result.error = "connection timeout"
+        fail_result.error = error
+        events = []
 
-        success_result = MagicMock()
-        success_result.error    = None
-        success_result.order_id = "retry-order-456"
-        success_result.status   = "resting"
-        success_result.filled   = 0
+        def post_once(**_kwargs):
+            events.append("post")
+            return fail_result
 
-        rest.place_limit_order.side_effect = [fail_result, success_result]
+        rest.place_limit_order.side_effect = post_once
 
-        analysis = _make_analysis()
-        with patch("trading.executor.trade_log"), \
-             patch("asyncio.sleep", new_callable=AsyncMock):
-            order_id = await ex._execute_live(analysis)
-
-        assert order_id == "retry-order-456"
-        assert rest.place_limit_order.call_count == 2
-
-    @pytest.mark.asyncio
-    async def test_execute_live_fails_after_3_attempts(self, monkeypatch):
-        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", False)
-        monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
-
-        rest  = MagicMock()
-        paper = MagicMock()
-        ex    = TradeExecutor(rest, paper)
-
-        fail_result = MagicMock()
-        fail_result.error = "HTTP 503 Service Unavailable"
-        rest.place_limit_order.return_value = fail_result
+        async def durable_write(writer, **kwargs):
+            events.append(writer._mock_name)
+            return writer(**kwargs)
 
         analysis = _make_analysis()
-        with patch("trading.executor.trade_log"), \
-             patch("asyncio.sleep", new_callable=AsyncMock):
+        with patch("trading.executor.trade_log") as trade_log_mock, patch(
+            "trading.executor.write_trade_log_async",
+            side_effect=durable_write,
+        ):
             order_id = await ex._execute_live(analysis)
 
         assert order_id is None
-        assert rest.place_limit_order.call_count == 3
+        rest.place_limit_order.assert_called_once()
+        trade_log_mock.log_live_submission_intent.assert_called_once()
+        trade_log_mock.log_live_submission_unknown.assert_called_once()
+        trade_log_mock.log_live_order.assert_not_called()
+        intent_kwargs = trade_log_mock.log_live_submission_intent.call_args.kwargs
+        unknown_kwargs = trade_log_mock.log_live_submission_unknown.call_args.kwargs
+        assert unknown_kwargs["submission_id"] == intent_kwargs["submission_id"]
+        assert unknown_kwargs["outcome"] == "error_result"
+        for field in ("ticker", "side", "contracts", "price_cents", "cost_dollars"):
+            assert unknown_kwargs[field] == intent_kwargs[field]
+        assert error not in repr(unknown_kwargs)
+        assert events == ["log_live_submission_intent", "post", "log_live_submission_unknown"]
+        assert hold_path.exists()
+
+        next_rest = MagicMock()
+        next_ex = TradeExecutor(
+            next_rest,
+            MagicMock(),
+            live_submission_hold_path=hold_path,
+        )
+        with patch("trading.executor.trade_log") as next_trade_log:
+            next_order_id = await next_ex._execute_live(analysis)
+
+        assert next_order_id is None
+        next_rest.place_limit_order.assert_not_called()
+        next_trade_log.log_live_submission_intent.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_execute_live_no_retry_on_permanent_error(self, monkeypatch):
+    async def test_execute_live_exception_is_unknown_after_one_post(self, monkeypatch, tmp_path):
         monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", False)
         monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
 
         rest  = MagicMock()
         paper = MagicMock()
-        ex    = TradeExecutor(rest, paper)
+        hold_path = tmp_path / "unknown_submission_holds.json"
+        ex = TradeExecutor(
+            rest,
+            paper,
+            live_submission_hold_path=hold_path,
+        )
 
-        fail_result = MagicMock()
-        fail_result.error = "HTTP 400 Bad Request -- invalid order"
-        rest.place_limit_order.return_value = fail_result
+        exception_detail = "transport failure with secret request detail"
+        rest.place_limit_order.side_effect = RuntimeError(exception_detail)
 
         analysis = _make_analysis()
-        with patch("trading.executor.trade_log"), \
-             patch("asyncio.sleep", new_callable=AsyncMock):
+        with patch("trading.executor.trade_log") as trade_log_mock:
             order_id = await ex._execute_live(analysis)
 
         assert order_id is None
-        # Must not retry on non-retryable errors
-        assert rest.place_limit_order.call_count == 1
+        rest.place_limit_order.assert_called_once()
+        trade_log_mock.log_live_submission_intent.assert_called_once()
+        trade_log_mock.log_live_submission_unknown.assert_called_once()
+        unknown_kwargs = trade_log_mock.log_live_submission_unknown.call_args.kwargs
+        assert unknown_kwargs["outcome"] == "exception"
+        assert exception_detail not in repr(unknown_kwargs)
+
+        next_ex, next_rest, _ = _make_executor(
+            monkeypatch,
+            live_submission_hold_path=hold_path,
+        )
+        with patch("trading.executor.trade_log") as next_trade_log:
+            next_order_id = await next_ex._execute_live(analysis)
+
+        assert next_order_id is None
+        next_rest.place_limit_order.assert_not_called()
+        next_trade_log.log_live_submission_intent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cancelled_post_holds_ticker_and_preserves_cancellation(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        hold_path = tmp_path / "unknown_submission_holds.json"
+        ex, rest, _ = _make_executor(
+            monkeypatch,
+            live_submission_hold_path=hold_path,
+        )
+        post_started = asyncio.Event()
+        release_post = threading.Event()
+        loop = asyncio.get_running_loop()
+
+        def blocking_post(**_kwargs):
+            loop.call_soon_threadsafe(post_started.set)
+            release_post.wait(timeout=5)
+            return MagicMock(error=None, order_id="late-order", status="resting", filled=0)
+
+        rest.place_limit_order.side_effect = blocking_post
+        analysis = _make_analysis()
+        with patch("trading.executor.trade_log") as trade_log_mock:
+            task = asyncio.create_task(ex._execute_live(analysis))
+            await asyncio.wait_for(post_started.wait(), timeout=1)
+            task.cancel()
+            try:
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            finally:
+                release_post.set()
+
+        rest.place_limit_order.assert_called_once()
+        unknown_kwargs = trade_log_mock.log_live_submission_unknown.call_args.kwargs
+        assert unknown_kwargs["outcome"] == "cancelled"
+
+        next_ex, next_rest, _ = _make_executor(
+            monkeypatch,
+            live_submission_hold_path=hold_path,
+        )
+        with patch("trading.executor.trade_log") as next_trade_log:
+            next_order_id = await next_ex._execute_live(analysis)
+
+        assert next_order_id is None
+        next_rest.place_limit_order.assert_not_called()
+        next_trade_log.log_live_submission_intent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_live_order_journal_failure_holds_ticker_across_executors(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        hold_path = tmp_path / "unknown_submission_holds.json"
+        ex, rest, _ = _make_executor(
+            monkeypatch,
+            live_submission_hold_path=hold_path,
+        )
+        rest.place_limit_order.return_value = MagicMock(
+            error=None,
+            order_id="accepted-order",
+            status="resting",
+            filled=0,
+        )
+
+        async def fail_live_order_journal(writer, **kwargs):
+            if writer._mock_name == "log_live_order":
+                raise OSError("live order journal unavailable")
+            return writer(**kwargs)
+
+        analysis = _make_analysis()
+        with patch("trading.executor.trade_log") as trade_log_mock, patch(
+            "trading.executor.write_trade_log_async",
+            side_effect=fail_live_order_journal,
+        ):
+            order_id = await ex._execute_live(analysis)
+
+        assert order_id is None
+        rest.place_limit_order.assert_called_once()
+        unknown_kwargs = trade_log_mock.log_live_submission_unknown.call_args.kwargs
+        assert unknown_kwargs["outcome"] == "live_order_journal_failure"
+        assert unknown_kwargs["venue_order_id"] == "accepted-order"
+        assert "live order journal unavailable" not in repr(unknown_kwargs)
+
+        next_ex, next_rest, _ = _make_executor(
+            monkeypatch,
+            live_submission_hold_path=hold_path,
+        )
+        with patch("trading.executor.trade_log") as next_trade_log:
+            next_order_id = await next_ex._execute_live(analysis)
+
+        assert next_order_id is None
+        next_rest.place_limit_order.assert_not_called()
+        next_trade_log.log_live_submission_intent.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("receipt_id", [None, "", "unknown"])
+    async def test_unverified_receipt_holds_ticker_across_executors(
+        self,
+        monkeypatch,
+        tmp_path,
+        receipt_id,
+    ):
+        hold_path = tmp_path / "unknown_submission_holds.json"
+        ex, rest, _ = _make_executor(
+            monkeypatch,
+            live_submission_hold_path=hold_path,
+        )
+        rest.place_limit_order.return_value = MagicMock(
+            error=None,
+            order_id=receipt_id,
+            status="resting",
+            filled=0,
+        )
+        analysis = _make_analysis()
+
+        with patch("trading.executor.trade_log") as trade_log_mock:
+            order_id = await ex._execute_live(analysis)
+
+        assert order_id is None
+        rest.place_limit_order.assert_called_once()
+        trade_log_mock.log_live_order.assert_not_called()
+        unknown_kwargs = trade_log_mock.log_live_submission_unknown.call_args.kwargs
+        assert unknown_kwargs["outcome"] == "unverified_receipt"
+
+        next_ex, next_rest, _ = _make_executor(
+            monkeypatch,
+            live_submission_hold_path=hold_path,
+        )
+        with patch("trading.executor.trade_log") as next_trade_log:
+            next_order_id = await next_ex._execute_live(analysis)
+
+        assert next_order_id is None
+        next_rest.place_limit_order.assert_not_called()
+        next_trade_log.log_live_submission_intent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unavailable_reservation_persistence_makes_zero_posts(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        hold_path = tmp_path / "unknown_submission_holds.json"
+        ex, rest, _ = _make_executor(
+            monkeypatch,
+            live_submission_hold_path=hold_path,
+        )
+        monkeypatch.setattr(
+            ex._live_submission_holds,
+            "_write",
+            lambda *_args: (_ for _ in ()).throw(OSError("hold store unavailable")),
+        )
+        rest.place_limit_order.return_value = MagicMock(error="HTTP 503")
+
+        with patch("trading.executor.trade_log") as trade_log_mock:
+            order_id = await ex._execute_live(_make_analysis())
+
+        assert order_id is None
+        trade_log_mock.log_live_submission_intent.assert_called_once()
+        trade_log_mock.log_live_submission_unknown.assert_not_called()
+        rest.place_limit_order.assert_not_called()
+
+        next_ex = ex
+        next_rest = rest
+        next_rest.place_limit_order.reset_mock()
+        with patch("trading.executor.trade_log") as next_trade_log:
+            next_order_id = await next_ex._execute_live(_make_analysis())
+
+        assert next_order_id is None
+        next_rest.place_limit_order.assert_not_called()
+        next_trade_log.log_live_submission_intent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_intent_persistence_failure_blocks_post(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", False)
+        monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+
+        rest = MagicMock()
+        paper = MagicMock()
+        ex = TradeExecutor(
+            rest,
+            paper,
+            live_submission_hold_path=tmp_path / "unknown_submission_holds.json",
+        )
+
+        with patch(
+            "trading.executor.write_trade_log_async",
+            new_callable=AsyncMock,
+            side_effect=OSError("intent store unavailable"),
+        ) as write_mock:
+            order_id = await ex._execute_live(_make_analysis())
+
+        assert order_id is None
+        write_mock.assert_awaited_once()
+        rest.place_limit_order.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -787,8 +1198,10 @@ class TestStructuredBoundaryLogging:
             order_id = await ex._execute_live(analysis)
 
         assert order_id == "live-order-123"
+        intent_kwargs = trade_log_mock.log_live_submission_intent.call_args.kwargs
         trade_log_mock.log_live_order.assert_called_once_with(
             order_id="live-order-123",
+            submission_id=intent_kwargs["submission_id"],
             ticker=analysis.market.ticker,
             side=analysis.side,
             contracts=19,
@@ -1020,9 +1433,6 @@ class TestPaperExecutionAsync:
 
 from datetime import datetime, timedelta, timezone
 
-from kalshi import OrderResult
-
-
 class TestCooldownSeeding:
     """`_seed_cooldowns_from_db` — populates `_last_traded` from portfolio."""
 
@@ -1134,7 +1544,7 @@ class TestExecutorStatus:
 
 
 class TestLiveExecuteErrorPaths:
-    """`_execute_live` error-path coverage (contracts=0, exception retries, fallthrough)."""
+    """`_execute_live` defensive-path coverage."""
 
     @pytest.mark.asyncio
     async def test_zero_contracts_aborts_order(self, monkeypatch):
@@ -1147,41 +1557,6 @@ class TestLiveExecuteErrorPaths:
         analysis = _make_analysis(yes_price=50.0, capped_dollars=10.0)
         result = await ex._execute_live(analysis)
         assert result is None
-
-    @pytest.mark.asyncio
-    async def test_order_exception_retries_then_fails(self, monkeypatch):
-        ex, rest, _ = _make_executor(monkeypatch, bankroll=500.0)
-        rest.place_limit_order.side_effect = RuntimeError("boom")
-
-        # Skip real backoff delays
-        async def _no_sleep(_):
-            return None
-        monkeypatch.setattr("trading.executor.asyncio.sleep", _no_sleep)
-
-        analysis = _make_analysis(yes_price=50.0, capped_dollars=10.0)
-        with patch("trading.executor.trade_log"):
-            result = await ex._execute_live(analysis)
-
-        assert result is None
-        assert rest.place_limit_order.call_count == 3
-
-    @pytest.mark.asyncio
-    async def test_order_non_retryable_error_fails_immediately(self, monkeypatch):
-        ex, rest, _ = _make_executor(monkeypatch, bankroll=500.0)
-        # Non-retryable error (no transient markers) — should fail on first attempt
-        rest.place_limit_order.return_value = OrderResult(
-            order_id="", ticker="KXTEST-25DEC31", side="yes",
-            contracts=0, price_cents=50, status="rejected", filled=0,
-            error="invalid market",
-        )
-
-        analysis = _make_analysis(yes_price=50.0, capped_dollars=10.0)
-        with patch("trading.executor.trade_log"):
-            result = await ex._execute_live(analysis)
-
-        assert result is None
-        assert rest.place_limit_order.call_count == 1
-
 
 # ---------------------------------------------------------------------------
 # PROFIT-OBS-005 harness — never-traded sentinel must not trip the cooldown.
