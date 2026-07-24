@@ -10292,6 +10292,7 @@ async def test_strict_research_gate_skips_adjudication_without_actionable_price(
 @pytest.mark.asyncio
 async def test_run_research_gate_reports_provider_exception(monkeypatch):
     events = []
+    provider_calls = 0
     monkeypatch.setattr(
         research_gate_module,
         "_log_generic_search_circuit_event",
@@ -10299,6 +10300,8 @@ async def test_run_research_gate_reports_provider_exception(monkeypatch):
     )
 
     async def failing_search(_query):
+        nonlocal provider_calls
+        provider_calls += 1
         raise GenericSearchUnavailable("generic search circuit unavailable")
 
     verdict = await run_research_gate(
@@ -10322,6 +10325,8 @@ async def test_run_research_gate_reports_provider_exception(monkeypatch):
 
     assert verdict.status == ResearchStatus.RESEARCH_PROVIDER_ERROR
     assert verdict.skip_reason == "research_provider_error"
+    assert verdict.research_provider_error_count == provider_calls
+    assert verdict.log_fields()["research_provider_error_count"] == provider_calls
     assert [event.kind for event in events].count("gate_provider_error_verdict") == 1
 
 
@@ -10716,13 +10721,90 @@ async def test_run_research_gate_times_out_hung_search_provider(tmp_path):
 
     assert verdict.status == ResearchStatus.CONTINUE_RESEARCHING
     assert verdict.skip_reason == "research_timeout"
+    assert verdict.research_timeout_stage == "provider_fanout"
+    assert verdict.research_provider_error_count == 0
     assert verdict.research_run_id
     assert verdict.research_persisted is True
     fields = verdict.log_fields()
     assert fields["research_contract_fingerprint"] == _contract_fingerprint(market)
+    assert fields["research_timeout_stage"] == "provider_fanout"
+    assert fields["research_provider_error_count"] == 0
     snapshot = await store.get_dossier_snapshot(market.ticker)
     assert snapshot is not None
     assert snapshot.last_contract_fingerprint == _contract_fingerprint(market)
+
+
+@pytest.mark.asyncio
+async def test_run_research_gate_reports_counter_query_timeout_stage():
+    fresh = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    news = SimpleNamespace(headline="Event conditions strengthen", source="Reuters")
+    market = SimpleNamespace(
+        ticker="KXCOUNTER-26JUL13",
+        title="Will the event happen by July 13?",
+        rules_primary="Reliable reporting determines the market.",
+        rules_secondary="",
+        settlement_sources=(),
+    )
+    initial_query_texts = {
+        query.query
+        for query in research_gate_module._select_research_queries(
+            build_research_queries(news, market),
+            max_queries=6,
+            require_decision_grade=True,
+        )
+    }
+    counter_queries: list[str] = []
+
+    async def search_provider(query):
+        if query.query not in initial_query_texts:
+            counter_queries.append(query.query)
+            await asyncio.sleep(60)
+            return []
+        return [
+            ResearchEvidence(
+                source_class="reputable_secondary",
+                source_name="Reuters",
+                source_url="https://www.reuters.com/example-counter-timeout",
+                title="Reuters reports the event is likely.",
+                snippet="Reuters reports conditions supporting the event.",
+                claim_type="supporting",
+                supports_direction="yes",
+                supports_confidence=0.9,
+                retrieved_at=fresh,
+            )
+        ]
+
+    async def adjudicator(**_kwargs):
+        return {
+            "direction": "yes",
+            "estimated_probability_yes": 0.7,
+            "confidence": 0.8,
+            "reason": "Directional evidence supports the YES case.",
+        }
+
+    verdict = await asyncio.wait_for(
+        run_research_gate(
+            news,
+            market,
+            model_direction="neutral",
+            model_confidence=0.5,
+            model_reason="No keywords.",
+            yes_ask=0.51,
+            no_ask=0.51,
+            live_mode=False,
+            search_provider=search_provider,
+            adjudicator=adjudicator,
+            require_decision_grade=True,
+            research_timeout_seconds=0.1,
+        ),
+        timeout=1.0,
+    )
+
+    assert verdict.status == ResearchStatus.CONTINUE_RESEARCHING
+    assert verdict.skip_reason == "research_timeout"
+    assert verdict.research_timeout_stage == "counter_query"
+    assert verdict.research_provider_error_count == 0
+    assert len(counter_queries) == 1
 
 
 @pytest.mark.asyncio
@@ -10824,6 +10906,8 @@ async def test_run_research_gate_enforces_end_to_end_timeout_budget():
 
     assert verdict.status == ResearchStatus.CONTINUE_RESEARCHING
     assert verdict.skip_reason == "research_timeout"
+    assert verdict.research_timeout_stage == "direct_fetch"
+    assert verdict.research_provider_error_count == 0
     assert elapsed < 0.10
 
 
