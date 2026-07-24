@@ -8,6 +8,7 @@ import hashlib
 import json
 from pathlib import Path
 import sqlite3
+import threading
 
 import pytest
 
@@ -738,6 +739,104 @@ async def test_strict_async_source_cancellation_never_appends_after_shutdown(
 
     assert _counts(store)["capital_guard_shadow_settlement_attempts"] == 0
     assert _counts(store)["capital_guard_shadow_observations"] == 0
+
+
+@pytest.mark.asyncio
+async def test_blocking_store_call_does_not_starve_unrelated_coroutine(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _initialized_store(tmp_path)
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    original = store.settlement_market_backlog
+
+    def blocking_backlog(*, limit: int):
+        started.set()
+        if not release.wait(timeout=1):
+            raise AssertionError("test did not release blocking store call")
+        finished.set()
+        return original(limit=limit)
+
+    monkeypatch.setattr(store, "settlement_market_backlog", blocking_backlog)
+    collector = CapitalGuardShadowSettlementCollector(store=store, source=SequenceSource({}))
+    run = asyncio.create_task(collector.run_once(limit=10))
+    fallback_release = threading.Timer(1, release.set)
+    fallback_release.start()
+    peer_ran = asyncio.Event()
+
+    try:
+        assert await asyncio.wait_for(asyncio.to_thread(started.wait, 1), timeout=2)
+
+        async def peer() -> None:
+            peer_ran.set()
+
+        await asyncio.wait_for(asyncio.create_task(peer()), timeout=1)
+        assert peer_ran.is_set()
+        assert not finished.is_set()
+
+        release.set()
+        result = await asyncio.wait_for(run, timeout=2)
+    finally:
+        release.set()
+        fallback_release.cancel()
+        if not run.done():
+            await run
+
+    assert result.checked == 0
+
+
+@pytest.mark.asyncio
+async def test_cancellation_waits_for_inflight_store_write_before_completion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _initialized_store(tmp_path)
+    record = candidate()
+    _append_candidate(store, record)
+    market_ref = MarketRef(Venue.KALSHI, record.venue_market_id, record.venue_market_id)
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    original = store.record_settlement_attempt
+
+    def blocking_record_settlement_attempt(*args: object, **kwargs: object):
+        started.set()
+        if not release.wait(timeout=1):
+            raise AssertionError("test did not release blocking store call")
+        result = original(*args, **kwargs)
+        finished.set()
+        return result
+
+    monkeypatch.setattr(store, "record_settlement_attempt", blocking_record_settlement_attempt)
+    collector = CapitalGuardShadowSettlementCollector(
+        store=store,
+        source=SequenceSource({market_ref: [_authoritative(market_ref)]}),
+    )
+    run = asyncio.create_task(collector.run_once(limit=10))
+    fallback_release = threading.Timer(1, release.set)
+    fallback_release.start()
+
+    try:
+        assert await asyncio.wait_for(asyncio.to_thread(started.wait, 1), timeout=2)
+        run.cancel()
+        await asyncio.sleep(0)
+        assert not run.done()
+
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(run, timeout=2)
+    finally:
+        release.set()
+        fallback_release.cancel()
+        if not run.done():
+            await run
+
+    assert finished.is_set()
+    counts = _counts(store)
+    assert counts["capital_guard_shadow_settlement_attempts"] == 1
+    assert counts["capital_guard_shadow_observations"] == 1
 
 
 def test_collector_rejects_lossy_sync_router_contract(

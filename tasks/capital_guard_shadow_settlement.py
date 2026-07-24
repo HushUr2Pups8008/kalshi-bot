@@ -7,12 +7,13 @@ is synchronous and lossy, so it does not satisfy this module's protocol.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import inspect
-from typing import Protocol
+from typing import Protocol, TypeVar
 
 from polymarket.settlement_reconciler import SettlementNotFound
 from trading.capital_guard_shadow import (
@@ -28,6 +29,9 @@ from trading.settlement import (
     UnsupportedVoidError,
 )
 from trading.venue import MarketRef
+
+
+_T = TypeVar("_T")
 
 
 class StrictAsyncAuthoritativeSettlementSource(Protocol):
@@ -88,7 +92,7 @@ class CapitalGuardShadowSettlementCollector:
         *,
         limit: int = MAX_SETTLEMENT_MARKETS_PER_RUN,
     ) -> SettlementCollectionResult:
-        keys = self._store.settlement_market_backlog(limit=limit)
+        keys = await self._store_call(lambda: self._store.settlement_market_backlog(limit=limit))
         counts = {
             "checked": 0,
             "nonterminal": 0,
@@ -104,12 +108,12 @@ class CapitalGuardShadowSettlementCollector:
         for key in keys:
             attempted_at = self._clock()
             try:
-                backlog = self._store.candidate_settlement_backlog(
-                    key, limit=self._max_candidates_per_market
+                backlog = await self._store_call(
+                    lambda: self._store.candidate_settlement_backlog(key, limit=self._max_candidates_per_market)
                 )
             except CapitalGuardShadowIdentityError as exc:
-                result = self._store.record_settlement_identity_quarantine(
-                    exc, attempted_at=attempted_at
+                result = await self._store_call(
+                    lambda exc=exc: self._store.record_settlement_identity_quarantine(exc, attempted_at=attempted_at)
                 )
                 counts["checked"] += 1
                 self._count_write_result(counts, result)
@@ -117,13 +121,15 @@ class CapitalGuardShadowSettlementCollector:
 
             counts["checked"] += 1
             if backlog.authoritative_head_error is not None:
-                result = self._store.record_settlement_attempt(
-                    backlog,
-                    attempted_at=attempted_at,
-                    status="quarantined",
-                    error_taxonomy="source_drift",
-                    error_sha256=_error_sha256("source_drift"),
-                    quarantine_reason="source_drift",
+                result = await self._store_call(
+                    lambda: self._store.record_settlement_attempt(
+                        backlog,
+                        attempted_at=attempted_at,
+                        status="quarantined",
+                        error_taxonomy="source_drift",
+                        error_sha256=_error_sha256("source_drift"),
+                        quarantine_reason="source_drift",
+                    )
                 )
                 self._count_write_result(counts, result)
                 continue
@@ -133,83 +139,119 @@ class CapitalGuardShadowSettlementCollector:
                     prior_observation=backlog.prior_authoritative_observation,
                 )
             except SettlementNotFound as exc:
-                result = self._store.record_settlement_attempt(
-                    backlog,
-                    attempted_at=attempted_at,
-                    status="not_found",
-                    error_taxonomy="authoritative_not_found",
-                    error_sha256=_error_sha256("authoritative_not_found", exc),
+                result = await self._store_call(
+                    lambda exc=exc: self._store.record_settlement_attempt(
+                        backlog,
+                        attempted_at=attempted_at,
+                        status="not_found",
+                        error_taxonomy="authoritative_not_found",
+                        error_sha256=_error_sha256("authoritative_not_found", exc),
+                    )
                 )
             except UnsupportedVoidError as exc:
-                result = self._store.record_settlement_attempt(
-                    backlog,
-                    attempted_at=attempted_at,
-                    status="quarantined",
-                    error_taxonomy="missing_void_refund_contract",
-                    error_sha256=_error_sha256(
-                        "missing_void_refund_contract", exc
-                    ),
-                    quarantine_reason="missing_void_refund_contract",
+                result = await self._store_call(
+                    lambda exc=exc: self._store.record_settlement_attempt(
+                        backlog,
+                        attempted_at=attempted_at,
+                        status="quarantined",
+                        error_taxonomy="missing_void_refund_contract",
+                        error_sha256=_error_sha256("missing_void_refund_contract", exc),
+                        quarantine_reason="missing_void_refund_contract",
+                    )
                 )
             except (SettlementDriftError, SettlementValidationError) as exc:
-                result = self._store.record_settlement_attempt(
-                    backlog,
-                    attempted_at=attempted_at,
-                    status="quarantined",
-                    error_taxonomy="source_drift",
-                    error_sha256=_error_sha256("source_drift", exc),
-                    quarantine_reason="source_drift",
+                result = await self._store_call(
+                    lambda exc=exc: self._store.record_settlement_attempt(
+                        backlog,
+                        attempted_at=attempted_at,
+                        status="quarantined",
+                        error_taxonomy="source_drift",
+                        error_sha256=_error_sha256("source_drift", exc),
+                        quarantine_reason="source_drift",
+                    )
                 )
             except TimeoutError as exc:
-                result = self._store.record_settlement_attempt(
-                    backlog,
-                    attempted_at=attempted_at,
-                    status="transient_error",
-                    error_taxonomy="timeout",
-                    error_sha256=_error_sha256("timeout", exc),
+                result = await self._store_call(
+                    lambda exc=exc: self._store.record_settlement_attempt(
+                        backlog,
+                        attempted_at=attempted_at,
+                        status="transient_error",
+                        error_taxonomy="timeout",
+                        error_sha256=_error_sha256("timeout", exc),
+                    )
                 )
             except ConnectionError as exc:
-                result = self._store.record_settlement_attempt(
-                    backlog,
-                    attempted_at=attempted_at,
-                    status="transient_error",
-                    error_taxonomy="connection",
-                    error_sha256=_error_sha256("connection", exc),
+                result = await self._store_call(
+                    lambda exc=exc: self._store.record_settlement_attempt(
+                        backlog,
+                        attempted_at=attempted_at,
+                        status="transient_error",
+                        error_taxonomy="connection",
+                        error_sha256=_error_sha256("connection", exc),
+                    )
                 )
             except OSError as exc:
-                result = self._store.record_settlement_attempt(
-                    backlog,
-                    attempted_at=attempted_at,
-                    status="transient_error",
-                    error_taxonomy="transport_os_error",
-                    error_sha256=_error_sha256("transport_os_error", exc),
+                result = await self._store_call(
+                    lambda exc=exc: self._store.record_settlement_attempt(
+                        backlog,
+                        attempted_at=attempted_at,
+                        status="transient_error",
+                        error_taxonomy="transport_os_error",
+                        error_sha256=_error_sha256("transport_os_error", exc),
+                    )
                 )
             except Exception as exc:
-                result = self._store.record_settlement_attempt(
-                    backlog,
-                    attempted_at=attempted_at,
-                    status="internal_error",
-                    error_taxonomy="internal_source_error",
-                    error_sha256=_error_sha256("internal_source_error", exc),
+                result = await self._store_call(
+                    lambda exc=exc: self._store.record_settlement_attempt(
+                        backlog,
+                        attempted_at=attempted_at,
+                        status="internal_error",
+                        error_taxonomy="internal_source_error",
+                        error_sha256=_error_sha256("internal_source_error", exc),
+                    )
                 )
             else:
                 if observation is None:
-                    result = self._store.record_settlement_attempt(
-                        backlog,
-                        attempted_at=attempted_at,
-                        status="nonterminal",
-                        error_taxonomy="authoritative_nonterminal",
-                        error_sha256=_error_sha256("authoritative_nonterminal"),
+                    result = await self._store_call(
+                        lambda: self._store.record_settlement_attempt(
+                            backlog,
+                            attempted_at=attempted_at,
+                            status="nonterminal",
+                            error_taxonomy="authoritative_nonterminal",
+                            error_sha256=_error_sha256("authoritative_nonterminal"),
+                        )
                     )
                 else:
-                    result = self._store.record_settlement_attempt(
-                        backlog,
-                        attempted_at=attempted_at,
-                        status="terminal",
-                        observation=observation,
+                    result = await self._store_call(
+                        lambda: self._store.record_settlement_attempt(
+                            backlog,
+                            attempted_at=attempted_at,
+                            status="terminal",
+                            observation=observation,
+                        )
                     )
             self._count_write_result(counts, result)
         return SettlementCollectionResult(**counts)
+
+    @staticmethod
+    async def _store_call(operation: Callable[[], _T]) -> _T:
+        """Await one synchronous store operation without stranding it on cancellation."""
+        task = asyncio.create_task(asyncio.to_thread(operation))
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            # A SQLite transaction cannot be cancelled safely from another thread.
+            # Let it finish before reporting collector cancellation to the scheduler.
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    continue
+            try:
+                task.result()
+            except BaseException:
+                pass
+            raise
 
     @staticmethod
     def _count_write_result(counts: dict[str, int], result: object) -> None:
