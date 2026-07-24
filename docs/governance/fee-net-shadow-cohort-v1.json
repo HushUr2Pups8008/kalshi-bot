@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "protocol_id": "fee-net-shadow-kalshi-rest-detail-no-v1",
+  "status": "locked",
+  "declared_at_utc": "2026-07-24T13:19:22Z",
+  "approval_ref": "operator authorization in current session, 2026-07-24",
+  "cohort_window": {
+    "start_utc": "2026-07-25T00:00:00Z",
+    "end_utc": "2027-01-21T00:00:00Z"
+  },
+  "scope": {
+    "mode": "paper_only",
+    "venue": "kalshi",
+    "book_source": "rest_detail",
+    "llm_direction": "no",
+    "side": "no",
+    "gate_policy": {
+      "required_passed": ["G1", "G2", "G3", "G4", "G5", "G6"],
+      "sole_failure": "G7_open_exposure_drawdown"
+    }
+  },
+  "provenance": {
+    "shadow_schema_version": 3,
+    "legacy_versions_rejected": [1, 2],
+    "record_mode": "append_only_hash_linked",
+    "required_fields": [
+      "evidence_schema_version",
+      "shadow_schema_version",
+      "record_type",
+      "record_id",
+      "protocol_id",
+      "protocol_hash",
+      "previous_record_hash",
+      "recorded_at_utc",
+      "candidate_id",
+      "candidate_payload_sha256",
+      "decision_at_utc",
+      "venue",
+      "venue_market_id",
+      "market_family",
+      "book_source",
+      "selected_side",
+      "mode",
+      "fee_provenance_sha256",
+      "llm_direction",
+      "llm_model_id",
+      "llm_prompt_sha256",
+      "llm_input_sha256",
+      "llm_output_sha256",
+      "authoritative_observation_sha256",
+      "authoritative_payload_sha256",
+      "settlement_economics_contract_sha256",
+      "settlement_fee_receipt_sha256",
+      "account_party_id_sha256",
+      "settlement_payload_sha256",
+      "evaluation_payload_sha256",
+      "gate_outcomes",
+      "settlement",
+      "economics",
+      "record_hash"
+    ],
+    "require_void_refund_policy": true,
+    "require_chronological_replay": true,
+    "protected_history_required": true
+  },
+  "acceptance": {
+    "minimum_unique_market_ids": 30,
+    "minimum_weekly_blocks": 4,
+    "minimum_market_families": 2,
+    "minimum_scorable_fraction": 0.95,
+    "minimum_scorable_stake_fraction": 0.95,
+    "minimum_venue_scorable_fraction": 0.9,
+    "fee_net_ci_95_lower_bound_dollars": 0,
+    "require_fee_net_ci_lower_bound_strictly_positive": true,
+    "max_stressed_chronological_drawdown_fraction": 0.2,
+    "require_non_negative_venue_expectancy": true,
+    "max_market_abs_pnl_fraction": 0.25,
+    "bootstrap": {
+      "method": "clustered_by_market",
+      "iterations": 10000,
+      "seed": 20260724
+    }
+  },
+  "protocol_hash": "576938e981173bdcfc227f40eb6f7bfb40742ced97d4eb82182b18b6b9366eeb"
+}
