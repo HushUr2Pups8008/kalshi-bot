@@ -789,6 +789,54 @@ def test_unclaimed_requirement_is_valid_pending_work(tmp_path):
         assert store.conservation(now=NOW).ok
 
 
+def test_canonical_delivery_completion_requires_conservation_and_a_drained_outbox(tmp_path):
+    db = tmp_path / "paper.db"
+    _create_legacy_db(db)
+    _migrate(db)
+    _seed_valid_accounting(db)
+
+    with SettlementStore(db, read_only=True) as store:
+        assert store.conservation(now=NOW).ok
+        assert store.canonical_delivery_complete_trade_ids(now=NOW) == ()
+        assert store.canonical_delivery_complete_outbox_payloads(now=NOW) == ()
+
+    with SettlementStore(db) as store:
+        pending = store.pending_requirements()
+    expected_outbox_id = pending[0].outbox_id
+    conn = sqlite3.connect(db)
+    try:
+        conn.executemany(
+            """
+            INSERT INTO paper_settlement_consumer_receipts (
+                consumer_name, outbox_id, processed_at, result_sha256
+            ) VALUES (?, ?, ?, ?)
+            """,
+            [
+                (
+                    requirement.consumer_name,
+                    requirement.outbox_id,
+                    NOW.isoformat(),
+                    settlement_result_sha256(
+                        requirement.outbox_id,
+                        requirement.consumer_name,
+                    ),
+                )
+                for requirement in pending
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    with SettlementStore(db, read_only=True) as store:
+        assert store.canonical_delivery_complete_trade_ids(now=NOW) == ("t1",)
+        payloads = store.canonical_delivery_complete_outbox_payloads(now=NOW)
+        assert len(payloads) == 1
+        assert payloads[0].outbox_id == expected_outbox_id
+        assert payloads[0].trade_id == "t1"
+        assert '"trade_id":"t1"' in payloads[0].payload_json
+
+
 def test_claim_compare_and_set_respects_active_and_expired_leases(tmp_path):
     db = tmp_path / "paper.db"
     _create_legacy_db(db)
@@ -832,32 +880,30 @@ def test_claim_compare_and_set_respects_active_and_expired_leases(tmp_path):
         assert tuple(claim) == ("token-2", 2)
 
 
-def test_receipts_drain_multi_consumer_event(tmp_path):
+def test_direct_receipt_recording_is_disabled(tmp_path):
     db = tmp_path / "paper.db"
     _create_legacy_db(db)
     _migrate(db)
     _seed_valid_accounting(db, consumers=("consumer-a", "consumer-b"))
 
     with SettlementStore(db) as store:
-        for index, consumer in enumerate(("consumer-a", "consumer-b"), start=1):
-            token = f"token-{index}"
-            assert store.acquire_claim(
-                consumer,
+        assert store.acquire_claim(
+            "consumer-a",
+            OUTBOX_ID,
+            claim_token="token-1",
+            now=NOW,
+            lease_seconds=60,
+        )
+        with pytest.raises(RuntimeError, match="Direct receipt recording is disabled"):
+            store.record_receipt(
+                "consumer-a",
                 OUTBOX_ID,
-                claim_token=token,
-                now=NOW,
-                lease_seconds=60,
-            )
-            assert store.record_receipt(
-                consumer,
-                OUTBOX_ID,
-                claim_token=token,
+                claim_token="token-1",
                 processed_at=NOW,
-                result_sha256=settlement_result_sha256(OUTBOX_ID, consumer),
+                result_sha256=settlement_result_sha256(OUTBOX_ID, "consumer-a"),
             )
-            assert store.is_outbox_drained(OUTBOX_ID) is (index == 2)
 
-        assert store.pending_requirements() == ()
+        assert not store.is_outbox_drained(OUTBOX_ID)
 
 
 def test_complete_claim_commits_consumer_effect_and_receipt_together(tmp_path):

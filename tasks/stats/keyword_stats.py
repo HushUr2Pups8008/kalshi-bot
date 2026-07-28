@@ -1,9 +1,10 @@
 """
 KeywordStats: per-(keyword, series_ticker) accuracy multiplier.
 
-Reads from the keyword_outcomes table (written at every market resolution since
-v0.19.0) and provides a get_multiplier(keyword, series_ticker) method that
-returns a float in [0.5, 1.5] for use in _keyword_score().
+``keyword_outcomes`` remains mutable telemetry written at market resolution.
+Runtime multipliers are derived only from immutable canonical settlement payloads
+whose required local consumers completed delivery. Delivery completion is not an
+assertion of realized trading profit.
 
 Design:
   - Loaded at startup, refreshed every 6 hours. Thread-safe via RLock.
@@ -24,11 +25,13 @@ Why [0.5, 1.5] range?
   Continuous range avoids cliff-edge suppression for borderline keywords.
 """
 
-import sqlite3
+import json
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
+from trading.settlement_store import SettlementStore
 from utils.logger import get_logger
 
 # Use the project's logger factory so messages reach bot.log + errors.log.
@@ -42,7 +45,7 @@ REFRESH_SECS = 6 * 3600  # 6 hours between DB refreshes
 
 class KeywordStats:
     """
-    Per-(keyword, series_ticker) accuracy multiplier from keyword_outcomes.
+    Per-(keyword, series_ticker) accuracy multiplier from delivered settlements.
 
     Usage:
         ks = KeywordStats(db_path)
@@ -60,40 +63,65 @@ class KeywordStats:
         self._load()
 
     def _load(self) -> None:
-        """Query keyword_outcomes and rebuild the in-memory accuracy tables."""
+        """Rebuild runtime accuracy tables from immutable delivered payloads."""
+        specific: dict[str, dict[str, tuple[int, int]]] = {}
+        aggregate: dict[str, list[int]] = {}
         try:
-            conn = sqlite3.connect(str(self._db_path))
-            try:
-                rows = conn.execute(
-                    """
-                    SELECT keyword, series_ticker, count(*) AS n, sum(correct) AS wins
-                    FROM keyword_outcomes
-                    GROUP BY keyword, series_ticker
-                    """
-                ).fetchall()
-            finally:
-                conn.close()
+            with SettlementStore(self._db_path, read_only=True) as store:
+                events = store.canonical_delivery_complete_outbox_payloads(
+                    now=datetime.now(timezone.utc)
+                )
+
+            for event in events:
+                payload = json.loads(event.payload_json)
+                if (
+                    not isinstance(payload, dict)
+                    or payload.get("trade_id") != event.trade_id
+                ):
+                    raise ValueError("canonical outbox payload identity mismatch")
+
+                series_ticker = payload.get("series_ticker")
+                if not isinstance(series_ticker, str) or not series_ticker:
+                    raise ValueError("canonical outbox series_ticker is invalid")
+
+                keyword_outcomes = payload.get("keyword_outcomes")
+                if not isinstance(keyword_outcomes, list):
+                    raise ValueError("canonical outbox keyword_outcomes is invalid")
+
+                for outcome in keyword_outcomes:
+                    if not isinstance(outcome, dict):
+                        raise ValueError("canonical keyword outcome is invalid")
+                    keyword = outcome.get("keyword")
+                    correct = outcome.get("correct")
+                    if not isinstance(keyword, str) or not keyword:
+                        raise ValueError("canonical keyword is invalid")
+                    if correct is None:
+                        continue
+                    if type(correct) is not bool:
+                        raise ValueError("canonical keyword correctness is invalid")
+
+                    series_map = specific.setdefault(keyword, {})
+                    count, wins = series_map.get(series_ticker, (0, 0))
+                    series_map[series_ticker] = (count + 1, wins + int(correct))
+                    aggregate_counts = aggregate.setdefault(keyword, [0, 0])
+                    aggregate_counts[0] += 1
+                    aggregate_counts[1] += int(correct)
         except Exception as exc:
-            log.warning("[KEYWORD_STATS] Load failed: %s", exc)
-            return
+            log.warning(
+                "[KEYWORD_STATS] Canonical delivery unavailable; clearing runtime data: %s",
+                exc,
+            )
+            specific = {}
+            aggregate = {}
 
         with self._lock:
-            self._specific = {}
-            agg: dict[str, list[int]] = {}  # keyword -> [n, wins]
-            for keyword, series_ticker, n, wins in rows:
-                if keyword not in self._specific:
-                    self._specific[keyword] = {}
-                self._specific[keyword][series_ticker] = (int(n), int(wins))
-                if keyword not in agg:
-                    agg[keyword] = [0, 0]
-                agg[keyword][0] += int(n)
-                agg[keyword][1] += int(wins)
-            self._aggregate = {k: (v[0], v[1]) for k, v in agg.items()}
+            self._specific = specific
+            self._aggregate = {key: (counts[0], counts[1]) for key, counts in aggregate.items()}
             self._last_loaded = time.monotonic()
 
         pair_count = sum(len(v) for v in self._specific.values())
         log.info(
-            "[KEYWORD_STATS] Loaded %d (keyword, series) accuracy pairs from keyword_outcomes",
+            "[KEYWORD_STATS] Loaded %d (keyword, series) accuracy pairs from canonical delivery",
             pair_count,
         )
 

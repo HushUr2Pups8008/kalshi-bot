@@ -13,10 +13,8 @@ import asyncio
 import hashlib
 import json
 import re
-import shutil
 import sqlite3
 import sys
-import tempfile
 from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -29,7 +27,6 @@ if str(ROOT) not in sys.path:
 
 from polymarket.public_client import PolymarketPublicClient  # noqa: E402
 from polymarket.settlement_reconciler import SettlementNotFound  # noqa: E402
-from scripts.migrate_paper_market_identity import open_readonly  # noqa: E402
 from trading.authoritative_settlement_source import (  # noqa: E402
     DEFAULT_AUTHORITATIVE_SETTLEMENT_TIMEOUT_SECONDS,
     AuthoritativeSettlementSource,
@@ -38,9 +35,9 @@ from trading.settlement import SettlementDriftError, SettlementObservation  # no
 from trading.venue import MarketRef, Venue  # noqa: E402
 
 
-DEFAULT_DB_PATH = ROOT / "data" / "paper_trades.db"
 MAX_AUDIT_SNAPSHOT_FILE_BYTES = 64 * 1024 * 1024
 _NUMERIC_MARKET_ID = re.compile(r"[0-9]+")
+_SHA256 = re.compile(r"[0-9a-f]{64}")
 _TERMINAL_STATE_COLUMNS = (
     "terminal_state",
     "settlement_observation_sha256",
@@ -76,6 +73,8 @@ class OpenPaperRow:
     quarantine_reason: str | None
     snapshot_close_time: str | None
     snapshot_close_at: datetime | None
+    market_snapshot_sha256: str | None
+    market_snapshot_malformed: bool
     trade_id_malformed: bool
     identity_status_malformed: bool
     persisted_terminal_fields: tuple[str, ...]
@@ -104,25 +103,56 @@ class SettlementAuditRow:
 
 
 @dataclass(frozen=True)
+class AuditSnapshotArtifact:
+    name: str
+    size: int
+    sha256: str
+
+
+@dataclass(frozen=True)
+class _AuditSnapshot:
+    rows: tuple[OpenPaperRow, ...]
+    artifacts: tuple[AuditSnapshotArtifact, ...]
+    open_rows_sha256: str
+
+
+@dataclass(frozen=True)
 class SettlementAuditReport:
     db_path: str
     generated_at: str
     fetched_markets: int
     rows: tuple[SettlementAuditRow, ...]
+    snapshot_artifacts: tuple[AuditSnapshotArtifact, ...]
+    open_rows_sha256: str
     read_only: bool = True
     resolution_applied: bool = False
 
     def to_dict(self) -> dict[str, object]:
         counts = Counter(row.status for row in self.rows)
-        return {
+        body = {
             "db_path": self.db_path,
             "generated_at": self.generated_at,
             "read_only": self.read_only,
             "resolution_applied": self.resolution_applied,
             "fetched_markets": self.fetched_markets,
             "counts": dict(sorted(counts.items())),
+            "snapshot_artifacts": [asdict(artifact) for artifact in self.snapshot_artifacts],
+            "open_rows_sha256": self.open_rows_sha256,
             "rows": [asdict(row) for row in self.rows],
         }
+        evidence_body = {
+            "read_only": self.read_only,
+            "resolution_applied": self.resolution_applied,
+            "fetched_markets": self.fetched_markets,
+            "counts": body["counts"],
+            "snapshot_artifacts": [
+                {"size": artifact.size, "sha256": artifact.sha256}
+                for artifact in self.snapshot_artifacts
+            ],
+            "open_rows_sha256": self.open_rows_sha256,
+            "rows": body["rows"],
+        }
+        return {**body, "report_sha256": _sha256_json(evidence_body)}
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), indent=2, sort_keys=True)
@@ -158,7 +188,14 @@ def _audit_source_paths(path: Path) -> tuple[Path, ...]:
     paths = [source]
     wal = source.with_name(source.name + "-wal")
     if wal.exists():
-        paths.append(wal)
+        raise PaperSettlementAuditSnapshotError(
+            "cannot audit an input snapshot with an active WAL"
+        )
+    shm = source.with_name(source.name + "-shm")
+    if shm.exists():
+        raise PaperSettlementAuditSnapshotError(
+            "cannot audit an input snapshot with a SQLite shared-memory sidecar"
+        )
     for item in paths:
         if item.stat().st_size > MAX_AUDIT_SNAPSHOT_FILE_BYTES:
             raise PaperSettlementAuditSnapshotError("audit input exceeds the bounded snapshot size")
@@ -173,8 +210,62 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _audit_source_signature(path: Path) -> tuple[tuple[str, int, str], ...]:
-    return tuple((item.name, item.stat().st_size, _file_sha256(item)) for item in _audit_source_paths(path))
+def _audit_source_signature(path: Path) -> tuple[AuditSnapshotArtifact, ...]:
+    return tuple(
+        AuditSnapshotArtifact(
+            name=item.name,
+            size=item.stat().st_size,
+            sha256=_file_sha256(item),
+        )
+        for item in _audit_source_paths(path)
+    )
+
+
+def _sha256_json(value: object) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _snapshot_value_sha256(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        payload = b"text\x00" + value.encode("utf-8")
+    elif isinstance(value, bytes):
+        payload = b"blob\x00" + value
+    else:
+        payload = b"other\x00" + repr(value).encode("utf-8", errors="backslashreplace")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _open_rows_sha256(rows: tuple[OpenPaperRow, ...]) -> str:
+    return _sha256_json(
+        [
+            {
+                "trade_id": row.trade_id,
+                "ticker": row.ticker,
+                "venue": row.venue,
+                "canonical_market_id": row.canonical_market_id,
+                "identity_status": row.identity_status,
+                "quarantine_reason": row.quarantine_reason,
+                "snapshot_close_time": row.snapshot_close_time,
+                "snapshot_close_at": (
+                    row.snapshot_close_at.isoformat() if row.snapshot_close_at is not None else None
+                ),
+                "market_snapshot_sha256": row.market_snapshot_sha256,
+                "market_snapshot_malformed": row.market_snapshot_malformed,
+                "trade_id_malformed": row.trade_id_malformed,
+                "identity_status_malformed": row.identity_status_malformed,
+                "persisted_terminal_fields": list(row.persisted_terminal_fields),
+            }
+            for row in rows
+        ]
+    )
 
 
 def _exact_text(value: object) -> str | None:
@@ -183,25 +274,29 @@ def _exact_text(value: object) -> str | None:
     return value
 
 
-def _parse_snapshot_close_time(raw_snapshot: object) -> tuple[str | None, datetime | None]:
+def _parse_snapshot_close_time(raw_snapshot: object) -> tuple[str | None, datetime | None, bool]:
+    if raw_snapshot is None:
+        return None, None, False
     if not isinstance(raw_snapshot, str) or not raw_snapshot.strip():
-        return None, None
+        return None, None, True
     try:
         snapshot = json.loads(raw_snapshot)
     except json.JSONDecodeError:
-        return None, None
+        return None, None, True
     if not isinstance(snapshot, dict):
-        return None, None
+        return None, None, True
     close_time = snapshot.get("close_time")
+    if close_time is None:
+        return None, None, False
     if not isinstance(close_time, str) or not close_time.strip():
-        return None, None
+        return None, None, True
     try:
         parsed = datetime.fromisoformat(close_time.replace("Z", "+00:00"))
     except ValueError:
-        return close_time, None
+        return close_time, None, True
     if parsed.tzinfo is None:
-        return close_time, None
-    return close_time, parsed.astimezone(timezone.utc)
+        return close_time, None, True
+    return close_time, parsed.astimezone(timezone.utc), False
 
 
 def _load_open_rows(conn: sqlite3.Connection) -> list[OpenPaperRow]:
@@ -229,7 +324,10 @@ def _load_open_rows(conn: sqlite3.Connection) -> list[OpenPaperRow]:
     ).fetchall()
     result: list[OpenPaperRow] = []
     for row in rows:
-        snapshot_close_time, snapshot_close_at = _parse_snapshot_close_time(row["market_snapshot"])
+        raw_snapshot = row["market_snapshot"]
+        snapshot_close_time, snapshot_close_at, market_snapshot_malformed = _parse_snapshot_close_time(
+            raw_snapshot
+        )
         raw_trade_id = row["trade_id"]
         trade_id = _exact_text(raw_trade_id)
         raw_identity_status = row["identity_status"]
@@ -244,6 +342,8 @@ def _load_open_rows(conn: sqlite3.Connection) -> list[OpenPaperRow]:
                 quarantine_reason=_exact_text(row["quarantine_reason"]),
                 snapshot_close_time=snapshot_close_time,
                 snapshot_close_at=snapshot_close_at,
+                market_snapshot_sha256=_snapshot_value_sha256(raw_snapshot),
+                market_snapshot_malformed=market_snapshot_malformed,
                 trade_id_malformed=raw_trade_id is not None and trade_id is None,
                 identity_status_malformed=(raw_identity_status is not None and identity_status is None),
                 persisted_terminal_fields=tuple(name for name in _TERMINAL_STATE_COLUMNS if row[name] is not None),
@@ -252,20 +352,50 @@ def _load_open_rows(conn: sqlite3.Connection) -> list[OpenPaperRow]:
     return result
 
 
-def _load_open_rows_from_stable_snapshot(path: Path) -> list[OpenPaperRow]:
-    source_signature = _audit_source_signature(path)
-    source_paths = _audit_source_paths(path)
-    with tempfile.TemporaryDirectory(prefix="open-paper-settlement-audit-") as directory:
-        snapshot_path = Path(directory) / source_paths[0].name
-        for source in source_paths:
-            shutil.copyfile(source, Path(directory) / source.name)
-        if _audit_source_signature(path) != source_signature:
-            raise PaperSettlementAuditSnapshotError("paper-trades database changed while the audit snapshot was copied")
-        with open_readonly(snapshot_path) as conn:
+def _load_open_rows_from_quiescent_snapshot(
+    path: Path,
+    *,
+    expected_sha256: str | None,
+) -> _AuditSnapshot:
+    if not isinstance(expected_sha256, str) or not _SHA256.fullmatch(expected_sha256):
+        raise PaperSettlementAuditSnapshotError(
+            "audit requires a snapshot SHA-256 from a caller-attested snapshot"
+        )
+    input_signature = _audit_source_signature(path)
+    if input_signature[0].sha256 != expected_sha256:
+        raise PaperSettlementAuditSnapshotError(
+            "snapshot SHA-256 does not match the caller-attested snapshot"
+        )
+    # immutable=1 prevents any SQLite reader locks or -shm writes if a writer
+    # violates the caller's external-quiescence prerequisite during the read.
+    uri = f"{path.expanduser().resolve().as_uri()}?mode=ro&immutable=1"
+    try:
+        conn = sqlite3.connect(uri, uri=True)
+        conn.row_factory = sqlite3.Row
+        try:
+            integrity = conn.execute("PRAGMA integrity_check").fetchone()
+            if integrity is None or integrity[0] != "ok":
+                detail = "missing result" if integrity is None else str(integrity[0])
+                raise PaperSettlementAuditSnapshotError(
+                    f"caller-attested snapshot failed SQLite integrity check: {detail}"
+                )
             rows = _load_open_rows(conn)
-    if _audit_source_signature(path) != source_signature:
-        raise PaperSettlementAuditSnapshotError("paper-trades database changed while the audit snapshot was read")
-    return rows
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        raise PaperSettlementAuditSnapshotError(
+            f"caller-attested snapshot failed SQLite integrity check: {_error_detail(exc)}"
+        ) from exc
+    if _audit_source_signature(path) != input_signature:
+        raise PaperSettlementAuditSnapshotError(
+            "caller-attested snapshot changed while the audit read it"
+        )
+    frozen_rows = tuple(rows)
+    return _AuditSnapshot(
+        rows=frozen_rows,
+        artifacts=input_signature,
+        open_rows_sha256=_open_rows_sha256(frozen_rows),
+    )
 
 
 def _error_detail(exc: BaseException) -> str:
@@ -276,6 +406,8 @@ def _error_detail(exc: BaseException) -> str:
 def _nonfetchable_status(row: OpenPaperRow) -> str | None:
     if row.persisted_terminal_fields:
         return "inconsistent_persisted_state"
+    if row.market_snapshot_malformed:
+        return "invalid_snapshot"
     if (
         row.trade_id is None
         or row.trade_id_malformed
@@ -392,6 +524,8 @@ async def _audit_rows(
     *,
     db_path: Path,
     now: datetime,
+    snapshot_artifacts: tuple[AuditSnapshotArtifact, ...],
+    open_rows_sha256: str,
 ) -> SettlementAuditReport:
     by_market: dict[tuple[str, str], list[OpenPaperRow]] = {}
     skipped: dict[int, SettlementAuditRow] = {}
@@ -439,6 +573,8 @@ async def _audit_rows(
         generated_at=now.isoformat(),
         fetched_markets=len(by_market),
         rows=tuple(audit_rows),
+        snapshot_artifacts=snapshot_artifacts,
+        open_rows_sha256=open_rows_sha256,
     )
 
 
@@ -446,29 +582,40 @@ async def audit_database(
     db_path: Path,
     source: ExactSettlementSource,
     *,
+    snapshot_sha256: str | None = None,
     now: datetime | None = None,
 ) -> SettlementAuditReport:
-    """Copy a stable SQLite snapshot, then audit it without source persistence."""
+    """Audit a hash-attested snapshot supplied after caller-managed quiescence."""
     audit_now = now or datetime.now(timezone.utc)
     if audit_now.tzinfo is None:
         raise ValueError("now must be timezone-aware")
     resolved_path = db_path.expanduser().resolve()
-    rows = _load_open_rows_from_stable_snapshot(resolved_path)
+    snapshot = _load_open_rows_from_quiescent_snapshot(
+        resolved_path,
+        expected_sha256=snapshot_sha256,
+    )
     return await _audit_rows(
-        rows,
+        list(snapshot.rows),
         source,
         db_path=resolved_path,
         now=audit_now.astimezone(timezone.utc),
+        snapshot_artifacts=snapshot.artifacts,
+        open_rows_sha256=snapshot.open_rows_sha256,
     )
 
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Read-only audit of authoritative receipts for open paper positions.")
     parser.add_argument(
-        "--db",
+        "--snapshot-db",
         type=Path,
-        default=DEFAULT_DB_PATH,
-        help=f"Paper-trade SQLite database (default: {DEFAULT_DB_PATH})",
+        required=True,
+        help="Caller-attested SQLite copy created after the paper-trade writer was quiesced.",
+    )
+    parser.add_argument(
+        "--snapshot-sha256",
+        required=True,
+        help="SHA-256 identity attestation for --snapshot-db; it does not prove quiescence.",
     )
     parser.add_argument(
         "--timeout-seconds",
@@ -485,7 +632,11 @@ async def _main_async(args: argparse.Namespace) -> int:
         polymarket_client=PolymarketPublicClient(),
         timeout_seconds=args.timeout_seconds,
     )
-    report = await audit_database(args.db, source)
+    report = await audit_database(
+        args.snapshot_db,
+        source,
+        snapshot_sha256=args.snapshot_sha256,
+    )
     print(report.to_json())
     return 0
 

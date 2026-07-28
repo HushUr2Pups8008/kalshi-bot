@@ -23,6 +23,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import main
+import pytest
 
 
 def _paper(*, notional: float, resolved_trades: list[dict]):
@@ -40,7 +41,11 @@ def _passing_resolved(n: int = 30, win_rate: float = 0.60) -> list[dict]:
     trades = []
     for i in range(n):
         trades.append(
-            {"resolved": True, "pnl_dollars": (1.0 if i < wins else -1.0)}
+            {
+                "trade_id": f"trade-{i}",
+                "resolved": True,
+                "pnl_dollars": (1.0 if i < wins else -1.0),
+            }
         )
     return trades
 
@@ -59,6 +64,99 @@ def _drawdown_failure(failures: list[str]) -> str | None:
         if f.startswith("Drawdown"):
             return f
     return None
+
+
+@pytest.fixture(autouse=True)
+def _canonical_delivery_for_existing_gate_tests(monkeypatch):
+    """Keep existing MTM tests focused on their intended gate."""
+
+    def delivery_complete_ids(paper):
+        return {str(trade["trade_id"]) for trade in paper.get_all_trades()}
+
+    monkeypatch.setattr(
+        main,
+        "_go_live_canonical_delivery_complete_ids",
+        delivery_complete_ids,
+        raising=False,
+    )
+
+
+def test_gate_excludes_legacy_resolved_outcomes_from_the_go_live_cohort():
+    paper = _paper(notional=60.0, resolved_trades=_passing_resolved())
+    with patch.object(main, "cfg", _cfg()), patch(
+        "scripts.mark_open_positions.compute_open_position_marks",
+        return_value={"marked_value": 0.0, "unpriced_count": 0},
+    ), patch.object(
+        main,
+        "_go_live_canonical_delivery_complete_ids",
+        return_value=set(),
+        create=True,
+    ):
+        failures = main._check_go_live_gates(paper)
+
+    assert any("canonical delivery-complete" in failure for failure in failures)
+    assert any("Resolved trades: 0 < minimum 20" in failure for failure in failures)
+
+
+def test_gate_uses_only_canonical_delivery_complete_cohort_for_count_and_win_rate():
+    paper = _paper(notional=60.0, resolved_trades=_passing_resolved(n=20))
+    complete_ids = {f"trade-{index}" for index in range(19)}
+    with patch.object(main, "cfg", _cfg()), patch(
+        "scripts.mark_open_positions.compute_open_position_marks",
+        return_value={"marked_value": 0.0, "unpriced_count": 0},
+    ), patch.object(
+        main,
+        "_go_live_canonical_delivery_complete_ids",
+        return_value=complete_ids,
+        create=True,
+    ):
+        failures = main._check_go_live_gates(paper)
+
+    assert any("1 resolved outcome(s) are not canonical delivery-complete" in failure for failure in failures)
+    assert any("Resolved trades: 19 < minimum 20" in failure for failure in failures)
+
+
+def test_gate_fails_closed_when_canonical_delivery_cannot_be_verified():
+    paper = _paper(notional=60.0, resolved_trades=_passing_resolved())
+    with patch.object(main, "cfg", _cfg()), patch(
+        "scripts.mark_open_positions.compute_open_position_marks",
+        return_value={"marked_value": 0.0, "unpriced_count": 0},
+    ), patch.object(
+        main,
+        "_go_live_canonical_delivery_complete_ids",
+        side_effect=RuntimeError("store unreadable"),
+        create=True,
+    ):
+        failures = main._check_go_live_gates(paper)
+
+    assert any("canonical delivery unavailable" in failure for failure in failures)
+    assert any("Resolved trades: 0 < minimum 20" in failure for failure in failures)
+
+
+def test_gate_requires_independent_realized_profit_evidence():
+    """Local delivery completion must never qualify a live-money transition."""
+    paper = _paper(notional=60.0, resolved_trades=_passing_resolved())
+    with patch.object(main, "cfg", _cfg()), patch(
+        "scripts.mark_open_positions.compute_open_position_marks",
+        return_value={"marked_value": 0.0, "unpriced_count": 0},
+    ):
+        failures = main._check_go_live_gates(paper)
+
+    assert any("Independent realized-profit evidence unavailable" in failure for failure in failures)
+
+
+def test_handle_go_live_refuses_to_offer_a_failed_gate_override(capsys):
+    paper = MagicMock()
+    live_cfg = SimpleNamespace(live_trading_enabled=True)
+    with patch.object(main, "cfg", live_cfg), patch.object(
+        main,
+        "_check_go_live_gates",
+        return_value=["canonical delivery unavailable -- gate fails closed"],
+    ), patch("builtins.input", side_effect=AssertionError("must not prompt")):
+        main._handle_go_live(paper)
+
+    assert paper.confirm_go_live.call_count == 0
+    assert "GATES FAILED" in capsys.readouterr().out
 
 
 def test_gate_uses_mtm_equity_not_raw_notional_basis():
