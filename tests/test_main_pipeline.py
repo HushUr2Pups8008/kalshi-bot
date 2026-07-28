@@ -1890,6 +1890,7 @@ async def test_market_source_hint_runtime_failure_does_not_block_candidate(monke
 @pytest.mark.asyncio
 async def test_process_candidate_builds_signal_analysis_and_executes(monkeypatch):
     monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "bankroll", 50.0)
     monkeypatch.setattr(_cfg_module.cfg, "kelly_fraction", 0.5)
     monkeypatch.setattr(_cfg_module.cfg, "min_bet_dollars", 2.0)
     monkeypatch.setattr(_cfg_module.cfg, "time_discount_half_life", 14.0)
@@ -2021,6 +2022,7 @@ async def test_organic_main_sizing_through_blend_persists_shadow_candidate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "bankroll", 50.0)
     monkeypatch.setattr(_cfg_module.cfg, "kelly_fraction", 0.5)
     monkeypatch.setattr(_cfg_module.cfg, "min_bet_dollars", 2.0)
     monkeypatch.setattr(_cfg_module.cfg, "time_discount_half_life", 14.0)
