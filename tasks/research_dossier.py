@@ -19,6 +19,7 @@ from types import SimpleNamespace
 from typing import Literal, TypeVar
 
 from analysis.research_gate import ResearchEvidence
+from analysis.research_timeout_replay import ResearchTimeoutReplaySnapshot
 from utils.research_gaps import research_questions_for_skip
 from utils.research_priority import (
     extract_pending_event_at,
@@ -161,6 +162,7 @@ class ResearchDossierStore:
         counterclaims: list[str] | None = None,
         queries: list[object] | None = None,
         evidence: list[ResearchEvidence] | None = None,
+        timeout_diagnostic: ResearchTimeoutReplaySnapshot | None = None,
         update_dossier_snapshot: bool = True,
         update_dossier_run_id: bool = True,
     ) -> None:
@@ -197,6 +199,7 @@ class ResearchDossierStore:
                 counterclaims_supplied=counterclaims is not None,
                 queries=queries or [],
                 evidence=evidence or [],
+                timeout_diagnostic=timeout_diagnostic,
                 update_dossier_snapshot=update_dossier_snapshot,
                 update_dossier_run_id=update_dossier_run_id,
             ),
@@ -435,6 +438,37 @@ class ResearchDossierStore:
             )
             conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS research_timeout_diagnostics (
+                    research_run_id TEXT PRIMARY KEY,
+                    market_ticker TEXT NOT NULL,
+                    timeout_stage TEXT NOT NULL,
+                    input_sha256 TEXT NOT NULL,
+                    snapshot_json TEXT NOT NULL,
+                    created_ts TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                    FOREIGN KEY (research_run_id) REFERENCES research_runs(research_run_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS research_timeout_diagnostics_no_update
+                BEFORE UPDATE ON research_timeout_diagnostics
+                BEGIN
+                    SELECT RAISE(ABORT, 'research timeout diagnostics are append-only');
+                END
+                """
+            )
+            conn.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS research_timeout_diagnostics_no_delete
+                BEFORE DELETE ON research_timeout_diagnostics
+                BEGIN
+                    SELECT RAISE(ABORT, 'research timeout diagnostics are append-only');
+                END
+                """
+            )
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS research_tasks (
                     market_ticker TEXT PRIMARY KEY,
                     state TEXT NOT NULL,
@@ -624,6 +658,7 @@ class ResearchDossierStore:
         counterclaims_supplied: bool,
         queries: list[object],
         evidence: list[ResearchEvidence],
+        timeout_diagnostic: ResearchTimeoutReplaySnapshot | None,
         update_dossier_snapshot: bool = True,
         update_dossier_run_id: bool = True,
     ) -> None:
@@ -646,6 +681,18 @@ class ResearchDossierStore:
             final_open_questions
         )
         final_contract_fingerprint = contract_fingerprint or _run_contract_fingerprint(evidence)
+        timeout_diagnostic_json: str | None = None
+        timeout_diagnostic_sha256: str | None = None
+        if timeout_diagnostic is not None:
+            _validate_timeout_diagnostic(
+                timeout_diagnostic,
+                market_ticker=market_ticker,
+                research_run_id=research_run_id,
+                contract_fingerprint=final_contract_fingerprint,
+                skip_reason=final_skip_reason,
+            )
+            timeout_diagnostic_json = timeout_diagnostic.canonical_json()
+            timeout_diagnostic_sha256 = timeout_diagnostic.input_sha256()
         normalized_market_status = (
             _UNSET if market_status is _UNSET else _normalize_market_status(market_status)
         )
@@ -780,6 +827,15 @@ class ResearchDossierStore:
                     research_run_id,
                 ),
             )
+            if timeout_diagnostic is not None:
+                self._insert_timeout_diagnostic_idempotent(
+                    conn,
+                    research_run_id=research_run_id,
+                    market_ticker=market_ticker,
+                    timeout_stage=timeout_diagnostic.timeout_stage,
+                    input_sha256=timeout_diagnostic_sha256,
+                    snapshot_json=timeout_diagnostic_json,
+                )
             conn.commit()
 
     def _ensure_dossier_and_run(
@@ -970,6 +1026,48 @@ class ResearchDossierStore:
         finally:
             if close_conn:
                 conn.close()
+
+    def _insert_timeout_diagnostic_idempotent(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        research_run_id: str,
+        market_ticker: str,
+        timeout_stage: str,
+        input_sha256: str,
+        snapshot_json: str,
+    ) -> None:
+        values = (
+            research_run_id,
+            market_ticker,
+            timeout_stage,
+            input_sha256,
+            snapshot_json,
+        )
+        try:
+            conn.execute(
+                """
+                INSERT INTO research_timeout_diagnostics (
+                    research_run_id, market_ticker, timeout_stage,
+                    input_sha256, snapshot_json
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                values,
+            )
+        except sqlite3.IntegrityError:
+            existing = conn.execute(
+                """
+                SELECT research_run_id, market_ticker, timeout_stage,
+                       input_sha256, snapshot_json
+                FROM research_timeout_diagnostics
+                WHERE research_run_id = ?
+                """,
+                (research_run_id,),
+            ).fetchone()
+            if existing is None:
+                raise
+            if tuple(existing) != values:
+                raise sqlite3.IntegrityError("research timeout diagnostic mismatch") from None
 
     def _insert_evidence_sync(
         self,
@@ -1451,6 +1549,26 @@ def _run_contract_fingerprint(evidence: list[ResearchEvidence]) -> str | None:
     if len(fingerprints) != 1:
         return None
     return next(iter(fingerprints))
+
+
+def _validate_timeout_diagnostic(
+    diagnostic: ResearchTimeoutReplaySnapshot,
+    *,
+    market_ticker: str,
+    research_run_id: str,
+    contract_fingerprint: str | None,
+    skip_reason: str | None,
+) -> None:
+    if skip_reason != "research_timeout":
+        raise ValueError("timeout diagnostic requires research_timeout skip reason")
+    if diagnostic.research_run_id != research_run_id:
+        raise ValueError("timeout diagnostic research run id mismatch")
+    if diagnostic.market_ticker != market_ticker:
+        raise ValueError("timeout diagnostic market ticker mismatch")
+    if contract_fingerprint and diagnostic.contract_fingerprint != contract_fingerprint:
+        raise ValueError("timeout diagnostic contract fingerprint mismatch")
+    if not diagnostic.timeout_stage:
+        raise ValueError("timeout diagnostic stage is required")
 
 
 def _validated_research_status(
