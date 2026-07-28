@@ -10974,3 +10974,227 @@ async def test_generic_market_contract_terms_fallback_remains_non_promotable():
 
     assert verdict.status == ResearchStatus.CONTINUE_RESEARCHING
     assert verdict.skip_reason == "missing_resolution_source"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("counter_result", "expected_status", "expected_skip_reason", "expected_timeout_stage"),
+    [
+        (
+            "timeout",
+            ResearchStatus.CONTINUE_RESEARCHING,
+            "research_timeout",
+            "counter_adjudication",
+        ),
+        (
+            None,
+            ResearchStatus.RESEARCH_ADJUDICATOR_ERROR,
+            "research_adjudicator_error",
+            None,
+        ),
+        (
+            RuntimeError("counter adjudicator unavailable"),
+            ResearchStatus.RESEARCH_ADJUDICATOR_ERROR,
+            "research_adjudicator_error",
+            None,
+        ),
+        (
+            asyncio.CancelledError(),
+            None,
+            None,
+            None,
+        ),
+    ],
+)
+async def test_run_research_gate_fails_closed_when_counter_adjudication_cannot_return_verdict_or_cancellation(
+    counter_result,
+    expected_status,
+    expected_skip_reason,
+    expected_timeout_stage,
+):
+    fresh = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    news = SimpleNamespace(headline="Event conditions strengthen", source="Reuters")
+    market = SimpleNamespace(
+        ticker="KXCOUNTERADJ-26JUL13",
+        title="Will the event happen by July 13?",
+        rules_primary="Reliable reporting determines the market.",
+        rules_secondary="",
+        settlement_sources=(),
+    )
+    initial_query_texts = {
+        query.query
+        for query in research_gate_module._select_research_queries(
+            build_research_queries(news, market),
+            max_queries=6,
+            require_decision_grade=True,
+        )
+    }
+    adjudication_calls = 0
+
+    async def search_provider(query):
+        if query.query not in initial_query_texts:
+            return [
+                ResearchEvidence(
+                    source_class="reputable_secondary",
+                    source_name="AP",
+                    source_url="https://apnews.com/event-counter",
+                    title="AP reports a risk to the event.",
+                    snippet="AP reports the event could still fail.",
+                    claim_type="disconfirming",
+                    supports_direction="no",
+                    supports_confidence=0.35,
+                    retrieved_at=fresh,
+                )
+            ]
+        return [
+            ResearchEvidence(
+                source_class="reputable_secondary",
+                source_name="Reuters",
+                source_url="https://reuters.com/event-support",
+                title="Reuters reports conditions supporting the event.",
+                snippet="Reuters reports the event is likely.",
+                claim_type="supporting",
+                supports_direction="yes",
+                supports_confidence=0.9,
+                retrieved_at=fresh,
+            )
+        ]
+
+    async def adjudicator(**_kwargs):
+        nonlocal adjudication_calls
+        adjudication_calls += 1
+        if adjudication_calls == 1:
+            return {
+                "direction": "yes",
+                "estimated_probability_yes": 0.7,
+                "confidence": 0.8,
+                "reason": "Directional evidence supports the YES case.",
+            }
+        if counter_result == "timeout":
+            await asyncio.sleep(60)
+        if isinstance(counter_result, BaseException):
+            raise counter_result
+        return counter_result
+
+    gate_run = run_research_gate(
+        news,
+        market,
+        model_direction="neutral",
+        model_confidence=0.5,
+        model_reason="No keywords.",
+        yes_ask=0.51,
+        no_ask=0.51,
+        live_mode=False,
+        search_provider=search_provider,
+        adjudicator=adjudicator,
+        require_decision_grade=True,
+        research_timeout_seconds=0.2,
+    )
+    if isinstance(counter_result, asyncio.CancelledError):
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(gate_run, timeout=1.0)
+        assert adjudication_calls == 2
+        return
+
+    verdict = await asyncio.wait_for(gate_run, timeout=1.0)
+
+    assert adjudication_calls == 2
+    assert verdict.status == expected_status
+    assert verdict.skip_reason == expected_skip_reason
+    assert verdict.research_timeout_stage == expected_timeout_stage
+    assert verdict.force_side is None
+
+
+@pytest.mark.asyncio
+async def test_run_research_gate_fails_closed_when_counter_budget_is_exhausted(
+    monkeypatch,
+):
+    fresh = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    news = SimpleNamespace(headline="Event conditions strengthen", source="Reuters")
+    market = SimpleNamespace(
+        ticker="KXCOUNTERBUDGET-26JUL13",
+        title="Will the event happen by July 13?",
+        rules_primary="Reliable reporting determines the market.",
+        rules_secondary="",
+        settlement_sources=(),
+    )
+    initial_query_texts = {
+        query.query
+        for query in research_gate_module._select_research_queries(
+            build_research_queries(news, market),
+            max_queries=6,
+            require_decision_grade=True,
+        )
+    }
+
+    class ControlledClock:
+        expired = False
+
+        def time(self):
+            return 1.0 if self.expired else 0.0
+
+    clock = ControlledClock()
+    monkeypatch.setattr(research_gate_module.asyncio, "get_running_loop", lambda: clock)
+    adjudication_calls = 0
+
+    async def search_provider(query):
+        if query.query not in initial_query_texts:
+            clock.expired = True
+            return [
+                ResearchEvidence(
+                    source_class="reputable_secondary",
+                    source_name="AP",
+                    source_url="https://apnews.com/event-counter-budget",
+                    title="AP reports a risk to the event.",
+                    snippet="AP reports the event could still fail.",
+                    claim_type="disconfirming",
+                    supports_direction="no",
+                    supports_confidence=0.35,
+                    retrieved_at=fresh,
+                )
+            ]
+        return [
+            ResearchEvidence(
+                source_class="reputable_secondary",
+                source_name="Reuters",
+                source_url="https://reuters.com/event-support-budget",
+                title="Reuters reports conditions supporting the event.",
+                snippet="Reuters reports the event is likely.",
+                claim_type="supporting",
+                supports_direction="yes",
+                supports_confidence=0.9,
+                retrieved_at=fresh,
+            )
+        ]
+
+    async def adjudicator(**_kwargs):
+        nonlocal adjudication_calls
+        adjudication_calls += 1
+        if adjudication_calls > 1:
+            raise AssertionError("counter adjudicator must not run after budget expiry")
+        return {
+            "direction": "yes",
+            "estimated_probability_yes": 0.7,
+            "confidence": 0.8,
+            "reason": "Directional evidence supports the YES case.",
+        }
+
+    verdict = await run_research_gate(
+        news,
+        market,
+        model_direction="neutral",
+        model_confidence=0.5,
+        model_reason="No keywords.",
+        yes_ask=0.51,
+        no_ask=0.51,
+        live_mode=False,
+        search_provider=search_provider,
+        adjudicator=adjudicator,
+        require_decision_grade=True,
+        research_timeout_seconds=0.5,
+    )
+
+    assert adjudication_calls == 1
+    assert verdict.status == ResearchStatus.CONTINUE_RESEARCHING
+    assert verdict.skip_reason == "research_timeout"
+    assert verdict.research_timeout_stage == "counter_adjudication"
