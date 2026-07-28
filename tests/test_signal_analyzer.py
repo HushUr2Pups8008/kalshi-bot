@@ -14,6 +14,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from analysis.feedback_counterfactual import (
+    FEEDBACK_ALGORITHM_VERSION,
+    FeedbackMultiplierReceipt,
+    KeywordFeedbackCollector,
+)
 import analysis.signal_analyzer as signal_analyzer
 from analysis.signal_analyzer import (
     _OLLAMA_FAILURE_THRESHOLD,
@@ -375,6 +380,37 @@ def _make_full_market(
 
 
 class TestKeywordEstimate:
+    def test_keyword_estimate_collects_actual_and_neutral_feedback(self):
+        news = _make_news("Missile strike prompts fears of wider conflict")
+        market = _make_full_market()
+        receipt = FeedbackMultiplierReceipt(
+            channel="keyword",
+            key="missile strike",
+            series_ticker="KXIRAN",
+            applied_multiplier=1.5,
+            status="canonical",
+            canonical_basis_sha256="b" * 64,
+            delivered_event_count=10,
+            effective_sample_count=10,
+            algorithm_version=FEEDBACK_ALGORITHM_VERSION,
+            as_of="2026-07-28T00:00:00+00:00",
+        )
+        stats = MagicMock()
+        stats.get_multiplier_with_receipt.return_value = (1.5, receipt)
+        collector = KeywordFeedbackCollector()
+
+        probability, _side, _keywords, _reasoning = keyword_estimate(
+            news,
+            market,
+            keyword_stats=stats,
+            feedback_collector=collector,
+        )
+
+        assert collector.keyword_probability_actual == pytest.approx(probability)
+        assert collector.keyword_probability_neutral is not None
+        assert collector.keyword_probability_neutral < probability
+        assert collector.keyword_receipts == (receipt,)
+
     def test_geo_coherence_suppresses_cross_country_signal(self):
         news = _make_news("Iran missile strike hits regional target")
         market = _make_full_market(

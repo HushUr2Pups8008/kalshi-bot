@@ -68,6 +68,12 @@ from urllib.parse import urlparse
 
 from analysis import DecisionFinancialProvenance, SignalAnalysis
 from analysis.evidence_scorer import source_quality
+from analysis.feedback_counterfactual import (
+    FEEDBACK_ALGORITHM_VERSION,
+    FeedbackDecisionRecord,
+    FeedbackMultiplierReceipt,
+    KeywordFeedbackCollector,
+)
 from analysis.kelly import kelly_bet
 from analysis.research_gate import (
     ResearchStatus,
@@ -1951,8 +1957,15 @@ class TradingBot:
             match_meta["lifecycle_id"] = lifecycle_id
             match_meta["settlement_source_match"] = settlement_source_match
 
+        feedback_collector = KeywordFeedbackCollector()
         estimated_prob, confidence, keywords, reasoning, llm_dir, llm_mag, llm_conf = \
-            await estimate_probability(news, market, keyword_stats=self.keyword_stats, match_meta=match_meta)
+            await estimate_probability(
+                news,
+                market,
+                keyword_stats=self.keyword_stats,
+                match_meta=match_meta,
+                feedback_collector=feedback_collector,
+            )
         # PROFIT-EDGE-001: reject only when neither signal source produced
         # anything. Empty `keywords` with a usable LLM signal (mag != none) is
         # a legitimate LLM-only path — the LLM identifies semantic relevance
@@ -2191,8 +2204,49 @@ class TradingBot:
         edge = edges.yes_edge if side == "yes" else edges.no_edge
         method = "llm" if any(value is not None for value in (llm_dir, llm_mag, llm_conf)) else "keyword"
 
-        # Get source credibility multiplier
+        # Preserve the existing numeric read exactly. Receipts are a second,
+        # observational read and can never replace or retry the sizing input.
         source_mult = self.paper.credibility.get_multiplier(news.source)
+        source_receipt_result = None
+        source_receipt_status = "unattested_provider"
+        get_source_receipt = getattr(
+            self.paper.credibility,
+            "get_multiplier_with_receipt",
+            None,
+        )
+        if callable(get_source_receipt):
+            try:
+                source_receipt_result = get_source_receipt(news.source)
+            except Exception as exc:
+                log.warning(
+                    "[FEEDBACK_DECISION] source receipt unavailable source=%s error=%s",
+                    news.source,
+                    exc,
+                )
+                source_receipt_status = "unattested_receipt_error"
+        if (
+            isinstance(source_receipt_result, tuple)
+            and len(source_receipt_result) == 2
+            and isinstance(source_receipt_result[0], (int, float))
+            and isinstance(source_receipt_result[1], FeedbackMultiplierReceipt)
+            and float(source_receipt_result[0]) == float(source_mult)
+        ):
+            _, source_receipt = source_receipt_result
+        else:
+            if source_receipt_result is not None:
+                source_receipt_status = "unattested_multiplier_mismatch"
+            source_receipt = FeedbackMultiplierReceipt(
+                channel="source",
+                key=news.source,
+                series_ticker=None,
+                applied_multiplier=float(source_mult),
+                status=source_receipt_status,
+                canonical_basis_sha256=None,
+                delivered_event_count=0,
+                effective_sample_count=0,
+                algorithm_version=FEEDBACK_ALGORITHM_VERSION,
+                as_of=datetime.now(timezone.utc).isoformat(),
+            )
 
         # Dynamic max bet is capped until all historical resolved paper outcomes
         # have canonical delivery completion; raw legacy wins cannot expand size.
@@ -2222,13 +2276,43 @@ class TradingBot:
             time_discount_half_life=cfg.time_discount_half_life,
             time_discount_floor=cfg.time_discount_floor,
         )
+        source_neutral_sizing_error: str | None = None
+        try:
+            (
+                source_neutral_kelly_frac,
+                source_neutral_kelly_dollars,
+                source_neutral_capped_dollars,
+            ) = kelly_bet(
+                estimated_probability=estimated_prob if side == "yes" else (1.0 - estimated_prob),
+                market_price_cents=executed_price_cents,
+                bankroll=notional,
+                kelly_fraction=cfg.kelly_fraction,
+                max_bet_dollars=max_bet,
+                min_bet_dollars=cfg.min_bet_dollars,
+                min_edge=min_edge,
+                source_multiplier=1.0,
+                confidence=confidence,
+                days_to_close=days_to_close,
+                time_discount_half_life=cfg.time_discount_half_life,
+                time_discount_floor=cfg.time_discount_floor,
+            )
+        except Exception as exc:
+            source_neutral_kelly_frac = None
+            source_neutral_kelly_dollars = None
+            source_neutral_capped_dollars = None
+            source_neutral_sizing_error = type(exc).__name__
+            log.warning(
+                "[FEEDBACK_DECISION] source-neutral sizing unavailable ticker=%s error=%s",
+                market.ticker,
+                source_neutral_sizing_error,
+            )
 
         # PROFIT-ALIGN-003 (2026-05-25): floor-clamp Kelly halving.
         # See _is_floor_clamp_suspected() for the full rationale + audit
         # context. Mitigation: when clamp is suspected, multiply the Kelly
         # stake by cfg.floor_clamp_kelly_multiplier (default 0.5).
         # Conservative; affects only clamped trades.
-        if (
+        floor_clamp_applied = (
             _is_floor_clamp_suspected(
                 llm_dir,
                 llm_mag,
@@ -2237,10 +2321,15 @@ class TradingBot:
                 llm_conf,
             )
             and cfg.floor_clamp_kelly_multiplier < 1.0
-        ):
+        )
+        if floor_clamp_applied:
             _pre = capped_dollars
             kelly_dollars *= cfg.floor_clamp_kelly_multiplier
             capped_dollars *= cfg.floor_clamp_kelly_multiplier
+            if source_neutral_kelly_dollars is not None:
+                source_neutral_kelly_dollars *= cfg.floor_clamp_kelly_multiplier
+            if source_neutral_capped_dollars is not None:
+                source_neutral_capped_dollars *= cfg.floor_clamp_kelly_multiplier
             log.debug(
                 "[KELLY] floor_clamp_halved ticker=%s side=%s "
                 "est_prob=%.4f mult=%.2f capped=$%.2f→$%.2f",
@@ -2309,6 +2398,8 @@ class TradingBot:
         )
         self.source_stats.increment_opportunities(news.source)
 
+        paper_placeholder_applied = False
+        source_neutral_paper_placeholder_applied = False
         if capped_dollars <= 0:
             if not cfg.is_paper_trading:
                 log.debug("No bet for %s: edge=%+.4f below threshold", market.ticker, edge)
@@ -2318,11 +2409,19 @@ class TradingBot:
             # and logs a proper SKIPPED event if needed. Use the executed-side
             # ask cents instead of the YES midpoint to avoid NO-side mispricing.
             capped_dollars = PAPER_FLAT_CONTRACTS * max(1, min(99, int(executed_price_cents))) / 100.0
+            paper_placeholder_applied = True
             log.debug(
                 "[ANALYSIS] paper_placeholder ticker=%s placeholder=$%.2f",
                 market.ticker,
                 capped_dollars,
             )
+        if source_neutral_capped_dollars is not None and source_neutral_capped_dollars <= 0 and cfg.is_paper_trading:
+            source_neutral_capped_dollars = (
+                PAPER_FLAT_CONTRACTS
+                * max(1, min(99, int(executed_price_cents)))
+                / 100.0
+            )
+            source_neutral_paper_placeholder_applied = True
 
         signal_meta = dict(news_meta)
         signal_meta["lifecycle_id"] = lifecycle_id
@@ -2375,6 +2474,100 @@ class TradingBot:
         # runs the readiness gate, and enqueues approved TradeCandidate objects.
         # The _trading_queue_consumer_task drains the queue and calls executor.execute().
         blend_result = await self._route_analysis_through_blend(analysis)
+        keyword_counterfactual_status = feedback_collector.keyword_counterfactual_status
+        if method == "llm":
+            keyword_counterfactual_status = (
+                "unscorable_llm_final_probability:"
+                f"{keyword_counterfactual_status}"
+            )
+        elif feedback_collector.keyword_probability_neutral is not None:
+            keyword_counterfactual_status = (
+                "captured_keyword_probability_not_sizing_replayed:"
+                f"{keyword_counterfactual_status}"
+            )
+        try:
+            feedback_decision = FeedbackDecisionRecord(
+                lifecycle_id=lifecycle_id,
+                venue=opportunity_venue or "kalshi",
+                ticker=market.ticker,
+                source=news.source,
+                series_ticker=str(getattr(market, "series_ticker", "") or "") or None,
+                decision_at=datetime.now(timezone.utc).isoformat(),
+                source_receipt=source_receipt,
+                keyword_receipts=feedback_collector.keyword_receipts,
+                probability_actual=float(estimated_prob),
+                probability_keyword_neutral=feedback_collector.keyword_probability_neutral,
+                keyword_counterfactual_status=keyword_counterfactual_status,
+                sizing_inputs={
+                    "executed_price_cents": float(executed_price_cents),
+                    "side": side,
+                    "bankroll": float(notional),
+                    "kelly_fraction": float(cfg.kelly_fraction),
+                    "max_bet_dollars": float(max_bet),
+                    "min_bet_dollars": float(cfg.min_bet_dollars),
+                    "min_edge": float(min_edge),
+                    "confidence": float(confidence),
+                    "days_to_close": float(days_to_close),
+                    "time_discount_half_life": float(cfg.time_discount_half_life),
+                    "time_discount_floor": float(cfg.time_discount_floor),
+                    "source_multiplier": float(source_mult),
+                    "is_paper_trading": bool(cfg.is_paper_trading),
+                    "paper_flat_contracts": int(PAPER_FLAT_CONTRACTS),
+                    "floor_clamp_applied": floor_clamp_applied,
+                    "floor_clamp_kelly_multiplier": float(
+                        cfg.floor_clamp_kelly_multiplier
+                    ),
+                },
+                actual={
+                    "source_multiplier": float(source_mult),
+                    "kelly_fraction": float(kelly_frac),
+                    "kelly_dollars": float(kelly_dollars),
+                    "capped_dollars": float(capped_dollars),
+                    "paper_placeholder_applied": paper_placeholder_applied,
+                },
+                source_neutral={
+                    "status": (
+                        "scorable"
+                        if source_neutral_sizing_error is None
+                        else "unscorable_sizing_error"
+                    ),
+                    "sizing_error": source_neutral_sizing_error,
+                    "source_multiplier": 1.0,
+                    "kelly_fraction": (
+                        float(source_neutral_kelly_frac)
+                        if source_neutral_kelly_frac is not None
+                        else None
+                    ),
+                    "kelly_dollars": (
+                        float(source_neutral_kelly_dollars)
+                        if source_neutral_kelly_dollars is not None
+                        else None
+                    ),
+                    "capped_dollars": (
+                        float(source_neutral_capped_dollars)
+                        if source_neutral_capped_dollars is not None
+                        else None
+                    ),
+                    "paper_placeholder_applied": source_neutral_paper_placeholder_applied,
+                },
+                keyword_neutral=None,
+                all_neutral=None,
+                gate={
+                    "enqueued": bool(blend_result.enqueued),
+                    "trade_blocked_reason": blend_result.trade_blocked_reason,
+                },
+            )
+            await write_trade_log_async(
+                trade_log.log_feedback_decision,
+                feedback_decision,
+            )
+        except Exception:
+            log.warning(
+                "[FEEDBACK_DECISION] receipt write failed ticker=%s source=%s",
+                market.ticker,
+                news.source,
+                exc_info=True,
+            )
         if not blend_result.enqueued:
             log.debug(
                 "[ANALYSIS] no_execution ticker=%s source=%s blocked_reason=%s",

@@ -23,6 +23,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from analysis.feedback_counterfactual import (
+    FEEDBACK_ALGORITHM_VERSION,
+    FeedbackMultiplierReceipt,
+    canonical_delivery_basis_sha256,
+)
 from config import (
     DATA_DIR,
     CREDIBILITY_MIN_SAMPLE,
@@ -117,6 +122,9 @@ class SourceCredibility:
         self._canonical_lock = threading.RLock()
         self._canonical_outcomes: dict[str, tuple[float, float, int]] | None = None
         self._canonical_loaded_at = float("-inf")
+        self._canonical_basis_sha256: str | None = None
+        self._canonical_event_count = 0
+        self._canonical_as_of: str | None = None
 
     # ── Read ──────────────────────────────────────────────────────────────────
 
@@ -128,18 +136,69 @@ class SourceCredibility:
         values never control runtime sizing. A missing, malformed, or
         non-conserved canonical delivery state fails neutral.
         """
-        canonical_outcomes = self._canonical_outcomes_for_source(source)
-        if canonical_outcomes is None:
-            return 1.0
+        return self.get_multiplier_with_receipt(source)[0]
 
-        weighted_wins, weighted_total, sample_count = canonical_outcomes
-        if sample_count < CREDIBILITY_MIN_SAMPLE or weighted_total <= 0.0:
-            return 1.0
+    def get_multiplier_with_receipt(
+        self,
+        source: str,
+    ) -> tuple[float, FeedbackMultiplierReceipt]:
+        """Return the runtime multiplier and its immutable canonical basis."""
+        self._maybe_refresh_canonical_outcomes()
+        observed_at = datetime.now(timezone.utc).isoformat()
+        with self._canonical_lock:
+            canonical_outcomes = self._canonical_outcomes
+            basis_sha256 = self._canonical_basis_sha256
+            event_count = self._canonical_event_count
+            basis_as_of = self._canonical_as_of or observed_at
 
-        accuracy = weighted_wins / weighted_total
-        return CREDIBILITY_MIN_MULT + accuracy * (
-            CREDIBILITY_MAX_MULT - CREDIBILITY_MIN_MULT
-        )
+            if canonical_outcomes is None:
+                return 1.0, FeedbackMultiplierReceipt(
+                    channel="source",
+                    key=source,
+                    series_ticker=None,
+                    applied_multiplier=1.0,
+                    status="neutral_unavailable",
+                    canonical_basis_sha256=None,
+                    delivered_event_count=0,
+                    effective_sample_count=0,
+                    algorithm_version=FEEDBACK_ALGORITHM_VERSION,
+                    as_of=basis_as_of,
+                )
+
+            weighted_wins, weighted_total, sample_count = canonical_outcomes.get(
+                source,
+                (0.0, 0.0, 0),
+            )
+            if sample_count < CREDIBILITY_MIN_SAMPLE or weighted_total <= 0.0:
+                return 1.0, FeedbackMultiplierReceipt(
+                    channel="source",
+                    key=source,
+                    series_ticker=None,
+                    applied_multiplier=1.0,
+                    status="neutral_insufficient_sample",
+                    canonical_basis_sha256=basis_sha256,
+                    delivered_event_count=event_count,
+                    effective_sample_count=sample_count,
+                    algorithm_version=FEEDBACK_ALGORITHM_VERSION,
+                    as_of=basis_as_of,
+                )
+
+            accuracy = weighted_wins / weighted_total
+            multiplier = CREDIBILITY_MIN_MULT + accuracy * (
+                CREDIBILITY_MAX_MULT - CREDIBILITY_MIN_MULT
+            )
+            return multiplier, FeedbackMultiplierReceipt(
+                channel="source",
+                key=source,
+                series_ticker=None,
+                applied_multiplier=multiplier,
+                status="canonical",
+                canonical_basis_sha256=basis_sha256,
+                delivered_event_count=event_count,
+                effective_sample_count=sample_count,
+                algorithm_version=FEEDBACK_ALGORITHM_VERSION,
+                as_of=basis_as_of,
+            )
 
     def _canonical_outcomes_for_source(
         self,
@@ -157,15 +216,19 @@ class SourceCredibility:
         with self._canonical_lock:
             if time.monotonic() - self._canonical_loaded_at < CANONICAL_REFRESH_SECS:
                 return
+            self._canonical_basis_sha256 = None
+            self._canonical_event_count = 0
+            self._canonical_as_of = None
             self._canonical_outcomes = self._load_canonical_outcomes()
             self._canonical_loaded_at = time.monotonic()
 
     def _load_canonical_outcomes(self) -> dict[str, tuple[float, float, int]] | None:
         """Rebuild time-decayed source outcomes from canonical delivered payloads."""
         try:
+            now = datetime.now(timezone.utc)
             with SettlementStore(self._db_path, read_only=True) as store:
-                events = store.canonical_delivery_complete_outbox_payloads(
-                    now=datetime.now(timezone.utc)
+                events = tuple(
+                    store.canonical_delivery_complete_outbox_payloads(now=now)
                 )
         except Exception as exc:
             log.warning(
@@ -175,7 +238,6 @@ class SourceCredibility:
             return None
 
         aggregate: dict[str, list[float]] = {}
-        now = datetime.now(timezone.utc)
         try:
             for event in events:
                 payload = json.loads(event.payload_json)
@@ -221,6 +283,10 @@ class SourceCredibility:
             )
             return None
 
+        self._canonical_basis_sha256, self._canonical_event_count = (
+            canonical_delivery_basis_sha256(events)
+        )
+        self._canonical_as_of = now.isoformat()
         return {
             source: (values[0], values[1], int(values[2]))
             for source, values in aggregate.items()

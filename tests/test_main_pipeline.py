@@ -12,13 +12,17 @@ from decimal import Decimal
 import json
 import sqlite3
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, create_autospec, patch
 
 import pytest
 
 import config as _cfg_module
 import main as main_module
 from analysis import SignalAnalysis
+from analysis.feedback_counterfactual import (
+    FEEDBACK_ALGORITHM_VERSION,
+    FeedbackMultiplierReceipt,
+)
 from analysis.research_gate import (
     ResearchEvidence,
     ResearchQuery,
@@ -1927,6 +1931,7 @@ async def test_process_candidate_builds_signal_analysis_and_executes(monkeypatch
         market,
         keyword_stats=bot.keyword_stats,
         match_meta=match_meta,
+        feedback_collector=ANY,
     )
     # PROFIT-MATCH-003 (L2-a): _process_candidate threads the matcher score onto
     # match_meta so the downstream MATCH_LLM_REVIEW emission carries it (the
@@ -2014,6 +2019,271 @@ async def test_process_candidate_builds_signal_analysis_and_executes(monkeypatch
             settlement_source_match=True,
             lifecycle_id=match_meta["lifecycle_id"],
         )
+
+
+@pytest.mark.asyncio
+async def test_feedback_decision_receipt_does_not_change_blend_input(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "bankroll", 50.0)
+    monkeypatch.setattr(_cfg_module.cfg, "kelly_fraction", 0.5)
+    monkeypatch.setattr(_cfg_module.cfg, "min_bet_dollars", 2.0)
+    monkeypatch.setattr(_cfg_module.cfg, "time_discount_half_life", 14.0)
+    monkeypatch.setattr(_cfg_module.cfg, "time_discount_floor", 0.20)
+    monkeypatch.setattr(_cfg_module.cfg, "dynamic_max_bet", lambda bankroll: 75.0)
+    monkeypatch.setattr(_cfg_module.cfg, "floor_clamp_kelly_multiplier", 1.0)
+    bot = _make_bot_stub()
+    receipt = FeedbackMultiplierReceipt(
+        channel="source",
+        key="Reuters",
+        series_ticker=None,
+        applied_multiplier=1.2,
+        status="canonical",
+        canonical_basis_sha256="c" * 64,
+        delivered_event_count=12,
+        effective_sample_count=10,
+        algorithm_version=FEEDBACK_ALGORITHM_VERSION,
+        as_of="2026-07-28T00:00:00+00:00",
+    )
+    bot.paper.credibility.get_multiplier_with_receipt.return_value = (1.2, receipt)
+    bot.paper.credibility.get_multiplier.return_value = 1.2
+    news = _make_news()
+    market = _make_market()
+
+    with patch(
+        "main.estimate_probability",
+        new=AsyncMock(
+            return_value=(
+                0.65,
+                0.8,
+                ["missile strike"],
+                "test reasoning",
+                "yes",
+                "moderate",
+                0.8,
+            )
+        ),
+    ), patch(
+        "main.kelly_bet",
+        side_effect=[(0.12, 15.0, 12.0), (0.12, 12.5, 10.0)],
+    ) as kelly_bet_mock, patch("utils.logger.trade_log.log_signal"), patch(
+        "utils.logger.trade_log.log_opportunity"
+    ), patch("utils.logger.trade_log.log_feedback_decision") as feedback_log:
+        await bot._process_candidate(news, market, 0.42, {})
+
+    analysis = bot._blend_task.process_fast_lane_result.await_args.args[0]
+    assert analysis.capped_dollars == pytest.approx(12.0)
+    feedback = feedback_log.call_args.args[0]
+    assert feedback.source_receipt == receipt
+    assert feedback.actual["capped_dollars"] == pytest.approx(12.0)
+    assert feedback.source_neutral["capped_dollars"] == pytest.approx(10.0)
+    assert feedback.gate["enqueued"] is True
+    actual_args = kelly_bet_mock.call_args_list[0].kwargs
+    neutral_args = kelly_bet_mock.call_args_list[1].kwargs
+    assert actual_args.keys() == neutral_args.keys()
+    for key, value in actual_args.items():
+        if key == "source_multiplier":
+            assert value == pytest.approx(1.2)
+            assert neutral_args[key] == pytest.approx(1.0)
+        else:
+            assert neutral_args[key] == value
+
+
+@pytest.mark.asyncio
+async def test_source_neutral_receipt_failure_does_not_interrupt_blend(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "bankroll", 50.0)
+    monkeypatch.setattr(_cfg_module.cfg, "kelly_fraction", 0.5)
+    monkeypatch.setattr(_cfg_module.cfg, "min_bet_dollars", 2.0)
+    monkeypatch.setattr(_cfg_module.cfg, "time_discount_half_life", 14.0)
+    monkeypatch.setattr(_cfg_module.cfg, "time_discount_floor", 0.20)
+    monkeypatch.setattr(_cfg_module.cfg, "dynamic_max_bet", lambda bankroll: 75.0)
+    monkeypatch.setattr(_cfg_module.cfg, "floor_clamp_kelly_multiplier", 1.0)
+    bot = _make_bot_stub()
+    news = _make_news()
+    market = _make_market()
+
+    with patch(
+        "main.estimate_probability",
+        new=AsyncMock(
+            return_value=(
+                0.65,
+                0.8,
+                ["missile strike"],
+                "test reasoning",
+                "yes",
+                "moderate",
+                0.8,
+            )
+        ),
+    ), patch(
+        "main.kelly_bet",
+        side_effect=[(0.12, 15.0, 12.0), RuntimeError("receipt-only failure")],
+    ), patch("utils.logger.trade_log.log_signal"), patch(
+        "utils.logger.trade_log.log_opportunity"
+    ), patch("utils.logger.trade_log.log_feedback_decision") as feedback_log:
+        await bot._process_candidate(news, market, 0.42, {})
+
+    analysis = bot._blend_task.process_fast_lane_result.await_args.args[0]
+    assert analysis.capped_dollars == pytest.approx(12.0)
+    feedback = feedback_log.call_args.args[0]
+    assert feedback.source_neutral["status"] == "unscorable_sizing_error"
+    assert feedback.source_neutral["capped_dollars"] is None
+
+
+@pytest.mark.asyncio
+async def test_source_receipt_error_does_not_retry_live_multiplier(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "bankroll", 50.0)
+    monkeypatch.setattr(_cfg_module.cfg, "kelly_fraction", 0.5)
+    monkeypatch.setattr(_cfg_module.cfg, "min_bet_dollars", 2.0)
+    monkeypatch.setattr(_cfg_module.cfg, "time_discount_half_life", 14.0)
+    monkeypatch.setattr(_cfg_module.cfg, "time_discount_floor", 0.20)
+    monkeypatch.setattr(_cfg_module.cfg, "dynamic_max_bet", lambda bankroll: 75.0)
+    monkeypatch.setattr(_cfg_module.cfg, "floor_clamp_kelly_multiplier", 1.0)
+    bot = _make_bot_stub()
+    bot.paper.credibility.get_multiplier.return_value = 1.2
+    bot.paper.credibility.get_multiplier_with_receipt.side_effect = RuntimeError(
+        "receipt store unavailable"
+    )
+    news = _make_news()
+    market = _make_market()
+
+    with patch(
+        "main.estimate_probability",
+        new=AsyncMock(
+            return_value=(
+                0.65,
+                0.8,
+                ["missile strike"],
+                "test reasoning",
+                "yes",
+                "moderate",
+                0.8,
+            )
+        ),
+    ), patch(
+        "main.kelly_bet",
+        side_effect=[(0.12, 15.0, 12.0), (0.12, 12.5, 10.0)],
+    ), patch("utils.logger.trade_log.log_signal"), patch(
+        "utils.logger.trade_log.log_opportunity"
+    ), patch("utils.logger.trade_log.log_feedback_decision") as feedback_log:
+        await bot._process_candidate(news, market, 0.42, {})
+
+    bot.paper.credibility.get_multiplier.assert_called_once_with("Reuters")
+    bot.paper.credibility.get_multiplier_with_receipt.assert_called_once_with("Reuters")
+    feedback = feedback_log.call_args.args[0]
+    assert feedback.actual["source_multiplier"] == pytest.approx(1.2)
+    assert feedback.source_receipt.status == "unattested_receipt_error"
+
+
+@pytest.mark.asyncio
+async def test_feedback_receipt_write_failure_does_not_interrupt_blend(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "bankroll", 50.0)
+    monkeypatch.setattr(_cfg_module.cfg, "kelly_fraction", 0.5)
+    monkeypatch.setattr(_cfg_module.cfg, "min_bet_dollars", 2.0)
+    monkeypatch.setattr(_cfg_module.cfg, "time_discount_half_life", 14.0)
+    monkeypatch.setattr(_cfg_module.cfg, "time_discount_floor", 0.20)
+    monkeypatch.setattr(_cfg_module.cfg, "dynamic_max_bet", lambda bankroll: 75.0)
+    monkeypatch.setattr(_cfg_module.cfg, "floor_clamp_kelly_multiplier", 1.0)
+    bot = _make_bot_stub()
+    news = _make_news()
+    market = _make_market()
+
+    with patch(
+        "main.estimate_probability",
+        new=AsyncMock(
+            return_value=(
+                0.65,
+                0.8,
+                ["missile strike"],
+                "test reasoning",
+                "yes",
+                "moderate",
+                0.8,
+            )
+        ),
+    ), patch("main.kelly_bet", return_value=(0.12, 15.0, 12.0)), patch(
+        "utils.logger.trade_log.log_signal"
+    ), patch("utils.logger.trade_log.log_opportunity"), patch(
+        "utils.logger.trade_log.log_feedback_decision",
+        side_effect=OSError("read-only logging failure"),
+    ):
+        await bot._process_candidate(news, market, 0.42, {})
+
+    analysis = bot._blend_task.process_fast_lane_result.await_args.args[0]
+    assert analysis.capped_dollars == pytest.approx(12.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "basis_sha256"),
+    [
+        ("neutral_unavailable", None),
+        ("neutral_insufficient_sample", "b" * 64),
+    ],
+)
+async def test_feedback_receipt_marks_neutral_source_and_paper_placeholders(
+    monkeypatch,
+    status,
+    basis_sha256,
+):
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "bankroll", 50.0)
+    monkeypatch.setattr(_cfg_module.cfg, "kelly_fraction", 0.5)
+    monkeypatch.setattr(_cfg_module.cfg, "min_bet_dollars", 2.0)
+    monkeypatch.setattr(_cfg_module.cfg, "time_discount_half_life", 14.0)
+    monkeypatch.setattr(_cfg_module.cfg, "time_discount_floor", 0.20)
+    monkeypatch.setattr(_cfg_module.cfg, "dynamic_max_bet", lambda bankroll: 75.0)
+    monkeypatch.setattr(_cfg_module.cfg, "floor_clamp_kelly_multiplier", 1.0)
+    bot = _make_bot_stub()
+    receipt = FeedbackMultiplierReceipt(
+        channel="source",
+        key="Reuters",
+        series_ticker=None,
+        applied_multiplier=1.0,
+        status=status,
+        canonical_basis_sha256=basis_sha256,
+        delivered_event_count=0,
+        effective_sample_count=0,
+        algorithm_version=FEEDBACK_ALGORITHM_VERSION,
+        as_of="2026-07-28T00:00:00+00:00",
+    )
+    bot.paper.credibility.get_multiplier.return_value = 1.0
+    bot.paper.credibility.get_multiplier_with_receipt.return_value = (1.0, receipt)
+    news = _make_news()
+    market = _make_market()
+
+    with patch(
+        "main.estimate_probability",
+        new=AsyncMock(
+            return_value=(
+                0.65,
+                0.8,
+                ["missile strike"],
+                "test reasoning",
+                "yes",
+                "moderate",
+                0.8,
+            )
+        ),
+    ), patch(
+        "main.kelly_bet",
+        side_effect=[(0.0, 0.0, 0.0), (0.0, 0.0, 0.0)],
+    ), patch("utils.logger.trade_log.log_signal"), patch(
+        "utils.logger.trade_log.log_opportunity"
+    ), patch("utils.logger.trade_log.log_feedback_decision") as feedback_log:
+        await bot._process_candidate(news, market, 0.42, {})
+
+    feedback = feedback_log.call_args.args[0]
+    assert feedback.source_receipt == receipt
+    assert feedback.actual["paper_placeholder_applied"] is True
+    assert feedback.source_neutral["paper_placeholder_applied"] is True
+    placeholder_dollars = _cfg_module.PAPER_FLAT_CONTRACTS * 51 / 100.0
+    assert feedback.actual["capped_dollars"] == pytest.approx(placeholder_dollars)
+    assert feedback.source_neutral["capped_dollars"] == pytest.approx(placeholder_dollars)
+    assert feedback.sizing_inputs["is_paper_trading"] is True
+    assert feedback.sizing_inputs["paper_flat_contracts"] == _cfg_module.PAPER_FLAT_CONTRACTS
 
 
 @pytest.mark.asyncio

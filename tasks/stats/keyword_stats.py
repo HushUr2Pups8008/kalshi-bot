@@ -31,6 +31,11 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from analysis.feedback_counterfactual import (
+    FEEDBACK_ALGORITHM_VERSION,
+    FeedbackMultiplierReceipt,
+    canonical_delivery_basis_sha256,
+)
 from trading.settlement_store import SettlementStore
 from utils.logger import get_logger
 
@@ -60,6 +65,9 @@ class KeywordStats:
         # _aggregate[keyword] = (n, wins) across all series
         self._aggregate: dict[str, tuple[int, int]] = {}
         self._last_loaded: float = 0.0
+        self._canonical_basis_sha256: str | None = None
+        self._canonical_event_count = 0
+        self._canonical_as_of: str | None = None
         self._load()
 
     def _load(self) -> None:
@@ -67,10 +75,9 @@ class KeywordStats:
         specific: dict[str, dict[str, tuple[int, int]]] = {}
         aggregate: dict[str, list[int]] = {}
         try:
+            now = datetime.now(timezone.utc)
             with SettlementStore(self._db_path, read_only=True) as store:
-                events = store.canonical_delivery_complete_outbox_payloads(
-                    now=datetime.now(timezone.utc)
-                )
+                events = tuple(store.canonical_delivery_complete_outbox_payloads(now=now))
 
             for event in events:
                 payload = json.loads(event.payload_json)
@@ -113,11 +120,20 @@ class KeywordStats:
             )
             specific = {}
             aggregate = {}
+            basis_sha256 = None
+            event_count = 0
+            as_of = datetime.now(timezone.utc).isoformat()
+        else:
+            basis_sha256, event_count = canonical_delivery_basis_sha256(events)
+            as_of = now.isoformat()
 
         with self._lock:
             self._specific = specific
             self._aggregate = {key: (counts[0], counts[1]) for key, counts in aggregate.items()}
             self._last_loaded = time.monotonic()
+            self._canonical_basis_sha256 = basis_sha256
+            self._canonical_event_count = event_count
+            self._canonical_as_of = as_of
 
         pair_count = sum(len(v) for v in self._specific.values())
         log.info(
@@ -139,22 +155,84 @@ class KeywordStats:
 
         Falls back from (keyword, series_ticker) -> (keyword, all series) -> 1.0.
         """
+        return self.get_multiplier_with_receipt(keyword, series_ticker)[0]
+
+    def get_multiplier_with_receipt(
+        self,
+        keyword: str,
+        series_ticker: str,
+    ) -> tuple[float, FeedbackMultiplierReceipt]:
+        """Return the runtime multiplier and its immutable canonical basis."""
         self._maybe_refresh()
+        observed_at = datetime.now(timezone.utc).isoformat()
         with self._lock:
+            basis_sha256 = self._canonical_basis_sha256
+            event_count = self._canonical_event_count
+            basis_as_of = self._canonical_as_of or observed_at
+            if basis_sha256 is None:
+                return 1.0, FeedbackMultiplierReceipt(
+                    channel="keyword",
+                    key=keyword,
+                    series_ticker=series_ticker,
+                    applied_multiplier=1.0,
+                    status="neutral_unavailable",
+                    canonical_basis_sha256=None,
+                    delivered_event_count=0,
+                    effective_sample_count=0,
+                    algorithm_version=FEEDBACK_ALGORITHM_VERSION,
+                    as_of=basis_as_of,
+                )
+
             # Try series-specific first
             series_map = self._specific.get(keyword, {})
             n, wins = series_map.get(series_ticker, (0, 0))
             if n >= MIN_SAMPLES:
                 accuracy = wins / n
-                return max(0.5, min(1.5, 0.5 + accuracy))
+                multiplier = max(0.5, min(1.5, 0.5 + accuracy))
+                return multiplier, FeedbackMultiplierReceipt(
+                    channel="keyword",
+                    key=keyword,
+                    series_ticker=series_ticker,
+                    applied_multiplier=multiplier,
+                    status="canonical",
+                    canonical_basis_sha256=basis_sha256,
+                    delivered_event_count=event_count,
+                    effective_sample_count=n,
+                    algorithm_version=FEEDBACK_ALGORITHM_VERSION,
+                    as_of=basis_as_of,
+                )
 
             # Fall back to aggregate across all series
             n_agg, wins_agg = self._aggregate.get(keyword, (0, 0))
             if n_agg >= MIN_SAMPLES:
                 accuracy = wins_agg / n_agg
-                return max(0.5, min(1.5, 0.5 + accuracy))
+                multiplier = max(0.5, min(1.5, 0.5 + accuracy))
+                return multiplier, FeedbackMultiplierReceipt(
+                    channel="keyword",
+                    key=keyword,
+                    series_ticker=series_ticker,
+                    applied_multiplier=multiplier,
+                    status="canonical",
+                    canonical_basis_sha256=basis_sha256,
+                    delivered_event_count=event_count,
+                    effective_sample_count=n_agg,
+                    algorithm_version=FEEDBACK_ALGORITHM_VERSION,
+                    as_of=basis_as_of,
+                )
 
-        return 1.0  # insufficient data -- neutral
+            sample_count = max(n, n_agg)
+        return 1.0, FeedbackMultiplierReceipt(
+            channel="keyword",
+            key=keyword,
+            series_ticker=series_ticker,
+            applied_multiplier=1.0,
+            status="neutral_insufficient_sample",
+            canonical_basis_sha256=basis_sha256,
+            delivered_event_count=event_count,
+            effective_sample_count=sample_count,
+            algorithm_version=FEEDBACK_ALGORITHM_VERSION,
+            as_of=basis_as_of,
+        )
 
     def refresh(self) -> None:
         """Force an immediate reload (call from scheduler or tests)."""

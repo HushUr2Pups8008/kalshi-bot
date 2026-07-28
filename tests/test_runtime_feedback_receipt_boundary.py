@@ -296,3 +296,48 @@ def test_feedback_multipliers_fail_neutral_for_tampered_canonical_payload(
         keyword_stats = KeywordStats(keyword_db)
 
     assert keyword_stats.get_multiplier("ceasefire", "KXTEST") == 1.0
+
+
+def test_source_multiplier_receipt_binds_the_canonical_snapshot(tmp_path: Path):
+    tracker = SourceCredibility(tmp_path / "paper.db")
+    events = tuple(
+        _event(str(index), won=index < 8)
+        for index in range(CREDIBILITY_MIN_SAMPLE)
+    )
+    store = _canonical_store(events)
+
+    with patch(
+        "tasks.stats.source_credibility.SettlementStore", store, create=True
+    ):
+        multiplier, receipt = tracker.get_multiplier_with_receipt("Reuters")
+
+    expected = CREDIBILITY_MIN_MULT + 0.8 * (
+        CREDIBILITY_MAX_MULT - CREDIBILITY_MIN_MULT
+    )
+    assert multiplier == pytest.approx(expected)
+    assert receipt.status == "canonical"
+    assert receipt.applied_multiplier == pytest.approx(expected)
+    assert receipt.effective_sample_count == CREDIBILITY_MIN_SAMPLE
+    assert receipt.delivered_event_count == CREDIBILITY_MIN_SAMPLE
+    assert len(receipt.canonical_basis_sha256 or "") == 64
+    tracker._conn.close()
+
+
+def test_keyword_multiplier_receipt_binds_the_canonical_snapshot(tmp_path: Path):
+    db_path = tmp_path / "paper.db"
+    events = tuple(
+        _event(str(index), keyword_correct=index < 8)
+        for index in range(MIN_SAMPLES)
+    )
+    store = _canonical_store(events)
+
+    with patch("tasks.stats.keyword_stats.SettlementStore", store, create=True):
+        stats = KeywordStats(db_path)
+        multiplier, receipt = stats.get_multiplier_with_receipt("ceasefire", "KXTEST")
+
+    assert multiplier == pytest.approx(1.3)
+    assert receipt.status == "canonical"
+    assert receipt.applied_multiplier == pytest.approx(1.3)
+    assert receipt.effective_sample_count == MIN_SAMPLES
+    assert receipt.delivered_event_count == MIN_SAMPLES
+    assert len(receipt.canonical_basis_sha256 or "") == 64
