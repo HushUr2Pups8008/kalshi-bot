@@ -46,6 +46,8 @@ from trading.paper_accounting import (
     require_paper_accounting_admission,
 )
 from trading.portfolio import Portfolio, Position
+from trading.profit_evidence import independent_realized_profit_evidence_available
+from trading.sizing_guard import effective_sizing_bankroll
 from trading.settlement import (
     MarketOutcome,
     SettlementDriftError,
@@ -842,22 +844,31 @@ class PaperTrader:
                 str(cfg.bankroll),
             )
 
-        # Go-live flag -- sets cfg.is_paper_trading only if LIVE_TRADING_ENABLED=true.
-        # The env var is a hard kill-switch: even if the DB says go_live_confirmed,
-        # the bot stays in paper mode until the operator explicitly unlocks it.
+        # A persisted flag is insufficient: startup requires both the kill-switch
+        # and independent realized-profit evidence before it can leave paper mode.
         row = self._conn.execute(
             "SELECT value FROM bot_state WHERE key = 'go_live_confirmed'"
         ).fetchone()
         if row and row["value"] == "true":
-            if cfg.live_trading_enabled:
+            if (
+                cfg.live_trading_enabled
+                and independent_realized_profit_evidence_available(db_path=self._db_path)
+            ):
                 cfg.set_paper_mode(False)
                 log.warning("GO-LIVE confirmed -- bot is in LIVE TRADING mode.")
             else:
-                log.warning(
-                    "LIVE TRADING BLOCKED -- go_live_confirmed=true in DB but "
-                    "LIVE_TRADING_ENABLED is not set in .env. "
-                    "Staying in paper mode. Set LIVE_TRADING_ENABLED=true to unlock."
-                )
+                if not cfg.live_trading_enabled:
+                    log.warning(
+                        "LIVE TRADING BLOCKED -- go_live_confirmed=true in DB but "
+                        "LIVE_TRADING_ENABLED is not set in .env. "
+                        "Staying in paper mode. Set LIVE_TRADING_ENABLED=true to unlock."
+                    )
+                else:
+                    log.warning(
+                        "LIVE TRADING BLOCKED -- go_live_confirmed=true in DB but "
+                        "independent realized-profit evidence is unavailable. "
+                        "Staying in paper mode."
+                    )
                 cfg.set_paper_mode(True)
         else:
             cfg.set_paper_mode(True)
@@ -951,6 +962,15 @@ class PaperTrader:
         ).fetchone()
         return float(row["value"]) if row else cfg.bankroll
 
+    def get_effective_sizing_bankroll(self) -> float:
+        """Return the bankroll that may safely expand paper or live sizing."""
+
+        return effective_sizing_bankroll(
+            self._db_path,
+            notional_bankroll=self.get_notional_bankroll(),
+            configured_starting_bankroll=cfg.bankroll,
+        )
+
     def _debit_bankroll(self, amount: float) -> float:
         """Subtract amount from notional bankroll. Returns new balance."""
         current = self.get_notional_bankroll()
@@ -972,6 +992,11 @@ class PaperTrader:
         Flip the go_live_confirmed flag in the DB and update cfg.
         Called only from main.py --go-live after human confirmation.
         """
+        if not independent_realized_profit_evidence_available(db_path=self._db_path):
+            raise RuntimeError(
+                "Live trading remains blocked: independent realized-profit evidence "
+                "is unavailable"
+            )
         self._set_state("go_live_confirmed", "true")
         cfg.set_paper_mode(False)
         log.warning(
@@ -1151,13 +1176,14 @@ class PaperTrader:
             return ""
 
         bankroll_before = self.get_notional_bankroll()
-        if cost_dollars > bankroll_before:
+        sizing_bankroll = self.get_effective_sizing_bankroll()
+        if cost_dollars > sizing_bankroll:
             log.warning(
                 "[PAPER] Skipping record_trade for %s: contract cost $%.2f "
-                "exceeds notional bankroll $%.2f",
+                "exceeds effective sizing bankroll $%.2f",
                 getattr(analysis.market, "ticker", "<unknown>"),
                 cost_dollars,
-                bankroll_before,
+                sizing_bankroll,
             )
             return ""
         bankroll_after = bankroll_before - cost_dollars

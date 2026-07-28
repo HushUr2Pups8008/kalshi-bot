@@ -12,6 +12,7 @@ from scripts.profit_evidence_report import (
     readiness_verdict,
     summarize_paper_expectancy,
 )
+import scripts.profit_evidence_report as profit_evidence_report
 
 
 def _create_paper_db(path: Path, rows: list[dict]) -> None:
@@ -82,6 +83,22 @@ def _paper_row(
         "notional_bankroll_after": before + (pnl or 0.0) if after is None else after,
         "venue": venue,
     }
+
+
+@pytest.fixture(autouse=True)
+def _canonical_delivery_for_synthetic_paper_rows(monkeypatch):
+    """Keep arithmetic fixtures explicit about their synthetic delivery state."""
+
+    def delivery_complete_ids(paper_db: Path) -> set[str]:
+        with sqlite3.connect(paper_db) as conn:
+            return {str(row[0]) for row in conn.execute("SELECT trade_id FROM paper_trades")}
+
+    monkeypatch.setattr(
+        profit_evidence_report,
+        "_canonical_delivery_complete_trade_ids",
+        delivery_complete_ids,
+        raising=False,
+    )
 
 
 def test_paper_expectancy_summary(tmp_path: Path) -> None:
@@ -224,8 +241,9 @@ def test_verdict_requires_paper_and_replay_proof(tmp_path: Path) -> None:
 
     verdict = readiness_verdict(report.paper, report.replay)
 
-    assert verdict.ready is True
-    assert verdict.label == "live-ready"
+    assert verdict.ready is False
+    assert verdict.label == "not live-ready"
+    assert "independent realized-profit evidence is unavailable" in verdict.reasons
 
     verdict = readiness_verdict(
         report.paper,
@@ -262,6 +280,39 @@ def test_verdict_requires_paper_and_replay_proof(tmp_path: Path) -> None:
     verdict = readiness_verdict(drawdown_report.paper, drawdown_report.replay)
     assert verdict.ready is False
     assert "drawdown 30.0% above 20.0%" in verdict.reasons
+
+
+def test_canonical_paper_delivery_is_not_realized_profit_evidence(tmp_path: Path) -> None:
+    db_path = tmp_path / "paper_trades.db"
+    _create_paper_db(
+        db_path,
+        [
+            _paper_row(f"trade-{idx}", resolved=True, pnl=0.30, edge=0.07)
+            for idx in range(20)
+        ],
+    )
+    replay_root = tmp_path / "edge_replay"
+    replay_root.mkdir()
+    (replay_root / "counterfactual_scores.json").write_text(
+        json.dumps(
+            {
+                "trade_count": 25,
+                "win_rate": 0.60,
+                "realized_pnl": 5.0,
+                "per_trade_ev": 0.20,
+                "ev_ci_95_lo": 0.05,
+                "ev_ci_95_hi": 0.35,
+            }
+        )
+    )
+
+    report = build_profit_evidence_report(db_path, replay_root)
+
+    assert report.paper.resolved_trades == 20
+    assert report.paper.canonical_delivery_complete_resolved_trades == 20
+    assert report.paper.profit_attested_resolved_trades == 0
+    assert report.verdict.ready is False
+    assert "independent realized-profit evidence is unavailable" in report.verdict.reasons
 
 
 def test_cli_emits_json_and_text_sections(tmp_path: Path) -> None:

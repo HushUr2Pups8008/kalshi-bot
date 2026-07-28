@@ -498,7 +498,7 @@ class TestModeSelection:
         assert _cfg_module.cfg.is_paper_trading is True
         keeper.close()
 
-    def test_go_live_confirmed_enables_live_when_env_kill_switch_enabled(self, monkeypatch):
+    def test_go_live_confirmed_stays_paper_without_external_profit_evidence(self, monkeypatch):
         monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
         monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
         monkeypatch.setattr(_cfg_module.cfg, "live_trading_enabled", True)
@@ -517,7 +517,7 @@ class TestModeSelection:
             MockCred.return_value.get_multiplier.return_value = 1.0
             PaperTrader(db_path=":memory:", startup_context="test")
 
-        assert _cfg_module.cfg.is_paper_trading is False
+        assert _cfg_module.cfg.is_paper_trading is True
         keeper.close()
 
 
@@ -1303,20 +1303,22 @@ class TestCalibrationEmission:
 
 
 class TestConfirmGoLive:
-    """`confirm_go_live` — sets DB flag and flips cfg.is_paper_trading off."""
+    """`confirm_go_live` cannot bypass independent realized-profit evidence."""
 
-    def test_confirm_go_live_sets_flag_and_mode(self, trader, monkeypatch, caplog):
-        # Ensure we can observe the mode flip
+    def test_confirm_go_live_refuses_without_external_profit_ledger(
+        self,
+        trader,
+        monkeypatch,
+    ):
         monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
-        with caplog.at_level(logging.WARNING, logger="paper_trader"):
+        with pytest.raises(RuntimeError, match="independent realized-profit evidence"):
             trader.confirm_go_live()
 
         row = trader._conn.execute(
             "SELECT value FROM bot_state WHERE key = 'go_live_confirmed'"
         ).fetchone()
-        assert row["value"] == "true"
-        assert _cfg_module.cfg.is_paper_trading is False
-        assert "GO-LIVE CONFIRMED" in caplog.text
+        assert row is None or row["value"] != "true"
+        assert _cfg_module.cfg.is_paper_trading is True
 
 
 class TestGoLiveAssessmentBranches:

@@ -1,21 +1,24 @@
 """
 Source credibility tracker.
 
-Maintains a per-source record of how many paper trade signals were correct
-(resolved in the direction we bet) vs. incorrect. After CREDIBILITY_MIN_SAMPLE
-resolved trades, the credibility score influences Kelly bet sizing via a
-multiplier applied to the kelly_fraction.
+Maintains mutable per-source telemetry for diagnostics. Runtime sizing derives
+its multiplier only from immutable canonical settlement payloads whose required
+local consumers completed delivery. Delivery completion is feedback input, not
+an assertion of realized trading profit.
 
 Multiplier formula:
     multiplier = CREDIBILITY_MIN_MULT + accuracy * (CREDIBILITY_MAX_MULT - CREDIBILITY_MIN_MULT)
     e.g. 100% accuracy → 1.5x Kelly | 50% accuracy → 1.0x | 0% → 0.5x
 
-The tracker is backed by the same SQLite database as the paper trader.
-It is updated on every market resolution and queried on every trade entry.
+The telemetry table is updated on every market resolution. Runtime reads fail
+neutral whenever canonical delivery state is missing or invalid.
 """
 
+import json
 import math
 import sqlite3
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -27,11 +30,13 @@ from config import (
     CREDIBILITY_MAX_MULT,
     CREDIBILITY_HALF_LIFE_DAYS,
 )
+from trading.settlement_store import SettlementStore
 from utils.logger import get_logger
 
 log = get_logger("source_credibility")
 
 DB_PATH = DATA_DIR / "paper_trades.db"
+CANONICAL_REFRESH_SECS = 60.0
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS source_credibility (
@@ -109,25 +114,117 @@ class SourceCredibility:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute(_DDL)
         self._conn.commit()
+        self._canonical_lock = threading.RLock()
+        self._canonical_outcomes: dict[str, tuple[float, float, int]] | None = None
+        self._canonical_loaded_at = float("-inf")
 
     # ── Read ──────────────────────────────────────────────────────────────────
 
     def get_multiplier(self, source: str) -> float:
         """
-        Return the Kelly multiplier for a source.
+        Return the Kelly multiplier derived from canonical delivered settlements.
 
-        Returns 1.0 (neutral) if the source has fewer than CREDIBILITY_MIN_SAMPLE
-        resolved trades — we don't penalise or reward sources with thin data.
+        ``source_credibility`` is retained as telemetry. Its mutable aggregate
+        values never control runtime sizing. A missing, malformed, or
+        non-conserved canonical delivery state fails neutral.
         """
-        row = self._conn.execute(
-            "SELECT total, multiplier FROM source_credibility WHERE source = ?",
-            (source,),
-        ).fetchone()
-
-        if row is None or row["total"] < CREDIBILITY_MIN_SAMPLE:
+        canonical_outcomes = self._canonical_outcomes_for_source(source)
+        if canonical_outcomes is None:
             return 1.0
 
-        return float(row["multiplier"])
+        weighted_wins, weighted_total, sample_count = canonical_outcomes
+        if sample_count < CREDIBILITY_MIN_SAMPLE or weighted_total <= 0.0:
+            return 1.0
+
+        accuracy = weighted_wins / weighted_total
+        return CREDIBILITY_MIN_MULT + accuracy * (
+            CREDIBILITY_MAX_MULT - CREDIBILITY_MIN_MULT
+        )
+
+    def _canonical_outcomes_for_source(
+        self,
+        source: str,
+    ) -> tuple[float, float, int] | None:
+        """Return cached delivered directional outcomes, or ``None`` when untrusted."""
+        self._maybe_refresh_canonical_outcomes()
+        with self._canonical_lock:
+            if self._canonical_outcomes is None:
+                return None
+            return self._canonical_outcomes.get(source, (0.0, 0.0, 0))
+
+    def _maybe_refresh_canonical_outcomes(self) -> None:
+        """Refresh the full canonical aggregate at a bounded cadence."""
+        with self._canonical_lock:
+            if time.monotonic() - self._canonical_loaded_at < CANONICAL_REFRESH_SECS:
+                return
+            self._canonical_outcomes = self._load_canonical_outcomes()
+            self._canonical_loaded_at = time.monotonic()
+
+    def _load_canonical_outcomes(self) -> dict[str, tuple[float, float, int]] | None:
+        """Rebuild time-decayed source outcomes from canonical delivered payloads."""
+        try:
+            with SettlementStore(self._db_path, read_only=True) as store:
+                events = store.canonical_delivery_complete_outbox_payloads(
+                    now=datetime.now(timezone.utc)
+                )
+        except Exception as exc:
+            log.warning(
+                "[SOURCE_CREDIBILITY] Canonical delivery unavailable; neutral multiplier: %s",
+                exc,
+            )
+            return None
+
+        aggregate: dict[str, list[float]] = {}
+        now = datetime.now(timezone.utc)
+        try:
+            for event in events:
+                payload = json.loads(event.payload_json)
+                if (
+                    not isinstance(payload, dict)
+                    or payload.get("trade_id") != event.trade_id
+                ):
+                    raise ValueError("canonical outbox payload identity mismatch")
+
+                payload_source = payload.get("signal_source")
+                if not isinstance(payload_source, str) or not payload_source:
+                    raise ValueError("canonical outbox signal_source is invalid")
+
+                if "won" not in payload:
+                    raise ValueError("canonical outbox won flag is missing")
+                won = payload["won"]
+                if won is None:
+                    continue
+                if type(won) is not bool:
+                    raise ValueError("canonical outbox won flag is invalid")
+
+                settled_at_text = payload.get("settled_at")
+                if not isinstance(settled_at_text, str) or not settled_at_text:
+                    raise ValueError("canonical outbox settled_at is invalid")
+                settled_at = datetime.fromisoformat(settled_at_text)
+                if settled_at.tzinfo is None:
+                    raise ValueError("canonical outbox settled_at must be timezone-aware")
+                if CREDIBILITY_HALF_LIFE_DAYS <= 0:
+                    raise ValueError("CREDIBILITY_HALF_LIFE_DAYS must be positive")
+
+                age_days = max(0.0, (now - settled_at).total_seconds() / 86400)
+                weight = math.exp(
+                    -math.log(2) / CREDIBILITY_HALF_LIFE_DAYS * age_days
+                )
+                values = aggregate.setdefault(payload_source, [0.0, 0.0, 0.0])
+                values[0] += weight * int(won)
+                values[1] += weight
+                values[2] += 1.0
+        except (OverflowError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            log.warning(
+                "[SOURCE_CREDIBILITY] Canonical delivery malformed; neutral multiplier: %s",
+                exc,
+            )
+            return None
+
+        return {
+            source: (values[0], values[1], int(values[2]))
+            for source, values in aggregate.items()
+        }
 
     def get_all(self) -> list[dict]:
         """Return all credibility records as a list of dicts, sorted by accuracy desc."""
@@ -199,9 +296,8 @@ class SourceCredibility:
         was_correct=False -- our signal was wrong
 
         Accuracy is computed as a time-decayed weighted average over all
-        resolved outcomes (CREDIBILITY_HALF_LIFE_DAYS=30 by default), so
-        stale data from months ago decays naturally and does not permanently
-        fix the multiplier.
+        resolved outcomes (CREDIBILITY_HALF_LIFE_DAYS=30 by default) for
+        telemetry only. ``get_multiplier`` never uses this mutable aggregate.
         """
         now = datetime.now(timezone.utc).isoformat()
 
@@ -242,7 +338,7 @@ class SourceCredibility:
         total    = row["total"] if row else n_resolved
 
         log.info(
-            "Source credibility updated -- %s: %d/%d raw (%.1f%% time-decayed) -> multiplier=%.2fx%s",
+            "Source credibility telemetry updated -- %s: %d/%d raw (%.1f%% time-decayed) -> multiplier=%.2fx%s",
             source,
             wins_raw,
             total,

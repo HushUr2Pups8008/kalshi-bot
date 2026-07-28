@@ -152,6 +152,8 @@ def test_section_placed_performance_renders_missing_price_as_na():
             "pnl_dollars": 0.10,
             "resolved": True,
             "resolved_yes": True,
+            "settlement_canonical_delivery_complete": True,
+            "settlement_profit_receipt_attested": False,
             "signal_source": "test",
         },
         {
@@ -211,6 +213,8 @@ def test_section_placed_performance_renders_venue_breakdown():
             "pnl_dollars": 3.00,
             "resolved": True,
             "resolved_yes": True,
+            "settlement_canonical_delivery_complete": True,
+            "settlement_profit_receipt_attested": False,
             "signal_source": "test",
         },
         {
@@ -241,13 +245,15 @@ def test_section_placed_performance_renders_venue_breakdown():
             "pnl_dollars": -2.70,
             "resolved": True,
             "resolved_yes": False,
+            "settlement_canonical_delivery_complete": True,
+            "settlement_profit_receipt_attested": False,
             "signal_source": "test",
         },
     ]
 
     output = section_placed_performance([], db_trades, {})
 
-    assert "By venue:" in output, output
+    assert "Canonical delivery-complete paper outcomes by venue:" in output, output
     assert "kalshi" in output, output
     assert "polymarket_us" in output, output
     assert "+$3.00" in output, output

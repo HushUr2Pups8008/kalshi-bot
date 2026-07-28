@@ -407,7 +407,11 @@ class TradeExecutor:
         # Concentration risk: cap exposure per ticker at max_ticker_exposure_pct
         # of the notional bankroll. Prevents a flood of signals on one ticker
         # from deploying an outsized fraction of capital on a single outcome.
-        notional = self._paper.get_notional_bankroll()
+        notional = (
+            self._paper.get_effective_sizing_bankroll()
+            if isinstance(self._paper, PaperTrader)
+            else self._paper.get_notional_bankroll()
+        )
         # F-08 (Site 2): executed_price_cents must be non-None here — Site 1's
         # fail-closed gate returns early when it is None. The assert encodes that
         # invariant; it should never fire in practice. The legacy midpoint fallback

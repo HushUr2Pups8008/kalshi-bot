@@ -5,9 +5,10 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any, Protocol
 
-from analysis import SignalAnalysis
+from analysis import DecisionFinancialProvenance, SignalAnalysis
 from analysis.kelly import kelly_bet
 from analysis.market_matcher import _compute_pre_llm_match_meta, _token_downweight_details
 from analysis.match_feedback import load_weights as _load_match_weights
@@ -19,6 +20,7 @@ from feeds import NewsItem
 from polymarket.candidate_adapter import adapt_polymarket_analysis
 from polymarket.models import PolymarketMarket
 from polymarket.public_client import PolymarketPublicClient
+from trading.fees import INITIAL_ORDER_FEE_ACCUMULATOR
 from trading.venue import Venue
 from utils.logger import get_logger, trade_log
 from utils.lifecycle import build_lifecycle_id, settlement_source_match
@@ -485,6 +487,7 @@ class PolymarketPaperRuntime:
                 / 100.0
             )
 
+        sizing_bankroll = Decimal(str(notional))
         side_edge = edges.yes_edge if side == "yes" else edges.no_edge
         analysis_keywords = _analysis_keywords(keywords, match_meta)
         base_analysis = SignalAnalysis(
@@ -506,6 +509,15 @@ class PolymarketPaperRuntime:
             llm_magnitude=llm_magnitude,
             llm_confidence=llm_confidence,
             signal_meta=match_meta,
+            decision_financial_provenance=DecisionFinancialProvenance(
+                sizing_bankroll_dollars=sizing_bankroll,
+                max_position_dollars=Decimal(str(max_bet)),
+                max_ticker_exposure_dollars=(
+                    Decimal(str(cfg.max_ticker_exposure_pct)) * sizing_bankroll
+                ),
+                fee_account_precision_dollars=None,
+                fee_accumulator_dollars=INITIAL_ORDER_FEE_ACCUMULATOR,
+            ),
         )
         adapted = adapt_polymarket_analysis(base_analysis, market)
         adapted.signal_meta = {
