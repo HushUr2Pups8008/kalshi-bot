@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from config import PAPER_MAX_CANDIDATES
+from analysis import SignalAnalysis
+from config import PAPER_MAX_CANDIDATES, cfg
 from feeds import NewsItem
 from polymarket.models import PolymarketMarket
 from polymarket.paper_runtime import (
@@ -16,6 +18,7 @@ from polymarket.paper_runtime import (
     polymarket_paper_runtime_disabled_reason,
 )
 from trading.venue import Venue
+from trading.fees import INITIAL_ORDER_FEE_ACCUMULATOR
 
 
 def _news(headline: str = "Example event gets more likely") -> NewsItem:
@@ -205,6 +208,17 @@ async def test_process_news_routes_matched_polymarket_analysis_through_blend(cap
     assert opportunity_kwargs["venue"] == "polymarket_us"
     assert match_kwargs["settlement_source_match"] is None
     assert opportunity_kwargs["settlement_source_match"] is None
+    provenance = analysis.decision_financial_provenance
+    assert provenance is not None
+    assert provenance.sizing_bankroll_dollars == Decimal(str(cfg.bankroll))
+    assert provenance.max_position_dollars == Decimal(
+        str(cfg.dynamic_max_bet(cfg.bankroll))
+    )
+    assert provenance.max_ticker_exposure_dollars == (
+        Decimal(str(cfg.max_ticker_exposure_pct)) * Decimal(str(cfg.bankroll))
+    )
+    assert provenance.fee_account_precision_dollars is None
+    assert provenance.fee_accumulator_dollars == INITIAL_ORDER_FEE_ACCUMULATOR
     stats = runtime.stats()
     assert stats.market_count == 1
     assert stats.news_processed == 1
@@ -214,6 +228,77 @@ async def test_process_news_routes_matched_polymarket_analysis_through_blend(cap
     assert "[POLYMARKET_MATCH] candidate ticker=will-example-event-happen-2026" in caplog.text
     assert "[POLYMARKET_ANALYSIS] candidate ticker=will-example-event-happen-2026" in caplog.text
     assert "[POLYMARKET_PAPER] heartbeat markets=1" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_process_news_financial_provenance_preserves_queue_admission_and_sizing(
+    monkeypatch,
+):
+    """Financial provenance is capture-only metadata at the Polymarket route boundary."""
+
+    def legacy_signal_analysis(*args, **kwargs):
+        kwargs.pop("decision_financial_provenance", None)
+        return SignalAnalysis(*args, **kwargs)
+
+    async def run_once(*, omit_provenance: bool):
+        queued = []
+        routed_analyses = []
+
+        async def route_analysis(analysis, **kwargs):
+            admitted = (
+                analysis.capped_dollars > 0
+                and analysis.edge >= cfg.min_edge
+                and analysis.executed_price_cents > 0
+            )
+            if admitted:
+                queued.append(
+                    {
+                        "ticker": analysis.market.ticker,
+                        "side": analysis.side,
+                        "executed_price_cents": analysis.executed_price_cents,
+                        "edge": analysis.edge,
+                        "kelly_fraction": analysis.kelly_fraction,
+                        "kelly_dollars": analysis.kelly_dollars,
+                        "capped_dollars": analysis.capped_dollars,
+                        "route_kwargs": kwargs,
+                    }
+                )
+            routed_analyses.append(analysis)
+            return SimpleNamespace(enqueued=admitted)
+
+        async def estimate_probability(*_args, **_kwargs):
+            return 0.65, 0.8, ["example"], "reason", "yes", "moderate", 0.8
+
+        runtime = PolymarketPaperRuntime(
+            client=_FakeClient([_market()]),
+            route_analysis=route_analysis,
+            keyword_stats=None,
+            estimate_probability_fn=estimate_probability,
+            market_limit=10,
+            market_cache_ttl_seconds=300,
+        )
+
+        with patch("polymarket.paper_runtime.trade_log"):
+            if omit_provenance:
+                with monkeypatch.context() as patcher:
+                    patcher.setattr(
+                        "polymarket.paper_runtime.SignalAnalysis",
+                        legacy_signal_analysis,
+                    )
+                    routed_count = await runtime.process_news(_news())
+            else:
+                routed_count = await runtime.process_news(_news())
+
+        assert len(routed_analyses) == 1
+        return routed_count, queued, routed_analyses[0]
+
+    legacy_routed, legacy_queue, legacy_analysis = await run_once(omit_provenance=True)
+    current_routed, current_queue, current_analysis = await run_once(omit_provenance=False)
+
+    assert legacy_analysis.decision_financial_provenance is None
+    assert current_analysis.decision_financial_provenance is not None
+    assert legacy_routed == current_routed == 1
+    assert legacy_queue == current_queue
 
 
 @pytest.mark.asyncio
