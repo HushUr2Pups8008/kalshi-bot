@@ -18,6 +18,11 @@ from pathlib import Path
 import pytest
 
 from tests._helpers import make_tmp_dir
+from analysis.feedback_counterfactual import (
+    FEEDBACK_ALGORITHM_VERSION,
+    FeedbackDecisionRecord,
+    FeedbackMultiplierReceipt,
+)
 from utils.log_records import SignalAnalysisDetail
 from utils.logger import TradeLogger
 
@@ -95,6 +100,56 @@ def _required_only_detail() -> SignalAnalysisDetail:
         final_probability=0.55,
         market_price=0.5,
     )
+
+
+def test_feedback_decision_record_preserves_counterfactual_receipts():
+    tmp = make_tmp_dir("feedback_decision_record")
+    try:
+        log_file = tmp / "trades.jsonl"
+        receipt = FeedbackMultiplierReceipt(
+            channel="source",
+            key="Reuters",
+            series_ticker=None,
+            applied_multiplier=1.2,
+            status="canonical",
+            canonical_basis_sha256="a" * 64,
+            delivered_event_count=12,
+            effective_sample_count=10,
+            algorithm_version=FEEDBACK_ALGORITHM_VERSION,
+            as_of="2026-07-28T00:00:00+00:00",
+        )
+        record = FeedbackDecisionRecord(
+            lifecycle_id="life-1",
+            venue="kalshi",
+            ticker="KXTEST-26DEC31",
+            source="Reuters",
+            series_ticker="KXTEST",
+            decision_at="2026-07-28T00:00:01+00:00",
+            source_receipt=receipt,
+            keyword_receipts=(),
+            probability_actual=0.62,
+            probability_keyword_neutral=None,
+            keyword_counterfactual_status="not_applicable_llm",
+            sizing_inputs={"bankroll": 50.0, "source_multiplier": 1.2},
+            actual={"capped_dollars": 12.0},
+            source_neutral={"capped_dollars": 10.0},
+            keyword_neutral=None,
+            all_neutral=None,
+            gate={"trade_blocked_reason": "G7_open_exposure_drawdown"},
+        )
+
+        TradeLogger(log_file).log_feedback_decision(record)
+        event = json.loads(log_file.read_text(encoding="utf-8").strip())
+
+        assert event["type"] == "FEEDBACK_DECISION"
+        assert event["lifecycle_id"] == "life-1"
+        assert event["source_receipt"]["canonical_basis_sha256"] == "a" * 64
+        assert event["source_neutral"]["capped_dollars"] == 10.0
+        assert event["keyword_receipts"] == []
+    finally:
+        import shutil
+
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _full_payload_detail() -> SignalAnalysisDetail:

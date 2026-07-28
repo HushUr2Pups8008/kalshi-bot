@@ -18,6 +18,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from analysis.feedback_counterfactual import KeywordFeedbackCollector
 from config import cfg, GEOPOLITICAL_SIGNALS, EARLY_MAX_NEWS_AGE_SECONDS, EARLY_MAX_NEWS_AGE_BY_SOURCE
 from utils.runtime_overrides import get_threshold_override, is_keyword_disabled
 from feeds import NewsItem
@@ -496,6 +497,7 @@ def _keyword_score(
     text: str,
     keyword_stats=None,   # KeywordStats instance or None
     series_ticker: str = "",
+    feedback_collector: KeywordFeedbackCollector | None = None,
 ) -> tuple[float, str, list[str]]:
     """
     Scan text against GEOPOLITICAL_SIGNALS keyword lists.
@@ -522,13 +524,38 @@ def _keyword_score(
         ]
         if hits:
             matched.extend(hits)
-            weight = strength * (1 + 0.1 * (len(hits) - 1))   # bonus for multiple hits
+            group_weight = strength * (1 + 0.1 * (len(hits) - 1))
+            weight = group_weight  # bonus for multiple hits
+            receipt = None
             if keyword_stats is not None and series_ticker:
                 # Apply per-(keyword, series_ticker) accuracy multiplier.
                 # Use the first hit in this signal group as the representative keyword;
                 # all hits share the same direction and strength definition.
-                mult = keyword_stats.get_multiplier(hits[0], series_ticker)
+                get_with_receipt = getattr(
+                    keyword_stats,
+                    "get_multiplier_with_receipt",
+                    None,
+                )
+                if callable(get_with_receipt):
+                    result = get_with_receipt(hits[0], series_ticker)
+                    if (
+                        isinstance(result, tuple)
+                        and len(result) == 2
+                        and isinstance(result[0], (int, float))
+                    ):
+                        mult, receipt = result
+                    else:
+                        mult = keyword_stats.get_multiplier(hits[0], series_ticker)
+                else:
+                    mult = keyword_stats.get_multiplier(hits[0], series_ticker)
                 weight *= mult
+            if feedback_collector is not None:
+                feedback_collector.record_group(
+                    direction=direction,
+                    actual_weight=weight,
+                    neutral_weight=group_weight,
+                    receipt=receipt,
+                )
             direction_weights[direction] += weight
 
     net_shift = direction_weights["yes"] - direction_weights["no"]
@@ -578,6 +605,7 @@ def keyword_estimate(
     market: KalshiMarket,
     base_probability: Optional[float] = None,
     keyword_stats=None,   # KeywordStats instance or None
+    feedback_collector: KeywordFeedbackCollector | None = None,
 ) -> tuple[float, str, list[str], str]:
     """
     Estimate the probability of YES resolution for the given market,
@@ -589,7 +617,10 @@ def keyword_estimate(
     combined_text = f"{news.headline} {news.body}"
     series_ticker = getattr(market, "series_ticker", "") or ""
     shift, direction, keywords = _keyword_score(
-        combined_text, keyword_stats=keyword_stats, series_ticker=series_ticker
+        combined_text,
+        keyword_stats=keyword_stats,
+        series_ticker=series_ticker,
+        feedback_collector=feedback_collector,
     )
 
     if base_probability is None:
@@ -618,11 +649,18 @@ def keyword_estimate(
             "Geo-coherence suppressed: article=%s market=%s ticker=%s",
             article_countries, market_countries, market.ticker,
         )
-        return (
+        result = (
             market.yes_prob, 0.05, keywords,
             f"Geo-entity mismatch: article mentions {article_countries} "
             f"but market concerns {market_countries} -- signal suppressed.",
         )
+        if feedback_collector is not None:
+            feedback_collector.record_probabilities(
+                actual=market.yes_prob,
+                neutral=market.yes_prob,
+                status="geo_suppressed",
+            )
+        return result
 
     # Dampen shift by current market price: shifts near extremes are smaller
     # because the market is already "priced in" somewhat
@@ -634,6 +672,26 @@ def keyword_estimate(
 
     adjusted_shift = shift * dampen_factor
     estimated_prob = max(0.02, min(0.98, base_probability + adjusted_shift))
+
+    if feedback_collector is not None:
+        neutral_direction = "yes" if feedback_collector.neutral_shift >= 0 else "no"
+        neutral_dampen_factor = 1.0
+        if base_probability > 0.8 and neutral_direction == "yes":
+            neutral_dampen_factor = 0.4
+        elif base_probability < 0.2 and neutral_direction == "no":
+            neutral_dampen_factor = 0.4
+        neutral_probability = max(
+            0.02,
+            min(
+                0.98,
+                base_probability + feedback_collector.neutral_shift * neutral_dampen_factor,
+            ),
+        )
+        feedback_collector.record_probabilities(
+            actual=estimated_prob,
+            neutral=neutral_probability,
+            status="scorable_keyword",
+        )
 
     edge = estimated_prob - market.yes_prob
     side = "yes" if edge > 0 else "no"
@@ -1396,6 +1454,7 @@ async def estimate_probability(
     keyword_stats=None,   # KeywordStats instance or None
     match_meta: dict[str, Any] | None = None,
     is_startup_probe: bool = False,
+    feedback_collector: KeywordFeedbackCollector | None = None,
 ) -> tuple[float, float, list[str], str, Optional[str], Optional[str], Optional[float]]:
     """
     Best-available probability estimate for this (news, market) pair.
@@ -1429,7 +1488,10 @@ async def estimate_probability(
     combined_text = f"{news.headline} {news.body}"
     series_ticker = getattr(market, "series_ticker", "") or ""
     kw_prob, kw_side, keywords, kw_reasoning = keyword_estimate(
-        news, market, keyword_stats=keyword_stats
+        news,
+        market,
+        keyword_stats=keyword_stats,
+        feedback_collector=feedback_collector,
     )
     keywords_present = bool(keywords)
     keyword_signal_strength = abs(kw_prob - base_probability)

@@ -51,6 +51,7 @@ from utils.output_paths import (
     RAW_TRADES_LIVE_DIR,
     RAW_TRADES_SHADOW_DIR,
 )
+from analysis.feedback_counterfactual import FeedbackDecisionRecord
 from utils.log_records import SignalAnalysisDetail
 from utils.lifecycle import strict_optional_bool
 
@@ -1270,6 +1271,10 @@ class TradeLogger:
                 value = round(value, 4)
             record[field.name] = value
         self._write(record)
+
+    def log_feedback_decision(self, decision: FeedbackDecisionRecord) -> None:
+        """Append one immutable feedback counterfactual record."""
+        self._write({"type": "FEEDBACK_DECISION", **decision.as_dict()})
 
     def log_llm_skipped_routing(
         self,

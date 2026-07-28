@@ -208,6 +208,14 @@ async def test_process_news_routes_matched_polymarket_analysis_through_blend(cap
     assert opportunity_kwargs["venue"] == "polymarket_us"
     assert match_kwargs["settlement_source_match"] is None
     assert opportunity_kwargs["settlement_source_match"] is None
+    feedback = trade_log_mock.log_feedback_decision.call_args.args[0]
+    assert feedback.venue == "polymarket_us"
+    assert feedback.ticker == "will-example-event-happen-2026"
+    assert feedback.source_receipt.status == "not_applicable_venue"
+    assert feedback.actual["source_multiplier"] == pytest.approx(1.0)
+    assert feedback.source_neutral["status"] == "not_applicable_venue"
+    assert feedback.keyword_counterfactual_status == "unavailable_estimator_feedback_collector"
+    assert feedback.gate["enqueued"] is True
     provenance = analysis.decision_financial_provenance
     assert provenance is not None
     assert provenance.sizing_bankroll_dollars == Decimal(str(cfg.bankroll))

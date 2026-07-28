@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
+import inspect
 import re
 import time
 from collections.abc import Awaitable, Callable, Sequence
@@ -9,6 +11,12 @@ from decimal import Decimal
 from typing import Any, Protocol
 
 from analysis import DecisionFinancialProvenance, SignalAnalysis
+from analysis.feedback_counterfactual import (
+    FEEDBACK_ALGORITHM_VERSION,
+    FeedbackDecisionRecord,
+    FeedbackMultiplierReceipt,
+    KeywordFeedbackCollector,
+)
 from analysis.kelly import kelly_bet
 from analysis.market_matcher import _compute_pre_llm_match_meta, _token_downweight_details
 from analysis.match_feedback import load_weights as _load_match_weights
@@ -22,7 +30,7 @@ from polymarket.models import PolymarketMarket
 from polymarket.public_client import PolymarketPublicClient
 from trading.fees import INITIAL_ORDER_FEE_ACCUMULATOR
 from trading.venue import Venue
-from utils.logger import get_logger, trade_log
+from utils.logger import get_logger, trade_log, write_trade_log_async
 from utils.lifecycle import build_lifecycle_id, settlement_source_match
 
 log = get_logger("polymarket.paper_runtime")
@@ -87,6 +95,20 @@ _EstimateProbability = Callable[
         tuple[float, float, list[str], str, str | None, str | None, float | None]
     ],
 ]
+
+
+def _supports_feedback_collector(estimator: _EstimateProbability) -> bool:
+    """Keep third-party estimator injection compatible with the receipt trace."""
+
+    try:
+        parameters = inspect.signature(estimator).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        parameter.name == "feedback_collector"
+        or parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
 
 
 @dataclass(frozen=True)
@@ -164,6 +186,47 @@ class PolymarketPaperRuntimeStats:
     no_match_count: int
     last_match_count: int
     last_error: str | None
+
+
+@dataclass(frozen=True)
+class _FeedbackDecisionDraft:
+    lifecycle_id: str
+    ticker: str
+    source: str
+    series_ticker: str | None
+    decision_at: str
+    source_receipt: FeedbackMultiplierReceipt
+    keyword_receipts: tuple[FeedbackMultiplierReceipt, ...]
+    probability_actual: float
+    probability_keyword_neutral: float | None
+    keyword_counterfactual_status: str
+    sizing_inputs: dict[str, Any]
+    actual: dict[str, Any]
+    source_neutral: dict[str, Any]
+
+    def to_record(self, route_result: Any) -> FeedbackDecisionRecord:
+        return FeedbackDecisionRecord(
+            lifecycle_id=self.lifecycle_id,
+            venue=Venue.POLYMARKET_US.value,
+            ticker=self.ticker,
+            source=self.source,
+            series_ticker=self.series_ticker,
+            decision_at=self.decision_at,
+            source_receipt=self.source_receipt,
+            keyword_receipts=self.keyword_receipts,
+            probability_actual=self.probability_actual,
+            probability_keyword_neutral=self.probability_keyword_neutral,
+            keyword_counterfactual_status=self.keyword_counterfactual_status,
+            sizing_inputs=self.sizing_inputs,
+            actual=self.actual,
+            source_neutral=self.source_neutral,
+            keyword_neutral=None,
+            all_neutral=None,
+            gate={
+                "enqueued": bool(getattr(route_result, "enqueued", False)),
+                "trade_blocked_reason": getattr(route_result, "trade_blocked_reason", None),
+            },
+        )
 
 
 class PolymarketPaperRuntime:
@@ -330,7 +393,23 @@ class PolymarketPaperRuntime:
                 )
                 if callable(increment_opportunities):
                     increment_opportunities(news.source)
+            feedback_draft = None
+            if isinstance(analysis.signal_meta, dict):
+                feedback_draft = analysis.signal_meta.pop("_feedback_decision_draft", None)
             result = await self._route_analysis(analysis, accumulate=True, watch=False)
+            if isinstance(feedback_draft, _FeedbackDecisionDraft):
+                try:
+                    await write_trade_log_async(
+                        trade_log.log_feedback_decision,
+                        feedback_draft.to_record(result),
+                    )
+                except Exception:
+                    log.warning(
+                        "[FEEDBACK_DECISION] receipt write failed ticker=%s source=%s",
+                        market.market_id,
+                        news.source,
+                        exc_info=True,
+                    )
             routed += 1
             self._routed_count += 1
             log.info(
@@ -428,6 +507,16 @@ class PolymarketPaperRuntime:
         match_score: float,
         match_meta: dict[str, Any],
     ) -> SignalAnalysis | None:
+        feedback_collector = KeywordFeedbackCollector()
+        estimate_kwargs: dict[str, Any] = {
+            "keyword_stats": self._keyword_stats,
+            "match_meta": match_meta,
+        }
+        estimator_supports_feedback = _supports_feedback_collector(
+            self._estimate_probability
+        )
+        if estimator_supports_feedback:
+            estimate_kwargs["feedback_collector"] = feedback_collector
         try:
             (
                 estimated_probability,
@@ -440,8 +529,7 @@ class PolymarketPaperRuntime:
             ) = await self._estimate_probability(
                 news,
                 market,
-                keyword_stats=self._keyword_stats,
-                match_meta=match_meta,
+                **estimate_kwargs,
             )
             side, executed_price_cents = select_side(market, estimated_probability)
             edges = compute_edge(market, estimated_probability)
@@ -480,7 +568,8 @@ class PolymarketPaperRuntime:
             source_multiplier=source_mult,
             confidence=confidence,
         )
-        if capped_dollars <= 0:
+        paper_placeholder_applied = capped_dollars <= 0
+        if paper_placeholder_applied:
             capped_dollars = (
                 PAPER_FLAT_CONTRACTS
                 * max(1, min(99, int(executed_price_cents)))
@@ -524,6 +613,80 @@ class PolymarketPaperRuntime:
             **(adapted.signal_meta or {}),
             **match_meta,
         }
+        keyword_counterfactual_status = feedback_collector.keyword_counterfactual_status
+        if not estimator_supports_feedback:
+            keyword_counterfactual_status = "unavailable_estimator_feedback_collector"
+        elif any(
+            value is not None
+            for value in (llm_direction, llm_magnitude, llm_confidence)
+        ):
+            keyword_counterfactual_status = (
+                "unscorable_llm_final_probability:"
+                f"{keyword_counterfactual_status}"
+            )
+        elif feedback_collector.keyword_probability_neutral is not None:
+            keyword_counterfactual_status = (
+                "captured_keyword_probability_not_sizing_replayed:"
+                f"{keyword_counterfactual_status}"
+            )
+        source_receipt = FeedbackMultiplierReceipt(
+            channel="source",
+            key=news.source,
+            series_ticker=None,
+            applied_multiplier=1.0,
+            status="not_applicable_venue",
+            canonical_basis_sha256=None,
+            delivered_event_count=0,
+            effective_sample_count=0,
+            algorithm_version=FEEDBACK_ALGORITHM_VERSION,
+            as_of=datetime.now(timezone.utc).isoformat(),
+        )
+        adapted.signal_meta["_feedback_decision_draft"] = _FeedbackDecisionDraft(
+            lifecycle_id=str(match_meta["lifecycle_id"]),
+            ticker=adapted.market.ticker,
+            source=news.source,
+            series_ticker=str(getattr(market, "series_ticker", "") or "") or None,
+            decision_at=datetime.now(timezone.utc).isoformat(),
+            source_receipt=source_receipt,
+            keyword_receipts=feedback_collector.keyword_receipts,
+            probability_actual=float(adapted.estimated_probability),
+            probability_keyword_neutral=feedback_collector.keyword_probability_neutral,
+            keyword_counterfactual_status=keyword_counterfactual_status,
+            sizing_inputs={
+                "executed_price_cents": float(executed_price_cents),
+                "side": side,
+                "bankroll": float(notional),
+                "kelly_fraction": float(cfg.kelly_fraction),
+                "max_bet_dollars": float(max_bet),
+                "min_bet_dollars": float(cfg.min_bet_dollars),
+                "min_edge": float(cfg.min_edge),
+                "confidence": float(confidence),
+                "days_to_close": None,
+                "time_discount_half_life": None,
+                "time_discount_floor": None,
+                "source_multiplier": 1.0,
+                "is_paper_trading": bool(cfg.is_paper_trading),
+                "paper_flat_contracts": int(PAPER_FLAT_CONTRACTS),
+                "floor_clamp_applied": False,
+                "floor_clamp_kelly_multiplier": 1.0,
+            },
+            actual={
+                "source_multiplier": 1.0,
+                "kelly_fraction": float(adapted.kelly_fraction),
+                "kelly_dollars": float(adapted.kelly_dollars),
+                "capped_dollars": float(adapted.capped_dollars),
+                "paper_placeholder_applied": paper_placeholder_applied,
+            },
+            source_neutral={
+                "status": "not_applicable_venue",
+                "sizing_error": None,
+                "source_multiplier": 1.0,
+                "kelly_fraction": float(adapted.kelly_fraction),
+                "kelly_dollars": float(adapted.kelly_dollars),
+                "capped_dollars": float(adapted.capped_dollars),
+                "paper_placeholder_applied": paper_placeholder_applied,
+            },
+        )
         log.info(
             "[POLYMARKET_ANALYSIS] candidate ticker=%s side=%s price_cents=%d "
             "edge=%.4f est_prob=%.4f confidence=%.3f",
