@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 import inspect
+import math
 import re
 import time
 from collections.abc import Awaitable, Callable, Sequence
@@ -23,7 +24,12 @@ from analysis.match_feedback import load_weights as _load_match_weights
 from analysis.match_feedback import market_prefix_for
 from analysis.signal_analyzer import estimate_probability
 from analysis.side_selection import compute_edge, select_side
-from config import PAPER_FLAT_CONTRACTS, PAPER_MAX_CANDIDATES, cfg
+from config import (
+    MAX_MARKET_DAYS_TO_EXPIRY,
+    PAPER_FLAT_CONTRACTS,
+    PAPER_MAX_CANDIDATES,
+    cfg,
+)
 from feeds import NewsItem
 from polymarket.candidate_adapter import adapt_polymarket_analysis
 from polymarket.models import PolymarketMarket
@@ -32,6 +38,7 @@ from trading.fees import INITIAL_ORDER_FEE_ACCUMULATOR
 from trading.venue import Venue
 from utils.logger import get_logger, trade_log, write_trade_log_async
 from utils.lifecycle import build_lifecycle_id, settlement_source_match
+from utils.market_horizon import evaluate_market_horizon
 
 log = get_logger("polymarket.paper_runtime")
 
@@ -244,6 +251,8 @@ class PolymarketPaperRuntime:
         market_cache_ttl_seconds: float = _DEFAULT_MARKET_CACHE_TTL_SECONDS,
         max_candidates: int = _DEFAULT_MAX_CANDIDATES,
         min_match_score: float = _DEFAULT_MIN_MATCH_SCORE,
+        sizing_bankroll_provider: Callable[[], float] | None = None,
+        now_provider: Callable[[], datetime] | None = None,
     ) -> None:
         self._client = client or PolymarketPublicClient()
         self._route_analysis = route_analysis
@@ -254,6 +263,8 @@ class PolymarketPaperRuntime:
         self._market_cache_ttl_seconds = market_cache_ttl_seconds
         self._max_candidates = max_candidates
         self._min_match_score = min_match_score
+        self._sizing_bankroll_provider = sizing_bankroll_provider or (lambda: cfg.bankroll)
+        self._now_provider = now_provider or (lambda: datetime.now(timezone.utc))
         self._markets: list[PolymarketMarket] = []
         self._last_fetch = 0.0
         self._fetch_lock = asyncio.Lock()
@@ -276,6 +287,7 @@ class PolymarketPaperRuntime:
             markets,
             max_results=self._max_candidates,
             min_score=self._min_match_score,
+            now=self._horizon_now(),
         )
         self._last_match_count = len(matches)
         if not matches:
@@ -440,6 +452,7 @@ class PolymarketPaperRuntime:
         return list(self._markets)
 
     def cached_candidate_markets(self) -> list[PolymarketMarket]:
+        now = self._horizon_now()
         return [
             market
             for market in self._markets
@@ -447,6 +460,11 @@ class PolymarketPaperRuntime:
                 market.venue == Venue.POLYMARKET_US
                 and market.is_tradeable()
                 and not _is_suppressed_market(market)
+                and evaluate_market_horizon(
+                    market.close_time,
+                    now=now,
+                    max_days_to_close=cfg.paper_admission_max_days_to_close,
+                ).eligible
             )
         ]
 
@@ -490,7 +508,16 @@ class PolymarketPaperRuntime:
                     exc,
                 )
                 return []
-            self._markets = list(markets)
+            horizon_now = self._horizon_now()
+            self._markets = [
+                market
+                for market in markets
+                if evaluate_market_horizon(
+                    market.close_time,
+                    now=horizon_now,
+                    max_days_to_close=MAX_MARKET_DAYS_TO_EXPIRY,
+                ).eligible
+            ]
             self._last_fetch = time.monotonic()
             self._last_error = None
             log.info(
@@ -499,6 +526,12 @@ class PolymarketPaperRuntime:
                 self._market_limit,
             )
             return list(self._markets)
+
+    def _horizon_now(self) -> datetime:
+        now = self._now_provider()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("Polymarket paper runtime clock must be timezone-aware")
+        return now.astimezone(timezone.utc)
 
     async def _build_analysis(
         self,
@@ -551,7 +584,24 @@ class PolymarketPaperRuntime:
         source_mult = 1.0
         if self._keyword_stats is not None:
             source_mult = 1.0
-        notional = cfg.bankroll
+        try:
+            supplied_bankroll = self._sizing_bankroll_provider()
+            if isinstance(supplied_bankroll, bool):
+                raise ValueError("boolean sizing bankroll")
+            notional = float(supplied_bankroll)
+        except Exception as exc:  # sizing source must never make a paper order fail open
+            log.warning(
+                "[POLYMARKET_PAPER] analysis_skip ticker=%s reason=invalid_sizing_bankroll error=%s",
+                market.market_id,
+                exc,
+            )
+            return None
+        if not math.isfinite(notional) or notional <= 0:
+            log.warning(
+                "[POLYMARKET_PAPER] analysis_skip ticker=%s reason=invalid_sizing_bankroll",
+                market.market_id,
+            )
+            return None
         max_bet = cfg.dynamic_max_bet(notional)
         kelly_fraction, kelly_dollars, capped_dollars = kelly_bet(
             estimated_probability=(
@@ -639,14 +689,14 @@ class PolymarketPaperRuntime:
             delivered_event_count=0,
             effective_sample_count=0,
             algorithm_version=FEEDBACK_ALGORITHM_VERSION,
-            as_of=datetime.now(timezone.utc).isoformat(),
+            as_of=self._horizon_now().isoformat(),
         )
         adapted.signal_meta["_feedback_decision_draft"] = _FeedbackDecisionDraft(
             lifecycle_id=str(match_meta["lifecycle_id"]),
             ticker=adapted.market.ticker,
             source=news.source,
             series_ticker=str(getattr(market, "series_ticker", "") or "") or None,
-            decision_at=datetime.now(timezone.utc).isoformat(),
+            decision_at=self._horizon_now().isoformat(),
             source_receipt=source_receipt,
             keyword_receipts=feedback_collector.keyword_receipts,
             probability_actual=float(adapted.estimated_probability),
@@ -707,6 +757,7 @@ def match_polymarket_markets(
     max_results: int = _DEFAULT_MAX_CANDIDATES,
     min_score: float = _DEFAULT_MIN_MATCH_SCORE,
     token_weights: dict[str, dict[str, Any]] | None = None,
+    now: datetime | None = None,
 ) -> list[tuple[PolymarketMarket, float, dict[str, Any]]]:
     news_tokens = _meaningful_tokens(f"{news.headline} {news.body}")
     headline_tokens = _meaningful_tokens(news.headline)
@@ -716,12 +767,23 @@ def match_polymarket_markets(
         token_weights = _load_match_weights()
 
     scored: list[tuple[PolymarketMarket, float, dict[str, Any]]] = []
+    match_time = now or datetime.now(timezone.utc)
+    if match_time.tzinfo is None or match_time.utcoffset() is None:
+        raise ValueError("Polymarket market matching clock must be timezone-aware")
+    match_time = match_time.astimezone(timezone.utc)
     for market in markets:
         if (
             market.venue != Venue.POLYMARKET_US
             or not market.is_tradeable()
             or _is_suppressed_market(market)
         ):
+            continue
+        horizon = evaluate_market_horizon(
+            market.close_time,
+            now=match_time,
+            max_days_to_close=cfg.paper_admission_max_days_to_close,
+        )
+        if not horizon.eligible:
             continue
         market_tokens = _meaningful_tokens(_market_match_text(market))
         if not market_tokens:

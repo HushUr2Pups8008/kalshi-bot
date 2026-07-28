@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -44,7 +44,7 @@ def _market(**overrides) -> PolymarketMarket:
         "no_ask_cents": 59,
         "volume_dollars": 1000.0,
         "open_interest_dollars": 100.0,
-        "close_time": "2026-12-31T23:59:59Z",
+        "close_time": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
         "is_binary": True,
     }
     values.update(overrides)
@@ -113,6 +113,54 @@ async def test_warm_cache_populates_cached_markets_for_shared_getters():
 
     assert warmed == 1
     assert runtime.cached_markets() == [market]
+
+
+@pytest.mark.asyncio
+async def test_warm_cache_rejects_missing_and_beyond_universe_horizon_close_times():
+    near = _market(market_id="near")
+    missing = _market(market_id="missing", close_time="")
+    far = _market(
+        market_id="far",
+        close_time=(datetime.now(timezone.utc) + timedelta(days=31)).isoformat(),
+    )
+    runtime = PolymarketPaperRuntime(
+        client=_FakeClient([near, missing, far]),
+        route_analysis=AsyncMock(),
+        keyword_stats=None,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+    )
+
+    warmed = await runtime.warm_cache()
+
+    assert warmed == 1
+    assert runtime.cached_markets() == [near]
+
+
+@pytest.mark.asyncio
+async def test_active_paper_horizon_rejects_far_candidate_before_route(monkeypatch):
+    monkeypatch.setattr(cfg, "is_paper_trading", True)
+    monkeypatch.setattr(cfg, "paper_cohort_id", "active-20260728")
+    monkeypatch.setattr(cfg, "paper_active_cohort_max_days_to_close", 14.0)
+    far = _market(
+        market_id="will-example-event-happen-far",
+        close_time=(datetime.now(timezone.utc) + timedelta(days=15)).isoformat(),
+    )
+    route_analysis = AsyncMock()
+    runtime = PolymarketPaperRuntime(
+        client=_FakeClient([far]),
+        route_analysis=route_analysis,
+        keyword_stats=None,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+    )
+
+    routed = await runtime.process_news(_news())
+
+    assert far in runtime.cached_markets()
+    assert runtime.cached_candidate_markets() == []
+    assert routed == 0
+    route_analysis.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -307,6 +355,68 @@ async def test_process_news_financial_provenance_preserves_queue_admission_and_s
     assert current_analysis.decision_financial_provenance is not None
     assert legacy_routed == current_routed == 1
     assert legacy_queue == current_queue
+
+
+@pytest.mark.asyncio
+async def test_process_news_uses_current_cohort_sizing_bankroll_provider():
+    routed = []
+    current_bankroll = [50.0]
+
+    async def route_analysis(analysis, **_kwargs):
+        routed.append(analysis)
+        return SimpleNamespace(enqueued=True)
+
+    async def estimate_probability(*_args, **_kwargs):
+        return 0.65, 0.8, ["example"], "reason", "yes", "moderate", 0.8
+
+    runtime = PolymarketPaperRuntime(
+        client=_FakeClient([_market()]),
+        route_analysis=route_analysis,
+        keyword_stats=None,
+        estimate_probability_fn=estimate_probability,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+        sizing_bankroll_provider=lambda: current_bankroll[0],
+    )
+
+    await runtime.process_news(_news("Example event gets more likely"))
+    current_bankroll[0] = 15.0
+    await runtime.process_news(_news("Example event gets much more likely"))
+
+    assert [
+        analysis.decision_financial_provenance.sizing_bankroll_dollars
+        for analysis in routed
+    ] == [Decimal("50.0"), Decimal("15.0")]
+    assert routed[0].decision_financial_provenance.max_position_dollars == Decimal(
+        str(cfg.dynamic_max_bet(50.0))
+    )
+    assert routed[1].decision_financial_provenance.max_position_dollars == Decimal(
+        str(cfg.dynamic_max_bet(15.0))
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_bankroll", (0.0, float("nan")))
+async def test_process_news_fails_closed_on_invalid_cohort_sizing_bankroll(invalid_bankroll):
+    route_analysis = AsyncMock()
+
+    async def estimate_probability(*_args, **_kwargs):
+        return 0.65, 0.8, ["example"], "reason", "yes", "moderate", 0.8
+
+    runtime = PolymarketPaperRuntime(
+        client=_FakeClient([_market()]),
+        route_analysis=route_analysis,
+        keyword_stats=None,
+        estimate_probability_fn=estimate_probability,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+        sizing_bankroll_provider=lambda: invalid_bankroll,
+    )
+
+    routed = await runtime.process_news(_news())
+
+    assert routed == 0
+    route_analysis.assert_not_awaited()
 
 
 @pytest.mark.asyncio

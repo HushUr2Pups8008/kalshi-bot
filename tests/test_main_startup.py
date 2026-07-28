@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import main
 
 from analysis.market_matcher import _compute_pre_llm_match_meta
 from main import (
@@ -41,6 +42,13 @@ def _tmp_root() -> Path:
     root = Path(__file__).resolve().parent / "_tmp_main_startup" / uuid.uuid4().hex
     root.mkdir(parents=True, exist_ok=False)
     return root
+
+
+def _cutover_eligible_legacy_db(path: Path) -> None:
+    """Create the minimum reconciled legacy ledger needed by cutover validation."""
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE paper_trades (resolved INTEGER NOT NULL)")
+        conn.execute("CREATE TABLE legacy_provenance (value TEXT)")
 
 
 def test_is_cli_only_command_distinguishes_short_lived_modes():
@@ -103,6 +111,136 @@ def test_paper_open_exposure_drawdown_fails_closed_when_marks_unavailable(monkey
         drawdown = _paper_open_exposure_drawdown_pct(paper)
 
     assert drawdown == pytest.approx(1.0)
+
+
+def test_active_runtime_cohort_requires_manifest_before_paper_trader_bootstrap(
+    monkeypatch,
+    tmp_path: Path,
+):
+    from trading.paper_cohorts import (
+        initialize_active_paper_cohort_manifest,
+        resolve_runtime_paper_cohort,
+    )
+
+    active_cfg = SimpleNamespace(
+        bankroll=500.0,
+        paper_cohort_id="active-20260728",
+        paper_active_cohort_starting_bankroll=125.0,
+        paper_active_cohort_max_days_to_close=14.0,
+    )
+    monkeypatch.setattr(main, "cfg", active_cfg)
+
+    with pytest.raises(FileNotFoundError, match="manifest"):
+        main._runtime_paper_cohort_from_config(db_root=tmp_path)
+    assert not (tmp_path / "paper_cohorts" / "active-20260728").exists()
+
+    cohort = resolve_runtime_paper_cohort(
+        active_cfg.paper_cohort_id,
+        legacy_starting_bankroll=active_cfg.bankroll,
+        active_starting_bankroll=active_cfg.paper_active_cohort_starting_bankroll,
+        db_root=tmp_path,
+    )
+    legacy_path = tmp_path / "paper_trades.db"
+    _cutover_eligible_legacy_db(legacy_path)
+    initialize_active_paper_cohort_manifest(
+        cohort,
+        max_days_to_close=active_cfg.paper_active_cohort_max_days_to_close,
+        legacy_db_path=legacy_path,
+        legacy_starting_bankroll=active_cfg.bankroll,
+    )
+
+    runtime, risk_cohorts, block_reason = main._runtime_paper_cohort_from_config(
+        db_root=tmp_path
+    )
+    assert runtime == cohort
+    assert [item.cohort_id for item in risk_cohorts] == ["legacy", "active-20260728"]
+    assert block_reason == "active paper cohort remains isolated from live trading"
+
+
+def test_legacy_runtime_config_is_refused_after_active_cohort_provisioning(
+    monkeypatch,
+    tmp_path: Path,
+):
+    from trading.paper_cohorts import (
+        initialize_active_paper_cohort_manifest,
+        resolve_runtime_paper_cohort,
+    )
+
+    legacy_path = tmp_path / "paper_trades.db"
+    _cutover_eligible_legacy_db(legacy_path)
+    active = resolve_runtime_paper_cohort(
+        "active-20260728",
+        legacy_starting_bankroll=500.0,
+        active_starting_bankroll=125.0,
+        db_root=tmp_path,
+    )
+    initialize_active_paper_cohort_manifest(
+        active,
+        max_days_to_close=14.0,
+        legacy_db_path=legacy_path,
+        legacy_starting_bankroll=500.0,
+    )
+    monkeypatch.setattr(
+        main,
+        "cfg",
+        SimpleNamespace(
+            bankroll=500.0,
+            paper_cohort_id="legacy",
+            paper_active_cohort_starting_bankroll=None,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="legacy paper runtime is blocked"):
+        main._runtime_paper_cohort_from_config(db_root=tmp_path)
+
+
+def test_active_runtime_uses_manifest_attested_legacy_baseline_not_cfg(
+    monkeypatch,
+    tmp_path: Path,
+):
+    from trading.paper_cohorts import (
+        initialize_active_paper_cohort_manifest,
+        resolve_runtime_paper_cohort,
+    )
+
+    legacy_path = tmp_path / "paper_trades.db"
+    _cutover_eligible_legacy_db(legacy_path)
+    active = resolve_runtime_paper_cohort(
+        "active-attested-baseline",
+        legacy_starting_bankroll=None,
+        active_starting_bankroll=125.0,
+        db_root=tmp_path,
+    )
+    initialize_active_paper_cohort_manifest(
+        active,
+        max_days_to_close=14.0,
+        legacy_db_path=legacy_path,
+        legacy_starting_bankroll=500.0,
+    )
+    monkeypatch.setattr(
+        main,
+        "cfg",
+        SimpleNamespace(
+            bankroll=999.0,
+            paper_cohort_id=active.cohort_id,
+            paper_active_cohort_starting_bankroll=125.0,
+            paper_active_cohort_max_days_to_close=14.0,
+        ),
+    )
+
+    runtime, risk_cohorts, _ = main._runtime_paper_cohort_from_config(db_root=tmp_path)
+
+    assert runtime == active
+    assert risk_cohorts[0].starting_bankroll == pytest.approx(500.0)
+
+
+def test_broken_active_cohort_root_symlink_fails_live_risk_gate(tmp_path: Path):
+    (tmp_path / "paper_cohorts").symlink_to(tmp_path / "missing-cohorts", target_is_directory=True)
+
+    active, failures = main._provisioned_cohort_live_risk_gate_failures(db_root=tmp_path)
+
+    assert active is True
+    assert any("root is invalid" in failure for failure in failures)
 
 
 def test_paper_open_exposure_drawdown_snapshot_preserves_mark_provenance(monkeypatch):
@@ -333,6 +471,20 @@ def test_log_bankroll_summary_warns_when_persisted_paper_state_differs(monkeypat
     assert "Notional bankroll: $500.00" in caplog.text
     assert "Configured starting bankroll (.env BANKROLL): $50.00" in caplog.text
     assert "Persisted paper bankroll ($500.00) differs from .env BANKROLL ($50.00)" in caplog.text
+
+
+def test_log_bankroll_summary_labels_an_isolated_cohort_baseline(monkeypatch, caplog):
+    monkeypatch.setattr(cfg, "is_paper_trading", True)
+    with caplog.at_level("INFO", logger="main"):
+        _log_bankroll_summary(
+            100.0,
+            starting_bankroll=125.0,
+            cohort_id="active-20260728",
+            db_path=Path("data/paper_cohorts/active-20260728/paper_trades.db"),
+        )
+
+    assert "paper cohort active-20260728" in caplog.text
+    assert "Configured starting bankroll" in caplog.text
 
 
 def test_log_polymarket_account_summary_logs_balance_and_status(monkeypatch, caplog):
@@ -566,7 +718,13 @@ async def test_async_main_cli_path_is_not_blocked_by_runtime_lock(caplog):
              caplog.at_level("DEBUG", logger="main"):
             await async_main()
 
-        trader_cls.assert_called_once_with(startup_context="cli")
+        trader_cls.assert_called_once()
+        call_kwargs = trader_cls.call_args.kwargs
+        assert call_kwargs["startup_context"] == "cli"
+        assert call_kwargs["db_path"].name == "paper_trades.db"
+        assert call_kwargs["starting_bankroll"] == pytest.approx(cfg.bankroll)
+        assert call_kwargs["cohort_id"] == "legacy"
+        assert call_kwargs["paper_cohort_storage_root"] == main.DATA_DIR
         print_mock.assert_called_once_with("report")
         assert "[BOOT]" in caplog.text
         assert "ctx=cli" in caplog.text

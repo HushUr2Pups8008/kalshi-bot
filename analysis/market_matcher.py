@@ -16,7 +16,7 @@ import os
 import re
 import time
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from config import cfg, MARKET_CACHE_TTL_SECONDS, MAX_MARKET_DAYS_TO_EXPIRY
 from config import PAPER_MIN_MATCH_SCORE, PAPER_MAX_CANDIDATES, MARKET_SERIES_BLOCKLIST_PREFIXES
@@ -31,6 +31,7 @@ from kalshi.rest_client import KalshiRestClient
 from kalshi.series_metadata import KalshiSeriesMetadata, normalize_series_list
 from utils.logger import get_logger, trade_log, write_trade_log_async
 from utils.lifecycle import build_lifecycle_id, settlement_source_match
+from utils.market_horizon import evaluate_market_horizon
 
 log = get_logger("market_matcher")
 
@@ -384,7 +385,11 @@ def _compute_pre_llm_match_meta(headline: str, market_title: str, matched_tokens
     }
 
 
-def _days_to_close(close_time_str: str) -> Optional[float]:
+def _days_to_close(
+    close_time_str: str,
+    *,
+    now: datetime | None = None,
+) -> Optional[float]:
     if not close_time_str:
         return None
     try:
@@ -402,7 +407,8 @@ def _days_to_close(close_time_str: str) -> Optional[float]:
         dt = dp.parse(close_time_str, tzinfos=_TZ)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        return (dt - datetime.now(timezone.utc)).total_seconds() / 86_400
+        reference_time = now or datetime.now(timezone.utc)
+        return (dt - reference_time).total_seconds() / 86_400
     except Exception:
         return None
 
@@ -766,15 +772,29 @@ def _warn_on_missing_expected_families(
 
 
 class MarketCache:
-    def __init__(self, rest_client: KalshiRestClient):
+    def __init__(
+        self,
+        rest_client: KalshiRestClient,
+        *,
+        now_provider: Callable[[], datetime] | None = None,
+    ):
         self._client          = rest_client
         self._markets:        list[KalshiMarket] = []
         self._last_fetch:     float = 0.0
         self._all_markets:    list[KalshiMarket] = []
         self._all_last_fetch: float = 0.0
         self._series_metadata_by_ticker: dict[str, KalshiSeriesMetadata] = {}
+        self._now_provider = now_provider or (lambda: datetime.now(timezone.utc))
         self._lock            = asyncio.Lock()
         self._all_lock        = asyncio.Lock()
+
+    def _horizon_time(self) -> datetime:
+        """Return the refresh clock used for market-horizon admission."""
+
+        now = self._now_provider()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("market cache clock must be timezone-aware")
+        return now.astimezone(timezone.utc)
 
     async def get_markets(self) -> list[KalshiMarket]:
         async with self._lock:
@@ -797,8 +817,9 @@ class MarketCache:
             return
         loop = asyncio.get_running_loop()
         try:
+            horizon_now = self._horizon_time()
             markets, n_series = await loop.run_in_executor(
-                None, self._fetch_geo_markets
+                None, self._fetch_geo_markets, horizon_now,
             )
             self._markets    = markets
             self._last_fetch = time.monotonic()
@@ -809,7 +830,10 @@ class MarketCache:
         except Exception as exc:
             log.error("Market cache refresh failed: %s", exc)
 
-    def _fetch_geo_markets(self) -> tuple[list, int]:
+    def _fetch_geo_markets(
+        self,
+        horizon_now: datetime | None = None,
+    ) -> tuple[list, int]:
         """
         Synchronous: discover geo/political series then fetch their open markets.
 
@@ -842,6 +866,7 @@ class MarketCache:
         )
 
         filtered = []
+        horizon_now = horizon_now or self._horizon_time()
         per_series_counts: dict[str, tuple[int, int]] = {}
         for series_ticker in geo_tickers:
             try:
@@ -865,8 +890,12 @@ class MarketCache:
                 for m in page:
                     if _is_excluded_test_market(m):
                         continue
-                    days = _days_to_close(m.close_time)
-                    if days is None or 0 < days <= MAX_MARKET_DAYS_TO_EXPIRY:
+                    horizon = evaluate_market_horizon(
+                        m.close_time,
+                        now=horizon_now,
+                        max_days_to_close=MAX_MARKET_DAYS_TO_EXPIRY,
+                    )
+                    if horizon.eligible:
                         filtered.append(_attach_regime_weights(m))
                         eligible_count += 1
                 per_series_counts[series_ticker] = (raw_count, eligible_count)
@@ -917,14 +946,20 @@ class MarketCache:
             return
         loop = asyncio.get_running_loop()
         try:
-            markets = await loop.run_in_executor(None, self._fetch_all_markets)
+            horizon_now = self._horizon_time()
+            markets = await loop.run_in_executor(
+                None, self._fetch_all_markets, horizon_now,
+            )
             self._all_markets    = markets
             self._all_last_fetch = time.monotonic()
             log.info("All-markets cache refreshed: %d active markets", len(markets))
         except Exception as exc:
             log.error("All-markets cache refresh failed: %s", exc)
 
-    def _fetch_all_markets(self) -> list[KalshiMarket]:
+    def _fetch_all_markets(
+        self,
+        horizon_now: datetime | None = None,
+    ) -> list[KalshiMarket]:
         """
         Synchronous: page through all active markets via cursor-complete
         pagination, with safety caps (page cap, row cap, wallclock timeout).
@@ -949,6 +984,7 @@ class MarketCache:
         cursor_exhausted = False
         cap_reached: str | None = None
         start = time.monotonic()
+        horizon_now = horizon_now or self._horizon_time()
 
         # `status="open"` is the request-parameter contract (see geo path
         # above for the full explanation). Response `KalshiMarket.status`
@@ -972,8 +1008,12 @@ class MarketCache:
             for m in page:
                 if _is_excluded_test_market(m):
                     continue
-                days = _days_to_close(m.close_time)
-                if days is None or 0 < days <= MAX_MARKET_DAYS_TO_EXPIRY:
+                horizon = evaluate_market_horizon(
+                    m.close_time,
+                    now=horizon_now,
+                    max_days_to_close=MAX_MARKET_DAYS_TO_EXPIRY,
+                )
+                if horizon.eligible:
                     markets.append(_attach_regime_weights(m))
             if not cursor:
                 cursor_exhausted = True
@@ -1009,8 +1049,23 @@ class MarketMatcher:
     so we collect the maximum amount of resolution data.
     """
 
-    def __init__(self, rest_client: KalshiRestClient):
-        self._cache = MarketCache(rest_client)
+    def __init__(
+        self,
+        rest_client: KalshiRestClient,
+        *,
+        now_provider: Callable[[], datetime] | None = None,
+    ):
+        self._now_provider = now_provider or (lambda: datetime.now(timezone.utc))
+        self._cache = MarketCache(rest_client, now_provider=self._match_time)
+
+    def _match_time(self) -> datetime:
+        """Provide recorded replay time without weakening production horizon checks."""
+
+        provider = getattr(self, "_now_provider", None)
+        now = provider() if provider is not None else datetime.now(timezone.utc)
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("market matcher clock must be timezone-aware")
+        return now.astimezone(timezone.utc)
 
     async def find_candidates(
         self,
@@ -1056,12 +1111,19 @@ class MarketMatcher:
         )
 
         headline_tokens = _tokenize(news.headline)
-        match_time = datetime.now(timezone.utc)
+        match_time = self._match_time()
         news_publish_ts = news.published.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         news_age_seconds = (match_time - news.published.astimezone(timezone.utc)).total_seconds()
 
         scored: list[tuple[KalshiMarket, float, dict[str, Any]]] = []
         for market in markets:
+            horizon = evaluate_market_horizon(
+                market.close_time,
+                now=match_time,
+                max_days_to_close=cfg.paper_admission_max_days_to_close,
+            )
+            if not horizon.eligible:
+                continue
             market_title_tokens = _tokenize(market.title)
             market_tokens = (
                 market_title_tokens
@@ -1088,7 +1150,7 @@ class MarketMatcher:
                 continue
             score = _similarity(news_tokens, market_tokens)
 
-            days = _days_to_close(market.close_time)
+            days = _days_to_close(market.close_time, now=match_time)
             if days is not None:
                 if days <= 1:
                     score *= 1.5
@@ -1339,10 +1401,18 @@ class MarketMatcher:
 
         news_tokens = _tokenize(f"{news.headline} {news.body}")
         markets     = await self._cache.get_all_markets()
+        match_time = self._match_time()
 
         scored: list[tuple[KalshiMarket, float]] = []
         for market in markets:
             if market.status not in ("open", "active"):
+                continue
+            horizon = evaluate_market_horizon(
+                market.close_time,
+                now=match_time,
+                max_days_to_close=cfg.paper_admission_max_days_to_close,
+            )
+            if not horizon.eligible:
                 continue
             market_tokens = _tokenize(market.title) | _tokenize(market.subtitle)
             if not market_tokens:
@@ -1350,10 +1420,8 @@ class MarketMatcher:
             score = _similarity(news_tokens, market_tokens)
             if score < _FADE_MIN_SCORE:
                 continue
-            days = _days_to_close(market.close_time)
+            days = _days_to_close(market.close_time, now=match_time)
             if days is not None:
-                if days <= 0:
-                    continue
                 if days <= 1:
                     score *= 1.5
                 elif days <= 7:

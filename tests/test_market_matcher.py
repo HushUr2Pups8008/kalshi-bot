@@ -583,6 +583,69 @@ class TestFindCandidates:
 
 
 class TestMarketCacheTestTickerExclusion:
+    @pytest.mark.asyncio
+    async def test_geo_cache_refresh_uses_matcher_replay_clock(self):
+        replay_now = datetime(2100, 1, 1, tzinfo=timezone.utc)
+        rest = MagicMock()
+        rest.get_all_series.return_value = [
+            {"ticker": "KXIRAN", "title": "Iran"},
+        ]
+        market = _make_market(
+            "KXIRAN-REPLAY",
+            "Will Iran close the Strait of Hormuz in 2100?",
+            series_ticker="KXIRAN",
+        )
+        market.close_time = (replay_now + timedelta(days=7)).isoformat()
+        rest.get_markets.return_value = ([market], None)
+
+        matcher = MarketMatcher(rest, now_provider=lambda: replay_now)
+
+        markets = await matcher._cache.get_markets()
+
+        assert [market.ticker for market in markets] == ["KXIRAN-REPLAY"]
+
+    @pytest.mark.asyncio
+    async def test_all_markets_cache_refresh_uses_matcher_replay_clock(self):
+        replay_now = datetime(2100, 1, 1, tzinfo=timezone.utc)
+        rest = MagicMock()
+        market = _make_market(
+            "KXNBA-REPLAY",
+            "Will the Nuggets win in 2100?",
+            series_ticker="KXNBA",
+        )
+        market.close_time = (replay_now + timedelta(days=7)).isoformat()
+        rest.get_markets.return_value = ([market], None)
+
+        matcher = MarketMatcher(rest, now_provider=lambda: replay_now)
+
+        markets = await matcher._cache.get_all_markets()
+
+        assert [market.ticker for market in markets] == ["KXNBA-REPLAY"]
+
+    def test_fetch_geo_markets_rejects_missing_close_time_fail_closed(self):
+        rest = MagicMock()
+        rest.get_all_series.return_value = [
+            {"ticker": "KXIRAN", "title": "Iran"},
+        ]
+        missing_close = _make_market(
+            "KXIRAN-MISSING",
+            "Will Iran close the Strait of Hormuz in 2026?",
+            series_ticker="KXIRAN",
+        )
+        missing_close.close_time = ""
+        valid = _make_market(
+            "KXIRAN-VALID",
+            "Will Iran close the Strait of Hormuz in 2026?",
+            series_ticker="KXIRAN",
+        )
+        rest.get_markets.return_value = ([missing_close, valid], None)
+
+        matcher = MarketMatcher(rest)
+
+        markets, _ = matcher._cache._fetch_geo_markets()
+
+        assert [market.ticker for market in markets] == ["KXIRAN-VALID"]
+
     def test_fetch_geo_markets_excludes_kxtest_tickers(self):
         rest = MagicMock()
         rest.get_all_series.return_value = [
@@ -652,6 +715,31 @@ class TestMarketCacheTestTickerExclusion:
         assert len(markets) == 1
         assert set(markets[0].regime_weights) == {"fast", "interpretation", "structural"}
         assert sum(markets[0].regime_weights.values()) == pytest.approx(1.0)
+
+
+class TestActivePaperMarketHorizon:
+    @pytest.mark.asyncio
+    async def test_active_paper_candidate_rejects_market_beyond_active_horizon(
+        self,
+        matcher,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        monkeypatch.setattr(_cfg_module.cfg, "paper_cohort_id", "active-20260728")
+        monkeypatch.setattr(_cfg_module.cfg, "paper_active_cohort_max_days_to_close", 14.0)
+        far_market = _make_market(
+            "KXUKR-FAR",
+            "Will Russia invade Ukraine in 2026?",
+            series_ticker="KXUKR",
+            days_to_close=15,
+        )
+        matcher._cache.get_markets = AsyncMock(return_value=[far_market])
+
+        results = await matcher.find_candidates(
+            _make_news("Russia launches new attack on Ukraine border")
+        )
+
+        assert results == []
 
 
 # ---------------------------------------------------------------------------

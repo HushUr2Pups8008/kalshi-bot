@@ -15,6 +15,7 @@ import dataclasses
 import hashlib
 import json
 import logging
+import math
 import os
 import sqlite3
 import threading
@@ -36,6 +37,13 @@ from kalshi.public_market_data import is_safe_kalshi_identifier
 from tasks.stats.source_credibility import SourceCredibility
 from config import cfg, DATA_DIR
 from trading.fees import FeeUnscorableError, fee_schedule_at
+from trading.paper_cohorts import (
+    active_cohort_binding_for_db,
+    assert_initialized_active_cohort_schema,
+    immutable_paper_database_block_reason,
+    mark_active_cohort_database_initialized,
+    unbound_paper_runtime_database_block_reason,
+)
 from trading.paper_accounting import (
     PAPER_ACCOUNTING_FRESH_PLAN_SHA256,
     PAPER_ACCOUNTING_VERSION,
@@ -72,6 +80,21 @@ from utils.logger import get_logger, trade_log, TRADE_LOG_FILE
 log = get_logger("paper_trader")
 
 DB_PATH = DATA_DIR / "paper_trades.db"
+
+
+def _resolve_starting_bankroll(value: float | None) -> float:
+    """Keep a cohort's initial paper account separate from process-wide config."""
+
+    candidate = cfg.bankroll if value is None else value
+    if isinstance(candidate, bool):
+        raise ValueError("starting_bankroll must be a positive finite number")
+    try:
+        bankroll = float(candidate)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("starting_bankroll must be a positive finite number") from exc
+    if not math.isfinite(bankroll) or bankroll <= 0:
+        raise ValueError("starting_bankroll must be a positive finite number")
+    return bankroll
 
 
 class _SettlementQuarantineRequired(RuntimeError):
@@ -437,8 +460,65 @@ class PaperTrader:
         startup_context: str = "runtime",
         calibration_task: "CalibrationTask | None" = None,
         paper_accounting_handlers: PaperAccountingHandlers | None = None,
+        starting_bankroll: float | None = None,
+        cohort_id: str | None = None,
+        live_transition_block_reason: str | None = None,
+        paper_cohort_storage_root: Path | None = None,
     ):
-        self._db_path = db_path
+        self._db_path = Path(db_path)
+        self._paper_cohort_storage_root = (
+            Path(paper_cohort_storage_root) if paper_cohort_storage_root is not None else None
+        )
+        active_cohort_binding = active_cohort_binding_for_db(
+            self._db_path,
+            cohort_id=cohort_id,
+        )
+        requested_starting_bankroll = (
+            _resolve_starting_bankroll(starting_bankroll)
+            if starting_bankroll is not None
+            else None
+        )
+        if active_cohort_binding is not None:
+            if (
+                requested_starting_bankroll is not None
+                and requested_starting_bankroll != active_cohort_binding.cohort.starting_bankroll
+            ):
+                raise ValueError("active cohort starting bankroll does not match its manifest")
+            self._starting_bankroll = active_cohort_binding.cohort.starting_bankroll
+            self._legacy_runtime_write_block_reason = None
+        else:
+            immutable_database_block_reason = immutable_paper_database_block_reason(
+                self._db_path,
+                storage_root=self._paper_cohort_storage_root,
+            )
+            if immutable_database_block_reason is not None:
+                raise RuntimeError(
+                    "immutable paper cohort database is blocked: "
+                    f"{immutable_database_block_reason}"
+                )
+            if startup_context in {"runtime", "cli"}:
+                unbound_runtime_block_reason = unbound_paper_runtime_database_block_reason(
+                    self._db_path,
+                    storage_root=self._paper_cohort_storage_root,
+                )
+                if unbound_runtime_block_reason is not None:
+                    raise RuntimeError(
+                        "unbound paper runtime database is blocked: "
+                        f"{unbound_runtime_block_reason}"
+                    )
+            self._starting_bankroll = _resolve_starting_bankroll(starting_bankroll)
+            self._legacy_runtime_write_block_reason = None
+        requested_live_transition_block = (
+            str(live_transition_block_reason).strip() or None
+            if live_transition_block_reason is not None
+            else None
+        )
+        self._active_cohort_binding = active_cohort_binding
+        self._live_transition_block_reason = (
+            "active paper cohort remains isolated from live trading"
+            if active_cohort_binding is not None
+            else self._legacy_runtime_write_block_reason or requested_live_transition_block
+        )
         self._startup_context = startup_context
         self._initialized = False
         self._transaction_lock = threading.RLock()
@@ -448,7 +528,7 @@ class PaperTrader:
         self._calibration_task = calibration_task
         self._validate_startup_context()
         self._enforce_runtime_guards()
-        self._conn = sqlite3.connect(str(db_path), check_same_thread=False, timeout=30.0)
+        self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False, timeout=30.0)
         try:
             self._conn.row_factory = sqlite3.Row
             enable_and_verify_foreign_keys(self._conn)
@@ -470,6 +550,11 @@ class PaperTrader:
         """
         if self._initialized:
             return
+        if self._active_cohort_binding is not None:
+            assert_initialized_active_cohort_schema(
+                self._conn,
+                self._active_cohort_binding,
+            )
         fresh_database = self._conn.execute(
             "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='paper_trades'"
         ).fetchone() is None
@@ -483,6 +568,15 @@ class PaperTrader:
                 initialize_fresh_paper_accounting_schema(
                     self._conn,
                     migration_plan_sha256=PAPER_ACCOUNTING_FRESH_PLAN_SHA256,
+                )
+            if self._active_cohort_binding is not None:
+                # This update shares the first durable schema transaction. A
+                # later crash can resume migrations, but it can never reset a
+                # cohort whose initial schema has already committed.
+                mark_active_cohort_database_initialized(
+                    self._conn,
+                    self._active_cohort_binding,
+                    commit=False,
                 )
         self._migrate_db()
         self._paper_accounting_schema_present = (
@@ -504,6 +598,10 @@ class PaperTrader:
     @property
     def db_path(self) -> Path:
         return self._db_path
+
+    @property
+    def starting_bankroll(self) -> float:
+        return self._starting_bankroll
 
     @property
     def settlement_schema_present(self) -> bool:
@@ -620,6 +718,14 @@ class PaperTrader:
         raise ValueError(f"Unsupported startup_context: {self._startup_context}")
 
     def _enforce_runtime_guards(self) -> None:
+        if self._legacy_runtime_write_block_reason is not None and (
+            self._startup_context in {"runtime", "cli"}
+        ):
+            context = "runtime" if self._startup_context == "runtime" else "CLI"
+            raise RuntimeError(
+                f"legacy paper {context} is blocked: "
+                f"{self._legacy_runtime_write_block_reason}"
+            )
         if self._startup_context != "runtime":
             return
         if self._is_in_memory_db_path():
@@ -841,7 +947,7 @@ class PaperTrader:
         if "notional_bankroll" not in existing_keys:
             bankroll_inserted = self._ensure_state_default(
                 "notional_bankroll",
-                str(cfg.bankroll),
+                str(self._starting_bankroll),
             )
 
         # A persisted flag is insufficient: startup requires both the kill-switch
@@ -850,7 +956,14 @@ class PaperTrader:
             "SELECT value FROM bot_state WHERE key = 'go_live_confirmed'"
         ).fetchone()
         if row and row["value"] == "true":
-            if (
+            if self._live_transition_block_reason is not None:
+                log.warning(
+                    "LIVE TRADING BLOCKED -- go_live_confirmed=true in DB but %s. "
+                    "Staying in paper mode.",
+                    self._live_transition_block_reason,
+                )
+                cfg.set_paper_mode(True)
+            elif (
                 cfg.live_trading_enabled
                 and independent_realized_profit_evidence_available(db_path=self._db_path)
             ):
@@ -914,7 +1027,7 @@ class PaperTrader:
             os.getcwd(),
             self._db_path_for_logging(),
             Path(config_path).resolve() if config_path != "unknown" else "unknown",
-            cfg.bankroll,
+            self._starting_bankroll,
             "paper_start_time" in startup_state.existing_keys,
             "notional_bankroll" in startup_state.existing_keys,
             "go_live_confirmed" in startup_state.existing_keys,
@@ -929,7 +1042,7 @@ class PaperTrader:
             log.warning("Paper trading phase state row was created concurrently during startup.")
 
         if startup_state.bankroll_inserted:
-            log.info("Notional bankroll initialised at $%.2f", cfg.bankroll)
+            log.info("Notional bankroll initialised at $%.2f", self._starting_bankroll)
         elif "notional_bankroll" not in startup_state.existing_keys:
             log.warning(
                 "Notional bankroll state row was created concurrently during startup; existing value preserved at $%.2f",
@@ -960,7 +1073,7 @@ class PaperTrader:
         row = self._conn.execute(
             "SELECT value FROM bot_state WHERE key = 'notional_bankroll'"
         ).fetchone()
-        return float(row["value"]) if row else cfg.bankroll
+        return float(row["value"]) if row else self._starting_bankroll
 
     def get_effective_sizing_bankroll(self) -> float:
         """Return the bankroll that may safely expand paper or live sizing."""
@@ -968,7 +1081,7 @@ class PaperTrader:
         return effective_sizing_bankroll(
             self._db_path,
             notional_bankroll=self.get_notional_bankroll(),
-            configured_starting_bankroll=cfg.bankroll,
+            configured_starting_bankroll=self._starting_bankroll,
         )
 
     def _debit_bankroll(self, amount: float) -> float:
@@ -992,6 +1105,11 @@ class PaperTrader:
         Flip the go_live_confirmed flag in the DB and update cfg.
         Called only from main.py --go-live after human confirmation.
         """
+        if self._live_transition_block_reason is not None:
+            raise RuntimeError(
+                "Live trading remains blocked: "
+                f"{self._live_transition_block_reason}"
+            )
         if not independent_realized_profit_evidence_available(db_path=self._db_path):
             raise RuntimeError(
                 "Live trading remains blocked: independent realized-profit evidence "
@@ -2459,7 +2577,7 @@ class PaperTrader:
         avg_loss   = sum(t["pnl_dollars"] for t in losses) / len(losses) if losses else 0
         avg_edge   = sum(t["edge"] for t in trades) / len(trades) if trades else 0
         roi        = (total_pnl / total_cost * 100) if total_cost > 0 else 0
-        drawdown   = cfg.bankroll - notional
+        drawdown   = self._starting_bankroll - notional
 
         lines = [
             "=" * 70,
@@ -2470,7 +2588,7 @@ class PaperTrader:
             f"  Mode:                   {'PAPER' if cfg.is_paper_trading else 'LIVE'}",
             "",
             "NOTIONAL BANKROLL",
-            f"  Starting bankroll:      ${cfg.bankroll:.2f}",
+            f"  Starting bankroll:      ${self._starting_bankroll:.2f}",
             f"  Current notional:       ${notional:.2f}",
             f"  Total drawdown:         ${drawdown:+.2f}",
             f"  Capital deployed:       ${total_cost:.2f}",

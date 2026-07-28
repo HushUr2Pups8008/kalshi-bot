@@ -6,6 +6,8 @@ Import `cfg` from this module everywhere instead of reading env vars directly.
 """
 
 import os
+import math
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -45,6 +47,13 @@ def _parse_float_band_pairs(value: str, *, default: list[tuple[float, float]]) -
         high = float(high_text.strip())
         bands.append((low, high))
     return bands
+
+
+def _optional_env_float(name: str) -> float | None:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return None
+    return float(raw)
 
 
 def _resolve_keyword_override_mode() -> str:
@@ -1258,6 +1267,19 @@ class BotConfig:
 
     # Live trading params
     bankroll: float = field(default_factory=lambda: float(os.getenv("BANKROLL", "500")))
+    # PAPER_COHORT_ID defaults to the historical account. A nonlegacy cohort is
+    # only usable after an explicit immutable manifest has been provisioned.
+    paper_cohort_id: str = field(
+        default_factory=lambda: os.getenv("PAPER_COHORT_ID", "legacy").strip().lower()
+    )
+    paper_active_cohort_starting_bankroll: float | None = field(
+        default_factory=lambda: _optional_env_float("PAPER_ACTIVE_COHORT_BANKROLL")
+    )
+    paper_active_cohort_max_days_to_close: float = field(
+        default_factory=lambda: float(
+            os.getenv("PAPER_ACTIVE_COHORT_MAX_DAYS_TO_CLOSE", "14")
+        )
+    )
     kelly_fraction: float = field(
         default_factory=lambda: float(os.getenv("KELLY_FRACTION", "0.5"))
     )
@@ -1672,6 +1694,30 @@ class BotConfig:
                 )
         if self.bankroll <= 0:
             errors.append("BANKROLL must be positive, got %.2f" % self.bankroll)
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", self.paper_cohort_id):
+            errors.append(
+                "PAPER_COHORT_ID must contain only lowercase letters, digits, and hyphens"
+            )
+        if self.paper_cohort_id != "legacy":
+            active_bankroll = self.paper_active_cohort_starting_bankroll
+            if (
+                active_bankroll is None
+                or not math.isfinite(active_bankroll)
+                or active_bankroll <= 0
+            ):
+                errors.append(
+                    "PAPER_ACTIVE_COHORT_BANKROLL must be a positive finite number "
+                    "for a nonlegacy PAPER_COHORT_ID"
+                )
+        if (
+            not math.isfinite(self.paper_active_cohort_max_days_to_close)
+            or self.paper_active_cohort_max_days_to_close <= 0
+            or self.paper_active_cohort_max_days_to_close > MAX_MARKET_DAYS_TO_EXPIRY
+        ):
+            errors.append(
+                "PAPER_ACTIVE_COHORT_MAX_DAYS_TO_CLOSE must be in "
+                f"(0, {MAX_MARKET_DAYS_TO_EXPIRY}]"
+            )
         if not (0 < self.kelly_fraction <= 1.0):
             errors.append(
                 "KELLY_FRACTION must be in (0, 1], got %.2f" % self.kelly_fraction
@@ -1742,6 +1788,14 @@ class BotConfig:
     def set_paper_mode(self, paper: bool) -> None:
         """Single controlled mutation point for the paper/live flag."""
         self.is_paper_trading = paper
+
+    @property
+    def paper_admission_max_days_to_close(self) -> float:
+        """Tighten active-paper routing without changing the observed universe cap."""
+
+        if self.is_paper_trading and self.paper_cohort_id != "legacy":
+            return self.paper_active_cohort_max_days_to_close
+        return float(MAX_MARKET_DAYS_TO_EXPIRY)
 
     @property
     def rest_base_url(self) -> str:

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import math
+from datetime import datetime
 
 import pytest
 
@@ -178,11 +179,10 @@ def test_executor_main_runs_clean(capsys):
 
 # ── match_score_audit ----------------------------------------------------------
 
-def test_match_audit_finds_target_ticker_for_each_event():
-    """A1 acceptance pin: every canonical event surfaces its anchor ticker
-    in the top-3 matches at score ≥ PAPER_MIN_MATCH_SCORE. If this fails,
-    the matcher's first kill point is silently dropping a real LLM-positive
-    signal — file a new debt-log item before changing thresholds.
+def test_match_audit_scores_only_replay_tradeable_targets():
+    """A1 acceptance pin: score anchors only when the archived observation
+    predates their close. Expired historical targets are evidence of an
+    untradeable replay, not matcher successes.
 
     PROFIT-MATCH-DYNAMIC (2026-05-25) — module fixture isolates runtime
     matcher-feedback weights: tests must not depend on aggregator-mutated
@@ -190,7 +190,19 @@ def test_match_audit_finds_target_ticker_for_each_event():
     from config import PAPER_MIN_MATCH_SCORE
     reports = match_score_audit.run()
     assert len(reports) == len(_common.LLM_POSITIVE_EVENTS_2026_04_26)
-    for r in reports:
+
+    expired = next(r for r in reports if r.target_ticker == "KXSBUDGETRES-26APR-APR25")
+    assert expired.observed_at == "2026-04-26T00:00:00Z"
+    assert expired.target_horizon_status == "untradeable:market_expired"
+    assert not expired.target_in_top_3
+    assert expired.target_score is None
+    assert not any(expired.threshold_sweep.values())
+
+    replay_tradeable = [
+        r for r in reports if r.target_horizon_status == "tradeable"
+    ]
+    assert replay_tradeable, "fixture must retain at least one scoreable historical target"
+    for r in replay_tradeable:
         assert r.target_in_top_3, (
             f"{r.event_name}: anchor ticker {r.target_ticker} not in top 3 "
             f"({[t for t, _ in r.top_3_matches]})"
@@ -200,6 +212,32 @@ def test_match_audit_finds_target_ticker_for_each_event():
             f"{r.event_name}: anchor score {r.target_score:.4f} below "
             f"PAPER_MIN_MATCH_SCORE = {PAPER_MIN_MATCH_SCORE}"
         )
+
+
+@pytest.mark.parametrize(
+    ("recorded_as_of", "expected_status"),
+    (
+        (None, "untradeable:observation_unrecorded"),
+        (datetime(2026, 4, 26), "untradeable:observation_invalid"),
+    ),
+)
+def test_match_audit_fails_closed_for_unrecorded_or_naive_observation(
+    monkeypatch,
+    recorded_as_of,
+    expected_status,
+):
+    monkeypatch.setattr(match_score_audit, "_AUDIT_AS_OF", recorded_as_of)
+
+    reports = match_score_audit.run()
+
+    assert reports
+    for report in reports:
+        assert report.target_horizon_status == expected_status
+        assert report.observed_at is None
+        assert not report.target_in_top_3
+        assert report.target_score is None
+        assert report.top_3_matches == ()
+        assert not any(report.threshold_sweep.values())
 
 
 def test_match_audit_main_runs_clean(capsys):

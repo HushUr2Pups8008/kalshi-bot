@@ -22,7 +22,7 @@ import sqlite3
 import sys
 import tempfile
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 from unittest.mock import MagicMock
@@ -51,6 +51,7 @@ _DEFAULT_BANKROLL = 500.0
 _SOURCE = "Polymarket Simulation Wire"
 _TICKER = "ewc-usgub-ks-2026-11-03-dem"
 _VENUE_MARKET_ID = "8596"
+_SIMULATION_AS_OF = datetime(2026, 6, 10, tzinfo=UTC)
 
 
 @dataclass(frozen=True)
@@ -124,7 +125,7 @@ def _news() -> NewsItem:
         headline="Kansas governor election tightens after new polling",
         url="https://example.invalid/polymarket-feedback-roundtrip",
         source=_SOURCE,
-        published=datetime(2026, 6, 10, tzinfo=UTC),
+        published=_SIMULATION_AS_OF,
         body="Kansas governor election polling moved the race.",
     )
 
@@ -143,7 +144,7 @@ def _market() -> PolymarketMarket:
         no_ask_cents=59,
         volume_dollars=1000.0,
         open_interest_dollars=100.0,
-        close_time="2026-12-31T23:59:59Z",
+        close_time=(_SIMULATION_AS_OF + timedelta(days=7)).isoformat(),
         is_binary=True,
     )
 
@@ -346,6 +347,7 @@ async def _run_async(root: Path) -> PolymarketFeedbackReport:
             source_stats=source_stats,
             estimate_probability_fn=_estimate_probability,
             market_limit=10,
+            now_provider=lambda: _SIMULATION_AS_OF,
         )
 
         routed_count = await runtime.process_news(_news())
