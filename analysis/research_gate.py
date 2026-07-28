@@ -6726,7 +6726,16 @@ async def run_research_gate(
                                 evidence.append(item)
                                 fresh_evidence.append(item)
                                 added_counter_evidence = True
-                            if added_counter_evidence and remaining_budget() > 0:
+                            if added_counter_evidence:
+                                remaining = remaining_budget()
+                                if remaining <= 0:
+                                    return await finalize_verdict(
+                                        timeout_verdict(
+                                            evidence,
+                                            "Research timed out before counter-evidence adjudication completed.",
+                                            stage="counter_adjudication",
+                                        )
+                                    )
                                 try:
                                     counter_adjudication = await asyncio.wait_for(
                                         adjudicate(
@@ -6740,12 +6749,46 @@ async def run_research_gate(
                                                 else {}
                                             ),
                                         ),
-                                        timeout=remaining_budget(),
+                                        timeout=remaining,
                                     )
                                 except TimeoutError:
-                                    counter_adjudication = None
+                                    return await finalize_verdict(
+                                        timeout_verdict(
+                                            evidence,
+                                            "Research timed out before counter-evidence adjudication completed.",
+                                            stage="counter_adjudication",
+                                        )
+                                    )
                                 except Exception:
-                                    counter_adjudication = None
+                                    return await finalize_verdict(
+                                        ResearchVerdict(
+                                            status=ResearchStatus.RESEARCH_ADJUDICATOR_ERROR,
+                                            attempted=True,
+                                            queries=queries,
+                                            evidence=evidence,
+                                            summary=(
+                                                "Research counter-evidence adjudication failed "
+                                                "before producing a verdict."
+                                            ),
+                                            skip_reason="research_adjudicator_error",
+                                            market_price=observed_market_price,
+                                        )
+                                    )
+                                if not isinstance(counter_adjudication, dict):
+                                    return await finalize_verdict(
+                                        ResearchVerdict(
+                                            status=ResearchStatus.RESEARCH_ADJUDICATOR_ERROR,
+                                            attempted=True,
+                                            queries=queries,
+                                            evidence=evidence,
+                                            summary=(
+                                                "Research counter-evidence adjudication returned "
+                                                "no parseable verdict."
+                                            ),
+                                            skip_reason="research_adjudicator_error",
+                                            market_price=observed_market_price,
+                                        )
+                                    )
                                 if isinstance(counter_adjudication, dict):
                                     model_direction = str(
                                         counter_adjudication.get("direction")
