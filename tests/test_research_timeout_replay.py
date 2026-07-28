@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 from dataclasses import FrozenInstanceError, replace
 from datetime import datetime, timezone
+from pathlib import Path
 import sqlite3
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -22,6 +27,9 @@ from analysis.research_timeout_replay import (
     replay_persisted_timeout,
 )
 from tasks.research_dossier import ResearchDossierStore
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _table_counts(db_path):
@@ -170,6 +178,33 @@ async def test_counter_adjudication_timeout_is_replayable_but_non_promoting(tmp_
     assert first.evidence_count == len(snapshot.evidence)
     assert provider_calls > 0
     assert adjudication_calls == 2
+    assert _table_counts(db_path) == counts_before
+
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(PROJECT_ROOT / "scripts" / "research_timeout_replay.py"),
+            "--run-id",
+            verdict.research_run_id,
+            "--db",
+            str(db_path),
+            "--json",
+        ],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        check=False,
+        env=env,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    cli_result = json.loads(completed.stdout)
+    assert cli_result["replayable"] is True
+    assert cli_result["candidate_eligible"] is False
+    assert cli_result["cache_eligible"] is False
+    assert cli_result["admission_eligible"] is False
     assert _table_counts(db_path) == counts_before
 
 
