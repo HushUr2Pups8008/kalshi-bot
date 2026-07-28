@@ -34,6 +34,7 @@ def test_classify_skip_category_groups_controllable_executor_reasons():
     assert classify_skip_category("market is not tradeable: price unavailable") == "liquidity"
     assert classify_skip_category("edge +0.0100 below min_edge 0.04") == "other"
 
+
 def _make_executor(
     monkeypatch,
     bankroll=500.0,
@@ -48,13 +49,13 @@ def _make_executor(
     monkeypatch.setattr(_cfg_module.cfg, "min_edge", 0.04)
     monkeypatch.setattr(_cfg_module.cfg, "max_ticker_exposure_pct", 1.0)
 
-    rest   = MagicMock()
+    rest = MagicMock()
     # CR-D re-fetch: default to None so the executor falls back to the
     # candidate.market snapshot, which test fixtures already populate.
     # Tests that exercise the re-fetch path explicitly should override
     # `rest.get_market.return_value` to a fully-formed market.
     rest.get_market.return_value = None
-    paper  = MagicMock()
+    paper = MagicMock()
     paper.get_notional_bankroll.return_value = bankroll
     paper.portfolio.open_positions.return_value = []
     paper.portfolio.is_concentration_ok.return_value = True
@@ -68,19 +69,20 @@ def _make_executor(
     return ex, rest, paper
 
 
-def _make_analysis(ticker="KXTEST-25DEC31", side="yes", yes_price=50.0,
-                   edge=0.10, estimated_prob=0.60, capped_dollars=10.0):
+def _make_analysis(
+    ticker="KXTEST-25DEC31", side="yes", yes_price=50.0, edge=0.10, estimated_prob=0.60, capped_dollars=10.0
+):
     market = MagicMock()
-    market.ticker    = ticker
+    market.ticker = ticker
     market.yes_price = yes_price
-    market.yes_bid   = yes_price - 1
-    market.yes_ask   = yes_price + 1
-    market.yes_prob  = yes_price / 100.0
-    market.status    = "active"
+    market.yes_bid = yes_price - 1
+    market.yes_ask = yes_price + 1
+    market.yes_prob = yes_price / 100.0
+    market.status = "active"
 
     news = MagicMock()
     news.headline = "Test"
-    news.source   = "test"
+    news.source = "test"
 
     # Post-P0 pricing surface on the MagicMock market so executor reads
     # that go through `market.is_tradeable()` / `executed_price_cents`
@@ -94,23 +96,23 @@ def _make_analysis(ticker="KXTEST-25DEC31", side="yes", yes_price=50.0,
     market.is_tradeable = lambda: True
 
     a = MagicMock()
-    a.market             = market
-    a.news_item          = news
-    a.side               = side
-    a.edge               = edge
+    a.market = market
+    a.news_item = news
+    a.side = side
+    a.edge = edge
     a.estimated_probability = estimated_prob
     # P-5 LD-10 / P1-A: canonical executed-side ask cents. We use
     # yes_price directly to preserve legacy price-boundary semantics
     # (e.g. yes_price=98 should pass paper bounds at 98). Tests that
     # exercise live-order pricing override this explicitly.
     a.executed_price_cents = max(1, min(99, int(round(yes_price))))
-    a.capped_dollars     = capped_dollars
-    a.confidence         = 0.8
-    a.kelly_fraction     = 0.5
-    a.kelly_dollars      = capped_dollars
-    a.llm_direction      = None
-    a.llm_magnitude      = None
-    a.llm_confidence     = None
+    a.capped_dollars = capped_dollars
+    a.confidence = 0.8
+    a.kelly_fraction = 0.5
+    a.kelly_dollars = capped_dollars
+    a.llm_direction = None
+    a.llm_magnitude = None
+    a.llm_confidence = None
     return a
 
 
@@ -131,7 +133,8 @@ def _make_blended_candidate(
         blended_probability=blended_probability,
         executed_price_cents=base.executed_price_cents,
         side=side,
-        signal_meta=signal_meta or {
+        signal_meta=signal_meta
+        or {
             "source_lane": "blend",
             "blended_p": blended_probability,
             "readiness_gate_min_edge_override": None,
@@ -142,6 +145,7 @@ def _make_blended_candidate(
 # ---------------------------------------------------------------------------
 # Loss limit
 # ---------------------------------------------------------------------------
+
 
 class TestLiveLossLimit:
     def test_no_breach_on_first_call(self, monkeypatch):
@@ -156,7 +160,7 @@ class TestLiveLossLimit:
 
     def test_breach_when_loss_exceeds_limit(self, monkeypatch):
         ex, _, _ = _make_executor(monkeypatch, bankroll=500.0, loss_limit_pct=0.10)
-        ex._check_live_loss_limit(500.0)     # seeds at 500
+        ex._check_live_loss_limit(500.0)  # seeds at 500
         assert ex._check_live_loss_limit(449.0)  # loss=$51 >= limit=$50
 
     def test_no_breach_just_below_limit(self, monkeypatch):
@@ -182,8 +186,8 @@ class TestLiveLossLimit:
         rest.get_balance.side_effect = [500.0, 440.0, 500.0]  # "recovery" in 3rd call
 
         analysis = _make_analysis()
-        ex._validate(analysis)   # seed
-        ex._validate(analysis)   # breach -> halt
+        ex._validate(analysis)  # seed
+        ex._validate(analysis)  # breach -> halt
         reason = ex._validate(analysis)  # should still be halted even if balance recovered
         assert reason is not None
         assert "HALTED" in reason
@@ -207,26 +211,26 @@ class TestLiveLossLimit:
 # Live submission safety
 # ---------------------------------------------------------------------------
 
-class TestLiveSubmissionNoRetry:
 
+class TestLiveSubmissionNoRetry:
     @pytest.mark.asyncio
     async def test_execute_live_succeeds_on_first_attempt(self, monkeypatch, tmp_path):
         monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", False)
         monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
 
-        rest  = MagicMock()
+        rest = MagicMock()
         paper = MagicMock()
-        ex    = TradeExecutor(
+        ex = TradeExecutor(
             rest,
             paper,
             live_submission_hold_path=tmp_path / "unknown_submission_holds.json",
         )
 
         result = MagicMock()
-        result.error     = None
-        result.order_id  = "test-order-123"
-        result.status    = "resting"
-        result.filled    = 0
+        result.error = None
+        result.order_id = "test-order-123"
+        result.status = "resting"
+        result.filled = 0
         rest.place_limit_order.return_value = result
 
         analysis = _make_analysis()
@@ -301,6 +305,7 @@ class TestLiveSubmissionNoRetry:
         journal_checked = False
 
         with patch("trading.executor.trade_log") as trade_log_mock:
+
             async def durable_write(writer, *args, **kwargs):
                 nonlocal journal_checked
                 if writer is trade_log_mock.log_live_order:
@@ -403,11 +408,14 @@ class TestLiveSubmissionNoRetry:
         fresh_rest.place_limit_order.assert_not_called()
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("error", [
-        "HTTP 429 Too Many Requests: internal request detail",
-        "HTTP 503 Service Unavailable: internal request detail",
-        "unexpected redirect response",
-    ])
+    @pytest.mark.parametrize(
+        "error",
+        [
+            "HTTP 429 Too Many Requests: internal request detail",
+            "HTTP 503 Service Unavailable: internal request detail",
+            "unexpected redirect response",
+        ],
+    )
     async def test_execute_live_error_result_holds_ticker_across_executors(
         self,
         monkeypatch,
@@ -417,7 +425,7 @@ class TestLiveSubmissionNoRetry:
         monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", False)
         monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
 
-        rest  = MagicMock()
+        rest = MagicMock()
         paper = MagicMock()
         hold_path = tmp_path / "unknown_submission_holds.json"
         ex = TradeExecutor(
@@ -441,9 +449,13 @@ class TestLiveSubmissionNoRetry:
             return writer(**kwargs)
 
         analysis = _make_analysis()
-        with patch("trading.executor.trade_log") as trade_log_mock, patch(
-            "trading.executor.write_trade_log_async",
-            side_effect=durable_write,
+        analysis.signal_meta = {"lifecycle_id": "lc-live-unknown"}
+        with (
+            patch("trading.executor.trade_log") as trade_log_mock,
+            patch(
+                "trading.executor.write_trade_log_async",
+                side_effect=durable_write,
+            ),
         ):
             order_id = await ex._execute_live(analysis)
 
@@ -454,8 +466,12 @@ class TestLiveSubmissionNoRetry:
         trade_log_mock.log_live_order.assert_not_called()
         intent_kwargs = trade_log_mock.log_live_submission_intent.call_args.kwargs
         unknown_kwargs = trade_log_mock.log_live_submission_unknown.call_args.kwargs
+        assert intent_kwargs["venue"] == "kalshi"
+        assert intent_kwargs["signal_meta"] == analysis.signal_meta
         assert unknown_kwargs["submission_id"] == intent_kwargs["submission_id"]
         assert unknown_kwargs["outcome"] == "error_result"
+        assert unknown_kwargs["venue"] == "kalshi"
+        assert unknown_kwargs["signal_meta"] == analysis.signal_meta
         for field in ("ticker", "side", "contracts", "price_cents", "cost_dollars"):
             assert unknown_kwargs[field] == intent_kwargs[field]
         assert error not in repr(unknown_kwargs)
@@ -480,7 +496,7 @@ class TestLiveSubmissionNoRetry:
         monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", False)
         monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
 
-        rest  = MagicMock()
+        rest = MagicMock()
         paper = MagicMock()
         hold_path = tmp_path / "unknown_submission_holds.json"
         ex = TradeExecutor(
@@ -586,9 +602,12 @@ class TestLiveSubmissionNoRetry:
             return writer(**kwargs)
 
         analysis = _make_analysis()
-        with patch("trading.executor.trade_log") as trade_log_mock, patch(
-            "trading.executor.write_trade_log_async",
-            side_effect=fail_live_order_journal,
+        with (
+            patch("trading.executor.trade_log") as trade_log_mock,
+            patch(
+                "trading.executor.write_trade_log_async",
+                side_effect=fail_live_order_journal,
+            ),
         ):
             order_id = await ex._execute_live(analysis)
 
@@ -715,6 +734,7 @@ class TestLiveSubmissionNoRetry:
 # ---------------------------------------------------------------------------
 # Skip reasons
 # ---------------------------------------------------------------------------
+
 
 class TestValidateSkipReasons:
     def test_live_zero_capped_dollars_skips(self, monkeypatch):
@@ -929,6 +949,7 @@ class TestBlendedCandidateCompatibility:
         kwargs = trade_log_mock.log_skipped.call_args.kwargs
         assert kwargs["reason"] == "research_paper_review_live_block"
         assert kwargs["method"] == "research_decision_grade"
+        assert kwargs["side"] == candidate.side
         assert kwargs["signal_meta"] == candidate.signal_meta
 
     @pytest.mark.asyncio
@@ -1002,6 +1023,7 @@ class TestBlendedCandidateCompatibility:
         kwargs = trade_log_mock.log_skipped.call_args.kwargs
         assert kwargs["reason"] == "edge +0.0100 below min_edge 0.02"
         assert kwargs["venue"] == "polymarket_us"
+        assert kwargs["side"] == candidate.side
         assert kwargs["signal_meta"] == candidate.signal_meta
 
     @pytest.mark.asyncio
@@ -1060,6 +1082,7 @@ class TestBlendedCandidateCompatibility:
         assert kwargs["min_edge_threshold"] == pytest.approx(0.02)
         assert kwargs["signal_meta"] == candidate.signal_meta
         assert kwargs["venue"] == "kalshi"
+        assert kwargs["side"] == candidate.side
 
     def test_override_validation_fails_closed_for_malformed_metadata(self, monkeypatch):
         ex, _, _ = _make_paper_executor(monkeypatch)
@@ -1140,6 +1163,7 @@ class TestStructuredBoundaryLogging:
             edge=analysis.edge,
             min_edge_threshold=0.04,
             venue="kalshi",
+            side=analysis.side,
         )
 
     def test_log_skipped_computes_probability_price_diffs_with_precision(self):
@@ -1212,12 +1236,14 @@ class TestStructuredBoundaryLogging:
             market_price=float(analysis.executed_price_cents),
             edge=analysis.edge,
             min_edge_threshold=0.04,
+            venue="kalshi",
         )
 
 
 # ---------------------------------------------------------------------------
 # Execution-mode safety (mode frozen at construction, fail-closed guards)
 # ---------------------------------------------------------------------------
+
 
 def _make_paper_executor(monkeypatch):
     """Create a paper-mode executor -- mode frozen to paper at construction."""
@@ -1228,7 +1254,7 @@ def _make_paper_executor(monkeypatch):
     monkeypatch.setattr(_cfg_module.cfg, "min_edge", 0.04)
     monkeypatch.setattr(_cfg_module.cfg, "max_ticker_exposure_pct", 1.0)
 
-    rest  = MagicMock()
+    rest = MagicMock()
     # CR-D re-fetch: default to None so executor falls back to the
     # candidate.market snapshot (which carries cents-level fields).
     rest.get_market.return_value = None
@@ -1302,10 +1328,9 @@ class TestExecutorModeSafety:
             return "live-order-id"
 
         ex._execute_paper = fake_paper
-        ex._execute_live  = fake_live
+        ex._execute_live = fake_live
 
-        analysis = _make_analysis(edge=0.05, estimated_prob=0.55, yes_price=50.0,
-                                  capped_dollars=0.50)
+        analysis = _make_analysis(edge=0.05, estimated_prob=0.55, yes_price=50.0, capped_dollars=0.50)
         with patch("trading.executor.trade_log"):
             result = await ex.execute(analysis)
 
@@ -1337,8 +1362,9 @@ class TestExecutorModeSafety:
     def test_executor_state_log_emitted_at_init(self, monkeypatch, caplog):
         """[EXECUTOR_STATE] diagnostic log must be emitted at construction."""
         import logging
+
         monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
-        rest  = MagicMock()
+        rest = MagicMock()
         paper = MagicMock()
         paper.portfolio.tickers.return_value = []
         with caplog.at_level(logging.INFO, logger="executor"):
@@ -1351,6 +1377,7 @@ class TestExecutorModeSafety:
 # ---------------------------------------------------------------------------
 # MAC-ASYNC-001: _execute_paper must not block the event loop (record_trade)
 # ---------------------------------------------------------------------------
+
 
 class TestPaperExecutionAsync:
     """MAC-ASYNC-001 regression guard.
@@ -1368,7 +1395,7 @@ class TestPaperExecutionAsync:
         monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
         monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
 
-        rest  = MagicMock()
+        rest = MagicMock()
         paper = MagicMock()
         paper.get_notional_bankroll.return_value = 500.0
         paper.portfolio.open_positions.return_value = []
@@ -1407,7 +1434,7 @@ class TestPaperExecutionAsync:
         monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
         monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
 
-        rest  = MagicMock()
+        rest = MagicMock()
         paper = MagicMock()
         paper.record_trade.return_value = "abc-123"
         paper.get_notional_bankroll.return_value = 475.50
@@ -1415,7 +1442,7 @@ class TestPaperExecutionAsync:
         paper.portfolio.is_concentration_ok.return_value = True
         paper.portfolio.exposure.return_value = 0.0
 
-        ex      = TradeExecutor(rest, paper)
+        ex = TradeExecutor(rest, paper)
         analysis = _make_analysis(edge=0.05, estimated_prob=0.55, capped_dollars=10.0)
 
         with patch("trading.executor.trade_log"):
@@ -1432,6 +1459,7 @@ class TestPaperExecutionAsync:
 # ---------------------------------------------------------------------------
 
 from datetime import datetime, timedelta, timezone
+
 
 class TestCooldownSeeding:
     """`_seed_cooldowns_from_db` — populates `_last_traded` from portfolio."""
@@ -1558,6 +1586,7 @@ class TestLiveExecuteErrorPaths:
         result = await ex._execute_live(analysis)
         assert result is None
 
+
 # ---------------------------------------------------------------------------
 # PROFIT-OBS-005 harness — never-traded sentinel must not trip the cooldown.
 #
@@ -1584,15 +1613,14 @@ _OBS005_XFAIL_REASON = (
 def _executor_source_lines() -> list[str]:
     import inspect
     import trading.executor as _ex_mod
+
     return inspect.getsource(_ex_mod).splitlines()
 
 
 def _last_traded_get_lines() -> list[tuple[int, str]]:
     """Return (1-indexed line, stripped text) for every `_last_traded.get(...)` call site."""
     return [
-        (i, line.strip())
-        for i, line in enumerate(_executor_source_lines(), start=1)
-        if "_last_traded.get(" in line
+        (i, line.strip()) for i, line in enumerate(_executor_source_lines(), start=1) if "_last_traded.get(" in line
     ]
 
 
@@ -1609,17 +1637,13 @@ class TestCooldownSentinelOBS005:
         """Every `_last_traded.get(ticker, <default>)` must default to float('-inf')."""
         sites = _last_traded_get_lines()
         # We expect at least the paper site and the live site.
-        assert len(sites) >= 2, (
-            f"expected at least 2 `_last_traded.get(...)` call sites; got {len(sites)}: {sites}"
-        )
+        assert len(sites) >= 2, f"expected at least 2 `_last_traded.get(...)` call sites; got {len(sites)}: {sites}"
         bad_sites = [
-            (lineno, text)
-            for lineno, text in sites
-            if 'float("-inf")' not in text and "float('-inf')" not in text
+            (lineno, text) for lineno, text in sites if 'float("-inf")' not in text and "float('-inf')" not in text
         ]
         assert bad_sites == [], (
             "post-fix invariant: every `_last_traded.get(ticker, <default>)` must use "
-            "`float(\"-inf\")` as the sentinel; offending sites:\n"
+            '`float("-inf")` as the sentinel; offending sites:\n'
             + "\n".join(f"  line {ln}: {tx}" for ln, tx in bad_sites)
         )
 
@@ -1629,7 +1653,7 @@ class TestCooldownSentinelOBS005:
         # The paper-mode site sits near the `paper_ticker_cooldown` reference.
         src = _executor_source_lines()
         for lineno, text in sites:
-            window = "\n".join(src[max(0, lineno - 1):min(len(src), lineno + 4)])
+            window = "\n".join(src[max(0, lineno - 1) : min(len(src), lineno + 4)])
             if "paper_ticker_cooldown" in window:
                 assert 'float("-inf")' in text or "float('-inf')" in text, (
                     f"paper-mode site at line {lineno} must use float('-inf') sentinel; got: {text}"
@@ -1642,7 +1666,7 @@ class TestCooldownSentinelOBS005:
         sites = _last_traded_get_lines()
         src = _executor_source_lines()
         for lineno, text in sites:
-            window = "\n".join(src[max(0, lineno - 1):min(len(src), lineno + 4)])
+            window = "\n".join(src[max(0, lineno - 1) : min(len(src), lineno + 4)])
             if "live_ticker_cooldown" in window:
                 assert 'float("-inf")' in text or "float('-inf')" in text, (
                     f"live-mode site at line {lineno} must use float('-inf') sentinel; got: {text}"
@@ -1697,6 +1721,7 @@ class TestCooldownSentinelOBS005:
         CI). It xpasses post-fix when the stubs are removed.
         """
         from pathlib import Path
+
         conftest = Path(__file__).parent / "conftest.py"
         if not conftest.exists():
             pytest.skip("conftest.py not found")
@@ -1716,6 +1741,7 @@ class TestCooldownSentinelOBS005:
 # ---------------------------------------------------------------------------
 # PROFIT-ALIGN-004 (2026-05-25) — per-prefix open-position cap
 # ---------------------------------------------------------------------------
+
 
 class TestPerPrefixPositionCap:
     """Pins the cfg.max_open_positions_per_prefix gate in _validate.
@@ -1745,8 +1771,7 @@ class TestPerPrefixPositionCap:
 
     def test_below_cap_passes(self, monkeypatch):
         ex, paper = self._setup(monkeypatch, open_in_prefix=[], cap=2)
-        a = _make_analysis(ticker="KXTXRUNOFFENDORSE-26MAY26-DJT-BOTH",
-                           side="yes", yes_price=50.0, edge=0.10)
+        a = _make_analysis(ticker="KXTXRUNOFFENDORSE-26MAY26-DJT-BOTH", side="yes", yes_price=50.0, edge=0.10)
         reason = ex._validate(a)
         assert reason is None or "per-prefix cap" not in (reason or ""), (
             f"empty prefix should not trigger cap; got: {reason}"
@@ -1759,8 +1784,7 @@ class TestPerPrefixPositionCap:
             SimpleNamespace(ticker="KXTXRUNOFFENDORSE-26MAY26-DJT-KPAX"),
         ]
         ex, paper = self._setup(monkeypatch, open_in_prefix=existing, cap=2)
-        a = _make_analysis(ticker="KXTXRUNOFFENDORSE-26MAY26-DJT-JCOR",
-                           side="yes", yes_price=50.0, edge=0.10)
+        a = _make_analysis(ticker="KXTXRUNOFFENDORSE-26MAY26-DJT-JCOR", side="yes", yes_price=50.0, edge=0.10)
         reason = ex._validate(a)
         assert reason is not None
         assert "per-prefix cap" in reason
@@ -1775,9 +1799,10 @@ class TestPerPrefixPositionCap:
         ex, paper = self._setup(monkeypatch, open_in_prefix=[], cap=2)
         # _setup wired open_positions_by_prefix to return [] regardless
         # of args; we want to assert different-prefix lookup returns 0
-        paper.portfolio.open_positions_by_prefix = MagicMock(side_effect=lambda pfx: existing if pfx == "KXTRUMPIRAN" else [])
-        a = _make_analysis(ticker="KXTXRUNOFFENDORSE-26MAY26-DJT-BOTH",
-                           side="yes", yes_price=50.0, edge=0.10)
+        paper.portfolio.open_positions_by_prefix = MagicMock(
+            side_effect=lambda pfx: existing if pfx == "KXTRUMPIRAN" else []
+        )
+        a = _make_analysis(ticker="KXTXRUNOFFENDORSE-26MAY26-DJT-BOTH", side="yes", yes_price=50.0, edge=0.10)
         reason = ex._validate(a)
         assert reason is None or "per-prefix cap" not in (reason or "")
 
@@ -1815,10 +1840,7 @@ class TestPerPrefixPositionCap:
         def lookup(prefix):
             if not prefix:
                 return []
-            return [
-                p for p in positions
-                if p.ticker == prefix or p.ticker.startswith(f"{prefix}-")
-            ]
+            return [p for p in positions if p.ticker == prefix or p.ticker.startswith(f"{prefix}-")]
 
         return lookup
 
@@ -1837,18 +1859,15 @@ class TestPerPrefixPositionCap:
         # keys on the per-contest stem ('ewc-usse-ga') which the two open
         # contests do not match → 0 in bucket → passes.
         open_tickers = [
-            "ewc-usse-me-2026-11-03-dem",   # Maine Senate
+            "ewc-usse-me-2026-11-03-dem",  # Maine Senate
             "ewc-usgub-ia-2026-11-03-dem",  # Iowa Governor
         ]
         ex, paper = self._setup(monkeypatch, cap=2)
-        paper.portfolio.open_positions_by_prefix = MagicMock(
-            side_effect=self._real_prefix_matcher(open_tickers)
-        )
+        paper.portfolio.open_positions_by_prefix = MagicMock(side_effect=self._real_prefix_matcher(open_tickers))
         a = self._pm_analysis("ewc-usse-ga-2026-11-03-dem")  # Georgia Senate
         reason = ex._validate(a)
         assert reason is None or "per-prefix cap" not in (reason or ""), (
-            "independent PM contests must not share an exposure bucket; "
-            f"got over-throttle: {reason}"
+            f"independent PM contests must not share an exposure bucket; got over-throttle: {reason}"
         )
 
     def test_pm_same_contest_outcomes_capped_together(self, monkeypatch):
@@ -1862,14 +1881,11 @@ class TestPerPrefixPositionCap:
             "ewc-usse-me-2026-11-03-rep",
         ]
         ex, paper = self._setup(monkeypatch, cap=2)
-        paper.portfolio.open_positions_by_prefix = MagicMock(
-            side_effect=self._real_prefix_matcher(open_tickers)
-        )
+        paper.portfolio.open_positions_by_prefix = MagicMock(side_effect=self._real_prefix_matcher(open_tickers))
         a = self._pm_analysis("ewc-usse-me-2026-11-03-grn")  # 3rd outcome, same contest
         reason = ex._validate(a)
         assert reason is not None and "per-prefix cap" in reason, (
-            "same-contest multi-outcome correlation control must still fire; "
-            f"got: {reason}"
+            f"same-contest multi-outcome correlation control must still fire; got: {reason}"
         )
         # Assert on the DERIVED-PREFIX token in the reason ("open in <prefix>"),
         # not a bare 'ewc-usse-me' substring — the latter also appears in the
@@ -1902,11 +1918,8 @@ class TestPerPrefixPositionCap:
             "KXUSAIRANAGREEMENT-27-26AUG",
         ]
         ex, paper = self._setup(monkeypatch, cap=2)
-        paper.portfolio.open_positions_by_prefix = MagicMock(
-            side_effect=self._real_prefix_matcher(open_tickers)
-        )
-        a = _make_analysis(ticker="KXUSAIRANAGREEMENT-27-26SEP",
-                           side="yes", yes_price=50.0, edge=0.10)
+        paper.portfolio.open_positions_by_prefix = MagicMock(side_effect=self._real_prefix_matcher(open_tickers))
+        a = _make_analysis(ticker="KXUSAIRANAGREEMENT-27-26SEP", side="yes", yes_price=50.0, edge=0.10)
         reason = ex._validate(a)
         assert reason is not None and "per-prefix cap" in reason, (
             f"Kalshi same-series cap must still block; got: {reason}"
@@ -1918,11 +1931,8 @@ class TestPerPrefixPositionCap:
         # KXBAR-* position. Distinct series → distinct split('-',1)[0] key.
         open_tickers = ["KXFOO-26JUN01", "KXFOO-26JUL01"]
         ex, paper = self._setup(monkeypatch, cap=2)
-        paper.portfolio.open_positions_by_prefix = MagicMock(
-            side_effect=self._real_prefix_matcher(open_tickers)
-        )
-        a = _make_analysis(ticker="KXBAR-26JUN01",
-                           side="yes", yes_price=50.0, edge=0.10)
+        paper.portfolio.open_positions_by_prefix = MagicMock(side_effect=self._real_prefix_matcher(open_tickers))
+        a = _make_analysis(ticker="KXBAR-26JUN01", side="yes", yes_price=50.0, edge=0.10)
         reason = ex._validate(a)
         assert reason is None or "per-prefix cap" not in (reason or ""), (
             f"distinct Kalshi series must stay independent; got: {reason}"

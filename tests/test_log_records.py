@@ -27,30 +27,61 @@ from utils.logger import TradeLogger
 # Drift here is intentional: any addition to SignalAnalysisDetail must be
 # accompanied by an update to this snapshot, ensuring downstream consumers
 # (governance audit, edge replay, dashboards) see the change.
-_FULL_SNAPSHOT_KEYS = frozenset({
-    "type", "ts",
-    "ticker", "source", "headline", "method", "keywords", "venue",
-    "base_probability", "final_probability", "market_price",
-    "publish_ts", "age_at_analysis_seconds", "analysis_threshold_seconds",
-    "keyword_contributions",
-    "llm_direction", "llm_magnitude", "llm_confidence",
-    "llm_attempted", "llm_result_used", "llm_result_status", "llm_provider",
-    "llm_latency_ms", "llm_total_stage_ms", "llm_queue_wait_ms",
-    "llm_http_round_trip_ms", "llm_parse_ms", "llm_http_status",
-    "llm_contention_observed", "llm_in_flight_at_entry",
-    "llm_routing_passed", "llm_routing_reason",
-    "pre_llm_quality_pass",
-    "pre_llm_semantic_overlap_count", "pre_llm_semantic_overlap_ratio",
-    "pre_llm_would_block",
-    "pre_llm_keyword_override", "pre_llm_keyword_override_mode",
-    "pre_llm_keyword_signal_strength",
-    "pre_llm_gate_reason", "pre_llm_gate_enforced",
-    "pre_llm_headline_token_count", "pre_llm_market_token_count",
-    "pre_llm_filtered_stopword_count", "pre_llm_filtered_generic_count",
-    "pre_llm_semantic_token_types",
-    "llm_probability_movement", "llm_useful", "pre_llm_would_block_and_useful",
-    "is_startup_probe", "is_synthetic_probe",
-})
+_FULL_SNAPSHOT_KEYS = frozenset(
+    {
+        "type",
+        "ts",
+        "ticker",
+        "source",
+        "headline",
+        "method",
+        "keywords",
+        "venue",
+        "base_probability",
+        "final_probability",
+        "market_price",
+        "publish_ts",
+        "age_at_analysis_seconds",
+        "analysis_threshold_seconds",
+        "keyword_contributions",
+        "llm_direction",
+        "llm_magnitude",
+        "llm_confidence",
+        "llm_attempted",
+        "llm_result_used",
+        "llm_result_status",
+        "llm_provider",
+        "llm_latency_ms",
+        "llm_total_stage_ms",
+        "llm_queue_wait_ms",
+        "llm_http_round_trip_ms",
+        "llm_parse_ms",
+        "llm_http_status",
+        "llm_contention_observed",
+        "llm_in_flight_at_entry",
+        "llm_routing_passed",
+        "llm_routing_reason",
+        "pre_llm_quality_pass",
+        "pre_llm_semantic_overlap_count",
+        "pre_llm_semantic_overlap_ratio",
+        "pre_llm_would_block",
+        "pre_llm_keyword_override",
+        "pre_llm_keyword_override_mode",
+        "pre_llm_keyword_signal_strength",
+        "pre_llm_gate_reason",
+        "pre_llm_gate_enforced",
+        "pre_llm_headline_token_count",
+        "pre_llm_market_token_count",
+        "pre_llm_filtered_stopword_count",
+        "pre_llm_filtered_generic_count",
+        "pre_llm_semantic_token_types",
+        "llm_probability_movement",
+        "llm_useful",
+        "pre_llm_would_block_and_useful",
+        "is_startup_probe",
+        "is_synthetic_probe",
+    }
+)
 
 
 def _required_only_detail() -> SignalAnalysisDetail:
@@ -199,13 +230,25 @@ def test_live_submission_records_are_linked_and_sanitized():
             "price_cents": 50,
             "cost_dollars": 10.0,
         }
+        signal_meta = {"lifecycle_id": "lc-live-submission-record"}
 
-        logger.log_live_submission_intent(**summary)
-        logger.log_live_submission_unknown(**summary, outcome="exception")
+        logger.log_live_submission_intent(
+            **summary,
+            venue="kalshi",
+            signal_meta=signal_meta,
+        )
+        logger.log_live_submission_unknown(
+            **summary,
+            outcome="exception",
+            venue="kalshi",
+            signal_meta=signal_meta,
+        )
         logger.log_live_submission_unknown(
             **summary,
             outcome="live_order_journal_failure",
             venue_order_id="venue-order-123",
+            venue="kalshi",
+            signal_meta=signal_meta,
         )
         logger.log_live_order(
             order_id="order-123",
@@ -216,6 +259,7 @@ def test_live_submission_records_are_linked_and_sanitized():
             price_cents=summary["price_cents"],
             cost_dollars=summary["cost_dollars"],
             status="resting",
+            venue="kalshi",
         )
 
         records = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
@@ -226,13 +270,20 @@ def test_live_submission_records_are_linked_and_sanitized():
             "LIVE_ORDER",
         ]
         assert all(record["submission_id"] == summary["submission_id"] for record in records)
+        assert records[0]["venue"] == "kalshi"
+        assert records[0]["lifecycle_id"] == signal_meta["lifecycle_id"]
         assert records[1]["outcome"] == "exception"
+        assert records[1]["venue"] == "kalshi"
+        assert records[1]["lifecycle_id"] == signal_meta["lifecycle_id"]
         assert "error" not in records[1]
         assert "venue_order_id" not in records[1]
         assert records[2]["outcome"] == "live_order_journal_failure"
         assert records[2]["venue_order_id"] == "venue-order-123"
+        assert records[2]["venue"] == "kalshi"
+        assert records[2]["lifecycle_id"] == signal_meta["lifecycle_id"]
         assert "error" not in records[2]
         assert records[3]["order_id"] == "order-123"
+        assert records[3]["venue"] == "kalshi"
     finally:
         _cleanup(tmp)
 
@@ -255,8 +306,7 @@ def test_logger_full_payload_snapshot():
         # other fields.
         expected_keys = _FULL_SNAPSHOT_KEYS - {"llm_routing_reason", "pre_llm_gate_reason"}
         assert actual_keys == expected_keys, (
-            f"Snapshot drift: missing={expected_keys - actual_keys}, "
-            f"extra={actual_keys - expected_keys}"
+            f"Snapshot drift: missing={expected_keys - actual_keys}, extra={actual_keys - expected_keys}"
         )
     finally:
         _cleanup(tmp)
@@ -341,12 +391,8 @@ def test_analysis_rejected_record_carries_research_replay_fields():
             "price_present",
             "edge_recomputed",
         ]
-        assert record["research_open_questions"] == [
-            "What official correction would change this?"
-        ]
-        assert record["research_counterclaims"] == [
-            "Counter source says the opposite side remains possible."
-        ]
+        assert record["research_open_questions"] == ["What official correction would change this?"]
+        assert record["research_counterclaims"] == ["Counter source says the opposite side remains possible."]
         assert record["research_duration_ms"] == 2000.4
         assert record["research_started_ts"] == "2026-06-27T10:00:00+00:00"
         assert record["research_completed_ts"] == "2026-06-27T10:00:02+00:00"

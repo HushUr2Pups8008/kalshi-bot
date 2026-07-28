@@ -2887,7 +2887,7 @@ def test_capital_guard_shadow_status_mixes_runtime_and_dotenv_provenance(
 
     assert capsys.readouterr().out.strip() == (
         "capital_guard_shadow: capture=off (runtime-process-env) "
-        "collection=configured-on (.env fallback) unwired-exact-source db=missing"
+        "collection=configured-on (.env fallback) exact-source=blocked-isolated-db-missing db=missing"
     )
 
 

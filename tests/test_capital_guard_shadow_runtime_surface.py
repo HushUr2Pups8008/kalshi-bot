@@ -134,7 +134,7 @@ def test_capital_guard_shadow_status_collector_only_missing_does_not_create_db(
 
     assert capsys.readouterr().out.strip() == (
         "capital_guard_shadow: capture=off (process-env) "
-        "collection=on (process-env) unwired-exact-source db=missing"
+        "collection=on (process-env) exact-source=blocked-isolated-db-missing db=missing"
     )
     assert not db_path.exists()
 
@@ -144,10 +144,10 @@ def test_capital_guard_shadow_status_reads_existing_db_read_only_and_bounded(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("ENABLE_CAPITAL_GUARD_SHADOW_CAPTURE", "true")
+    monkeypatch.setenv("ENABLE_CAPITAL_GUARD_SHADOW_CAPTURE", "false")
     monkeypatch.setenv(
         "ENABLE_CAPITAL_GUARD_SHADOW_SETTLEMENT_COLLECTION",
-        "false",
+        "true",
     )
     db_path = tmp_path / "data" / "capital_guard_shadow.db"
     CapitalGuardShadowStore(db_path).initialize(
@@ -182,8 +182,8 @@ def test_capital_guard_shadow_status_reads_existing_db_read_only_and_bounded(
     assert len(count_queries) == len(botcheck.CAPITAL_GUARD_SHADOW_TABLES) + 2
     assert all("LIMIT" in statement for statement in count_queries)
     assert capsys.readouterr().out.strip() == (
-        "capital_guard_shadow: capture=on (process-env) "
-        "collection=off (process-env) "
+        "capital_guard_shadow: capture=off (process-env) "
+        "collection=on (process-env) exact-source=runtime-eligible "
         "integrity=ok tables=10/10 schema=ok "
         "missing=none unexpected=none "
         "rows=meta:1,attempts:0,candidates:0,conflicts:0,observations:0,links:0,"
@@ -200,7 +200,7 @@ def test_capital_guard_shadow_status_reports_exact_schema_drift(
     monkeypatch.setenv("ENABLE_CAPITAL_GUARD_SHADOW_CAPTURE", "true")
     monkeypatch.setenv(
         "ENABLE_CAPITAL_GUARD_SHADOW_SETTLEMENT_COLLECTION",
-        "false",
+        "true",
     )
     db_path = tmp_path / "data" / "capital_guard_shadow.db"
     CapitalGuardShadowStore(db_path).initialize(
@@ -219,7 +219,32 @@ def test_capital_guard_shadow_status_reports_exact_schema_drift(
     botcheck.print_capital_guard_shadow_status(tmp_path)
 
     out = capsys.readouterr().out.strip()
+    assert "exact-source=blocked-isolated-db-invalid" in out
     assert "integrity=ok tables=10/10 schema=mismatch" in out
+
+
+def test_capital_guard_shadow_status_marks_corrupt_collector_db_invalid(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ENABLE_CAPITAL_GUARD_SHADOW_CAPTURE", "false")
+    monkeypatch.setenv(
+        "ENABLE_CAPITAL_GUARD_SHADOW_SETTLEMENT_COLLECTION",
+        "true",
+    )
+    db_path = tmp_path / "data" / "capital_guard_shadow.db"
+    db_path.parent.mkdir(parents=True)
+    db_path.write_bytes(b"not a sqlite database")
+    before = db_path.read_bytes()
+
+    botcheck.print_capital_guard_shadow_status(tmp_path)
+
+    out = capsys.readouterr().out.strip()
+    assert "exact-source=blocked-isolated-db-invalid" in out
+    assert "db=error:" in out
+    assert "exact-source=active" not in out
+    assert db_path.read_bytes() == before
 
 
 def test_capital_guard_shadow_status_running_env_is_authoritative(

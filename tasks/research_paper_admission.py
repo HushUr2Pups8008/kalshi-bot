@@ -1,4 +1,5 @@
 """Guarded bridge from decision-grade research to paper-review blend admission."""
+
 from __future__ import annotations
 
 import asyncio
@@ -30,9 +31,7 @@ from utils.research_market_eligibility import research_market_eligibility
 
 DECISION_GRADE_STATUS = "decision_grade_candidate"
 _COUNTER_QUERY_INTENTS = frozenset({"disconfirming", "contradiction_check"})
-_COUNTER_CLAIM_TYPES = frozenset(
-    {"contradiction", "disconfirming", "contradiction_check"}
-)
+_COUNTER_CLAIM_TYPES = frozenset({"contradiction", "disconfirming", "contradiction_check"})
 _OFFICIAL_SOURCE_CLASSES = frozenset(
     {"official", "official_primary", "official_source", "resolution_source", "rules_source"}
 )
@@ -161,11 +160,14 @@ class ResearchPaperSignalProvider:
         now = self._now().astimezone(UTC)
         if now - researched_ts > self.max_age:
             return None, "stale_research"
-        if _recompute_edge(
-            side=side,
-            estimated_probability=float(snapshot.last_estimated_probability),
-            market_price=float(snapshot.last_market_price),
-        ) <= _EDGE_TOLERANCE:
+        if (
+            _recompute_edge(
+                side=side,
+                estimated_probability=float(snapshot.last_estimated_probability),
+                market_price=float(snapshot.last_market_price),
+            )
+            <= _EDGE_TOLERANCE
+        ):
             return None, "no_positive_edge"
         if not _edge_recomputes(
             side=side,
@@ -181,9 +183,7 @@ class ResearchPaperSignalProvider:
             )
         )
         temporally_valid_evidence = tuple(
-            item
-            for item in evidence
-            if research_evidence_temporally_valid(item, as_of=now)
+            item for item in evidence if research_evidence_temporally_valid(item, as_of=now)
         )
         if not temporally_valid_evidence:
             return None, "temporally_invalid_evidence"
@@ -207,18 +207,13 @@ class ResearchPaperSignalProvider:
             )
             for item in evidence
         )
-        relevant_evidence = tuple(
-            item
-            for item in validated_evidence
-            if _evidence_is_relevant(item, relevance_spec)
-        )
+        relevant_evidence = tuple(item for item in validated_evidence if _evidence_is_relevant(item, relevance_spec))
         if not has_reliable_research_source_path(validated_evidence):
             return None, "no_reliable_source_path"
         if not any(
             str(item.supports_direction or "").strip().lower() == side
             and str(item.claim_type or "").strip().lower() in _SETTLEMENT_CLAIM_TYPES
-            and float(item.supports_confidence or 0.0)
-            >= MIN_DIRECTIONAL_SUPPORT_CONFIDENCE
+            and float(item.supports_confidence or 0.0) >= MIN_DIRECTIONAL_SUPPORT_CONFIDENCE
             for item in relevant_evidence
         ):
             return None, "missing_directional_support"
@@ -285,11 +280,7 @@ class ResearchBackedBlendStore:
                 source=item.source_name or item.source_class,
                 source_class=item.source_class,
                 headline=item.title or item.snippet[:120],
-                ingested_ts=(
-                    item.retrieved_at
-                    or item.inserted_at
-                    or self.signal.researched_ts.isoformat()
-                ),
+                ingested_ts=(item.retrieved_at or item.inserted_at or self.signal.researched_ts.isoformat()),
                 content_hash=f"research-{self.signal.research_run_id}-{index}",
                 update_type="research_decision_grade",
                 dossier_version_before=1,
@@ -313,10 +304,7 @@ class ResearchPaperAdmissionBridge:
         logger: Any = trade_log,
         now: Callable[[], datetime] | None = None,
         signal_provider: ResearchPaperSignalProvider | None = None,
-        route_analysis: (
-            Callable[[SignalAnalysis, ResearchBackedBlendStore], Awaitable[Any]]
-            | None
-        ) = None,
+        route_analysis: (Callable[[SignalAnalysis, ResearchBackedBlendStore], Awaitable[Any]] | None) = None,
     ) -> None:
         self.provider = signal_provider or ResearchPaperSignalProvider(
             research_store,
@@ -455,7 +443,7 @@ class ResearchPaperAdmissionBridge:
             reason=blend_result.trade_blocked_reason,
             enqueued=blend_result.enqueued,
             blend_result=blend_result,
-    )
+        )
 
 
 def _signal_with_current_market_price(
@@ -465,9 +453,7 @@ def _signal_with_current_market_price(
     if not callable(getattr(market, "is_tradeable", None)) or not market.is_tradeable():
         return None, "current_market_price_unavailable"
     price_cents = (
-        getattr(market, "yes_ask_cents", None)
-        if signal.side == "yes"
-        else getattr(market, "no_ask_cents", None)
+        getattr(market, "yes_ask_cents", None) if signal.side == "yes" else getattr(market, "no_ask_cents", None)
     )
     if price_cents is None:
         return None, "current_market_price_unavailable"
@@ -492,10 +478,7 @@ def _signal_with_current_market_price(
 def _is_decision_grade_prewarm_result(result: ResearchPrewarmResult) -> bool:
     if result.status == DECISION_GRADE_STATUS:
         return True
-    return (
-        result.status == "skipped_terminal"
-        and result.skip_reason == DECISION_GRADE_STATUS
-    )
+    return result.status == "skipped_terminal" and result.skip_reason == DECISION_GRADE_STATUS
 
 
 def _signal_analysis_from_research(
@@ -526,15 +509,9 @@ def _signal_analysis_from_research(
             "research_contract_fingerprint": signal.contract_fingerprint,
             "trigger_evidence_id": trigger_evidence_id,
             "trigger_evidence_source_class": (
-                trigger_evidence.source_class
-                if trigger_evidence is not None
-                else "research"
+                trigger_evidence.source_class if trigger_evidence is not None else "research"
             ),
-            "trigger_evidence_source": (
-                trigger_evidence.source_name
-                if trigger_evidence is not None
-                else "research"
-            ),
+            "trigger_evidence_source": (trigger_evidence.source_name if trigger_evidence is not None else "research"),
             "trigger_evidence_original_weight": 1.0,
             "settlement_source_match": settlement_source_match,
             "lifecycle_id": lifecycle_id,
@@ -560,6 +537,7 @@ def _emit_research_opportunity(
     )
     log_opportunity(
         ticker=signal.market_ticker,
+        venue=_market_venue(market),
         market_title=str(getattr(market, "title", "") or signal.market_ticker),
         entry_price_cents=signal.market_price * 100.0,
         estimated_probability=signal.estimated_probability,
@@ -581,6 +559,16 @@ def _emit_research_opportunity(
         signal_type=analysis.signal_type,
         lifecycle_id=lifecycle_id,
     )
+
+
+def _market_venue(market: Any) -> str:
+    for raw in (getattr(market, "venue", None), getattr(market, "report_venue", None)):
+        if isinstance(raw, str) and (value := raw.strip().lower()):
+            return value
+        value = getattr(raw, "value", None)
+        if isinstance(value, str) and (normalized := value.strip().lower()):
+            return normalized
+    return "kalshi"
 
 
 def _select_trigger_evidence(
@@ -638,9 +626,7 @@ def _recompute_edge(
     estimated_probability: float,
     market_price: float,
 ) -> float:
-    side_probability = (
-        estimated_probability if side == "yes" else 1.0 - estimated_probability
-    )
+    side_probability = estimated_probability if side == "yes" else 1.0 - estimated_probability
     return side_probability - market_price - 0.01
 
 
@@ -705,11 +691,7 @@ def _has_counter_evidence(
         direction = item.supports_direction.strip().lower()
         if claim_type in _COUNTER_CLAIM_TYPES and (
             direction == "neutral"
-            or (
-                direction == opposite
-                and float(item.supports_confidence or 0.0)
-                >= MIN_COUNTER_EVIDENCE_CONFIDENCE
-            )
+            or (direction == opposite and float(item.supports_confidence or 0.0) >= MIN_COUNTER_EVIDENCE_CONFIDENCE)
         ):
             return True
         if (
@@ -746,19 +728,11 @@ async def _has_counter_query(store: ResearchAdmissionStore, research_run_id: str
         try:
             conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
             tables = {
-                str(row[0])
-                for row in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'"
-                ).fetchall()
+                str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
             }
             if "research_run_queries" not in tables:
                 return False
-            columns = {
-                str(row[1])
-                for row in conn.execute(
-                    "PRAGMA table_info(research_run_queries)"
-                ).fetchall()
-            }
+            columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(research_run_queries)").fetchall()}
             if "query_intent" not in columns:
                 return False
             placeholders = ",".join("?" for _ in _COUNTER_QUERY_INTENTS)

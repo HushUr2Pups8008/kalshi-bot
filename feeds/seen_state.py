@@ -44,6 +44,8 @@ def load_seen_ids(path: Path, max_seen: int) -> OrderedDict[str, None]:
         if not isinstance(ids, list):
             raise ValueError("invalid checkpoint ids")
         return _bounded_valid_ids(ids, max_seen)
+    except FileNotFoundError:
+        return OrderedDict()
     except (OSError, TypeError, ValueError):
         logger.warning("Unable to load seen-ID checkpoint; starting empty.")
         return OrderedDict()

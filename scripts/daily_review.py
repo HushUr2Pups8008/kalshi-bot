@@ -244,28 +244,102 @@ def _format_fresh_pass_conversion_lines(
     paper_trades: int,
 ) -> list[str]:
     signal_label = "signal row" if detail_rows == 1 else "signal rows"
+    attempt_label = "LLM attempt" if llm_attempted == 1 else "LLM attempts"
     lines = [
-        "  Fresh-pass conversion            : "
-        f"{fresh_passes} fresh -> {detail_rows} {signal_label} -> "
-        f"{llm_attempted} LLM attempts -> {opportunities} opportunities -> "
-        f"{paper_trades} paper trades"
+        "  Fresh-pass observability          : "
+        f"{fresh_passes} fresh; {match_records} match diagnostics; {detail_rows} {signal_label}; "
+        f"{llm_attempted} {attempt_label}; {opportunities} opportunities; "
+        f"{paper_trades} raw paper-trade events"
     ]
-    deltas = [
-        ("fresh_to_match", fresh_passes - match_records, "fresh passes had no match diagnostic"),
-        ("match_to_analysis", match_records - detail_rows, "match diagnostics did not become signal-analysis rows"),
-        ("analysis_to_opportunity", detail_rows - opportunities, "signal-analysis rows did not create opportunities"),
-        ("opportunity_to_trade", opportunities - paper_trades, "opportunities did not become paper trades"),
-    ]
-    lines.append(
-        "    lifecycle gaps                 : "
-        + ", ".join(f"{label}={max(0, delta)}" for label, delta, _desc in deltas)
+    lines.append("    attribution                    : raw stage counts are not lifecycle conversion")
+    return lines
+
+
+def _format_same_window_lifecycle_attribution_lines(
+    attribution: dict[str, Any],
+    *,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> list[str]:
+    paper_trade_status = str(attribution.get("paper_trade_lifecycle_status") or "unavailable")
+    paper_trade_event_rows = int(attribution.get("paper_trade_event_rows") or 0)
+    paper_trade_linked_event_rows = int(attribution.get("paper_trade_linked_event_rows") or 0)
+    live_submission_event_rows = int(attribution.get("live_submission_event_rows") or 0)
+    live_submission_linked_event_rows = int(attribution.get("live_submission_linked_event_rows") or 0)
+    unknown_live_submission_event_rows = int(attribution.get("unknown_live_submission_event_rows") or 0)
+    unknown_live_submission_linked_event_rows = int(attribution.get("unknown_live_submission_linked_event_rows") or 0)
+    paper_trade_opportunities = int(attribution.get("paper_trade_opportunity_lifecycle_count") or 0)
+    live_submission_opportunities = int(attribution.get("live_submission_opportunity_lifecycle_count") or 0)
+    unknown_live_submission_opportunities = int(
+        attribution.get("unknown_live_submission_opportunity_lifecycle_count") or 0
     )
-    positive = [(label, delta, desc) for label, delta, desc in deltas if delta > 0]
-    if positive:
-        label, delta, desc = max(positive, key=lambda item: item[1])
-        lines.append(f"    pinch                          : {label} ({delta} {desc})")
+    unresolved_live_submission_intents = int(
+        attribution.get("unresolved_live_submission_intent_opportunity_lifecycle_count") or 0
+    )
+    live_submission_intent_event_rows = int(attribution.get("live_submission_intent_event_rows") or 0)
+    live_submission_intent_linked_event_rows = int(attribution.get("live_submission_intent_linked_event_rows") or 0)
+    outcome_conflicts = int(attribution.get("outcome_conflict_lifecycle_count") or 0)
+    terminal_evidence_conflicts = int(attribution.get("terminal_evidence_conflict_lifecycle_count") or 0)
+    orphan_paper_trades = int(attribution.get("orphan_paper_trade_lifecycle_count") or 0)
+    orphan_live_submissions = int(attribution.get("orphan_live_submission_lifecycle_count") or 0)
+    orphan_unknown_live_submissions = int(attribution.get("orphan_unknown_live_submission_lifecycle_count") or 0)
+    orphan_live_submission_intents = int(attribution.get("orphan_live_submission_intent_lifecycle_count") or 0)
+    conflicted_lifecycles = int(attribution.get("conflicted_lifecycle_count") or 0)
+    incomplete_lifecycles = int(attribution.get("identity_incomplete_lifecycle_count") or 0)
+    reused_opportunities = int(attribution.get("reused_opportunity_lifecycle_count") or 0)
+    unattributed = Counter(attribution.get("unattributed_event_counts") or {})
+    lines = [
+        "  Same-window linkable cohort      : "
+        f"{int(attribution.get('opportunity_lifecycle_count') or 0)} opportunities",
+        "    Window                         : "
+        f"{since.isoformat() if since else '(beginning)'} -> {until.isoformat() if until else '(latest)'}",
+        "    Terminal attribution           : "
+        f"G7 skips={int(attribution.get('g7_skip_lifecycle_count') or 0)}, "
+        f"zero-cap skips={int(attribution.get('zero_cap_skip_lifecycle_count') or 0)}, "
+        f"other skips={int(attribution.get('other_skip_lifecycle_count') or 0)}, "
+        f"paper trades={paper_trade_opportunities}, live submissions={live_submission_opportunities}, "
+        f"unknown live submissions={unknown_live_submission_opportunities}, "
+        f"intents without matching terminal journal={unresolved_live_submission_intents}, "
+        f"conflicts={outcome_conflicts}, receipt conflicts={terminal_evidence_conflicts}, "
+        f"pending={int(attribution.get('pending_opportunity_lifecycle_count') or 0)}, "
+        f"orphan skips={int(attribution.get('orphan_skip_lifecycle_count') or 0)}",
+    ]
+    if paper_trade_status == "not_observed":
+        lines.append("    Paper-trade lineage            : not observed in this window")
     else:
-        lines.append("    pinch                          : none detected in this window")
+        lines.append(
+            "    Paper-trade lineage            : "
+            f"{paper_trade_status} ({paper_trade_linked_event_rows}/{paper_trade_event_rows} event rows linked)"
+        )
+    lines.append(
+        "    Live submission lineage        : "
+        f"{live_submission_linked_event_rows}/{live_submission_event_rows} event rows linked; "
+        "not fill or P&L evidence"
+    )
+    lines.append(
+        "    Live submission unknown       : "
+        f"{unknown_live_submission_linked_event_rows}/{unknown_live_submission_event_rows} event rows linked; "
+        "reconciliation required"
+    )
+    lines.append(
+        "    Live submission intent lineage: "
+        f"{live_submission_intent_linked_event_rows}/{live_submission_intent_event_rows} event rows linked; "
+        f"{unresolved_live_submission_intents} without matching terminal journal; "
+        "not fill or P&L evidence; reconciliation required"
+    )
+    lines.append(
+        "    Linkage conflicts              : "
+        f"lifecycle IDs={conflicted_lifecycles}, incomplete IDs={incomplete_lifecycles}, "
+        f"reused opportunities={reused_opportunities}, terminal evidence conflicts={terminal_evidence_conflicts}, "
+        f"orphan paper trades={orphan_paper_trades}, "
+        f"orphan live submissions={orphan_live_submissions}, "
+        f"orphan unknown submissions={orphan_unknown_live_submissions}, "
+        f"orphan live intents={orphan_live_submission_intents}"
+    )
+    lines.append("    P&L basis                      : settlement and mark P&L excluded from lifecycle linkage")
+    if unattributed:
+        rendered = ", ".join(f"{event_type}={count}" for event_type, count in sorted(unattributed.items()))
+        lines.append(f"    Unattributed lifecycle events  : {rendered}")
     return lines
 
 
@@ -276,14 +350,10 @@ def _format_match_attribution_lines(
 ) -> list[str]:
     event_counts = funnel_stats.get("event_counts", {})
     match_diagnostics = int(
-        funnel_stats.get("match_diagnostics_total", 0)
-        or event_counts.get("MATCH_DIAGNOSTIC", 0)
-        or 0
+        funnel_stats.get("match_diagnostics_total", 0) or event_counts.get("MATCH_DIAGNOSTIC", 0) or 0
     )
     signal_detail_rows = int(
-        funnel_stats.get("signal_analysis_detail_total", 0)
-        or event_counts.get("SIGNAL_ANALYSIS_DETAIL", 0)
-        or 0
+        funnel_stats.get("signal_analysis_detail_total", 0) or event_counts.get("SIGNAL_ANALYSIS_DETAIL", 0) or 0
     )
     match_detail_gap = int(
         funnel_stats.get(
@@ -298,16 +368,10 @@ def _format_match_attribution_lines(
         or 0
     )
     weight_applications = int(
-        funnel_stats.get("match_weight_applied_total", 0)
-        or event_counts.get("MATCH_WEIGHT_APPLIED", 0)
-        or 0
+        funnel_stats.get("match_weight_applied_total", 0) or event_counts.get("MATCH_WEIGHT_APPLIED", 0) or 0
     )
-    weight_score_delta = float(
-        funnel_stats.get("match_weight_score_delta_total", 0.0) or 0.0
-    )
-    suppression_coverage = Counter(
-        funnel_stats.get("match_suppressed_column_coverage", {})
-    )
+    weight_score_delta = float(funnel_stats.get("match_weight_score_delta_total", 0.0) or 0.0)
+    suppression_coverage = Counter(funnel_stats.get("match_suppressed_column_coverage", {}))
     drilldowns = [
         ("Drilldown: pre-LLM quality gate", Counter(funnel_stats.get("match_diagnostic_pre_llm_gate", {})), None),
         ("Drilldown: match diagnostic sources", Counter(funnel_stats.get("match_diagnostic_sources", {})), top),
@@ -320,12 +384,20 @@ def _format_match_attribution_lines(
         ("Drilldown: opportunity sources", Counter(funnel_stats.get("opportunity_sources", {})), top),
         ("Drilldown: opportunity source classes", Counter(funnel_stats.get("opportunity_source_classes", {})), top),
         ("Drilldown: opportunity retrieval modes", Counter(funnel_stats.get("opportunity_retrieval_modes", {})), top),
-        ("Drilldown: opportunity settlement-source match", Counter(funnel_stats.get("opportunity_settlement_source_matches", {})), top),
+        (
+            "Drilldown: opportunity settlement-source match",
+            Counter(funnel_stats.get("opportunity_settlement_source_matches", {})),
+            top,
+        ),
         ("Drilldown: skip sources", Counter(funnel_stats.get("skip_sources", {})), top),
         ("Drilldown: skip source classes", Counter(funnel_stats.get("skip_source_classes", {})), top),
         ("Drilldown: skip retrieval modes", Counter(funnel_stats.get("skip_retrieval_modes", {})), top),
         ("Drilldown: skip evidence IDs", Counter(funnel_stats.get("skip_evidence_ids", {})), top),
-        ("Drilldown: skip settlement-source match", Counter(funnel_stats.get("skip_settlement_source_matches", {})), top),
+        (
+            "Drilldown: skip settlement-source match",
+            Counter(funnel_stats.get("skip_settlement_source_matches", {})),
+            top,
+        ),
     ]
 
     if not any(
@@ -345,8 +417,7 @@ def _format_match_attribution_lines(
         f"  Signal analysis detail rows      : {signal_detail_rows}",
         f"  Match -> analysis detail gap     : {match_detail_gap}",
         f"  Match suppressions               : {suppressions}",
-        "  Match weight applications        : "
-        f"{weight_applications} (score_delta={weight_score_delta:.4f})",
+        f"  Match weight applications        : {weight_applications} (score_delta={weight_score_delta:.4f})",
     ]
     if suppressions:
         coverage_parts = [
@@ -425,9 +496,7 @@ def _format_since_restart_money_path_lines(report: dict[str, Any]) -> list[str]:
     summary = report.get("summary", {})
     no_keywords = report.get("no_keywords", {})
     terminal_counts = summary.get("terminal_counts", {}) or {}
-    terminal_text = ", ".join(
-        f"{key}={value}" for key, value in sorted(terminal_counts.items())
-    ) or "none"
+    terminal_text = ", ".join(f"{key}={value}" for key, value in sorted(terminal_counts.items())) or "none"
     lines = [
         "SINCE-RESTART MONEY PATH  [source: scripts/since_restart_money_path.py]",
         "  Boundary source                  : health bot_runtime.started_utc (process start)",
@@ -439,19 +508,12 @@ def _format_since_restart_money_path_lines(report: dict[str, Any]) -> list[str]:
     ]
     boundaries = report.get("boundaries") or {}
     if boundaries.get("process_start_utc") or boundaries.get("log_boot_utc"):
-        lines.append(
-            "  Process-start boundary           : "
-            f"{boundaries.get('process_start_utc') or 'unknown'}"
-        )
-        lines.append(
-            "  Latest log-boot boundary         : "
-            f"{boundaries.get('log_boot_utc') or 'unknown'}"
-        )
+        lines.append(f"  Process-start boundary           : {boundaries.get('process_start_utc') or 'unknown'}")
+        lines.append(f"  Latest log-boot boundary         : {boundaries.get('log_boot_utc') or 'unknown'}")
     gap = report.get("legacy_resolutions_between_process_start_and_log_boot") or {}
     if gap.get("count", 0):
         lines.append(
-            "  Legacy resolutions before boot   : "
-            f"{gap.get('count', 0)} pnl={fmt_money(gap.get('pnl_total'))}"
+            f"  Legacy resolutions before boot   : {gap.get('count', 0)} pnl={fmt_money(gap.get('pnl_total'))}"
         )
     pm_feedback = report.get("polymarket_settlement_feedback", {}) or {}
     if pm_feedback:
@@ -500,9 +562,12 @@ def _software_version() -> str:
 
 
 def _counterfactual_eval_hydrate_markets_enabled() -> bool:
-    return os.getenv(
-        "DAILY_REVIEW_COUNTERFACTUAL_HYDRATE_KALSHI_MARKETS", ""
-    ).strip().lower() in {"1", "true", "yes", "on"}
+    return os.getenv("DAILY_REVIEW_COUNTERFACTUAL_HYDRATE_KALSHI_MARKETS", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def _build_counterfactual_llm_eval_report(
@@ -642,9 +707,7 @@ def _collect_kalshi_drift_state() -> tuple[dict[str, Any], str | None]:
     return halt_state, cohort_ts
 
 
-def _format_kalshi_drift_lines(
-    halt_state: dict[str, Any], cohort_ts: str | None
-) -> list[str]:
+def _format_kalshi_drift_lines(halt_state: dict[str, Any], cohort_ts: str | None) -> list[str]:
     """Render the P0 heartbeat block for the daily-review report file.
 
     Output shape matches `scripts/botcheck.py::print_kalshi_drift_section`
@@ -744,15 +807,9 @@ def _report_ollama_settings() -> tuple[str, str]:
                 continue
             key, value = line.split("=", 1)
             env_values[key.strip()] = value.strip()
-    model = str(
-        os.getenv("OLLAMA_MODEL")
-        or env_values.get("OLLAMA_MODEL")
-        or "qwen2.5:7b"
-    ).strip()
+    model = str(os.getenv("OLLAMA_MODEL") or env_values.get("OLLAMA_MODEL") or "qwen2.5:7b").strip()
     base_url = str(
-        os.getenv("OLLAMA_BASE_URL")
-        or env_values.get("OLLAMA_BASE_URL")
-        or "http://localhost:11434/v1"
+        os.getenv("OLLAMA_BASE_URL") or env_values.get("OLLAMA_BASE_URL") or "http://localhost:11434/v1"
     ).strip()
     return model, base_url
 
@@ -769,11 +826,7 @@ def _ollama_runtime_summary() -> str:
     try:
         with urllib.request.urlopen(_ollama_tags_url(base_url), timeout=3) as response:
             payload = json.load(response)
-        available = [
-            item.get("name")
-            for item in payload.get("models", [])
-            if item.get("name")
-        ]
+        available = [item.get("name") for item in payload.get("models", []) if item.get("name")]
         if available:
             health = "ok" if configured in available else "mismatch"
             return f"configured={configured} health={health} available={available}"
@@ -908,22 +961,34 @@ def build_daily_review(
 
     with stage_timer("freshness diagnostics", enabled=show_profile):
         freshness_stats = freshness_diagnostics.summarize(
-            trades_path, since, until, exclude_test=exclude_test,
+            trades_path,
+            since,
+            until,
+            exclude_test=exclude_test,
             progress_tracker=ProgressTracker() if show_progress else None,
         )
     with stage_timer("match quality diagnostics", enabled=show_profile):
         match_stats = match_quality_diagnostics.summarize(
-            trades_path, since, until, exclude_test=exclude_test,
+            trades_path,
+            since,
+            until,
+            exclude_test=exclude_test,
             progress_tracker=ProgressTracker() if show_progress else None,
         )
     with stage_timer("decision funnel summary", enabled=show_profile):
         funnel_stats = decision_funnel_summary.summarize(
-            trades_path, since, until, exclude_test=exclude_test,
+            trades_path,
+            since,
+            until,
+            exclude_test=exclude_test,
             progress_tracker=ProgressTracker() if show_progress else None,
         )
     with stage_timer("signal edge diagnostics", enabled=show_profile):
         edge_stats = signal_edge_diagnostics.summarize(
-            trades_path, since, until, exclude_test=exclude_test,
+            trades_path,
+            since,
+            until,
+            exclude_test=exclude_test,
             progress_tracker=ProgressTracker() if show_progress else None,
         )
     throughput_until = until or datetime.now(timezone.utc)
@@ -946,11 +1011,17 @@ def build_daily_review(
         matcher_weight_status = _matcher_weight_runtime_status()
     with stage_timer("match suppression audit", enabled=show_profile):
         suppression_stats = match_suppression_audit.summarize(
-            trades_path, since, until, exclude_test=exclude_test,
+            trades_path,
+            since,
+            until,
+            exclude_test=exclude_test,
         )
     with stage_timer("keyword feedback", enabled=show_profile):
         keyword_stats = keyword_feedback.summarize(
-            trades_path, since, until, exclude_test=exclude_test,
+            trades_path,
+            since,
+            until,
+            exclude_test=exclude_test,
         )
     with stage_timer("counterfactual LLM eval", enabled=show_profile):
         try:
@@ -1007,18 +1078,9 @@ def build_daily_review(
     )
     skip_breakdown = edge_stats.get("skip_breakdown", {})
     match_flags = Counter(match_stats.get("heuristic_flags", {}))
-    llm_rows = sum(
-        1 for row in edge_stats.get("audit_rows", [])
-        if row.get("method") == "llm"
-    )
-    keyword_rows = sum(
-        1 for row in edge_stats.get("audit_rows", [])
-        if row.get("method") == "keyword"
-    )
-    keyword_gate_rows = sum(
-        1 for row in edge_stats.get("audit_rows", [])
-        if row.get("method") == "keyword_gate"
-    )
+    llm_rows = sum(1 for row in edge_stats.get("audit_rows", []) if row.get("method") == "llm")
+    keyword_rows = sum(1 for row in edge_stats.get("audit_rows", []) if row.get("method") == "keyword")
+    keyword_gate_rows = sum(1 for row in edge_stats.get("audit_rows", []) if row.get("method") == "keyword_gate")
     suppressed = event_counts.get("MATCH_SUPPRESSED", 0)
     suppression_candidates = event_counts.get("MATCH_SUPPRESSION_CANDIDATE", 0)
     detail_rows = edge_stats.get("counts", {}).get("SIGNAL_ANALYSIS_DETAIL", 0)
@@ -1030,6 +1092,7 @@ def build_daily_review(
     zero_edge = skip_breakdown.get("zero_edge", 0)
     duplicate = skip_breakdown.get("duplicate", 0)
     liquidity_skip = skip_breakdown.get("liquidity", 0)
+    risk_gate_skip = skip_breakdown.get("risk_gate", 0)
     other_skip = skip_breakdown.get("other", 0)
 
     lines: list[str] = []
@@ -1063,10 +1126,7 @@ def build_daily_review(
     lines.append("")
     if since_restart_report:
         if "error" in since_restart_report:
-            lines.append(
-                "SINCE-RESTART MONEY PATH          : "
-                f"unavailable ({since_restart_report['error']})"
-            )
+            lines.append(f"SINCE-RESTART MONEY PATH          : unavailable ({since_restart_report['error']})")
         else:
             lines.extend(_format_since_restart_money_path_lines(since_restart_report))
         lines.append("")
@@ -1075,18 +1135,9 @@ def build_daily_review(
     lines.append("")
 
     lines.append("1. INGESTION  [source: scripts/freshness_diagnostics.py + scripts/decision_funnel_summary.py]")
-    observed_records = sum(
-        row.get("observed_records", 0)
-        for row in freshness_stats.get("sources", {}).values()
-    )
-    fresh_passes = sum(
-        row.get("fresh_passes", 0)
-        for row in freshness_stats.get("sources", {}).values()
-    )
-    early_stale = sum(
-        row.get("early_stale_drops", 0)
-        for row in freshness_stats.get("sources", {}).values()
-    )
+    observed_records = sum(row.get("observed_records", 0) for row in freshness_stats.get("sources", {}).values())
+    fresh_passes = sum(row.get("fresh_passes", 0) for row in freshness_stats.get("sources", {}).values())
+    early_stale = sum(row.get("early_stale_drops", 0) for row in freshness_stats.get("sources", {}).values())
     lines.append(f"  Source-attributed items observed : {observed_records}")
     lines.append(f"  Fresh passes                     : {fresh_passes}")
     lines.append(f"  Dropped early stale              : {early_stale}")
@@ -1101,6 +1152,15 @@ def build_daily_review(
             paper_trades=paper_trades,
         )
     )
+    attribution = funnel_stats.get("same_window_lifecycle_attribution")
+    if isinstance(attribution, dict):
+        lines.extend(
+            _format_same_window_lifecycle_attribution_lines(
+                attribution,
+                since=since,
+                until=until,
+            )
+        )
     lines.extend(_format_match_attribution_lines(funnel_stats, top=top))
     if assignment_shadow_stats.get("rows", 0) > 0:
         lines.append(
@@ -1132,8 +1192,7 @@ def build_daily_review(
         lines.extend(_format_tier_change_lines(prior_tiers, tier_by_source, prior_date))
 
     eligible_freshness_rows = [
-        row for row in freshness_stats.get("sources", {}).values()
-        if row.get("observed_records", 0) >= 1
+        row for row in freshness_stats.get("sources", {}).values() if row.get("observed_records", 0) >= 1
     ]
     if eligible_freshness_rows:
         buckets = freshness_diagnostics.bucket_sources(eligible_freshness_rows, show_all=True)
@@ -1173,9 +1232,7 @@ def build_daily_review(
                 lines.append("    (no operationally-relevant sources in window)")
             total_hidden = sum(hidden_counts.values())
             if total_hidden > 0:
-                breakdown = ", ".join(
-                    f"{tier}={count}" for tier, count in hidden_counts.items() if count > 0
-                )
+                breakdown = ", ".join(f"{tier}={count}" for tier, count in hidden_counts.items() if count > 0)
                 lines.append(
                     f"    {total_hidden} lower-relevance sources hidden ({breakdown}; "
                     "see Section 8 Source Scorecard or run scripts/freshness_diagnostics.py for the full list)"
@@ -1189,7 +1246,9 @@ def build_daily_review(
     pre_llm_useful = edge_stats.get("llm_observability", {}).get("pre_llm_would_block_and_useful", 0)
     lines.append(f"  Match diagnostics emitted        : {match_records}")
     lines.append(f"  Low-quality flagged              : {low_quality} ({fmt_pct(low_quality, match_records)})")
-    lines.append(f"  Pre-LLM gate would-block         : {pre_llm_would_block} ({fmt_pct(pre_llm_would_block, match_records)})")
+    lines.append(
+        f"  Pre-LLM gate would-block         : {pre_llm_would_block} ({fmt_pct(pre_llm_would_block, match_records)})"
+    )
     lines.append(f"  Pre-LLM would-block useful rows : {pre_llm_useful}")
     lines.append(f"  Suppression candidates           : {suppression_candidates}")
     lines.append(f"  Suppressed                       : {suppressed}")
@@ -1225,12 +1284,10 @@ def build_daily_review(
     suppression_risky = suppression_stats.get("risky_count", 0)
     lines.append(f"  Suppression candidates (audited) : {suppression_total}")
     lines.append(
-        f"    Likely safe to suppress        : {suppression_safe} "
-        f"({fmt_pct(suppression_safe, suppression_total)})"
+        f"    Likely safe to suppress        : {suppression_safe} ({fmt_pct(suppression_safe, suppression_total)})"
     )
     lines.append(
-        f"    Likely risky to suppress       : {suppression_risky} "
-        f"({fmt_pct(suppression_risky, suppression_total)})"
+        f"    Likely risky to suppress       : {suppression_risky} ({fmt_pct(suppression_risky, suppression_total)})"
     )
     if suppression_total:
         risky_by_source = sorted(
@@ -1247,7 +1304,9 @@ def build_daily_review(
                 lines.append(f"    {row['source'] or 'n/a'}: risky={row['risky']}")
     lines.append("")
 
-    lines.append("3. ANALYSIS  [source: scripts/decision_funnel_summary.py + scripts/signal_edge_diagnostics.py + scripts/keyword_feedback.py]")
+    lines.append(
+        "3. ANALYSIS  [source: scripts/decision_funnel_summary.py + scripts/signal_edge_diagnostics.py + scripts/keyword_feedback.py]"
+    )
     total_rejections = sum(analysis_rejections.values())
     lines.append(f"  Signal analysis detail rows      : {detail_rows}")
     lines.append(f"  Passed keyword gate              : {detail_rows - keyword_gate_rows}")
@@ -1285,12 +1344,8 @@ def build_daily_review(
         "  LLM parse time                   : "
         f"{signal_edge_diagnostics.fmt_latency_stats(llm_obs.get('parse_ms_samples', []))}"
     )
-    lines.append(
-        f"  LLM contention observed          : {llm_obs.get('contention_observed', 0)}"
-    )
-    lines.append(
-        f"  LLM max in-flight at entry       : {llm_obs.get('max_in_flight_at_entry', 0)}"
-    )
+    lines.append(f"  LLM contention observed          : {llm_obs.get('contention_observed', 0)}")
+    lines.append(f"  LLM max in-flight at entry       : {llm_obs.get('max_in_flight_at_entry', 0)}")
     if llm_status_counts:
         lines.append("  LLM status breakdown:")
         for status, count in llm_status_counts.most_common():
@@ -1354,12 +1409,17 @@ def build_daily_review(
             )
     lines.append("")
 
-    lines.append("5. EXECUTION  [source: scripts/decision_funnel_summary.py + scripts/paper_performance_drilldown.py]")
+    lines.append(
+        "5. PAPER TRADES AND LIVE SUBMISSIONS  "
+        "[source: scripts/decision_funnel_summary.py + scripts/paper_performance_drilldown.py]"
+    )
     live_orders = event_counts.get("LIVE_ORDER", 0)
-    lines.append(f"  Paper trades                     : {paper_trades}")
-    lines.append(f"  Live orders                      : {live_orders}")
+    lines.append(f"  Paper-trade records              : {paper_trades}")
+    lines.append(f"  Live order submissions           : {live_orders}")
+    lines.append("  Scope: live order submissions are not fill or P&L evidence.")
     lines.append(f"  Skipped duplicate position       : {duplicate}")
     lines.append(f"  Skipped liquidity/near-limit     : {liquidity_skip}")
+    lines.append(f"  Skipped risk gate                : {risk_gate_skip}")
     lines.append(f"  Skipped below threshold          : {below_threshold}")
     lines.append(f"  Skipped other                    : {other_skip}")
     if paper_stats.get("total_trades", 0):
@@ -1372,43 +1432,27 @@ def build_daily_review(
         open_mark = paper_stats.get("open_mark_summary") or {}
         liquidation = paper_stats.get("executable_liquidation") or {}
         if open_mark:
-            lines.append(
-                f"    Open cost                        : {fmt_money(open_mark.get('open_cost_dollars'))}"
-            )
+            lines.append(f"    Open cost                        : {fmt_money(open_mark.get('open_cost_dollars'))}")
             if liquidation:
+                lines.append(f"    Gross executable bid value       : {fmt_money(liquidation.get('gross_bid_value'))}")
                 lines.append(
-                    "    Gross executable bid value       : "
-                    f"{fmt_money(liquidation.get('gross_bid_value'))}"
-                )
-                lines.append(
-                    "    Estimated exit fees              : "
-                    f"{fmt_money(liquidation.get('estimated_exit_fees'))}"
+                    f"    Estimated exit fees              : {fmt_money(liquidation.get('estimated_exit_fees'))}"
                 )
                 lines.append(
                     "    Fee-net liquidation value        : "
                     f"{fmt_money(liquidation.get('report_net_liquidation_value'))}"
                 )
                 lines.append(
-                    "    Unrealized fee-net P&L           : "
-                    f"{fmt_money(liquidation.get('unrealized_fee_net_pnl'))}"
+                    f"    Unrealized fee-net P&L           : {fmt_money(liquidation.get('unrealized_fee_net_pnl'))}"
                 )
-                lines.append(
-                    "    Unscorable liquidation cost      : "
-                    f"{fmt_money(liquidation.get('unscorable_cost'))}"
-                )
+                lines.append(f"    Unscorable liquidation cost      : {fmt_money(liquidation.get('unscorable_cost'))}")
                 reasons = liquidation.get("unscorable_reasons") or {}
                 if reasons:
                     lines.append(
                         "    Unscorable reasons                : "
-                        + ", ".join(
-                            f"{reason}={count}"
-                            for reason, count in sorted(reasons.items())
-                        )
+                        + ", ".join(f"{reason}={count}" for reason, count in sorted(reasons.items()))
                     )
-                lines.append(
-                    "    Executable snapshot as of         : "
-                    f"{liquidation.get('as_of') or 'n/a'}"
-                )
+                lines.append(f"    Executable snapshot as of         : {liquidation.get('as_of') or 'n/a'}")
                 for row in liquidation.get("by_venue") or []:
                     lines.append(
                         f"    {row.get('venue') or 'unknown'} "
@@ -1434,13 +1478,10 @@ def build_daily_review(
                     f"{fmt_money(open_mark.get('marked_kalshi_unrealized_pnl_dollars'))}"
                 )
                 lines.append(
-                    "    Unknown mark cost                : "
-                    f"{fmt_money(open_mark.get('unknown_mark_cost_dollars'))}"
+                    f"    Unknown mark cost                : {fmt_money(open_mark.get('unknown_mark_cost_dollars'))}"
                 )
         venue_rows = paper_stats.get("venues") or []
-        if len(venue_rows) > 1 or any(
-            str(row.get("name") or "") != "kalshi" for row in venue_rows
-        ):
+        if len(venue_rows) > 1 or any(str(row.get("name") or "") != "kalshi" for row in venue_rows):
             lines.append("  Drilldown: paper performance by venue")
             for row in venue_rows:
                 resolved = row.get("resolved") or 0
@@ -1502,8 +1543,11 @@ def build_daily_review(
         f"  Meaningful signals                : {llm_value.get('meaningful_signals', 0)} ({fmt_pct(llm_value.get('meaningful_signals', 0), llm_rows)})"
     )
     lines.append(
-        f"  Trade candidates                  : {llm_value.get('trade_candidates', 0)} ({fmt_pct(llm_value.get('trade_candidates', 0), llm_rows)})"
+        f"  Model gross-edge candidates (fee unscored): {llm_value.get('trade_candidates', 0)} ({fmt_pct(llm_value.get('trade_candidates', 0), llm_rows)})"
     )
+    lines.append(f"  Candidates admitted               : {llm_value.get('admitted_trade_candidates', 0)}")
+    lines.append(f"  Candidates blocked by gates       : {llm_value.get('blocked_trade_candidates', 0)}")
+    lines.append(f"  Candidates pending                : {llm_value.get('pending_trade_candidates', 0)}")
     lines.append(
         f"  LLM created edge @0.50 market     : {llm_value.get('llm_created_edge', 0)} ({fmt_pct(llm_value.get('llm_created_edge', 0), llm_rows)})"
     )
@@ -1606,17 +1650,13 @@ def build_daily_review(
     if timing_segmentation.get("available"):
         lines.append("  Freshness/timing segmentation      : available")
     else:
-        lines.append(
-            "  Freshness/timing segmentation      : "
-            f"unavailable ({timing_segmentation.get('reason', 'n/a')})"
-        )
+        lines.append(f"  Freshness/timing segmentation      : unavailable ({timing_segmentation.get('reason', 'n/a')})")
     category_segmentation = llm_segmentation.get("headline_category", {})
     if category_segmentation.get("available"):
         lines.append("  Headline/category segmentation     : available")
     else:
         lines.append(
-            "  Headline/category segmentation     : "
-            f"unavailable ({category_segmentation.get('reason', 'n/a')})"
+            f"  Headline/category segmentation     : unavailable ({category_segmentation.get('reason', 'n/a')})"
         )
     rare_examples = llm_value.get("rare_non_neutral_examples", [])[: min(top, RECENT_EDGE_AUDIT)]
     if rare_examples:
@@ -1671,8 +1711,7 @@ def build_daily_review(
                 )
     disabled_source = grouped.get("disabled by source", []) or []
     disabled_family = grouped.get("disabled by family", []) or []
-    lines.append(f"  Disabled by config               : "
-                 f"source={len(disabled_source)} family={len(disabled_family)}")
+    lines.append(f"  Disabled by config               : source={len(disabled_source)} family={len(disabled_family)}")
     lines.append("")
 
     lines.append("Appendix")
@@ -1705,13 +1744,10 @@ def build_daily_review(
     # Reporting-only feature: log to stderr on IO failure, never raise.
     if tier_state_path is not None:
         try:
-            _save_current_tier_state(
-                tier_state_path, tier_by_source, datetime.now(timezone.utc)
-            )
+            _save_current_tier_state(tier_state_path, tier_by_source, datetime.now(timezone.utc))
         except OSError as exc:
             _eprint(
-                f"warning: failed to persist source tier state to {tier_state_path}: "
-                f"{exc.__class__.__name__}: {exc}"
+                f"warning: failed to persist source tier state to {tier_state_path}: {exc.__class__.__name__}: {exc}"
             )
 
     return lines

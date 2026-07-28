@@ -370,6 +370,7 @@ def test_print_summary_includes_edge_sections(capsys):
         assert "LLM Path Observability" in output
         assert "LLM Value-Add Analysis" in output
         assert "LLM Value-Add Segmentation" in output
+        assert "Model gross-edge candidates (fee unscored)" in output
         assert "LLM skipped (routing)" in output
         assert "Top sources by meaningful signal rate" in output
         assert "Market price bands by meaningful signal rate" in output
@@ -386,8 +387,8 @@ def test_print_summary_includes_edge_sections(capsys):
 
 def test_summarize_accepts_legacy_market_yes_price_key_in_opportunity():
     """F-11 P1-C: pre-bounce OPPORTUNITY log rows carry ``market_yes_price``
-    instead of ``entry_price_cents``. The summarize() path must read the legacy
-    key via fallback and store the value so downstream consumers can find it.
+    instead of ``entry_price_cents``. The summarize() path must retain the
+    legacy quote as a cents value without treating it as a YES probability.
     """
     tmp = make_tmp_dir("signal_edge_diagnostics")
     try:
@@ -412,22 +413,231 @@ def test_summarize_accepts_legacy_market_yes_price_key_in_opportunity():
         stats = summarize(path, since=None, until=None)
 
         assert stats["counts"]["OPPORTUNITY"] == 1
-        # F-11 P1-C: the fallback at scripts/signal_edge_diagnostics.py:665-668
-        # must have resolved the legacy `market_yes_price` to the canonical
-        # `entry_price_cents`; the resolved value flows into the unmatched
-        # audit_rows list with key "market_price" via line 404.
-        # If the fallback regressed (e.g. switched to direct `record["entry_price_cents"]`),
-        # the OPPORTUNITY would either crash with KeyError or surface as
-        # market_price=None, and this assertion would fail.
+        # The legacy fallback must resolve the quote to the canonical
+        # executable-cents field. An orphaned OPPORTUNITY does not contain a
+        # reliable YES midpoint, so market_price must remain absent.
         audit_rows = stats.get("audit_rows", [])
         legacy_rows = [r for r in audit_rows if r.get("ticker") == "KXLEGACY"]
         assert legacy_rows, (
             f"audit_rows missing KXLEGACY entry; got tickers "
             f"{sorted({r.get('ticker') for r in audit_rows})}"
         )
-        assert legacy_rows[0]["market_price"] == pytest.approx(0.45), (
-            f"resolved market_price must equal the legacy market_yes_price "
-            f"value (0.45); got {legacy_rows[0]['market_price']!r}"
+        assert legacy_rows[0]["executable_price_cents"] == pytest.approx(0.45), (
+            f"resolved executable cents must equal the legacy market_yes_price "
+            f"value (0.45); got {legacy_rows[0]['executable_price_cents']!r}"
         )
+        assert legacy_rows[0]["market_price"] is None
+    finally:
+        cleanup_tmp_dir(tmp)
+
+
+def test_summarize_keeps_zero_yes_midpoint_and_marks_g7_blocked_candidate():
+    """A one-cent executable quote is not a 1.0 market probability.
+
+    The fast-lane detail records the YES midpoint in probability units while
+    OPPORTUNITY records the selected-side executable quote in cents.  The
+    diagnostic must retain both values, use the chosen-side edge, and not
+    present a G7-blocked opportunity as admitted execution evidence.
+    """
+    tmp = make_tmp_dir("signal_edge_diagnostics")
+    try:
+        path = tmp / "trades.jsonl"
+        write_jsonl(
+            path,
+            [
+                {
+                    "type": "SIGNAL_ANALYSIS_DETAIL",
+                    "ticker": "KXONECENT",
+                    "source": "Reuters",
+                    "headline": "Candidate has exited the race",
+                    "method": "llm",
+                    "llm_direction": "no",
+                    "final_probability": 0.05,
+                    "market_price": 0.0,
+                    "ts": "2026-07-24T01:32:53+00:00",
+                },
+                {
+                    "type": "OPPORTUNITY",
+                    "ticker": "KXONECENT",
+                    "source": "Reuters",
+                    "headline": "Candidate has exited the race",
+                    "method": "llm",
+                    "llm_direction": "no",
+                    "estimated_probability": 0.05,
+                    "side": "yes",
+                    "entry_price_cents": 1,
+                    "edge": 0.04,
+                    "ts": "2026-07-24T01:32:54+00:00",
+                },
+                {
+                    "type": "SKIPPED",
+                    "ticker": "KXONECENT",
+                    "source": "Reuters",
+                    "headline": "Candidate has exited the race",
+                    "reason": "G7_open_exposure_drawdown",
+                    "edge": 0.04,
+                    "ts": "2026-07-24T01:32:55+00:00",
+                },
+            ],
+        )
+
+        stats = summarize(path, since=None, until=None)
+
+        row = next(row for row in stats["audit_rows"] if row["ticker"] == "KXONECENT")
+        assert row["market_price"] == pytest.approx(0.0)
+        assert row["edge"] == pytest.approx(0.04)
+        assert row["opportunity_side"] == "yes"
+        assert row["executable_price_cents"] == pytest.approx(1.0)
+        assert row["llm_abs_edge"] == pytest.approx(0.04)
+        assert row["llm_edge_basis"] == "gross_executable"
+        assert row["llm_fee_net_status"] == "unscored"
+        assert row["llm_decision_impact"] == "trade_candidate"
+        assert row["llm_candidate_outcome"] == "blocked_by_risk_gate"
+        assert row["outcome"] == "opportunity skipped: risk gate"
+        assert stats["skip_breakdown"]["risk_gate"] == 1
+        assert stats["llm_value_add"]["trade_candidates"] == 1
+        assert stats["llm_value_add"]["admitted_trade_candidates"] == 0
+        assert stats["llm_value_add"]["blocked_trade_candidates"] == 1
+    finally:
+        cleanup_tmp_dir(tmp)
+
+
+def test_summarize_uses_recorded_no_side_edge_not_yes_probability_minus_cents():
+    """NO-side executable cents must never be subtracted from p(YES)."""
+    tmp = make_tmp_dir("signal_edge_diagnostics")
+    try:
+        path = tmp / "trades.jsonl"
+        write_jsonl(
+            path,
+            [
+                {
+                    "type": "SIGNAL_ANALYSIS_DETAIL",
+                    "ticker": "KXNOEDGE",
+                    "source": "Reuters",
+                    "headline": "Candidate exit",
+                    "method": "llm",
+                    "llm_direction": "no",
+                    "final_probability": 0.05,
+                    "market_price": 0.05,
+                    "ts": "2026-07-24T01:32:53+00:00",
+                },
+                {
+                    "type": "OPPORTUNITY",
+                    "ticker": "KXNOEDGE",
+                    "source": "Reuters",
+                    "headline": "Candidate exit",
+                    "method": "llm",
+                    "llm_direction": "no",
+                    "estimated_probability": 0.05,
+                    "side": "no",
+                    "entry_price_cents": 95,
+                    "edge": 0.0,
+                    "ts": "2026-07-24T01:32:54+00:00",
+                },
+            ],
+        )
+
+        stats = summarize(path, since=None, until=None)
+
+        row = next(row for row in stats["audit_rows"] if row["ticker"] == "KXNOEDGE")
+        assert row["market_price"] == pytest.approx(0.05)
+        assert row["opportunity_side"] == "no"
+        assert row["executable_price_cents"] == pytest.approx(95.0)
+        assert row["edge"] == pytest.approx(0.0)
+        assert row["llm_abs_edge"] == pytest.approx(0.0)
+        assert row["llm_decision_impact"] == "weak_signal"
+        assert row["llm_edge_basis"] == "gross_executable"
+        assert row["llm_fee_net_status"] == "unscored"
+        assert stats["llm_value_add"]["trade_candidates"] == 0
+    finally:
+        cleanup_tmp_dir(tmp)
+
+
+def test_summarize_does_not_treat_any_g_prefixed_skip_as_a_risk_gate():
+    """Only the normalized skip type, not a string prefix, determines the block."""
+    tmp = make_tmp_dir("signal_edge_diagnostics")
+    try:
+        path = tmp / "trades.jsonl"
+        write_jsonl(
+            path,
+            [
+                {
+                    "type": "SIGNAL_ANALYSIS_DETAIL",
+                    "ticker": "KXGENERICBLOCK",
+                    "source": "Reuters",
+                    "headline": "Candidate exit",
+                    "method": "llm",
+                    "final_probability": 0.05,
+                    "market_price": 0.0,
+                    "ts": "2026-07-24T01:32:53+00:00",
+                },
+                {
+                    "type": "OPPORTUNITY",
+                    "ticker": "KXGENERICBLOCK",
+                    "source": "Reuters",
+                    "headline": "Candidate exit",
+                    "method": "llm",
+                    "estimated_probability": 0.05,
+                    "side": "yes",
+                    "entry_price_cents": 1,
+                    "edge": 0.04,
+                    "ts": "2026-07-24T01:32:54+00:00",
+                },
+                {
+                    "type": "SKIPPED",
+                    "ticker": "KXGENERICBLOCK",
+                    "source": "Reuters",
+                    "headline": "Candidate exit",
+                    "reason": "generic execution failure",
+                    "edge": 0.04,
+                    "ts": "2026-07-24T01:32:55+00:00",
+                },
+            ],
+        )
+
+        stats = summarize(path, since=None, until=None)
+
+        row = next(
+            row for row in stats["audit_rows"] if row["ticker"] == "KXGENERICBLOCK"
+        )
+        assert row["llm_decision_impact"] == "trade_candidate"
+        assert row["llm_candidate_outcome"] == "blocked_by_execution_gate"
+        assert stats["skip_breakdown"]["risk_gate"] == 0
+        assert stats["skip_breakdown"]["other"] == 1
+    finally:
+        cleanup_tmp_dir(tmp)
+
+
+def test_summarize_does_not_call_raw_midpoint_delta_a_trade_candidate():
+    """Only a recorded selected-side opportunity can be an executable candidate."""
+    tmp = make_tmp_dir("signal_edge_diagnostics")
+    try:
+        path = tmp / "trades.jsonl"
+        write_jsonl(
+            path,
+            [
+                {
+                    "type": "SIGNAL_ANALYSIS_DETAIL",
+                    "ticker": "KXRAWONLY",
+                    "source": "Reuters",
+                    "headline": "Raw model movement",
+                    "method": "llm",
+                    "llm_direction": "yes",
+                    "final_probability": 0.80,
+                    "market_price": 0.10,
+                    "ts": "2026-07-24T01:32:53+00:00",
+                },
+            ],
+        )
+
+        stats = summarize(path, since=None, until=None)
+
+        row = next(row for row in stats["audit_rows"] if row["ticker"] == "KXRAWONLY")
+        assert row["llm_edge_basis"] == "gross_midpoint"
+        assert row["llm_fee_net_status"] == "unscored"
+        assert row["llm_decision_impact"] == "meaningful_signal"
+        assert row["llm_candidate_outcome"] is None
+        assert stats["llm_value_add"]["meaningful_signals"] == 1
+        assert stats["llm_value_add"]["trade_candidates"] == 0
     finally:
         cleanup_tmp_dir(tmp)

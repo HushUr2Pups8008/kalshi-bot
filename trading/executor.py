@@ -39,9 +39,7 @@ _UNVERIFIED_ORDER_IDS = frozenset({"unknown", "none", "null"})
 
 def _is_verified_order_id(order_id: object) -> bool:
     return (
-        isinstance(order_id, str)
-        and bool(order_id.strip())
-        and order_id.strip().lower() not in _UNVERIFIED_ORDER_IDS
+        isinstance(order_id, str) and bool(order_id.strip()) and order_id.strip().lower() not in _UNVERIFIED_ORDER_IDS
     )
 
 
@@ -56,21 +54,13 @@ def classify_skip_category(reason: str | None) -> str:
         return "duplicate"
     if "concentration" in text or "per-prefix cap" in text:
         return "concentration"
-    if (
-        "illiquid" in text
-        or "near limit" in text
-        or "price unavailable" in text
-        or "not tradeable" in text
-    ):
+    if "illiquid" in text or "near limit" in text or "price unavailable" in text or "not tradeable" in text:
         return "liquidity"
     return "other"
 
 
 def _is_research_paper_review_signal(signal_meta: dict[str, Any]) -> bool:
-    return (
-        str(signal_meta.get("research_admission_status") or "")
-        == "decision_grade_candidate"
-    )
+    return str(signal_meta.get("research_admission_status") or "") == "decision_grade_candidate"
 
 
 def _correlated_exposure_prefix(market: Any) -> str:
@@ -126,13 +116,11 @@ class TradeExecutor:
         paper_trader: PaperTrader,
         live_submission_hold_path: Path | None = None,
     ):
-        self._rest         = rest_client
-        self._paper        = paper_trader
+        self._rest = rest_client
+        self._paper = paper_trader
         self._last_traded: dict[str, float] = {}
         self._live_submission_holds = LiveSubmissionHoldStore(
-            live_submission_hold_path
-            if live_submission_hold_path is not None
-            else LIVE_SUBMISSION_HOLD_PATH
+            live_submission_hold_path if live_submission_hold_path is not None else LIVE_SUBMISSION_HOLD_PATH
         )
         # Execution mode frozen at construction -- never re-derived from cfg or DB.
         # cfg.is_paper_trading may be mutated by CLI commands or tests after this
@@ -140,8 +128,8 @@ class TradeExecutor:
         self._is_paper: bool = cfg.is_paper_trading
         # Live session loss limit state
         self._session_start_balance: Optional[float] = None
-        self._live_halted:           bool             = False
-        self._shutdown_callback:     Optional[Callable] = None
+        self._live_halted: bool = False
+        self._shutdown_callback: Optional[Callable] = None
         log.info(
             "[EXECUTOR_STATE] pid=%s mode=%s bankroll_source=%s",
             __import__("os").getpid(),
@@ -165,8 +153,7 @@ class TradeExecutor:
         if self._session_start_balance is None:
             self._session_start_balance = balance
             log.info(
-                "[LOSS_LIMIT] Session start balance recorded: $%.2f "
-                "(halt at $%.2f loss, limit=%.0f%%)",
+                "[LOSS_LIMIT] Session start balance recorded: $%.2f (halt at $%.2f loss, limit=%.0f%%)",
                 balance,
                 cfg.bankroll * cfg.live_loss_limit_pct,
                 cfg.live_loss_limit_pct * 100,
@@ -195,7 +182,8 @@ class TradeExecutor:
                 self._last_traded[ticker] = now_mono - age_secs
                 log.debug(
                     "Cooldown seeded for %s from portfolio (%.1fh ago)",
-                    ticker, age_secs / 3600,
+                    ticker,
+                    age_secs / 3600,
                 )
 
     async def execute(self, candidate: Any) -> Optional[str]:
@@ -236,6 +224,7 @@ class TradeExecutor:
                 reason=skip_reason,
                 skip_category=classify_skip_category(skip_reason),
                 ticker=analysis.market.ticker,
+                side=analysis.side,
                 headline=analysis.news_item.headline[:80],
                 source=analysis.news_item.source,
                 method="research_decision_grade",
@@ -243,9 +232,7 @@ class TradeExecutor:
                 llm_magnitude=analysis.llm_magnitude,
                 model_probability=analysis.estimated_probability,
                 market_price=(
-                    float(analysis.executed_price_cents)
-                    if analysis.executed_price_cents is not None
-                    else 0.0
+                    float(analysis.executed_price_cents) if analysis.executed_price_cents is not None else 0.0
                 ),
                 edge=analysis.edge,
                 min_edge_threshold=self._min_edge_threshold(analysis),
@@ -258,7 +245,10 @@ class TradeExecutor:
             effective_min_edge = self._min_edge_threshold(analysis)
             method = (
                 "llm"
-                if any(value is not None for value in (analysis.llm_direction, analysis.llm_magnitude, analysis.llm_confidence))
+                if any(
+                    value is not None
+                    for value in (analysis.llm_direction, analysis.llm_magnitude, analysis.llm_confidence)
+                )
                 else "keyword"
             )
             log.debug(
@@ -272,13 +262,16 @@ class TradeExecutor:
                 "reason": skip_reason,
                 "skip_category": classify_skip_category(skip_reason),
                 "ticker": analysis.market.ticker,
+                "side": analysis.side,
                 "headline": analysis.news_item.headline[:80],
                 "source": analysis.news_item.source,
                 "method": method,
                 "llm_direction": analysis.llm_direction,
                 "llm_magnitude": analysis.llm_magnitude,
                 "model_probability": analysis.estimated_probability,
-                "market_price": float(analysis.executed_price_cents) if analysis.executed_price_cents is not None else 0.0,
+                "market_price": float(analysis.executed_price_cents)
+                if analysis.executed_price_cents is not None
+                else 0.0,
                 "edge": analysis.edge,
                 "min_edge_threshold": effective_min_edge,
                 "venue": self._venue_value(analysis.market),
@@ -307,8 +300,7 @@ class TradeExecutor:
             self._last_traded[analysis.market.ticker] = time.monotonic()
         else:
             log.debug(
-                "[DECISION] no_trade_id ticker=%s mode=%s side=%s "
-                "after successful validation",
+                "[DECISION] no_trade_id ticker=%s mode=%s side=%s after successful validation",
                 analysis.market.ticker,
                 "paper" if self._is_paper else "live",
                 analysis.side.upper(),
@@ -346,19 +338,19 @@ class TradeExecutor:
                 "price_available=True (side selector did not set canonical price)"
             )
         price_floor = 2 if self._is_paper else 3
-        price_ceil  = 98 if self._is_paper else 97
+        price_ceil = 98 if self._is_paper else 97
         if yes_price < price_floor or yes_price > price_ceil:
             return f"price {yes_price:.1f}c is near limit (too illiquid)"
 
         # Paper ticker cooldown (4h): prevents same ticker being spammed by a burst
         # of headlines on the same topic (e.g. 30 Iran-war articles in one poll cycle).
         if self._is_paper:
-            last    = self._last_traded.get(analysis.market.ticker, float("-inf"))
+            last = self._last_traded.get(analysis.market.ticker, float("-inf"))
             elapsed = time.monotonic() - last
             if elapsed < cfg.paper_ticker_cooldown:
                 return (
-                    f"paper cooldown: last trade {elapsed/3600:.1f}h ago "
-                    f"(cooldown={cfg.paper_ticker_cooldown//3600}h)"
+                    f"paper cooldown: last trade {elapsed / 3600:.1f}h ago "
+                    f"(cooldown={cfg.paper_ticker_cooldown // 3600}h)"
                 )
 
         # PROFIT-ALIGN-004 (2026-05-25): per-market-prefix open-position cap.
@@ -387,8 +379,7 @@ class TradeExecutor:
         for pos in self._paper.portfolio.open_positions(analysis.market.ticker):
             if pos.side != analysis.side:
                 return (
-                    f"opposing position exists: open {pos.side.upper()} "
-                    f"at est={pos.estimated_prob:.3f} -- no hedging"
+                    f"opposing position exists: open {pos.side.upper()} at est={pos.estimated_prob:.3f} -- no hedging"
                 )
             # Paper phase: allow same-side re-entry only if the estimated probability
             # has shifted significantly (>=0.07) OR market price has moved (>=5c).
@@ -396,7 +387,7 @@ class TradeExecutor:
             # which suppressed 11 valid follow-on signals over the first 30 days.
             analysis_price = float(analysis.executed_price_cents) if analysis.executed_price_cents is not None else 0.0
             if self._is_paper and PAPER_BLOCK_SAME_SIDE_DUPLICATE:
-                prob_delta_paper  = abs(pos.estimated_prob - analysis.estimated_probability)
+                prob_delta_paper = abs(pos.estimated_prob - analysis.estimated_probability)
                 price_delta_paper = abs(pos.entry_price_cents - analysis_price)
                 if prob_delta_paper < 0.07 and price_delta_paper < 5.0:
                     return (
@@ -404,7 +395,7 @@ class TradeExecutor:
                         f"est={pos.estimated_prob:.3f} (delta={prob_delta_paper:.3f}) "
                         f"-- prob shift too small to add position"
                     )
-            prob_delta  = abs(pos.estimated_prob - analysis.estimated_probability)
+            prob_delta = abs(pos.estimated_prob - analysis.estimated_probability)
             price_delta = abs(pos.entry_price_cents - analysis_price)
             if prob_delta < 0.02 and price_delta < 2.0:
                 return (
@@ -422,31 +413,20 @@ class TradeExecutor:
         # invariant; it should never fire in practice. The legacy midpoint fallback
         # (elif price_available / else 50) has been removed; it masked producer bugs.
         assert analysis.executed_price_cents is not None, (  # noqa: S101
-            "Site 1 F-08 gate failed: executed_price_cents is None at Site 2. "
-            "This is a bug in _validate control flow."
+            "Site 1 F-08 gate failed: executed_price_cents is None at Site 2. This is a bug in _validate control flow."
         )
         paper_unit_price = max(1, min(99, int(analysis.executed_price_cents)))
         if self._is_paper:
             # PROFIT-SIZING-001b: paper sizes by Kelly now (mirrors live, matches
             # paper_trader). Concentration pre-check uses the actual Kelly
             # contract cost rather than the retired flat-5 estimate.
-            trade_cost = (
-                contracts_from_dollars(analysis.capped_dollars, paper_unit_price)
-                * paper_unit_price
-                / 100.0
-            )
+            trade_cost = contracts_from_dollars(analysis.capped_dollars, paper_unit_price) * paper_unit_price / 100.0
         else:
             trade_cost = analysis.capped_dollars
         if self._is_paper and trade_cost > analysis.capped_dollars:
-            return (
-                f"paper contract cost ${trade_cost:.2f} exceeds capped dollars "
-                f"${analysis.capped_dollars:.2f}"
-            )
+            return f"paper contract cost ${trade_cost:.2f} exceeds capped dollars ${analysis.capped_dollars:.2f}"
         if self._is_paper and trade_cost > notional:
-            return (
-                f"paper contract cost ${trade_cost:.2f} exceeds notional bankroll "
-                f"${notional:.2f}"
-            )
+            return f"paper contract cost ${trade_cost:.2f} exceeds notional bankroll ${notional:.2f}"
         if not self._paper.portfolio.is_concentration_ok(
             ticker=analysis.market.ticker,
             additional_dollars=trade_cost,
@@ -467,13 +447,10 @@ class TradeExecutor:
             if self._live_halted:
                 return "LIVE HALTED: session loss limit reached -- all trading suspended"
 
-            last    = self._last_traded.get(analysis.market.ticker, float("-inf"))
+            last = self._last_traded.get(analysis.market.ticker, float("-inf"))
             elapsed = time.monotonic() - last
             if elapsed < cfg.live_ticker_cooldown:
-                return (
-                    f"cooldown: last trade {elapsed:.0f}s ago "
-                    f"(cooldown={cfg.live_ticker_cooldown}s)"
-                )
+                return f"cooldown: last trade {elapsed:.0f}s ago (cooldown={cfg.live_ticker_cooldown}s)"
             # Live balance check + session loss limit (single API call covers both)
             balance = self._rest.get_balance()
             if self._check_live_loss_limit(balance):
@@ -531,7 +508,8 @@ class TradeExecutor:
             except Exception as exc:
                 log.warning(
                     "[BLEND_REFETCH] %s fetch failed: %s -- falling back to candidate snapshot",
-                    ticker, exc,
+                    ticker,
+                    exc,
                 )
         else:
             fresh_market = candidate.market
@@ -546,8 +524,7 @@ class TradeExecutor:
             # itself tradeable; otherwise fail-closed.
             if not candidate.market.is_tradeable():
                 log.warning(
-                    "[BLEND_REFETCH] %s candidate market not tradeable and "
-                    "refetch returned None -- skipping",
+                    "[BLEND_REFETCH] %s candidate market not tradeable and refetch returned None -- skipping",
                     ticker,
                 )
                 return None
@@ -560,9 +537,9 @@ class TradeExecutor:
 
         if not fresh_market.is_tradeable():
             log.warning(
-                "[BLEND_REFETCH] %s not tradeable post-blend "
-                "(price_available=%s) -- skipping",
-                ticker, fresh_market.price_available,
+                "[BLEND_REFETCH] %s not tradeable post-blend (price_available=%s) -- skipping",
+                ticker,
+                fresh_market.price_available,
             )
             return None
 
@@ -572,14 +549,14 @@ class TradeExecutor:
         # Re-derive side + executable price against the fresh book.
         try:
             from analysis.side_selection import select_side, compute_edge
-            new_side, new_executed_cents = select_side(
-                fresh_market, candidate.blended_probability
-            )
+
+            new_side, new_executed_cents = select_side(fresh_market, candidate.blended_probability)
             edges = compute_edge(fresh_market, candidate.blended_probability)
         except ValueError as exc:
             log.debug(
                 "[BLEND_REFETCH] %s side selection failed post-refetch: %s",
-                ticker, exc,
+                ticker,
+                exc,
             )
             return None
 
@@ -672,8 +649,7 @@ class TradeExecutor:
 
         if not self._live_submission_holds.can_submit(analysis.market.ticker):
             log.error(
-                "[LIVE_GUARD] BLOCKED live order for %s: unknown submission hold is active "
-                "or unavailable.",
+                "[LIVE_GUARD] BLOCKED live order for %s: unknown submission hold is active or unavailable.",
                 analysis.market.ticker,
             )
             return None
@@ -688,12 +664,11 @@ class TradeExecutor:
                 analysis.market.ticker,
             )
             return None
-        price_cents  = max(1, min(99, int(analysis.executed_price_cents)))
-        contracts    = contracts_from_dollars(analysis.capped_dollars, float(price_cents))
+        price_cents = max(1, min(99, int(analysis.executed_price_cents)))
+        contracts = contracts_from_dollars(analysis.capped_dollars, float(price_cents))
 
         if contracts <= 0:
-            log.warning("Live order aborted: contracts=0 for $%.2f @ %dc",
-                        analysis.capped_dollars, price_cents)
+            log.warning("Live order aborted: contracts=0 for $%.2f @ %dc", analysis.capped_dollars, price_cents)
             return None
 
         cost_dollars = contracts * price_cents / 100.0
@@ -705,11 +680,18 @@ class TradeExecutor:
             "price_cents": price_cents,
             "cost_dollars": cost_dollars,
         }
+        signal_meta = self._signal_meta(analysis)
+        intent_kwargs = {
+            **submission_summary,
+            "venue": self._venue_value(analysis.market),
+        }
+        if signal_meta:
+            intent_kwargs["signal_meta"] = signal_meta
 
         try:
             await write_trade_log_async(
                 trade_log.log_live_submission_intent,
-                **submission_summary,
+                **intent_kwargs,
             )
         except Exception:
             log.error(
@@ -733,14 +715,16 @@ class TradeExecutor:
         ) -> None:
             if not self._live_submission_holds.hold(analysis.market.ticker):
                 log.error(
-                    "[LIVE_GUARD] Submission reservation persistence failed for %s; "
-                    "blocking later live posts.",
+                    "[LIVE_GUARD] Submission reservation persistence failed for %s; blocking later live posts.",
                     analysis.market.ticker,
                 )
             unknown_kwargs = {
                 **submission_summary,
                 "outcome": outcome,
+                "venue": self._venue_value(analysis.market),
             }
+            if signal_meta:
+                unknown_kwargs["signal_meta"] = signal_meta
             if venue_order_id is not None:
                 unknown_kwargs["venue_order_id"] = venue_order_id
             try:
@@ -756,8 +740,13 @@ class TradeExecutor:
 
         log.info(
             "[LIVE] Submitting one order: %s %s %d @ %dc | cost=$%.2f | edge=%+.3f | confidence=%.2f",
-            analysis.market.ticker, analysis.side.upper(), contracts,
-            price_cents, cost_dollars, analysis.edge, analysis.confidence,
+            analysis.market.ticker,
+            analysis.side.upper(),
+            contracts,
+            price_cents,
+            cost_dollars,
+            analysis.edge,
+            analysis.confidence,
         )
 
         loop = asyncio.get_running_loop()
@@ -819,12 +808,12 @@ class TradeExecutor:
                 "order_id": order_id,
                 **submission_summary,
                 "status": status,
+                "venue": self._venue_value(analysis.market),
                 "model_probability": analysis.estimated_probability,
                 "market_price": float(analysis.executed_price_cents),
                 "edge": analysis.edge,
                 "min_edge_threshold": self._min_edge_threshold(analysis),
             }
-            signal_meta = self._signal_meta(analysis)
             if signal_meta:
                 live_order_kwargs["signal_meta"] = signal_meta
             await write_trade_log_async(trade_log.log_live_order, **live_order_kwargs)
@@ -852,14 +841,16 @@ class TradeExecutor:
             )
         log.info(
             "[LIVE] Order placed: %s | status=%s | filled=%d",
-            order_id, status, filled,
+            order_id,
+            status,
+            filled,
         )
         return order_id
 
     def status(self) -> dict:
         return {
-            "mode":              "paper" if self._is_paper else "live",
+            "mode": "paper" if self._is_paper else "live",
             "notional_bankroll": self._paper.get_notional_bankroll(),
-            "ticker_cooldowns":  len(self._last_traded),
-            "portfolio":         self._paper.portfolio.summary(),
+            "ticker_cooldowns": len(self._last_traded),
+            "portfolio": self._paper.portfolio.summary(),
         }

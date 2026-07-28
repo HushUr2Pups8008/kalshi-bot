@@ -48,6 +48,13 @@ def test_missing_checkpoint_fails_open(tmp_path):
     assert list(loaded) == []
 
 
+def test_missing_checkpoint_fails_open_without_warning(tmp_path, caplog):
+    with caplog.at_level(logging.WARNING, logger="feeds.seen_state"):
+        assert list(load_seen_ids(tmp_path / "rss_seen_ids.json", max_seen=5_000)) == []
+
+    assert not caplog.records
+
+
 def test_corrupt_checkpoint_fails_open(tmp_path):
     path = tmp_path / "rss_seen_ids.json"
     path.write_text("not-json", encoding="utf-8")

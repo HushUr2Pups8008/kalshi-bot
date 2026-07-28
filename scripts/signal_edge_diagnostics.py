@@ -102,6 +102,9 @@ def classify_skip_reason(record: dict[str, Any]) -> str:
     reason = str(record.get("reason") or "").lower()
     edge = safe_float(record.get("edge"))
     min_edge = safe_float(record.get("min_edge_threshold"))
+    gate_prefix = reason.split("_", 1)[0]
+    if len(gate_prefix) == 2 and gate_prefix[0] == "g" and gate_prefix[1].isdigit():
+        return "risk_gate"
     if "duplicate" in reason or "same-signal" in reason:
         return "duplicate"
     if "illiquid" in reason or "near limit" in reason or "price unavailable" in reason or "not tradeable" in reason:
@@ -192,11 +195,23 @@ def _llm_edge_bucket(abs_edge: float) -> str:
     return "strong"
 
 
-def _llm_decision_impact_classification(*, est_prob: float, market_price: float) -> str:
-    abs_edge = abs(est_prob - market_price)
-    if abs(est_prob - 0.5) < LLM_NEAR_NEUTRAL_PROB_MAX and abs(market_price - 0.5) < LLM_MARKET_NEUTRAL_MAX and abs_edge < LLM_ZERO_EDGE_MAX:
+def _llm_decision_impact_classification(
+    *,
+    est_prob: float,
+    market_price: float | None,
+    executable_edge: float | None = None,
+) -> str:
+    """Classify model impact without mixing cents and probability units."""
+    if executable_edge is not None:
+        abs_edge = max(0.0, executable_edge)
+    elif market_price is not None:
+        abs_edge = abs(est_prob - market_price)
+    else:
+        return "weak_signal"
+    market_for_neutral = market_price if market_price is not None else 0.5
+    if abs(est_prob - 0.5) < LLM_NEAR_NEUTRAL_PROB_MAX and abs(market_for_neutral - 0.5) < LLM_MARKET_NEUTRAL_MAX and abs_edge < LLM_ZERO_EDGE_MAX:
         return "neutral_confirmation"
-    if abs_edge >= LLM_TRADE_CANDIDATE_EDGE_MIN:
+    if executable_edge is not None and abs_edge >= LLM_TRADE_CANDIDATE_EDGE_MIN:
         return "trade_candidate"
     if abs_edge >= LLM_MEANINGFUL_EDGE_MIN:
         return "meaningful_signal"
@@ -210,6 +225,9 @@ def _default_llm_value_add() -> dict[str, Any]:
         "meaningful_signals": 0,
         "non_zero_edge_outputs": 0,
         "trade_candidates": 0,
+        "admitted_trade_candidates": 0,
+        "blocked_trade_candidates": 0,
+        "pending_trade_candidates": 0,
         "llm_created_edge": 0,
         "probability_movement_buckets": Counter(),
         "edge_magnitude_buckets": Counter(),
@@ -415,8 +433,13 @@ def attach_opportunities(
                 "llm_direction": opp["llm_direction"],
                 "llm_magnitude": opp["llm_magnitude"],
                 "estimated_probability": opp["estimated_probability"],
-                "market_price": opp["entry_price_cents"],
+                # The opportunity quote is selected-side cents, not a YES
+                # probability. Do not fabricate a midpoint for an orphaned
+                # OPPORTUNITY record.
+                "market_price": None,
                 "edge": opp["edge"],
+                "opportunity_side": opp["side"],
+                "executable_price_cents": opp["entry_price_cents"],
                 "signal_ts": None,
                 "opportunity_ts": opp["ts"],
                 "outcome": "opportunity no recorded outcome",
@@ -425,9 +448,12 @@ def attach_opportunities(
 
         row = unmatched_rows[target_idx]
         row["opportunity_ts"] = opp["ts"]
-        row["estimated_probability"] = row["estimated_probability"] or opp["estimated_probability"]
-        row["market_price"] = row["market_price"] or opp["entry_price_cents"]
-        row["edge"] = row["edge"] if row["edge"] is not None else opp["edge"]
+        if row["estimated_probability"] is None:
+            row["estimated_probability"] = opp["estimated_probability"]
+        if opp["edge"] is not None:
+            row["edge"] = opp["edge"]
+        row["opportunity_side"] = opp["side"]
+        row["executable_price_cents"] = opp["entry_price_cents"]
         row["method"] = row["method"] or opp["method"]
         row["llm_direction"] = row["llm_direction"] or opp["llm_direction"]
         row["llm_magnitude"] = row["llm_magnitude"] or opp["llm_magnitude"]
@@ -463,6 +489,7 @@ def attach_outcomes(
             row["final_ts"] = event["ts"]
             row["outcome"] = label_builder(event)
             row["skip_reason"] = event.get("reason")
+            row["skip_type"] = event.get("skip_type")
             queues[key].popleft()
             break
         else:
@@ -481,6 +508,7 @@ def attach_outcomes(
                 row["final_ts"] = event["ts"]
                 row["outcome"] = label_builder(event)
                 row["skip_reason"] = event.get("reason")
+                row["skip_type"] = event.get("skip_type")
                 ticker_only[ticker].popleft()
                 break
 
@@ -503,6 +531,7 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
             "below_threshold": 0,
             "duplicate": 0,
             "liquidity": 0,
+            "risk_gate": 0,
             "other": 0,
         },
         "llm_observability": {
@@ -681,6 +710,7 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
                 "llm_direction": str(record.get("llm_direction") or "").strip() or None,
                 "llm_magnitude": str(record.get("llm_magnitude") or "").strip() or None,
                 "estimated_probability": safe_float(record.get("estimated_probability")),
+                "side": str(record.get("side") or "").strip().lower() or None,
                 # F-11 P1-C: read with fallback; emit under canonical key only
                 "entry_price_cents": safe_float(
                     record.get("entry_price_cents") if record.get("entry_price_cents") is not None
@@ -728,6 +758,8 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
             if event["skip_type"] == "below_threshold"
             else "opportunity skipped: liquidity"
             if event["skip_type"] == "liquidity"
+            else "opportunity skipped: risk gate"
+            if event["skip_type"] == "risk_gate"
             else "opportunity skipped: other"
         ),
     )
@@ -775,16 +807,35 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
             )
         if not is_probe and row.get("pre_llm_would_block_and_useful") is True:
             stats["llm_observability"]["pre_llm_would_block_and_useful"] += 1
-        if not is_probe and row.get("method") == "llm" and row.get("estimated_probability") is not None and row.get("market_price") is not None:
+        if not is_probe and row.get("method") == "llm" and row.get("estimated_probability") is not None:
             est_prob = float(row["estimated_probability"])
-            market_price = float(row["market_price"])
+            market_price = safe_float(row.get("market_price"))
+            opportunity_edge = (
+                safe_float(row.get("edge"))
+                if row.get("opportunity_ts") is not None
+                else None
+            )
+            if market_price is None and opportunity_edge is None:
+                continue
             abs_move = abs(est_prob - 0.5)
-            edge = est_prob - market_price
-            abs_edge = abs(edge)
+            edge = (
+                opportunity_edge
+                if opportunity_edge is not None
+                else est_prob - float(market_price)
+            )
+            abs_edge = max(0.0, edge) if opportunity_edge is not None else abs(edge)
             movement_bucket = _llm_probability_movement_bucket(abs_move)
             edge_bucket = _llm_edge_bucket(abs_edge)
-            impact = _llm_decision_impact_classification(est_prob=est_prob, market_price=market_price)
-            created_edge = abs(market_price - 0.5) < LLM_MARKET_NEUTRAL_MAX and abs_edge >= LLM_ZERO_EDGE_MAX
+            impact = _llm_decision_impact_classification(
+                est_prob=est_prob,
+                market_price=market_price,
+                executable_edge=opportunity_edge,
+            )
+            created_edge = (
+                market_price is not None
+                and abs(market_price - 0.5) < LLM_MARKET_NEUTRAL_MAX
+                and abs_edge >= LLM_ZERO_EDGE_MAX
+            )
 
             row["llm_probability_movement"] = abs_move
             row["llm_probability_movement_bucket"] = movement_bucket
@@ -792,6 +843,29 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
             row["llm_edge_bucket"] = edge_bucket
             row["llm_created_edge"] = created_edge
             row["llm_decision_impact"] = impact
+            row["llm_edge_basis"] = (
+                "gross_executable"
+                if opportunity_edge is not None
+                else "gross_midpoint"
+            )
+            # OPPORTUNITY does not contain the pinned fee schedule, fill role,
+            # or rounding state required for a fee-net claim.
+            row["llm_fee_net_status"] = "unscored"
+            candidate_outcome = None
+            if impact == "trade_candidate":
+                if row.get("outcome") == "executed":
+                    candidate_outcome = "admitted"
+                    stats["llm_value_add"]["admitted_trade_candidates"] += 1
+                elif str(row.get("outcome") or "").startswith("opportunity skipped:"):
+                    if row.get("skip_type") == "risk_gate":
+                        candidate_outcome = "blocked_by_risk_gate"
+                    else:
+                        candidate_outcome = "blocked_by_execution_gate"
+                    stats["llm_value_add"]["blocked_trade_candidates"] += 1
+                else:
+                    candidate_outcome = "pending"
+                    stats["llm_value_add"]["pending_trade_candidates"] += 1
+            row["llm_candidate_outcome"] = candidate_outcome
 
             stats["llm_value_add"]["llm_rows"] += 1
             stats["llm_value_add"]["probability_movement_buckets"][movement_bucket] += 1
@@ -830,12 +904,13 @@ def summarize(path: Path, since: datetime | None, until: datetime | None, exclud
                     abs_edge=abs_edge,
                     impact=impact,
                 )
-            _update_llm_segment_metrics(
-                llm_price_band_segments[_llm_market_price_band(market_price)],
-                movement_bucket=movement_bucket,
-                abs_edge=abs_edge,
-                impact=impact,
-            )
+            if market_price is not None:
+                _update_llm_segment_metrics(
+                    llm_price_band_segments[_llm_market_price_band(market_price)],
+                    movement_bucket=movement_bucket,
+                    abs_edge=abs_edge,
+                    impact=impact,
+                )
             if row.get("age_at_analysis_seconds") is not None:
                 _update_llm_segment_metrics(
                     llm_timing_segments[_llm_timing_bucket(float(row["age_at_analysis_seconds"]))],
@@ -989,8 +1064,13 @@ def format_llm_value_rows(rows: list[dict[str, Any]], limit: int) -> list[str]:
             f"source={row['source'] or 'n/a'}  "
             f"est_prob={fmt_prob(row.get('estimated_probability'))}  "
             f"market_prob={fmt_prob(row.get('market_price'))}  "
+            f"side={row.get('opportunity_side') or 'n/a'}  "
+            f"exec_cents={fmt_prob(row.get('executable_price_cents'))}  "
             f"edge={fmt_prob(row.get('edge'))}  "
+            f"basis={row.get('llm_edge_basis') or 'n/a'}  "
+            f"fee_net={row.get('llm_fee_net_status') or 'n/a'}  "
             f"impact={row.get('llm_decision_impact') or 'n/a'}  "
+            f"candidate={row.get('llm_candidate_outcome') or 'n/a'}  "
             f"headline={row['headline'][:80] if row['headline'] else 'n/a'}"
         )
     return lines
@@ -1032,6 +1112,7 @@ def print_summary(
     print(f"  Non-zero below-threshold  : {stats['skip_breakdown']['below_threshold']}")
     print(f"  Duplicate-position skips  : {stats['skip_breakdown']['duplicate']}")
     print(f"  Liquidity skips           : {stats['skip_breakdown']['liquidity']}")
+    print(f"  Risk-gate skips           : {stats['skip_breakdown']['risk_gate']}")
     print(f"  Other skip reasons        : {stats['skip_breakdown']['other']}")
 
     print()
@@ -1067,7 +1148,10 @@ def print_summary(
     print(f"  Near-neutral outputs      : {llm_value['near_neutral_outputs']} ({_pct(llm_value['near_neutral_outputs'], llm_rows)})")
     print(f"  Non-zero edge outputs     : {llm_value['non_zero_edge_outputs']} ({_pct(llm_value['non_zero_edge_outputs'], llm_rows)})")
     print(f"  Meaningful signals        : {llm_value['meaningful_signals']} ({_pct(llm_value['meaningful_signals'], llm_rows)})")
-    print(f"  Trade candidates          : {llm_value['trade_candidates']} ({_pct(llm_value['trade_candidates'], llm_rows)})")
+    print(f"  Model gross-edge candidates (fee unscored): {llm_value['trade_candidates']} ({_pct(llm_value['trade_candidates'], llm_rows)})")
+    print(f"  Candidates admitted       : {llm_value['admitted_trade_candidates']}")
+    print(f"  Candidates blocked        : {llm_value['blocked_trade_candidates']}")
+    print(f"  Candidates pending        : {llm_value['pending_trade_candidates']}")
     print(
         f"  LLM created edge @0.50    : {llm_value['llm_created_edge']} "
         f"({_pct(llm_value['llm_created_edge'], llm_rows)})"

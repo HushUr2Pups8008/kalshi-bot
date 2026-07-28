@@ -9,13 +9,20 @@ Funnel
   Structured records considered : 8
   Pre-signal rejections         : 2
   Signals logged                : 2
-  Opportunities logged          : 1 (50.0% of signals)
+  Opportunities logged          : 1
   No-signal exits               : partially observable via ANALYSIS_REJECTED
   Executor skips               : 1
-  Executions                   : 2
-  Note                         : window mixes stages from different decision lifecycles
-    Paper trades               : 1
-    Live orders                : 1
+  Paper-trade records          : 1
+  Live submission intents      : 0
+  Live order submissions       : 1
+  Linkable opportunities        : 0
+  Linked outcomes               : G7=0 zero_cap=0 other=0 paper_trades=0 live_submissions=0 unknown_live_submissions=0 intents_without_matching_terminal_journal=0 conflicts=0 receipt_conflicts=0 pending=0
+  Paper-trade lifecycle coverage : unavailable (0/1 linked)
+  Live submission linkage       : 0/1 records linked; not fill or P&L evidence
+  Live submission unknown       : 0/0 records linked; reconciliation required
+  Live submission intent lineage: 0/0 records linked; 0 without matching terminal journal; not fill or P&L evidence; reconciliation required
+  Linkage exclusions             : identity_conflicts=0 identity_incomplete=0 reused_opportunity=0 quarantined=0 terminal_evidence_conflicts=0 orphan_skips=0 orphan_paper_trades=0 orphan_live_submissions=0 orphan_unknown_live_submissions=0 orphan_live_intents=0
+  Same-window scope              : lifecycle links only; settlement and mark P&L excluded
 
 Match Attribution
   Match diagnostics            : 0
@@ -100,7 +107,8 @@ Path Contribution (decision-stage records)
   1  price_fade
   1  fade_tweet
 
-Execution Path Contribution
+Trade and Submission Path Contribution
+  Scope: paper-trade records and live submissions; live submissions are not fill or P&L evidence.
   1  news
   1  price_fade
 

@@ -1144,11 +1144,7 @@ def print_capital_guard_shadow_status(
         "configured-" if sources[1].endswith(" fallback") else ""
     ) + ("on" if collection_enabled else "off")
     capture_summary = f"capture={capture_state} ({sources[0]})"
-    collection_summary = (
-        f"collection={collection_state} ({sources[1]}) unwired-exact-source"
-        if collection_enabled
-        else f"collection={collection_state} ({sources[1]})"
-    )
+    collection_summary = f"collection={collection_state} ({sources[1]})"
     prefix = f"capital_guard_shadow: {capture_summary} {collection_summary}"
     if not capture_enabled and not collection_enabled:
         print(prefix)
@@ -1156,7 +1152,12 @@ def print_capital_guard_shadow_status(
 
     db_path = repo_root / "data" / "capital_guard_shadow.db"
     if not db_path.is_file():
-        print(f"{prefix} db=missing")
+        exact_source_status = (
+            " exact-source=blocked-isolated-db-missing"
+            if collection_enabled
+            else ""
+        )
+        print(f"{prefix}{exact_source_status} db=missing")
         return
 
     try:
@@ -1237,7 +1238,12 @@ def print_capital_guard_shadow_status(
                 counts["current_heads"] = None
             exact_schema_contract = capital_guard_shadow_schema_contract_matches(conn)
     except (OSError, sqlite3.Error) as exc:
-        print(f"{prefix} db=error:{type(exc).__name__}")
+        exact_source_status = (
+            " exact-source=blocked-isolated-db-invalid"
+            if collection_enabled
+            else ""
+        )
+        print(f"{prefix}{exact_source_status} db=error:{type(exc).__name__}")
         return
 
     row_summary = ",".join(
@@ -1251,8 +1257,15 @@ def print_capital_guard_shadow_status(
         if not missing_tables and not unexpected_tables and exact_schema_contract
         else "mismatch"
     )
+    exact_source_status = ""
+    if collection_enabled:
+        exact_source_status = (
+            " exact-source=runtime-eligible"
+            if integrity == "ok" and schema_status == "ok"
+            else " exact-source=blocked-isolated-db-invalid"
+        )
     print(
-        f"{prefix} integrity={integrity} "
+        f"{prefix}{exact_source_status} integrity={integrity} "
         f"tables={len(present_tables)}/{len(CAPITAL_GUARD_SHADOW_TABLES)} "
         f"schema={schema_status} missing={missing_summary} "
         f"unexpected={unexpected_summary} rows={row_summary}"

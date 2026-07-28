@@ -142,8 +142,7 @@ def _market(
         open_interest=50,
         close_time=close_time,
         status="active",
-        regime_weights=regime_weights
-        or {"fast": 1.0, "interpretation": 0.0, "structural": 0.0},
+        regime_weights=regime_weights or {"fast": 1.0, "interpretation": 0.0, "structural": 0.0},
         # P-5 CR-C: legacy fixtures need post-P0 pricing surface fields
         # populated so the new __getattribute__ guard does not raise.
         yes_bid_cents=49,
@@ -171,7 +170,9 @@ def _analysis(
         news_item=None,
         market=market,
         estimated_probability=probability,
-        executed_price_cents=int(round(market.yes_price)),  # F-16: canonical post-P0; __post_init__ mirrors to market_yes_price
+        executed_price_cents=int(
+            round(market.yes_price)
+        ),  # F-16: canonical post-P0; __post_init__ mirrors to market_yes_price
         edge=probability - market.yes_prob,
         side="yes",
         kelly_fraction=0.0,
@@ -232,10 +233,7 @@ def _evidence(
         source=source,
         source_class=source_class,
         headline=f"Evidence {evidence_id}",
-        ingested_ts=(
-            ingested_ts
-            or datetime(2026, 4, 18, 12, tzinfo=UTC).isoformat()
-        ),
+        ingested_ts=(ingested_ts or datetime(2026, 4, 18, 12, tzinfo=UTC).isoformat()),
         content_hash=f"hash-{evidence_id}",
         update_type="state",
         dossier_version_before=1,
@@ -630,9 +628,7 @@ async def test_capital_guard_capture_process_control_exceptions_propagate(
         store=FakeStore(),
         logger=SpyLogger(),
         open_exposure_drawdown_provider=lambda: 0.21,
-        capital_guard_capture_sink=SpyCapitalGuardCaptureSink(
-            failure=failure_type("stop")
-        ),
+        capital_guard_capture_sink=SpyCapitalGuardCaptureSink(failure=failure_type("stop")),
         is_paper_mode=True,
     )
 
@@ -671,9 +667,7 @@ async def test_capital_guard_capture_ignores_non_targeted_blocks():
         is_paper_mode=True,
     )
 
-    result = await task.process_fast_lane_result(
-        _analysis(market=_market(liquidity_dollars=Decimal("0")))
-    )
+    result = await task.process_fast_lane_result(_analysis(market=_market(liquidity_dollars=Decimal("0"))))
 
     assert result.trade_blocked_reason == "G7_zero_liquidity"
     assert sink.envelopes == []
@@ -700,9 +694,7 @@ async def test_capital_guard_capture_uses_normalized_report_venue():
 
 
 @pytest.mark.asyncio
-async def test_computed_polymarket_marks_flow_through_startup_and_bind_g7(
-    tmp_path: Path, monkeypatch
-):
+async def test_computed_polymarket_marks_flow_through_startup_and_bind_g7(tmp_path: Path, monkeypatch):
     db = tmp_path / "paper.db"
     with sqlite3.connect(db) as conn:
         conn.execute(
@@ -769,14 +761,13 @@ async def test_computed_polymarket_marks_flow_through_startup_and_bind_g7(
         store=FakeStore(),
         logger=logger,
         readiness_evaluator=capture_and_evaluate,
-        open_exposure_drawdown_provider=lambda: _paper_open_exposure_drawdown_snapshot(
-            paper
-        ),
+        open_exposure_drawdown_provider=lambda: _paper_open_exposure_drawdown_snapshot(paper),
         is_paper_mode=True,
     )
 
-    with patch("polymarket.public_client.PolymarketPublicClient", _FakePoly), patch(
-        "kalshi.rest_client.KalshiRestClient", _FakeKalshi
+    with (
+        patch("polymarket.public_client.PolymarketPublicClient", _FakePoly),
+        patch("kalshi.rest_client.KalshiRestClient", _FakeKalshi),
     ):
         result = await task.process_fast_lane_result(_analysis())
 
@@ -890,11 +881,13 @@ async def test_lane_skip_flag_emits_no_data_lane_events(monkeypatch):
 async def test_readiness_gate_summary_logs_g4_as_binding_constraint():
     queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
     logger = SpyLogger()
-    market = _market(regime_weights={
-        "fast": 1 / 3,
-        "interpretation": 1 / 3,
-        "structural": 1 / 3,
-    })
+    market = _market(
+        regime_weights={
+            "fast": 1 / 3,
+            "interpretation": 1 / 3,
+            "structural": 1 / 3,
+        }
+    )
     task = BlendTask(
         trading_queue=queue,
         store=FakeStore(),
@@ -1029,22 +1022,14 @@ async def test_stale_accumulation_without_trigger_still_fails_g6():
     assert result.readiness_decision.recency_score is not None
     assert result.readiness_decision.recency_threshold == pytest.approx(0.30)
     assert result.readiness_decision.recency_distance < 0
-    assert logger.gate_summary_records[0]["recency_score"] == pytest.approx(
-        result.readiness_decision.recency_score
-    )
+    assert logger.gate_summary_records[0]["recency_score"] == pytest.approx(result.readiness_decision.recency_score)
     assert logger.gate_summary_records[0]["recency_threshold"] == pytest.approx(0.30)
     assert logger.gate_summary_records[0]["recency_distance"] == pytest.approx(
         result.readiness_decision.recency_distance
     )
-    assert logger.records[0]["recency_score"] == pytest.approx(
-        result.readiness_decision.recency_score
-    )
-    assert logger.skipped_records[0]["recency_score"] == pytest.approx(
-        result.readiness_decision.recency_score
-    )
-    assert logger.skipped_records[0]["recency_distance"] == pytest.approx(
-        result.readiness_decision.recency_distance
-    )
+    assert logger.records[0]["recency_score"] == pytest.approx(result.readiness_decision.recency_score)
+    assert logger.skipped_records[0]["recency_score"] == pytest.approx(result.readiness_decision.recency_score)
+    assert logger.skipped_records[0]["recency_distance"] == pytest.approx(result.readiness_decision.recency_distance)
 
 
 @pytest.mark.asyncio
@@ -1113,10 +1098,7 @@ async def test_trigger_evidence_source_class_counts_for_g2():
 
     assert result.ready is True
     assert result.trade_blocked_reason is None
-    assert (
-        "G2_evidence_source_class_diversity"
-        not in result.readiness_decision.failure_reasons
-    )
+    assert "G2_evidence_source_class_diversity" not in result.readiness_decision.failure_reasons
 
 
 @pytest.mark.asyncio
@@ -1171,10 +1153,7 @@ async def test_single_source_allowed_and_count_tracked(monkeypatch):
 
     result = await task.process_fast_lane_result(_analysis())
 
-    assert (
-        "G2_evidence_source_class_diversity"
-        not in result.readiness_decision.failure_reasons
-    )
+    assert "G2_evidence_source_class_diversity" not in result.readiness_decision.failure_reasons
     assert result.readiness_decision.source_class_count == 1
     if result.candidate is not None:
         assert result.candidate.signal_meta["evidence_source_class_count"] == 1
@@ -1266,6 +1245,7 @@ async def test_calibration_scaling_applied_to_lane_inputs():
     def recording_blender(**kwargs) -> BlendResult:  # noqa: ANN003
         captured["fast_conf"] = kwargs["fast"].confidence
         from analysis.decision_blender import blend as real_blend
+
         return real_blend(**kwargs)
 
     class HalfScaleCalibration:
@@ -1296,6 +1276,7 @@ async def test_no_calibration_scaling_when_calibration_is_none():
     def recording_blender(**kwargs) -> BlendResult:  # noqa: ANN003
         captured["fast_conf"] = kwargs["fast"].confidence
         from analysis.decision_blender import blend as real_blend
+
         return real_blend(**kwargs)
 
     task = BlendTask(
@@ -1363,7 +1344,9 @@ def _analysis_with_news() -> SignalAnalysis:
         news_item=_news_item_for_obs003(),
         market=market,
         estimated_probability=0.72,
-        executed_price_cents=int(round(market.yes_price)),  # F-16: canonical post-P0; __post_init__ mirrors to market_yes_price
+        executed_price_cents=int(
+            round(market.yes_price)
+        ),  # F-16: canonical post-P0; __post_init__ mirrors to market_yes_price
         edge=0.72 - market.yes_prob,
         side="yes",
         kelly_fraction=0.0,
@@ -1434,8 +1417,7 @@ async def test_blocked_blend_emits_skipped_record(trade_blocked_reason: str) -> 
     assert logger.records[0]["trade_blocked_reason"] == trade_blocked_reason
     # NEW: SKIPPED also emits exactly once with the same reason.
     assert len(logger.skipped_records) == 1, (
-        f"expected one BlendTask-emitted SKIPPED record for {trade_blocked_reason}; "
-        f"got {len(logger.skipped_records)}"
+        f"expected one BlendTask-emitted SKIPPED record for {trade_blocked_reason}; got {len(logger.skipped_records)}"
     )
     assert logger.skipped_records[0]["reason"] == trade_blocked_reason
     assert logger.skipped_records[0]["ticker"] == "KXBLEND-1"
@@ -1473,9 +1455,7 @@ async def test_unblocked_blend_does_not_emit_blendtask_skipped_record() -> None:
     assert result.trade_blocked_reason is None
     assert queue.qsize() == 1
     assert len(logger.records) == 1  # BLEND_DECISION still fires
-    assert logger.skipped_records == [], (
-        "BlendTask must not emit SKIPPED on the happy path"
-    )
+    assert logger.skipped_records == [], "BlendTask must not emit SKIPPED on the happy path"
 
 
 @pytest.mark.asyncio
@@ -1608,11 +1588,7 @@ async def test_obs003_blocked_path_writes_via_injected_logger_log_skipped(
     await task.process_fast_lane_result(_analysis())
 
     # Find the SKIPPED-emission write among the captured calls.
-    skipped_writes = [
-        (writer, args, kwargs)
-        for writer, args, kwargs in spy_calls
-        if writer == logger.log_skipped
-    ]
+    skipped_writes = [(writer, args, kwargs) for writer, args, kwargs in spy_calls if writer == logger.log_skipped]
     assert len(skipped_writes) == 1, (
         "BlendTask must call `write_trade_log_async(logger.log_skipped, ...)` "
         f"exactly once on the blocked-reason path; got {len(skipped_writes)} "
@@ -1622,10 +1598,9 @@ async def test_obs003_blocked_path_writes_via_injected_logger_log_skipped(
     # Bypass-detection: assert the writer is NOT the module-level
     # `trade_log.log_skipped` (the un-injected fallback).
     from utils.logger import trade_log as _module_trade_log
+
     bypass_writes = [
-        (writer, args, kwargs)
-        for writer, args, kwargs in spy_calls
-        if writer == _module_trade_log.log_skipped
+        (writer, args, kwargs) for writer, args, kwargs in spy_calls if writer == _module_trade_log.log_skipped
     ]
     assert bypass_writes == [], (
         "BlendTask must not bypass the injected logger; "
@@ -1672,14 +1647,15 @@ async def test_obs003_skipped_payload_carries_required_keys() -> None:
         "market_price",
         "edge",
         "min_edge_threshold",
+        "side",
+        "venue",
         # `signal_meta` is conditional on the upstream analysis carrying
         # signal_meta (mirrors the executor's `if signal_meta:` guard at
         # trading/executor.py:151). Not part of the always-required set.
     }
     missing = required_keys - record.keys()
     assert missing == set(), (
-        f"BlendTask SKIPPED payload missing executor-compatible keys: {missing}. "
-        f"Got keys: {sorted(record.keys())}"
+        f"BlendTask SKIPPED payload missing executor-compatible keys: {missing}. Got keys: {sorted(record.keys())}"
     )
 
     # Headline-truncation parity: the executor truncates to 80 chars at
@@ -1766,18 +1742,14 @@ def _analysis_for_series(ticker: str) -> SignalAnalysis:
 )
 def test_series_prefix_extraction(ticker: str, expected_prefix: str) -> None:
     """The `_series_prefix` helper splits on `-` and returns the first component."""
-    helper = getattr(_bt_mod, "_series_prefix", None) or getattr(
-        _bt_mod.BlendTask, "_series_prefix", None
-    )
+    helper = getattr(_bt_mod, "_series_prefix", None) or getattr(_bt_mod.BlendTask, "_series_prefix", None)
     assert helper is not None, "_series_prefix helper must exist on BlendTask or module"
     assert helper(ticker) == expected_prefix
 
 
 def test_series_prefix_raises_on_empty_ticker() -> None:
     """Empty ticker must raise rather than return "" (silent-failure-hunter EXEC-002)."""
-    helper = getattr(_bt_mod, "_series_prefix", None) or getattr(
-        _bt_mod.BlendTask, "_series_prefix", None
-    )
+    helper = getattr(_bt_mod, "_series_prefix", None) or getattr(_bt_mod.BlendTask, "_series_prefix", None)
     assert helper is not None
     with pytest.raises(ValueError, match=r"empty or null ticker"):
         helper("")
@@ -1806,9 +1778,7 @@ def test_series_prefix_polymarket_independent_contests_get_distinct_prefixes() -
     on the Alaska Senate race would suppress an unrelated Michigan Senate
     trade inside the correlation window. The contest stem keeps them apart.
     """
-    helper = getattr(_bt_mod, "_series_prefix", None) or getattr(
-        _bt_mod.BlendTask, "_series_prefix", None
-    )
+    helper = getattr(_bt_mod, "_series_prefix", None) or getattr(_bt_mod.BlendTask, "_series_prefix", None)
     assert helper is not None
     alaska = helper("ewc-usse-ak-2026-11-03-rep")
     michigan = helper("ewc-usse-mi-2026-11-03-rep")
@@ -1828,9 +1798,7 @@ def test_series_prefix_polymarket_same_contest_sides_share_prefix() -> None:
     contest MUST collapse to a single bucket (date + trailing outcome
     stripped by `pm_domain_key`).
     """
-    helper = getattr(_bt_mod, "_series_prefix", None) or getattr(
-        _bt_mod.BlendTask, "_series_prefix", None
-    )
+    helper = getattr(_bt_mod, "_series_prefix", None) or getattr(_bt_mod.BlendTask, "_series_prefix", None)
     assert helper is not None
     dem = helper("ewc-usse-me-2026-11-03-dem")
     rep = helper("ewc-usse-me-2026-11-03-rep")
@@ -1844,9 +1812,7 @@ def test_series_prefix_kalshi_unchanged_byte_identical() -> None:
 
     The leading Kalshi token IS the real series; the fix must NOT alter it.
     """
-    helper = getattr(_bt_mod, "_series_prefix", None) or getattr(
-        _bt_mod.BlendTask, "_series_prefix", None
-    )
+    helper = getattr(_bt_mod, "_series_prefix", None) or getattr(_bt_mod.BlendTask, "_series_prefix", None)
     assert helper is not None
     assert helper("KXFISAEXTEND-26APR-MAY01") == "KXFISAEXTEND"
     assert helper("KXMOCTRUMP25-26-APR24") == "KXMOCTRUMP25"
@@ -1860,9 +1826,7 @@ def test_series_prefix_polymarket_no_date_falls_back_to_split() -> None:
     never crashes — `pm_domain_key` returns the bare venue segment (no ':')
     for an unrecognizable stem, which the helper treats as the split branch.
     """
-    helper = getattr(_bt_mod, "_series_prefix", None) or getattr(
-        _bt_mod.BlendTask, "_series_prefix", None
-    )
+    helper = getattr(_bt_mod, "_series_prefix", None) or getattr(_bt_mod.BlendTask, "_series_prefix", None)
     assert helper is not None
     # 'polymarket_us' bare slug -> pm_domain_key returns 'polymarket_us' (no ':')
     assert helper("polymarket_us") == "polymarket_us"
@@ -1897,13 +1861,8 @@ async def test_fisa_replay_three_same_series_only_one_enqueues() -> None:
     for ticker in tickers:
         await task.process_fast_lane_result(_analysis_for_series(ticker))
 
-    assert queue.qsize() == 1, (
-        f"FISA series burst must produce exactly 1 enqueue; got {queue.qsize()}"
-    )
-    in_window_records = [
-        r for r in logger.skipped_records
-        if r.get("reason") == "series_correlation_in_window"
-    ]
+    assert queue.qsize() == 1, f"FISA series burst must produce exactly 1 enqueue; got {queue.qsize()}"
+    in_window_records = [r for r in logger.skipped_records if r.get("reason") == "series_correlation_in_window"]
     assert len(in_window_records) == 2, (
         f"expected 2 series_correlation_in_window SKIPPED records; got {len(in_window_records)}"
     )
@@ -1934,9 +1893,9 @@ async def test_cross_series_burst_does_not_interfere() -> None:
     await task.process_fast_lane_result(_analysis_for_series("KXTRUMPIRAN-26MAY01"))
 
     assert queue.qsize() == 2, "cross-series candidates must both enqueue"
-    assert not any(
-        r.get("reason") == "series_correlation_in_window" for r in logger.skipped_records
-    ), "no series_correlation_in_window SKIPPED expected for cross-series traffic"
+    assert not any(r.get("reason") == "series_correlation_in_window" for r in logger.skipped_records), (
+        "no series_correlation_in_window SKIPPED expected for cross-series traffic"
+    )
 
 
 @pytest.mark.asyncio
@@ -1951,7 +1910,10 @@ async def test_window_expiry_allows_second_same_series_candidate(monkeypatch) ->
     queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
     logger = SpyLogger()
     monkeypatch.setattr(
-        cfg, "series_correlation_window_seconds", 60, raising=False,
+        cfg,
+        "series_correlation_window_seconds",
+        60,
+        raising=False,
     )
 
     # Fake monotonic clock that the test can advance.
@@ -1989,7 +1951,10 @@ async def test_window_override_zero_disables_guard(monkeypatch) -> None:
     queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
     logger = SpyLogger()
     monkeypatch.setattr(
-        cfg, "series_correlation_window_seconds", 0, raising=False,
+        cfg,
+        "series_correlation_window_seconds",
+        0,
+        raising=False,
     )
     task = BlendTask(
         trading_queue=queue,
@@ -2015,9 +1980,9 @@ async def test_window_override_zero_disables_guard(monkeypatch) -> None:
         await task.process_fast_lane_result(_analysis_for_series(ticker))
 
     assert queue.qsize() == 3, "window=0 must allow every candidate"
-    assert not any(
-        r.get("reason") == "series_correlation_in_window" for r in logger.skipped_records
-    ), "window=0 must fully bypass the guard"
+    assert not any(r.get("reason") == "series_correlation_in_window" for r in logger.skipped_records), (
+        "window=0 must fully bypass the guard"
+    )
 
 
 # Removed `test_blend_task_carries_recent_series_enqueues_state` per Codex review F2:
@@ -2077,8 +2042,7 @@ class TestProfitBlender001CallerFlagSetting:
         lane = task._build_accumulation_lane(dossier)
         assert lane is not None
         assert lane.signal_kind == "fallback", (
-            f"neutral default dossier must be classified as fallback; "
-            f"got signal_kind={lane.signal_kind!r}"
+            f"neutral default dossier must be classified as fallback; got signal_kind={lane.signal_kind!r}"
         )
 
     def test_dossier_with_low_confidence_NON_neutral_stays_real(self):
