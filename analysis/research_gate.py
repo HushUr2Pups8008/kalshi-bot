@@ -40,6 +40,10 @@ from analysis.generic_search_circuit import (
     GenericSearchUnavailable,
     generic_search_circuit_event_record,
 )
+from analysis.research_timeout_replay import (
+    ResearchTimeoutReplaySnapshot,
+    capture_timeout_replay_snapshot,
+)
 from config import cfg
 from utils.bounded_https import (
     BoundedHTTPSAttemptTelemetry,
@@ -6196,6 +6200,10 @@ async def run_research_gate(
     ticker = _clean(getattr(market, "ticker", ""))
     contract_fingerprint = _contract_fingerprint(market)
     observed_market_price = _market_price_for_side(None, yes_ask, no_ask)
+    persistence_run_id = (
+        f"rr-{uuid.uuid4().hex}" if dossier_store is not None and ticker else None
+    )
+    captured_timeout_snapshot: ResearchTimeoutReplaySnapshot | None = None
     loop = asyncio.get_running_loop()
     deadline = loop.time() + max(0.001, float(research_timeout_seconds))
     provider_errors: list[Exception] = []
@@ -6208,7 +6216,41 @@ async def run_research_gate(
         summary: str,
         *,
         stage: str,
+        counter_evidence_added: bool = False,
     ) -> ResearchVerdict:
+        nonlocal captured_timeout_snapshot
+        if persistence_run_id is not None:
+            try:
+                captured_timeout_snapshot = capture_timeout_replay_snapshot(
+                    research_run_id=persistence_run_id,
+                    market_ticker=ticker,
+                    contract_fingerprint=contract_fingerprint,
+                    timeout_stage=stage,
+                    configured_timeout_seconds=research_timeout_seconds,
+                    remaining_budget_seconds=remaining_budget(),
+                    observed_market_price=observed_market_price,
+                    yes_ask=yes_ask,
+                    no_ask=no_ask,
+                    require_decision_grade=require_decision_grade,
+                    live_mode=live_mode,
+                    counter_evidence_added=counter_evidence_added,
+                    model_direction=model_direction,
+                    model_confidence=model_confidence,
+                    estimated_probability_yes=estimated_probability_yes,
+                    model_reason=model_reason,
+                    counterclaims=decision_grade_counterclaims,
+                    open_questions=decision_grade_open_questions,
+                    queries=queries,
+                    evidence=evidence,
+                )
+            except Exception as exc:
+                captured_timeout_snapshot = None
+                log.warning(
+                    "[RESEARCH_TIMEOUT_DIAGNOSTIC] capture failed ticker=%s stage=%s: %s",
+                    ticker,
+                    stage,
+                    exc,
+                )
         return ResearchVerdict(
             status=ResearchStatus.CONTINUE_RESEARCHING,
             attempted=True,
@@ -6262,7 +6304,7 @@ async def run_research_gate(
                 research_direct_fetch_failures=tuple(direct_fetch_failures),
             )
         if dossier_store is not None and ticker:
-            run_id = f"rr-{uuid.uuid4().hex}"
+            run_id = persistence_run_id or f"rr-{uuid.uuid4().hex}"
             verdict = replace(
                 verdict,
                 research_run_id=run_id,
@@ -6303,6 +6345,7 @@ async def run_research_gate(
                         counterclaims=list(verdict.counterclaims),
                         queries=queries,
                         evidence=verdict.evidence,
+                        timeout_diagnostic=captured_timeout_snapshot,
                         # Keep fail-closed attempts in the audit log without
                         # demoting the last cache-eligible dossier snapshot.
                         update_dossier_snapshot=_should_update_dossier_snapshot(
@@ -6734,6 +6777,7 @@ async def run_research_gate(
                                             evidence,
                                             "Research timed out before counter-evidence adjudication completed.",
                                             stage="counter_adjudication",
+                                            counter_evidence_added=True,
                                         )
                                     )
                                 try:
@@ -6757,6 +6801,7 @@ async def run_research_gate(
                                             evidence,
                                             "Research timed out before counter-evidence adjudication completed.",
                                             stage="counter_adjudication",
+                                            counter_evidence_added=True,
                                         )
                                     )
                                 except Exception:
