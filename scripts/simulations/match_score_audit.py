@@ -39,7 +39,7 @@ import sys
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Final, Iterable, Optional
 from unittest.mock import patch
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -47,7 +47,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from analysis import market_matcher as mm  # noqa: E402
-from config import PAPER_MIN_MATCH_SCORE  # noqa: E402
+from config import PAPER_MIN_MATCH_SCORE, cfg  # noqa: E402
 from feeds import NewsItem  # noqa: E402
 from kalshi import KalshiMarket  # noqa: E402
 from scripts.simulations._common import (  # noqa: E402
@@ -56,9 +56,14 @@ from scripts.simulations._common import (  # noqa: E402
     LLM_POSITIVE_EVENTS_2026_04_26,
     LLMPositiveEvent,
 )
+from utils.market_horizon import evaluate_market_horizon  # noqa: E402
 
 
 DEFAULT_THRESHOLD_SWEEP: tuple[float, ...] = (0.03, 0.04, 0.05, 0.06, 0.08, 0.10)
+
+# This is the recorded historical audit date from the original static fixture.
+# It is evidence, not a value derived from a market's settlement deadline.
+_AUDIT_AS_OF: Final = datetime(2026, 4, 26, tzinfo=timezone.utc)
 
 
 @dataclass(frozen=True)
@@ -67,7 +72,9 @@ class MatchAuditReport:
 
     event_name: str
     headline: str
+    observed_at: str | None
     target_ticker: str
+    target_horizon_status: str
     target_in_top_3: bool
     target_score: Optional[float]
     top_3_matches: tuple[tuple[str, float], ...]
@@ -167,22 +174,68 @@ def _candidate_pool() -> list[KalshiMarket]:
 # ── Per-event audit ───────────────────────────────────────────────────────────
 
 
+def _recorded_observation_status(
+    event: LLMPositiveEvent,
+    observed_at: datetime | None,
+) -> tuple[datetime | None, str]:
+    """Return a fail-closed target status for the recorded replay instant."""
+
+    if observed_at is None:
+        return None, "untradeable:observation_unrecorded"
+    if not isinstance(observed_at, datetime) or observed_at.tzinfo is None or observed_at.utcoffset() is None:
+        return None, "untradeable:observation_invalid"
+
+    as_of = observed_at.astimezone(timezone.utc)
+    horizon = evaluate_market_horizon(
+        event.close_time,
+        now=as_of,
+        max_days_to_close=cfg.paper_admission_max_days_to_close,
+    )
+    if not horizon.eligible:
+        return as_of, f"untradeable:{horizon.reason or 'market_not_admissible'}"
+    return as_of, "tradeable"
+
+
+def _observed_at_json(observed_at: datetime | None) -> str | None:
+    if observed_at is None:
+        return None
+    return observed_at.isoformat().replace("+00:00", "Z")
+
+
 async def _audit_event(
     event: LLMPositiveEvent,
     headline: str,
     *,
     pool: list[KalshiMarket],
     thresholds: tuple[float, ...],
+    observed_at: datetime | None,
 ) -> MatchAuditReport:
+    replay_as_of, target_horizon_status = _recorded_observation_status(event, observed_at)
+    if target_horizon_status != "tradeable":
+        return MatchAuditReport(
+            event_name=event.name,
+            headline=headline,
+            observed_at=_observed_at_json(replay_as_of),
+            target_ticker=event.ticker,
+            target_horizon_status=target_horizon_status,
+            target_in_top_3=False,
+            target_score=None,
+            top_3_matches=(),
+            threshold_sweep={round(th, 4): False for th in thresholds},
+            paper_min_match_score=PAPER_MIN_MATCH_SCORE,
+        )
+
+    assert replay_as_of is not None
     news = NewsItem(
         headline=headline,
         url="https://example.invalid/sim",
         source="match-score-audit",
-        published=datetime(2026, 4, 26, tzinfo=timezone.utc),
+        published=replay_as_of,
     )
 
     matcher = mm.MarketMatcher.__new__(mm.MarketMatcher)
     matcher._cache = _StaticMarketCache(pool)
+    matcher._now_provider = lambda: replay_as_of
 
     async def _silent_writer(*_args, **_kwargs):
         return None
@@ -205,7 +258,9 @@ async def _audit_event(
     return MatchAuditReport(
         event_name=event.name,
         headline=headline,
+        observed_at=_observed_at_json(replay_as_of),
         target_ticker=event.ticker,
+        target_horizon_status=target_horizon_status,
         target_in_top_3=target_in_top_3,
         target_score=target_score,
         top_3_matches=top_3,
@@ -231,6 +286,7 @@ def run(
                     headline,
                     pool=pool,
                     thresholds=thresholds,
+                    observed_at=_AUDIT_AS_OF,
                 )
             )
         return out
@@ -249,7 +305,9 @@ def _print_per_event(reports: list[MatchAuditReport]) -> None:
     for r in reports:
         print(f"\n• {r.event_name}")
         print(f"  headline      : {r.headline}")
+        print(f"  observed at   : {r.observed_at or 'unrecorded'}")
         print(f"  target ticker : {r.target_ticker}")
+        print(f"  target status : {r.target_horizon_status}")
         score_str = f"{r.target_score:.4f}" if r.target_score is not None else "—"
         print(f"  in top-3      : {r.target_in_top_3}   (target score={score_str})")
         if r.top_3_matches:

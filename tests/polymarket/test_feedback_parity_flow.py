@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -33,12 +33,15 @@ class _FakeSettlementSource:
         return self.settlements[market_id]
 
 
+_SIMULATION_AS_OF = datetime(2026, 6, 10, tzinfo=timezone.utc)
+
+
 def _news() -> NewsItem:
     return NewsItem(
         headline="Kansas governor election tightens after new polling",
         url="https://example.test/kansas-governor",
         source="Example Wire",
-        published=datetime.now(timezone.utc),
+        published=_SIMULATION_AS_OF,
         body="Kansas governor election polling moved the race.",
     )
 
@@ -57,7 +60,7 @@ def _market() -> PolymarketMarket:
         no_ask_cents=59,
         volume_dollars=1000.0,
         open_interest_dollars=100.0,
-        close_time="2026-12-31T23:59:59Z",
+        close_time=(_SIMULATION_AS_OF + timedelta(days=7)).isoformat(),
         is_binary=True,
     )
 
@@ -102,6 +105,7 @@ async def test_polymarket_candidate_closes_shared_feedback_loop(tmp_path, monkey
         source_stats=source_stats,
         estimate_probability_fn=estimate_probability,
         market_limit=10,
+        now_provider=lambda: _SIMULATION_AS_OF,
     )
 
     assert await runtime.process_news(_news()) == 1

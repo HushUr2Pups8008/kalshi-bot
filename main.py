@@ -62,6 +62,7 @@ import uuid
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any, Awaitable, Callable, Iterable  # noqa: F401 — referenced in string annotations
 from urllib.parse import urlparse
@@ -126,6 +127,15 @@ from tasks.calibration_task import CalibrationTask
 from tasks.structural_task import StructuralTask
 from trading.executor import TradeExecutor
 from trading.fees import DIRECT_ACCOUNT_PRECISION, INITIAL_ORDER_FEE_ACCUMULATOR
+from trading.paper_cohorts import (
+    LEGACY_PAPER_COHORT_ID,
+    PaperCohort,
+    aggregate_open_exposure_snapshot,
+    discover_paper_risk_cohorts,
+    provisioned_active_cohort_block_reason,
+    resolve_runtime_paper_cohort,
+    validate_active_paper_cohort_manifest,
+)
 from trading.paper_trader import PaperTrader
 from trading.profit_evidence import independent_realized_profit_evidence_available
 from trading.settlement import (
@@ -164,6 +174,51 @@ from utils.trade_log_reader import iter_trade_records
 from tasks.runtime_overrides_task import run_runtime_overrides_poll
 
 log = get_logger("main")
+
+_ACTIVE_COHORT_LIVE_TRANSITION_BLOCK = (
+    "active paper cohort remains isolated from live trading"
+)
+
+
+def _runtime_paper_cohort_from_config(
+    *,
+    db_root: Path = DATA_DIR,
+) -> tuple[PaperCohort, tuple[PaperCohort, ...], str | None]:
+    """Resolve one writable runtime account and validate active binding first."""
+
+    cohort_id = getattr(cfg, "paper_cohort_id", LEGACY_PAPER_COHORT_ID)
+    requested_legacy_runtime = str(cohort_id or "").strip().lower() == LEGACY_PAPER_COHORT_ID
+    runtime_cohort = resolve_runtime_paper_cohort(
+        cohort_id,
+        legacy_starting_bankroll=cfg.bankroll if requested_legacy_runtime else None,
+        active_starting_bankroll=getattr(
+            cfg,
+            "paper_active_cohort_starting_bankroll",
+            None,
+        ),
+        db_root=db_root,
+    )
+    if runtime_cohort.cohort_id == LEGACY_PAPER_COHORT_ID:
+        active_block = provisioned_active_cohort_block_reason(db_root)
+        if active_block is not None:
+            raise RuntimeError(f"legacy paper runtime is blocked: {active_block}")
+        return runtime_cohort, (runtime_cohort,), None
+
+    validate_active_paper_cohort_manifest(
+        runtime_cohort,
+        max_days_to_close=getattr(
+            cfg,
+            "paper_active_cohort_max_days_to_close",
+            14.0,
+        ),
+        legacy_db_path=runtime_cohort.storage_root / "paper_trades.db",
+        legacy_starting_bankroll=None,
+    )
+    return (
+        runtime_cohort,
+        discover_paper_risk_cohorts(db_root),
+        _ACTIVE_COHORT_LIVE_TRANSITION_BLOCK,
+    )
 
 _BOT_RUNTIME_LOCK = DATA_DIR / "bot_runtime.lock"
 
@@ -398,16 +453,38 @@ def _log_boot_summary(startup_context: str) -> None:
     )
 
 
-def _log_bankroll_summary(notional_bankroll: float) -> None:
+def _log_bankroll_summary(
+    notional_bankroll: float,
+    *,
+    starting_bankroll: float | None = None,
+    cohort_id: str | None = None,
+    db_path: Path | None = None,
+) -> None:
     log.info("Notional bankroll: $%.2f", notional_bankroll)
     if cfg.is_paper_trading:
-        log.info("Configured starting bankroll (.env BANKROLL): $%.2f", cfg.bankroll)
-        if abs(notional_bankroll - cfg.bankroll) > 1e-9:
+        configured_starting_bankroll = (
+            cfg.bankroll if starting_bankroll is None else float(starting_bankroll)
+        )
+        if cohort_id is None:
+            label = ".env BANKROLL"
+        else:
+            label = f"paper cohort {cohort_id}"
+        log.info(
+            "Configured starting bankroll (%s): $%.2f",
+            label,
+            configured_starting_bankroll,
+        )
+        if abs(notional_bankroll - configured_starting_bankroll) > 1e-9:
+            state_location = (
+                "data/paper_trades.db" if db_path is None else str(db_path)
+            )
             log.warning(
-                "Persisted paper bankroll ($%.2f) differs from .env BANKROLL ($%.2f); "
-                "paper mode resumes the saved SQLite state until you reset data/paper_trades.db.",
+                "Persisted paper bankroll ($%.2f) differs from %s ($%.2f); "
+                "paper mode resumes the saved SQLite state at %s.",
                 notional_bankroll,
-                cfg.bankroll,
+                label,
+                configured_starting_bankroll,
+                state_location,
             )
 
 
@@ -866,9 +943,18 @@ class TradingBot:
         # same instance can be injected into PaperTrader (for resolve-time
         # CALIBRATION_CHECK emission) and BlendTask (for get_scaling_factor).
         self._calibration_task = CalibrationTask()
+        (
+            self.paper_cohort,
+            self._paper_risk_cohorts,
+            _live_transition_block_reason,
+        ) = _runtime_paper_cohort_from_config()
         self.paper         = PaperTrader(
+            db_path=self.paper_cohort.db_path,
             startup_context="runtime",
             calibration_task=self._calibration_task,
+            starting_bankroll=self.paper_cohort.starting_bankroll,
+            cohort_id=self.paper_cohort.cohort_id,
+            paper_cohort_storage_root=self.paper_cohort.storage_root,
         )
         self._settlement_outbox_task: SettlementOutboxTask | None = None
         self.executor      = TradeExecutor(self.rest, self.paper)
@@ -894,8 +980,8 @@ class TradingBot:
             len(self._runtime_overrides_reader.snapshot().applied_threshold_overrides),
             self._runtime_overrides_reader.snapshot().mode,
         )
-        self.source_stats  = SourceStats(db_path=DATA_DIR / "paper_trades.db")
-        self.keyword_stats = KeywordStats(DATA_DIR / "paper_trades.db")
+        self.source_stats  = SourceStats(db_path=self.paper.db_path)
+        self.keyword_stats = KeywordStats(self.paper.db_path)
         self.polymarket_paper_runtime = None
         try:
             from polymarket.paper_runtime import (
@@ -909,6 +995,7 @@ class TradingBot:
                     route_analysis=self._route_analysis_through_blend,
                     keyword_stats=self.keyword_stats,
                     source_stats=self.source_stats,
+                    sizing_bankroll_provider=self.paper.get_effective_sizing_bankroll,
                 )
                 log.info("[POLYMARKET_PAPER] active paper_execution=blend")
             else:
@@ -3452,7 +3539,7 @@ class TradingBot:
                 # Windows NSSM would restart daily; macOS dev machines may run for weeks.
                 try:
                     db_conn = sqlite3.connect(
-                        str(DATA_DIR / "paper_trades.db"), check_same_thread=False
+                        str(self.paper.db_path), check_same_thread=False
                     )
                     try:
                         db_conn.execute("PRAGMA wal_checkpoint(RESTART)")
@@ -3494,7 +3581,7 @@ class TradingBot:
             try:
                 markets = self.matcher._cache._markets
                 if markets:
-                    count = await run_discovery_pass(markets, DATA_DIR / "paper_trades.db")
+                    count = await run_discovery_pass(markets, self.paper.db_path)
                     if count:
                         log.info("[DISCOVERY] Found %d new candidate subreddits", count)
                 else:
@@ -3540,7 +3627,7 @@ class TradingBot:
                 result = select_subreddits(
                     markets,
                     source_stats=self.source_stats,
-                    db_path=DATA_DIR / "paper_trades.db",
+                    db_path=self.paper.db_path,
                 )
                 log.debug(
                     "Subreddit selector: %d subs for this cycle (%d active markets)",
@@ -3858,7 +3945,13 @@ class TradingBot:
             from polymarket.startup_probe import log_polymarket_startup_probe
 
             await asyncio.to_thread(log_polymarket_startup_probe)
-        _log_bankroll_summary(notional)
+        runtime_cohort = getattr(self, "paper_cohort", None)
+        _log_bankroll_summary(
+            notional,
+            starting_bankroll=_paper_starting_bankroll(self.paper),
+            cohort_id=getattr(runtime_cohort, "cohort_id", None),
+            db_path=getattr(self.paper, "db_path", None),
+        )
         log.info("Max bet (dynamic): $%.2f  (%.0f%% of bankroll, hard cap $%.2f)",
                  max_bet, cfg.max_bet_pct_bankroll * 100, cfg.max_bet_hard_cap)
         log.info("Kelly fraction:   %.0f%%", cfg.kelly_fraction * 100)
@@ -4123,7 +4216,16 @@ async def async_main() -> None:
                     f"then restart it. owner={cli_guard.describe_owner()}"
                 )
         try:
-            paper = PaperTrader(startup_context="cli")
+            paper_cohort, _risk_cohorts, _live_transition_block_reason = (
+                _runtime_paper_cohort_from_config()
+            )
+            paper = PaperTrader(
+                db_path=paper_cohort.db_path,
+                startup_context="cli",
+                starting_bankroll=paper_cohort.starting_bankroll,
+                cohort_id=paper_cohort.cohort_id,
+                paper_cohort_storage_root=paper_cohort.storage_root,
+            )
             if args.report:
                 print(paper.generate_report())
                 return
@@ -4179,7 +4281,7 @@ def _paper_open_exposure_drawdown_snapshot(
     observed_at = datetime.now(timezone.utc).isoformat()
     provider = "scripts.mark_open_positions"
     try:
-        configured_bankroll = float(cfg.bankroll)
+        configured_bankroll = _paper_starting_bankroll(paper)
     except (TypeError, ValueError):
         configured_bankroll = None
     if (
@@ -4338,6 +4440,20 @@ def _check_go_live_gates(paper: PaperTrader) -> list[str]:
     notional = paper.get_notional_bankroll()
     failures: list[str] = []
 
+    provisioned_active_cohorts, cohort_risk_failures = (
+        _provisioned_cohort_live_risk_gate_failures()
+    )
+    failures.extend(cohort_risk_failures)
+    if (
+        not provisioned_active_cohorts
+        and getattr(cfg, "paper_cohort_id", LEGACY_PAPER_COHORT_ID)
+        != LEGACY_PAPER_COHORT_ID
+    ):
+        failures.append(
+            "Live trading remains blocked: "
+            f"{_ACTIVE_COHORT_LIVE_TRANSITION_BLOCK}"
+        )
+
     if not independent_realized_profit_evidence_available(db_path=paper.db_path):
         failures.append(
             "Independent realized-profit evidence unavailable -- gate fails closed"
@@ -4386,6 +4502,88 @@ def _check_go_live_gates(paper: PaperTrader) -> list[str]:
                 f"Win rate: {win_rate:.1%} < minimum {cfg.go_live_min_win_rate:.1%}"
             )
 
+    if not provisioned_active_cohorts:
+        _append_selected_cohort_drawdown_failure(
+            failures,
+            paper=paper,
+            notional=notional,
+        )
+
+    return failures
+
+
+def _provisioned_cohort_live_risk_gate_failures(
+    *,
+    db_root: Path = DATA_DIR,
+) -> tuple[bool, list[str]]:
+    """Fail closed on every provisioned cohort, independent of runtime selection."""
+
+    active_root = Path(db_root) / "paper_cohorts"
+    try:
+        active_root.lstat()
+    except FileNotFoundError:
+        return False, []
+    except OSError as exc:
+        return True, [
+            "Paper cohort discovery unavailable "
+            f"({str(exc)[:80]}) -- gate fails closed"
+        ]
+    if active_root.is_symlink() or not active_root.is_dir():
+        return True, ["Paper cohort root is invalid -- gate fails closed"]
+    try:
+        cohorts = discover_paper_risk_cohorts(db_root)
+    except Exception as exc:  # noqa: BLE001 - live-money boundary must fail closed
+        return True, [
+            "Paper cohort discovery unavailable "
+            f"({str(exc)[:80]}) -- gate fails closed"
+        ]
+    if not cohorts:
+        return False, []
+
+    failures = [
+        "Live trading remains blocked: active paper cohort remains isolated from "
+        "live trading until all-cohort settlement and realized-profit reconciliation "
+        "is explicitly reviewed"
+    ]
+    try:
+        snapshot = aggregate_open_exposure_snapshot(cohorts)
+    except Exception as exc:  # noqa: BLE001 - live-money boundary must fail closed
+        return True, [
+            *failures,
+            "Paper cohort mark-to-market unavailable "
+            f"({str(exc)[:80]}) -- gate fails closed",
+        ]
+    if not snapshot.ok:
+        return True, [
+            *failures,
+            "Paper cohort mark-to-market unavailable "
+            f"({snapshot.failure_status}) -- gate fails closed",
+        ]
+
+    for exposure in snapshot.cohorts:
+        if exposure.unresolved_trade_count:
+            failures.append(
+                f"Paper cohort {exposure.cohort_id}: "
+                f"{exposure.unresolved_trade_count} unresolved paper trade(s) "
+                "-- gate fails closed"
+            )
+        if exposure.drawdown_pct > cfg.go_live_max_drawdown_pct:
+            failures.append(
+                f"Paper cohort {exposure.cohort_id} drawdown: "
+                f"{exposure.drawdown_pct:.1%} > maximum "
+                f"{cfg.go_live_max_drawdown_pct:.1%}"
+            )
+    return True, failures
+
+
+def _append_selected_cohort_drawdown_failure(
+    failures: list[str],
+    *,
+    paper: PaperTrader,
+    notional: float,
+) -> None:
+    """Append legacy single-cohort MTM drawdown failure when no active cohort exists."""
+
     # P4 (PROFIT-DRAWDOWN-001c reconcile): gate drawdown on MARK-TO-MARKET
     # equity, the SAME basis the authoritative section-8 daily report uses, not
     # raw notional free-cash. The paper bankroll model deducts each open trade's
@@ -4430,16 +4628,17 @@ def _check_go_live_gates(paper: PaperTrader) -> list[str]:
                 "Drawdown: mark-to-market value is non-finite -- gate fails closed"
             )
         else:
+            configured_starting_bankroll = _paper_starting_bankroll(paper)
             mtm_equity = notional + marked_value
             drawdown_pct = (
-                (cfg.bankroll - mtm_equity) / cfg.bankroll if cfg.bankroll > 0 else 0.0
+                (configured_starting_bankroll - mtm_equity) / configured_starting_bankroll
+                if configured_starting_bankroll > 0
+                else 0.0
             )
             if drawdown_pct > cfg.go_live_max_drawdown_pct:
                 failures.append(
                     f"Drawdown: {drawdown_pct:.1%} > maximum {cfg.go_live_max_drawdown_pct:.1%}"
                 )
-
-    return failures
 
 
 def _paper_effective_sizing_bankroll(paper: PaperTrader) -> float:
@@ -4448,6 +4647,19 @@ def _paper_effective_sizing_bankroll(paper: PaperTrader) -> float:
     if isinstance(paper, PaperTrader):
         return paper.get_effective_sizing_bankroll()
     return min(float(paper.get_notional_bankroll()), float(cfg.bankroll))
+
+
+def _paper_starting_bankroll(paper: PaperTrader) -> float:
+    """Use the cohort baseline for runtime paper accounts, config for test doubles."""
+
+    if isinstance(paper, PaperTrader):
+        return float(paper.starting_bankroll)
+    candidate = getattr(paper, "starting_bankroll", None)
+    if isinstance(candidate, (int, float)) and not isinstance(candidate, bool):
+        candidate_float = float(candidate)
+        if math.isfinite(candidate_float) and candidate_float > 0:
+            return candidate_float
+    return float(cfg.bankroll)
 
 
 def _go_live_canonical_delivery_complete_ids(paper: PaperTrader) -> set[str]:

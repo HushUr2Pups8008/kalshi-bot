@@ -19,6 +19,34 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.23] - 2026-07-28
+
+### Added
+
+- **Active paper cohorts.** Explicitly provisioned paper cohorts now use a
+  lock-protected, hash-verified legacy cutover snapshot, a manifest-bound
+  starting bankroll, and a fixed admission horizon. Provisioning requires a
+  reconciled legacy ledger with only canonical resolved states.
+- **Shared market horizon.** Kalshi and Polymarket paper admission now share a
+  strict aware-timestamp horizon; replay audit decisions use the injected replay
+  clock rather than event close times.
+
+### Fixed
+
+- **Cohort-boundary bypasses.** Root, active, and cutover-snapshot databases
+  must be distinct regular single-link files. Symlink and hard-link aliases,
+  symlinked cohort directories, malformed legacy resolution states, and direct
+  immutable database opens now fail closed.
+- **Parallel runtime escape.** Once an active cohort exists, runtime and CLI
+  callers must use its manifest-bound database; arbitrary unbound SQLite paths
+  cannot form a separate paper or go-live path.
+
+### Verification
+
+- `pytest tests/test_paper_cohorts.py tests/test_paper_trader.py tests/test_main_startup.py tests/test_go_live_gates.py tests/test_initialize_active_paper_cohort.py -q`
+- `pytest tests/test_market_horizon.py tests/test_market_matcher.py tests/polymarket/test_paper_runtime.py tests/polymarket/test_feedback_parity_flow.py tests/test_simulations_smoke.py -q`
+- `ruff check trading/paper_cohorts.py trading/paper_trader.py tests/test_paper_cohorts.py tests/test_paper_trader.py tests/test_main_startup.py`
+
 ## [0.33.22] - 2026-06-26
 
 ### Added

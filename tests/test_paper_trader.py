@@ -8,10 +8,13 @@ Uses :memory: SQLite so no disk I/O or shared state between tests.
 """
 
 import asyncio
+import hashlib
 import logging
+import os
 import sqlite3
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -25,6 +28,27 @@ def _run_resolve(trader, ticker, resolved_yes):
     asyncio.run(trader.resolve_market(ticker, resolved_yes))
 
 _REAL_SQLITE_CONNECT = sqlite3.connect
+
+
+def _cutover_eligible_legacy_db(path: Path) -> None:
+    """Create the minimum reconciled legacy ledger needed by cutover validation."""
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE paper_trades (resolved INTEGER NOT NULL)")
+        conn.execute("CREATE TABLE legacy_provenance (value TEXT)")
+
+
+def _initialized_settled_legacy_db(path: Path, *, starting_bankroll: float = 500.0) -> None:
+    """Create a full current legacy schema for tests that reopen it through PaperTrader."""
+    from trading.paper_trader import PaperTrader
+
+    with patch("trading.paper_trader.SourceCredibility") as mock_cred:
+        mock_cred.return_value.get_multiplier.return_value = 1.0
+        trader = PaperTrader(
+            db_path=path,
+            startup_context="test",
+            starting_bankroll=starting_bankroll,
+        )
+        trader._conn.close()
 
 
 def _shared_memory_connect(name: str):
@@ -145,6 +169,467 @@ def trader(monkeypatch):
             pt._set_state("notional_bankroll", "500.0")
             yield pt
     keeper.close()
+
+
+def test_explicit_starting_bankroll_initializes_and_drives_sizing(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+
+    from trading.paper_trader import PaperTrader
+
+    keeper, connect = _shared_memory_connect("explicit-starting-bankroll")
+    try:
+        with patch("trading.paper_trader.sqlite3.connect", side_effect=connect), patch(
+            "trading.paper_trader.SourceCredibility"
+        ) as mock_cred:
+            mock_cred.return_value.get_multiplier.return_value = 1.0
+            trader = PaperTrader(
+                db_path=":memory:",
+                startup_context="test",
+                starting_bankroll=125.0,
+            )
+            assert trader.get_notional_bankroll() == pytest.approx(125.0)
+            with patch(
+                "trading.paper_trader.effective_sizing_bankroll",
+                return_value=120.0,
+            ) as effective_sizing:
+                assert trader.get_effective_sizing_bankroll() == pytest.approx(120.0)
+
+        effective_sizing.assert_called_once_with(
+            trader.db_path,
+            notional_bankroll=125.0,
+            configured_starting_bankroll=125.0,
+        )
+    finally:
+        keeper.close()
+
+
+def test_isolated_cohort_cannot_auto_or_directly_transition_to_live(monkeypatch):
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+    monkeypatch.setattr(_cfg_module.cfg, "live_trading_enabled", True)
+
+    from trading.paper_trader import PaperTrader
+
+    keeper, connect = _shared_memory_connect("isolated-cohort-live-block")
+    try:
+        with patch("trading.paper_trader.sqlite3.connect", side_effect=connect), patch(
+            "trading.paper_trader.SourceCredibility"
+        ) as mock_cred, patch(
+            "trading.paper_trader.independent_realized_profit_evidence_available",
+            return_value=True,
+        ):
+            mock_cred.return_value.get_multiplier.return_value = 1.0
+            first = PaperTrader(db_path=":memory:", startup_context="test")
+            first._set_state("go_live_confirmed", "true")
+            isolated = PaperTrader(
+                db_path=":memory:",
+                startup_context="test",
+                live_transition_block_reason="active paper cohort remains isolated",
+            )
+
+            assert _cfg_module.cfg.is_paper_trading is True
+            with pytest.raises(RuntimeError, match="active paper cohort remains isolated"):
+                isolated.confirm_go_live()
+            row = isolated._conn.execute(
+                "SELECT value FROM bot_state WHERE key = 'go_live_confirmed'"
+            ).fetchone()
+            assert row["value"] == "true"
+    finally:
+        keeper.close()
+
+
+def test_manifest_bound_active_cohort_forces_live_block_without_caller_reason(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+    monkeypatch.setattr(_cfg_module.cfg, "live_trading_enabled", True)
+
+    from trading.paper_cohorts import (
+        initialize_active_paper_cohort_manifest,
+        resolve_runtime_paper_cohort,
+    )
+    from trading.paper_trader import PaperTrader
+
+    legacy_path = tmp_path / "paper_trades.db"
+    _cutover_eligible_legacy_db(legacy_path)
+    cohort = resolve_runtime_paper_cohort(
+        "active-identity-test",
+        legacy_starting_bankroll=500.0,
+        active_starting_bankroll=125.0,
+        db_root=tmp_path,
+    )
+    initialize_active_paper_cohort_manifest(
+        cohort,
+        max_days_to_close=14.0,
+        legacy_db_path=legacy_path,
+        legacy_starting_bankroll=500.0,
+    )
+
+    with patch("trading.paper_trader.SourceCredibility") as mock_cred, patch(
+        "trading.paper_trader.independent_realized_profit_evidence_available",
+        return_value=True,
+    ):
+        mock_cred.return_value.get_multiplier.return_value = 1.0
+        trader = PaperTrader(
+            db_path=cohort.db_path,
+            startup_context="test",
+            starting_bankroll=125.0,
+        )
+        assert _cfg_module.cfg.is_paper_trading is True
+        with pytest.raises(RuntimeError, match="active paper cohort remains isolated"):
+            trader.confirm_go_live()
+        trader._conn.close()
+
+
+def test_active_cohort_manifest_bankroll_cannot_be_overridden(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+
+    from trading.paper_cohorts import (
+        initialize_active_paper_cohort_manifest,
+        resolve_runtime_paper_cohort,
+    )
+    from trading.paper_trader import PaperTrader
+
+    legacy_path = tmp_path / "paper_trades.db"
+    _cutover_eligible_legacy_db(legacy_path)
+    cohort = resolve_runtime_paper_cohort(
+        "active-manifest-bankroll",
+        legacy_starting_bankroll=500.0,
+        active_starting_bankroll=125.0,
+        db_root=tmp_path,
+    )
+    initialize_active_paper_cohort_manifest(
+        cohort,
+        max_days_to_close=14.0,
+        legacy_db_path=legacy_path,
+        legacy_starting_bankroll=500.0,
+    )
+
+    with pytest.raises(ValueError, match="starting bankroll does not match"):
+        PaperTrader(
+            db_path=cohort.db_path,
+            startup_context="test",
+            starting_bankroll=999.0,
+        )
+
+
+def test_initialized_active_cohort_refuses_schema_rebootstrap(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+
+    from trading.paper_cohorts import (
+        initialize_active_paper_cohort_manifest,
+        resolve_runtime_paper_cohort,
+    )
+    from trading.paper_trader import PaperTrader
+
+    legacy_path = tmp_path / "paper_trades.db"
+    _cutover_eligible_legacy_db(legacy_path)
+    cohort = resolve_runtime_paper_cohort(
+        "active-schema-guard",
+        legacy_starting_bankroll=500.0,
+        active_starting_bankroll=125.0,
+        db_root=tmp_path,
+    )
+    initialize_active_paper_cohort_manifest(
+        cohort,
+        max_days_to_close=14.0,
+        legacy_db_path=legacy_path,
+        legacy_starting_bankroll=500.0,
+    )
+
+    with patch("trading.paper_trader.SourceCredibility") as mock_cred:
+        mock_cred.return_value.get_multiplier.return_value = 1.0
+        trader = PaperTrader(
+            db_path=cohort.db_path,
+            startup_context="test",
+            starting_bankroll=125.0,
+        )
+        trader._conn.close()
+
+    with sqlite3.connect(cohort.db_path) as conn:
+        conn.execute("DROP TABLE paper_trades")
+    with pytest.raises(RuntimeError, match="initialized active cohort database is missing"):
+        PaperTrader(
+            db_path=cohort.db_path,
+            startup_context="test",
+            starting_bankroll=125.0,
+        )
+
+
+def test_active_cohort_schema_commit_blocks_reset_after_later_startup_failure(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+
+    from trading.paper_cohorts import (
+        initialize_active_paper_cohort_manifest,
+        resolve_runtime_paper_cohort,
+    )
+    from trading.paper_trader import PaperTrader
+
+    legacy_path = tmp_path / "paper_trades.db"
+    _cutover_eligible_legacy_db(legacy_path)
+    cohort = resolve_runtime_paper_cohort(
+        "active-crash-window",
+        legacy_starting_bankroll=500.0,
+        active_starting_bankroll=125.0,
+        db_root=tmp_path,
+    )
+    initialize_active_paper_cohort_manifest(
+        cohort,
+        max_days_to_close=14.0,
+        legacy_db_path=legacy_path,
+        legacy_starting_bankroll=500.0,
+    )
+
+    with patch.object(PaperTrader, "_migrate_db", side_effect=RuntimeError("later startup failure")):
+        with pytest.raises(RuntimeError, match="later startup failure"):
+            PaperTrader(
+                db_path=cohort.db_path,
+                startup_context="test",
+                starting_bankroll=125.0,
+            )
+
+    with sqlite3.connect(cohort.db_path) as conn:
+        conn.execute("DROP TABLE paper_trades")
+    with pytest.raises(RuntimeError, match="initialized active cohort database is missing"):
+        PaperTrader(
+            db_path=cohort.db_path,
+            startup_context="test",
+            starting_bankroll=125.0,
+        )
+
+
+def test_provisioned_active_cohort_blocks_immutable_legacy_database(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+    monkeypatch.setattr(_cfg_module.cfg, "live_trading_enabled", True)
+
+    from trading.paper_cohorts import (
+        initialize_active_paper_cohort_manifest,
+        resolve_runtime_paper_cohort,
+    )
+    from trading.paper_trader import PaperTrader
+
+    legacy_path = tmp_path / "paper_trades.db"
+    _initialized_settled_legacy_db(legacy_path)
+    cohort = resolve_runtime_paper_cohort(
+        "active-legacy-block",
+        legacy_starting_bankroll=500.0,
+        active_starting_bankroll=125.0,
+        db_root=tmp_path,
+    )
+    initialize_active_paper_cohort_manifest(
+        cohort,
+        max_days_to_close=14.0,
+        legacy_db_path=legacy_path,
+        legacy_starting_bankroll=500.0,
+    )
+    legacy_hash = hashlib.sha256(legacy_path.read_bytes()).hexdigest()
+
+    for startup_context in ("test", "runtime", "cli"):
+        with pytest.raises(RuntimeError, match="immutable paper cohort database is blocked"):
+            PaperTrader(
+                db_path=legacy_path,
+                startup_context=startup_context,
+                starting_bankroll=500.0,
+            )
+    assert hashlib.sha256(legacy_path.read_bytes()).hexdigest() == legacy_hash
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX symlink permissions")
+@pytest.mark.parametrize("alias_kind", ["symlink", "hardlink"])
+@pytest.mark.parametrize("target_name", ["legacy", "snapshot"])
+def test_provisioned_active_cohort_blocks_immutable_database_aliases(
+    monkeypatch,
+    tmp_path: Path,
+    alias_kind: str,
+    target_name: str,
+):
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+    monkeypatch.setattr(_cfg_module.cfg, "live_trading_enabled", True)
+
+    from trading.paper_cohorts import (
+        initialize_active_paper_cohort_manifest,
+        resolve_runtime_paper_cohort,
+    )
+    from trading.paper_trader import PaperTrader
+
+    legacy_path = tmp_path / "paper_trades.db"
+    _initialized_settled_legacy_db(legacy_path)
+    cohort = resolve_runtime_paper_cohort(
+        "active-legacy-alias",
+        legacy_starting_bankroll=500.0,
+        active_starting_bankroll=125.0,
+        db_root=tmp_path,
+    )
+    initialize_active_paper_cohort_manifest(
+        cohort,
+        max_days_to_close=14.0,
+        legacy_db_path=legacy_path,
+        legacy_starting_bankroll=500.0,
+    )
+    target_path = (
+        legacy_path
+        if target_name == "legacy"
+        else cohort.db_path.parent / "legacy_cutover.db"
+    )
+    target_hash = hashlib.sha256(target_path.read_bytes()).hexdigest()
+    alias_path = tmp_path / f"{target_name}-{alias_kind}.db"
+    if alias_kind == "symlink":
+        alias_path.symlink_to(target_path)
+    else:
+        os.link(target_path, alias_path)
+
+    for startup_context in ("test", "runtime", "cli"):
+        with pytest.raises(RuntimeError, match="immutable paper cohort database is blocked"):
+            PaperTrader(
+                db_path=alias_path,
+                startup_context=startup_context,
+                starting_bankroll=500.0,
+            )
+    assert hashlib.sha256(target_path.read_bytes()).hexdigest() == target_hash
+
+
+def test_provisioned_active_cohort_blocks_unbound_runtime_and_cli_databases(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+
+    from trading.paper_cohorts import (
+        initialize_active_paper_cohort_manifest,
+        resolve_runtime_paper_cohort,
+    )
+    from trading.paper_trader import PaperTrader
+
+    legacy_path = tmp_path / "paper_trades.db"
+    _initialized_settled_legacy_db(legacy_path)
+    cohort = resolve_runtime_paper_cohort(
+        "active-unbound-runtime",
+        legacy_starting_bankroll=500.0,
+        active_starting_bankroll=125.0,
+        db_root=tmp_path,
+    )
+    initialize_active_paper_cohort_manifest(
+        cohort,
+        max_days_to_close=14.0,
+        legacy_db_path=legacy_path,
+        legacy_starting_bankroll=500.0,
+    )
+    bypass_path = tmp_path / "unbound-paper.db"
+
+    for startup_context in ("runtime", "cli"):
+        with pytest.raises(RuntimeError, match="unbound paper runtime database is blocked"):
+            PaperTrader(
+                db_path=bypass_path,
+                startup_context=startup_context,
+                starting_bankroll=500.0,
+            )
+    assert not bypass_path.exists()
+
+
+def test_explicit_storage_root_blocks_external_hardlinked_legacy_alias(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+
+    from trading.paper_cohorts import (
+        initialize_active_paper_cohort_manifest,
+        resolve_runtime_paper_cohort,
+    )
+    from trading.paper_trader import PaperTrader
+
+    legacy_path = tmp_path / "paper_trades.db"
+    _initialized_settled_legacy_db(legacy_path)
+    cohort = resolve_runtime_paper_cohort(
+        "active-configured-root",
+        legacy_starting_bankroll=500.0,
+        active_starting_bankroll=125.0,
+        db_root=tmp_path,
+    )
+    initialize_active_paper_cohort_manifest(
+        cohort,
+        max_days_to_close=14.0,
+        legacy_db_path=legacy_path,
+        legacy_starting_bankroll=500.0,
+    )
+    external_root = tmp_path.parent / f"external-paper-alias-{uuid.uuid4().hex}"
+    external_root.mkdir()
+    alias_path = external_root / "paper_trades.db"
+    os.link(legacy_path, alias_path)
+
+    with pytest.raises(RuntimeError, match="immutable paper cohort database is blocked"):
+        PaperTrader(
+            db_path=alias_path,
+            startup_context="test",
+            starting_bankroll=500.0,
+            paper_cohort_storage_root=tmp_path,
+        )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX symlink permissions")
+def test_dangling_cohort_root_blocks_immutable_and_unbound_runtime_paths(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+
+    from trading.paper_cohorts import (
+        initialize_active_paper_cohort_manifest,
+        resolve_runtime_paper_cohort,
+    )
+    from trading.paper_trader import PaperTrader
+
+    legacy_path = tmp_path / "paper_trades.db"
+    _initialized_settled_legacy_db(legacy_path)
+    cohort = resolve_runtime_paper_cohort(
+        "active-dangling-root",
+        legacy_starting_bankroll=500.0,
+        active_starting_bankroll=125.0,
+        db_root=tmp_path,
+    )
+    initialize_active_paper_cohort_manifest(
+        cohort,
+        max_days_to_close=14.0,
+        legacy_db_path=legacy_path,
+        legacy_starting_bankroll=500.0,
+    )
+    cohorts_root = tmp_path / "paper_cohorts"
+    cohorts_root.rename(tmp_path / "paper_cohorts-backup")
+    cohorts_root.symlink_to(tmp_path / "missing-cohorts", target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="immutable paper cohort database is blocked"):
+        PaperTrader(
+            db_path=legacy_path,
+            startup_context="test",
+            starting_bankroll=500.0,
+        )
+
+    bypass_path = tmp_path / "unbound-paper.db"
+    for startup_context in ("runtime", "cli"):
+        with pytest.raises(RuntimeError, match="paper cohort database is blocked"):
+            PaperTrader(
+                db_path=bypass_path,
+                startup_context=startup_context,
+                starting_bankroll=500.0,
+            )
+    assert not bypass_path.exists()
 
 
 def test_record_trade_persists_llm_capture_join_key(trader):

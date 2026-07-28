@@ -50,12 +50,20 @@ def _passing_resolved(n: int = 30, win_rate: float = 0.60) -> list[dict]:
     return trades
 
 
-def _cfg(*, bankroll=50.0, min_resolved=20, min_win_rate=0.52, max_dd=0.20):
+def _cfg(
+    *,
+    bankroll=50.0,
+    min_resolved=20,
+    min_win_rate=0.52,
+    max_dd=0.20,
+    paper_cohort_id="legacy",
+):
     return SimpleNamespace(
         bankroll=bankroll,
         go_live_min_resolved=min_resolved,
         go_live_min_win_rate=min_win_rate,
         go_live_max_drawdown_pct=max_dd,
+        paper_cohort_id=paper_cohort_id,
     )
 
 
@@ -145,6 +153,94 @@ def test_gate_requires_independent_realized_profit_evidence():
     assert any("Independent realized-profit evidence unavailable" in failure for failure in failures)
 
 
+def test_gate_hard_blocks_nonlegacy_cohort_even_when_other_local_checks_pass():
+    paper = _paper(notional=60.0, resolved_trades=_passing_resolved())
+    with patch.object(main, "cfg", _cfg(paper_cohort_id="active-20260728")), patch.object(
+        main,
+        "independent_realized_profit_evidence_available",
+        return_value=True,
+    ), patch(
+        "scripts.mark_open_positions.compute_open_position_marks",
+        return_value={"marked_value": 0.0, "unpriced_count": 0},
+    ):
+        failures = main._check_go_live_gates(paper)
+
+    assert any("active paper cohort remains isolated" in failure for failure in failures)
+
+
+def test_provisioned_cohort_gate_checks_each_drawdown_without_aggregate_dilution(tmp_path):
+    (tmp_path / "paper_cohorts").mkdir()
+    exposures = (
+        SimpleNamespace(
+            cohort_id="legacy",
+            unresolved_trade_count=0,
+            drawdown_pct=0.25,
+        ),
+        SimpleNamespace(
+            cohort_id="active-a",
+            unresolved_trade_count=0,
+            drawdown_pct=0.0,
+        ),
+    )
+    snapshot = SimpleNamespace(ok=True, failure_status="none", cohorts=exposures)
+    with patch.object(main, "cfg", _cfg(max_dd=0.20)), patch.object(
+        main,
+        "discover_paper_risk_cohorts",
+        return_value=(SimpleNamespace(), SimpleNamespace()),
+    ), patch.object(main, "aggregate_open_exposure_snapshot", return_value=snapshot):
+        active_present, failures = main._provisioned_cohort_live_risk_gate_failures(
+            db_root=tmp_path
+        )
+
+    assert active_present is True
+    assert any("legacy drawdown: 25.0%" in failure for failure in failures)
+    assert any("active paper cohort remains isolated" in failure for failure in failures)
+
+
+def test_provisioned_cohort_gate_blocks_unresolved_history_even_when_runtime_is_legacy(
+    tmp_path,
+):
+    (tmp_path / "paper_cohorts").mkdir()
+    snapshot = SimpleNamespace(
+        ok=True,
+        failure_status="none",
+        cohorts=(
+            SimpleNamespace(
+                cohort_id="legacy",
+                unresolved_trade_count=0,
+                drawdown_pct=0.0,
+            ),
+            SimpleNamespace(
+                cohort_id="active-a",
+                unresolved_trade_count=2,
+                drawdown_pct=0.0,
+            ),
+        ),
+    )
+    with patch.object(main, "cfg", _cfg(paper_cohort_id="legacy")), patch.object(
+        main,
+        "discover_paper_risk_cohorts",
+        return_value=(SimpleNamespace(), SimpleNamespace()),
+    ), patch.object(main, "aggregate_open_exposure_snapshot", return_value=snapshot):
+        active_present, failures = main._provisioned_cohort_live_risk_gate_failures(
+            db_root=tmp_path
+        )
+
+    assert active_present is True
+    assert any("active-a: 2 unresolved paper trade" in failure for failure in failures)
+
+
+def test_provisioned_cohort_gate_fails_closed_on_discovery_error(tmp_path):
+    (tmp_path / "paper_cohorts").mkdir()
+    with patch.object(main, "discover_paper_risk_cohorts", side_effect=ValueError("manifest")):
+        active_present, failures = main._provisioned_cohort_live_risk_gate_failures(
+            db_root=tmp_path
+        )
+
+    assert active_present is True
+    assert any("discovery unavailable" in failure for failure in failures)
+
+
 def test_handle_go_live_refuses_to_offer_a_failed_gate_override(capsys):
     paper = MagicMock()
     live_cfg = SimpleNamespace(live_trading_enabled=True)
@@ -199,6 +295,20 @@ def test_gate_passes_drawdown_when_mtm_equity_clears_cap():
     assert _drawdown_failure(failures) is None, (
         f"10% MTM drawdown must clear the 20% cap; failures={failures!r}"
     )
+
+
+def test_gate_uses_runtime_cohort_starting_bankroll_not_global_config():
+    paper = _paper(notional=20.0, resolved_trades=_passing_resolved())
+    paper.starting_bankroll = 100.0
+    with patch.object(main, "cfg", _cfg(bankroll=50.0)), patch(
+        "scripts.mark_open_positions.compute_open_position_marks",
+        return_value={"marked_value": 40.0, "unpriced_count": 0},
+    ):
+        failures = main._check_go_live_gates(paper)
+
+    drawdown_failure = _drawdown_failure(failures)
+    assert drawdown_failure is not None
+    assert "40.0%" in drawdown_failure
 
 
 def test_unpriced_positions_are_worthless_fail_closed():
