@@ -7,6 +7,7 @@ from scripts.daily_review import (
     _build_tier_by_source,
     _format_fresh_pass_conversion_lines,
     _format_match_attribution_lines,
+    _format_same_window_lifecycle_attribution_lines,
     _summarize_fresh_pass_assignment_shadow,
     _format_tier_change_lines,
     _load_previous_tier_state,
@@ -17,7 +18,7 @@ from scripts.daily_review import (
 from scripts.throughput_operator_metrics import ThroughputOperatorSummary
 
 
-def test_format_fresh_pass_conversion_lines_surfaces_funnel_pinch():
+def test_format_fresh_pass_conversion_lines_labels_raw_stages_noncausal():
     lines = _format_fresh_pass_conversion_lines(
         fresh_passes=186,
         match_records=40,
@@ -28,9 +29,60 @@ def test_format_fresh_pass_conversion_lines_surfaces_funnel_pinch():
     )
 
     assert lines == [
-        "  Fresh-pass conversion            : 186 fresh -> 1 signal row -> 0 LLM attempts -> 0 opportunities -> 0 paper trades",
-        "    lifecycle gaps                 : fresh_to_match=146, match_to_analysis=39, analysis_to_opportunity=1, opportunity_to_trade=0",
-        "    pinch                          : fresh_to_match (146 fresh passes had no match diagnostic)",
+        "  Fresh-pass observability          : 186 fresh; 40 match diagnostics; 1 signal row; 0 LLM attempts; 0 opportunities; 0 raw paper-trade events",
+        "    attribution                    : raw stage counts are not lifecycle conversion",
+    ]
+
+
+def test_format_same_window_lifecycle_attribution_lines_surfaces_missing_execution_lineage():
+    lines = _format_same_window_lifecycle_attribution_lines(
+        {
+            "opportunity_lifecycle_count": 3,
+            "g7_skip_lifecycle_count": 1,
+            "zero_cap_skip_lifecycle_count": 1,
+            "other_skip_lifecycle_count": 0,
+            "pending_opportunity_lifecycle_count": 1,
+            "orphan_skip_lifecycle_count": 1,
+            "paper_trade_opportunity_lifecycle_count": 0,
+            "live_submission_opportunity_lifecycle_count": 0,
+            "unknown_live_submission_opportunity_lifecycle_count": 0,
+            "unresolved_live_submission_intent_opportunity_lifecycle_count": 0,
+            "outcome_conflict_lifecycle_count": 0,
+            "terminal_evidence_conflict_lifecycle_count": 0,
+            "orphan_paper_trade_lifecycle_count": 0,
+            "orphan_live_submission_lifecycle_count": 0,
+            "orphan_unknown_live_submission_lifecycle_count": 0,
+            "orphan_live_submission_intent_lifecycle_count": 0,
+            "conflicted_lifecycle_count": 0,
+            "identity_incomplete_lifecycle_count": 0,
+            "reused_opportunity_lifecycle_count": 0,
+            "quarantined_lifecycle_count": 0,
+            "paper_trade_lifecycle_status": "unavailable",
+            "paper_trade_event_rows": 1,
+            "paper_trade_linked_event_rows": 0,
+            "live_submission_event_rows": 1,
+            "live_submission_linked_event_rows": 0,
+            "unknown_live_submission_event_rows": 0,
+            "unknown_live_submission_linked_event_rows": 0,
+            "live_submission_intent_event_rows": 0,
+            "live_submission_intent_linked_event_rows": 0,
+            "unattributed_event_counts": Counter({"PAPER_TRADE": 1}),
+        },
+        since=datetime(2026, 4, 11, tzinfo=timezone.utc),
+        until=datetime(2026, 4, 12, tzinfo=timezone.utc),
+    )
+
+    assert lines == [
+        "  Same-window linkable cohort      : 3 opportunities",
+        "    Window                         : 2026-04-11T00:00:00+00:00 -> 2026-04-12T00:00:00+00:00",
+        "    Terminal attribution           : G7 skips=1, zero-cap skips=1, other skips=0, paper trades=0, live submissions=0, unknown live submissions=0, intents without matching terminal journal=0, conflicts=0, receipt conflicts=0, pending=1, orphan skips=1",
+        "    Paper-trade lineage            : unavailable (0/1 event rows linked)",
+        "    Live submission lineage        : 0/1 event rows linked; not fill or P&L evidence",
+        "    Live submission unknown       : 0/0 event rows linked; reconciliation required",
+        "    Live submission intent lineage: 0/0 event rows linked; 0 without matching terminal journal; not fill or P&L evidence; reconciliation required",
+        "    Linkage conflicts              : lifecycle IDs=0, incomplete IDs=0, reused opportunities=0, terminal evidence conflicts=0, orphan paper trades=0, orphan live submissions=0, orphan unknown submissions=0, orphan live intents=0",
+        "    P&L basis                      : settlement and mark P&L excluded from lifecycle linkage",
+        "    Unattributed lifecycle events  : PAPER_TRADE=1",
     ]
 
 
@@ -41,10 +93,7 @@ def test_write_report_overwrites_previous_snapshot_atomically(tmp_path):
     write_report(report_path, ["PIPELINE REVIEW", "new snapshot"])
 
     assert report_path.read_text(encoding="utf-8") == (
-        "PIPELINE REVIEW\n"
-        "new snapshot\n"
-        "\n"
-        f"Daily review report saved to: {report_path}\n"
+        f"PIPELINE REVIEW\nnew snapshot\n\nDaily review report saved to: {report_path}\n"
     )
 
 
@@ -55,9 +104,7 @@ def test_format_match_attribution_lines_surfaces_suppression_drilldowns():
             "match_diagnostics_total": 10,
             "signal_analysis_detail_total": 2,
             "match_to_signal_detail_gap": 8,
-            "match_diagnostic_pre_llm_gate": Counter(
-                {"would_fail": 9, "would_pass": 1}
-            ),
+            "match_diagnostic_pre_llm_gate": Counter({"would_fail": 9, "would_pass": 1}),
             "match_suppressed_reasons": Counter({"minimal_overlap": 3}),
             "match_suppressed_tokens": Counter({"iran": 2, "israel": 1}),
             "match_weight_applied_total": 5,
@@ -186,14 +233,35 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
                 "PAPER_TRADE": 2,
                 "LIVE_ORDER": 0,
             },
+            "same_window_lifecycle_attribution": {
+                "opportunity_lifecycle_count": 3,
+                "g7_skip_lifecycle_count": 1,
+                "zero_cap_skip_lifecycle_count": 1,
+                "other_skip_lifecycle_count": 0,
+                "pending_opportunity_lifecycle_count": 1,
+                "orphan_skip_lifecycle_count": 0,
+                "paper_trade_opportunity_lifecycle_count": 0,
+                "live_submission_opportunity_lifecycle_count": 0,
+                "outcome_conflict_lifecycle_count": 0,
+                "orphan_paper_trade_lifecycle_count": 0,
+                "orphan_live_submission_lifecycle_count": 0,
+                "conflicted_lifecycle_count": 0,
+                "identity_incomplete_lifecycle_count": 0,
+                "reused_opportunity_lifecycle_count": 0,
+                "quarantined_lifecycle_count": 0,
+                "paper_trade_lifecycle_status": "unavailable",
+                "paper_trade_event_rows": 2,
+                "paper_trade_linked_event_rows": 0,
+                "live_submission_event_rows": 0,
+                "live_submission_linked_event_rows": 0,
+                "unattributed_event_counts": Counter({"PAPER_TRADE": 2}),
+            },
             "analysis_rejected_reasons": {"stale_news": 2, "no_keywords": 1},
             "analysis_rejected_categories": {"post_llm_neutral_empty_keywords": 1},
             "match_diagnostics_total": 8,
             "signal_analysis_detail_total": 6,
             "match_to_signal_detail_gap": 2,
-            "match_diagnostic_pre_llm_gate": Counter(
-                {"would_fail": 7, "would_pass": 1}
-            ),
+            "match_diagnostic_pre_llm_gate": Counter({"would_fail": 7, "would_pass": 1}),
             "match_diagnostic_sources": Counter({"Reuters": 5, "AP": 3}),
             "match_diagnostic_tickers": Counter({"KXIRAN": 5, "KXTRUMP": 3}),
             "match_suppressed_reasons": Counter({"minimal_overlap": 1}),
@@ -392,9 +460,7 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
                     "signal_source": "qns.com",
                 }
             ],
-            "open_resolution_buckets": [
-                {"bucket": "0-3d", "venue": "polymarket", "trades": 1, "exposure": 12.5}
-            ],
+            "open_resolution_buckets": [{"bucket": "0-3d", "venue": "polymarket", "trades": 1, "exposure": 12.5}],
             "open_mark_summary": {
                 "open_cost_dollars": 12.5,
                 "marked_kalshi_cost_dollars": 0.5,
@@ -569,11 +635,15 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     assert "Opportunity age p50/p90        : 2.0m / 5.0m" in rendered
     assert "KX1: 1.00/day" in rendered
     assert "4. EDGE FORMATION" in rendered
-    assert "5. EXECUTION" in rendered
+    assert "5. PAPER TRADES AND LIVE SUBMISSIONS" in rendered
+    assert "Live order submissions" in rendered
+    assert "Scope: live order submissions are not fill or P&L evidence." in rendered
     assert "Matcher weights runtime status   : FAIL_CLOSED" in rendered
     assert "matcher weights staged: data/matcher_token_weights.json" in rendered
     assert "High-confidence full-loss rows   : 1" in rendered
-    assert "PM-BAD venue=polymarket_us pnl=$-4.15 cost=$4.15 p=89.8% entry=83.0c llm_conf=85.0% source=qns.com" in rendered
+    assert (
+        "PM-BAD venue=polymarket_us pnl=$-4.15 cost=$4.15 p=89.8% entry=83.0c llm_conf=85.0% source=qns.com" in rendered
+    )
     assert "6. LLM VALUE-ADD ANALYSIS" in rendered
     assert "7. LLM VALUE-ADD SEGMENTATION" in rendered
     assert "Appendix" in rendered
@@ -582,9 +652,15 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     assert "Drilldown: pre-LLM would-block by source (top)" in rendered
     assert "Drilldown: pre-LLM would-block by market (top)" in rendered
     assert "Drilldown: per-source freshness waterfall" in rendered
-    assert "Fresh-pass conversion" in rendered
-    assert "9 fresh -> 6 signal rows -> 1 LLM attempts -> 3 opportunities -> 2 paper trades" in rendered
-    assert "lifecycle gaps                 : fresh_to_match=1, match_to_analysis=2, analysis_to_opportunity=3, opportunity_to_trade=1" in rendered
+    assert "Fresh-pass observability" in rendered
+    assert (
+        "9 fresh; 8 match diagnostics; 6 signal rows; 1 LLM attempt; 3 opportunities; 2 raw paper-trade events"
+        in rendered
+    )
+    assert "Same-window linkable cohort      : 3 opportunities" in rendered
+    assert "Paper-trade lineage            : unavailable (0/2 event rows linked)" in rendered
+    assert "Live submission lineage        : 0/0 event rows linked; not fill or P&L evidence" in rendered
+    assert "P&L basis                      : settlement and mark P&L excluded from lifecycle linkage" in rendered
     assert "Match diagnostics                : 8" in rendered
     assert "Signal analysis detail rows      : 6" in rendered
     assert "Match -> analysis detail gap     : 2" in rendered
@@ -632,7 +708,7 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     assert "Reuters: 2" in rendered
     assert "Drilldown: top no-keyword analysis-exit tickers" in rendered
     assert "KXIRAN: 2" in rendered
-    assert "Paper trades                     : 2" in rendered
+    assert "Paper-trade records              : 2" in rendered
     assert "Skipped liquidity/near-limit     : 1" in rendered
     assert "Open cost                        : +$12.50" in rendered
     assert "Gross executable bid value       : +$10.50" in rendered
@@ -747,7 +823,9 @@ def test_load_previous_tier_state_returns_none_for_non_dict_payload(tmp_path):
 
 def test_load_previous_tier_state_returns_dict_for_valid_payload(tmp_path):
     target = tmp_path / "ok.json"
-    target.write_text(json.dumps({"current": {"date": "2026-04-24", "tiers": {"X": "keep"}}, "previous": None}), encoding="utf-8")
+    target.write_text(
+        json.dumps({"current": {"date": "2026-04-24", "tiers": {"X": "keep"}}, "previous": None}), encoding="utf-8"
+    )
     state = _load_previous_tier_state(target)
     assert state == {"current": {"date": "2026-04-24", "tiers": {"X": "keep"}}, "previous": None}
 
@@ -766,10 +844,16 @@ def test_save_current_tier_state_first_run_creates_file_with_no_previous(tmp_pat
 def test_save_current_tier_state_same_day_rerun_preserves_previous(tmp_path):
     target = tmp_path / "state.json"
     target.write_text(
-        json.dumps({
-            "current": {"date": "2026-04-25", "tiers": {"Reuters": "keep"}, "saved_at_utc": "2026-04-25T08:00:00+00:00"},
-            "previous": {"date": "2026-04-24", "tiers": {"Reuters": "top performers"}},
-        }),
+        json.dumps(
+            {
+                "current": {
+                    "date": "2026-04-25",
+                    "tiers": {"Reuters": "keep"},
+                    "saved_at_utc": "2026-04-25T08:00:00+00:00",
+                },
+                "previous": {"date": "2026-04-24", "tiers": {"Reuters": "top performers"}},
+            }
+        ),
         encoding="utf-8",
     )
     now = datetime(2026, 4, 25, 18, 0, tzinfo=timezone.utc)
@@ -785,10 +869,12 @@ def test_save_current_tier_state_same_day_rerun_preserves_previous(tmp_path):
 def test_save_current_tier_state_new_day_shifts_current_to_previous(tmp_path):
     target = tmp_path / "state.json"
     target.write_text(
-        json.dumps({
-            "current": {"date": "2026-04-24", "tiers": {"Reuters": "keep"}},
-            "previous": {"date": "2026-04-23", "tiers": {"Reuters": "top performers"}},
-        }),
+        json.dumps(
+            {
+                "current": {"date": "2026-04-24", "tiers": {"Reuters": "keep"}},
+                "previous": {"date": "2026-04-23", "tiers": {"Reuters": "top performers"}},
+            }
+        ),
         encoding="utf-8",
     )
     now = datetime(2026, 4, 25, 12, 0, tzinfo=timezone.utc)
@@ -801,9 +887,7 @@ def test_save_current_tier_state_new_day_shifts_current_to_previous(tmp_path):
 
 def test_format_tier_change_lines_no_prior_baseline_returns_first_run_notice():
     lines = _format_tier_change_lines(None, {"X": "keep"}, prior_date=None)
-    assert lines == [
-        "  Status changes since previous report : (no prior baseline; first run or state reset)"
-    ]
+    assert lines == ["  Status changes since previous report : (no prior baseline; first run or state reset)"]
 
 
 def test_format_tier_change_lines_no_changes_returns_empty_notice():
@@ -818,11 +902,11 @@ def test_format_tier_change_lines_no_changes_returns_empty_notice():
 
 def test_format_tier_change_lines_reports_degradation_and_silence():
     prior = {
-        "Reuters": "top performers",       # -> watch (regression, jump 2)
-        "AP": "keep",                       # unchanged
-        "BBC": "keep",                      # silent
-        "NoiseFeed": "prune",               # already low-tier; ignored
-        "Disabled": "disabled by source",   # ignored
+        "Reuters": "top performers",  # -> watch (regression, jump 2)
+        "AP": "keep",  # unchanged
+        "BBC": "keep",  # silent
+        "NoiseFeed": "prune",  # already low-tier; ignored
+        "Disabled": "disabled by source",  # ignored
     }
     current = {
         "Reuters": "watch / investigate",
@@ -929,25 +1013,40 @@ def test_build_daily_review_filters_waterfall_by_tier_and_appends_summary(monkey
         lambda *args, **kwargs: {
             "counts": {},
             "llm_observability": {
-                "attempted": 0, "skipped_routing": 0,
+                "attempted": 0,
+                "skipped_routing": 0,
                 "skipped_routing_reasons": Counter(),
-                "result_used": 0, "fallback": 0,
-                "status_counts": Counter(), "latency_ms_samples": [],
-                "total_stage_ms_samples": [], "queue_wait_ms_samples": [],
-                "http_round_trip_ms_samples": [], "parse_ms_samples": [],
-                "contention_observed": 0, "max_in_flight_at_entry": 0,
+                "result_used": 0,
+                "fallback": 0,
+                "status_counts": Counter(),
+                "latency_ms_samples": [],
+                "total_stage_ms_samples": [],
+                "queue_wait_ms_samples": [],
+                "http_round_trip_ms_samples": [],
+                "parse_ms_samples": [],
+                "contention_observed": 0,
+                "max_in_flight_at_entry": 0,
             },
             "skip_breakdown": {},
             "audit_rows": [],
             "llm_value_add": {
-                "llm_rows": 0, "near_neutral_outputs": 0, "non_zero_edge_outputs": 0,
-                "meaningful_signals": 0, "trade_candidates": 0, "llm_created_edge": 0,
+                "llm_rows": 0,
+                "near_neutral_outputs": 0,
+                "non_zero_edge_outputs": 0,
+                "meaningful_signals": 0,
+                "trade_candidates": 0,
+                "llm_created_edge": 0,
                 "probability_movement_buckets": Counter(),
                 "edge_magnitude_buckets": Counter(),
-                "meaningful_sources": Counter(), "meaningful_tickers": Counter(),
-                "strong_examples": [], "neutral_examples": [], "rare_non_neutral_examples": [],
+                "meaningful_sources": Counter(),
+                "meaningful_tickers": Counter(),
+                "strong_examples": [],
+                "neutral_examples": [],
+                "rare_non_neutral_examples": [],
                 "segmentation": {
-                    "by_source": [], "by_ticker": [], "by_price_band": [],
+                    "by_source": [],
+                    "by_ticker": [],
+                    "by_price_band": [],
                     "timing": {"available": False, "reason": "n/a"},
                     "headline_category": {"available": False, "reason": "n/a"},
                 },
@@ -957,21 +1056,29 @@ def test_build_daily_review_filters_waterfall_by_tier_and_appends_summary(monkey
     monkeypatch.setattr(
         "scripts.daily_review.paper_performance_drilldown.summarize",
         lambda *args, **kwargs: {
-            "total_trades": 0, "resolved_trades": 0, "open_trades": 0,
-            "win_rate": None, "total_pnl": 0.0,
+            "total_trades": 0,
+            "resolved_trades": 0,
+            "open_trades": 0,
+            "win_rate": None,
+            "total_pnl": 0.0,
         },
     )
     monkeypatch.setattr(
         "scripts.daily_review.match_suppression_audit.summarize",
         lambda *args, **kwargs: {
-            "total_candidates": 0, "safe_count": 0, "risky_count": 0, "by_source": {},
+            "total_candidates": 0,
+            "safe_count": 0,
+            "risky_count": 0,
+            "by_source": {},
         },
     )
     monkeypatch.setattr(
         "scripts.daily_review.keyword_feedback.summarize",
         lambda *args, **kwargs: {
-            "no_keyword_misses": 0, "corroborating_keyword_gate_records": 0,
-            "unique_candidate_phrases": 0, "grouped_phrases": {},
+            "no_keyword_misses": 0,
+            "corroborating_keyword_gate_records": 0,
+            "unique_candidate_phrases": 0,
+            "grouped_phrases": {},
         },
     )
     captured_scorecard_kwargs = {}
@@ -979,7 +1086,9 @@ def test_build_daily_review_filters_waterfall_by_tier_and_appends_summary(monkey
     def _capture_scorecard(*args, **kwargs):
         captured_scorecard_kwargs.update(kwargs)
         return {
-            "rows": [], "log_meta": {"records_kept": 0}, "db_exists": False,
+            "rows": [],
+            "log_meta": {"records_kept": 0},
+            "db_exists": False,
             "grouped": {
                 "top performers": [],
                 "keep": [{"source": "Reuters"}],
@@ -989,25 +1098,30 @@ def test_build_daily_review_filters_waterfall_by_tier_and_appends_summary(monkey
                 # DeadFeed carries a lifetime funnel so Section 8 must render it
                 # beside the "remove immediately" verdict (B). An operator who
                 # sees a bare verdict without the funnel could delete a producer.
-                "remove immediately": [{
-                    "source": "DeadFeed",
-                    "lifetime_posts": 300, "lifetime_signals": 5,
-                    "lifetime_opportunities": 2, "lifetime_trades": 1,
-                }],
+                "remove immediately": [
+                    {
+                        "source": "DeadFeed",
+                        "lifetime_posts": 300,
+                        "lifetime_signals": 5,
+                        "lifetime_opportunities": 2,
+                        "lifetime_trades": 1,
+                    }
+                ],
                 "disabled by source": [],
                 "disabled by family": [],
             },
         }
 
-    monkeypatch.setattr(
-        "scripts.daily_review.source_scorecard.summarize", _capture_scorecard
-    )
+    monkeypatch.setattr("scripts.daily_review.source_scorecard.summarize", _capture_scorecard)
 
     state_path = tmp_path / "tier_state.json"
     lines = build_daily_review(
         trades_path=Path("logs/trades/trades.jsonl"),
         paper_db_path=Path("data/paper_trades.db"),
-        since=None, until=None, top=5, exclude_test=True,
+        since=None,
+        until=None,
+        top=5,
+        exclude_test=True,
         tier_state_path=state_path,
     )
     rendered = "\n".join(lines)
@@ -1062,10 +1176,12 @@ def test_build_daily_review_uses_persisted_state_for_change_diff(monkeypatch, tm
     """When a prior baseline exists, regressions appear in the changes section."""
     state_path = tmp_path / "tier_state.json"
     state_path.write_text(
-        json.dumps({
-            "current": {"date": "2026-04-25", "tiers": {"Reuters": "keep", "BBC": "keep"}},
-            "previous": {"date": "2026-04-24", "tiers": {"Reuters": "top performers", "BBC": "keep"}},
-        }),
+        json.dumps(
+            {
+                "current": {"date": "2026-04-25", "tiers": {"Reuters": "keep", "BBC": "keep"}},
+                "previous": {"date": "2026-04-24", "tiers": {"Reuters": "top performers", "BBC": "keep"}},
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -1073,71 +1189,146 @@ def test_build_daily_review_uses_persisted_state_for_change_diff(monkeypatch, tm
     monkeypatch.setattr("scripts.daily_review._ollama_runtime_summary", lambda: "stub")
     monkeypatch.setattr(
         "scripts.daily_review.freshness_diagnostics.summarize",
-        lambda *a, **kw: {"sources": {"Reuters": {
-            "source": "Reuters", "observed_records": 10, "fresh_passes": 5,
-            "early_stale_drops": 2, "within_300s": 3, "stale_rate": 0.2,
-            "median_age_seconds": 100.0, "freshest_age_seconds": 30.0,
-            "p90_age_seconds": 200.0, "age_samples_count": 5,
-            "interpretation": "near-threshold",
-        }}},
+        lambda *a, **kw: {
+            "sources": {
+                "Reuters": {
+                    "source": "Reuters",
+                    "observed_records": 10,
+                    "fresh_passes": 5,
+                    "early_stale_drops": 2,
+                    "within_300s": 3,
+                    "stale_rate": 0.2,
+                    "median_age_seconds": 100.0,
+                    "freshest_age_seconds": 30.0,
+                    "p90_age_seconds": 200.0,
+                    "age_samples_count": 5,
+                    "interpretation": "near-threshold",
+                }
+            }
+        },
     )
     for stub_target, stub_value in [
-        ("match_quality_diagnostics", {
-            "match_records": 0, "low_quality_matches": 0, "heuristic_flags": Counter(),
-            "pre_llm_would_block": 0, "pre_llm_would_block_by_source": Counter(),
-            "pre_llm_would_block_by_ticker": Counter(), "examples_bad": [],
-        }),
-        ("decision_funnel_summary", {
-            "records_kept": 0, "event_counts": {}, "analysis_rejected_reasons": {},
-        }),
-        ("signal_edge_diagnostics", {
-            "counts": {}, "llm_observability": {
-                "attempted": 0, "skipped_routing": 0, "skipped_routing_reasons": Counter(),
-                "result_used": 0, "fallback": 0, "status_counts": Counter(),
-                "latency_ms_samples": [], "total_stage_ms_samples": [],
-                "queue_wait_ms_samples": [], "http_round_trip_ms_samples": [],
-                "parse_ms_samples": [], "contention_observed": 0, "max_in_flight_at_entry": 0,
+        (
+            "match_quality_diagnostics",
+            {
+                "match_records": 0,
+                "low_quality_matches": 0,
+                "heuristic_flags": Counter(),
+                "pre_llm_would_block": 0,
+                "pre_llm_would_block_by_source": Counter(),
+                "pre_llm_would_block_by_ticker": Counter(),
+                "examples_bad": [],
             },
-            "skip_breakdown": {}, "audit_rows": [],
-            "llm_value_add": {
-                "llm_rows": 0, "near_neutral_outputs": 0, "non_zero_edge_outputs": 0,
-                "meaningful_signals": 0, "trade_candidates": 0, "llm_created_edge": 0,
-                "probability_movement_buckets": Counter(), "edge_magnitude_buckets": Counter(),
-                "meaningful_sources": Counter(), "meaningful_tickers": Counter(),
-                "strong_examples": [], "neutral_examples": [], "rare_non_neutral_examples": [],
-                "segmentation": {"by_source": [], "by_ticker": [], "by_price_band": [],
-                                 "timing": {"available": False, "reason": "n/a"},
-                                 "headline_category": {"available": False, "reason": "n/a"}},
+        ),
+        (
+            "decision_funnel_summary",
+            {
+                "records_kept": 0,
+                "event_counts": {},
+                "analysis_rejected_reasons": {},
             },
-        }),
-        ("paper_performance_drilldown", {
-            "total_trades": 0, "resolved_trades": 0, "open_trades": 0,
-            "win_rate": None, "total_pnl": 0.0,
-        }),
-        ("match_suppression_audit", {
-            "total_candidates": 0, "safe_count": 0, "risky_count": 0, "by_source": {},
-        }),
-        ("keyword_feedback", {
-            "no_keyword_misses": 0, "corroborating_keyword_gate_records": 0,
-            "unique_candidate_phrases": 0, "grouped_phrases": {},
-        }),
-        ("source_scorecard", {
-            "rows": [], "log_meta": {"records_kept": 0}, "db_exists": False,
-            "grouped": {
-                "top performers": [], "keep": [{"source": "Reuters"}],
-                "watch / investigate": [], "incubating": [],
-                "prune": [], "remove immediately": [],
-                "disabled by source": [], "disabled by family": [],
+        ),
+        (
+            "signal_edge_diagnostics",
+            {
+                "counts": {},
+                "llm_observability": {
+                    "attempted": 0,
+                    "skipped_routing": 0,
+                    "skipped_routing_reasons": Counter(),
+                    "result_used": 0,
+                    "fallback": 0,
+                    "status_counts": Counter(),
+                    "latency_ms_samples": [],
+                    "total_stage_ms_samples": [],
+                    "queue_wait_ms_samples": [],
+                    "http_round_trip_ms_samples": [],
+                    "parse_ms_samples": [],
+                    "contention_observed": 0,
+                    "max_in_flight_at_entry": 0,
+                },
+                "skip_breakdown": {},
+                "audit_rows": [],
+                "llm_value_add": {
+                    "llm_rows": 0,
+                    "near_neutral_outputs": 0,
+                    "non_zero_edge_outputs": 0,
+                    "meaningful_signals": 0,
+                    "trade_candidates": 0,
+                    "llm_created_edge": 0,
+                    "probability_movement_buckets": Counter(),
+                    "edge_magnitude_buckets": Counter(),
+                    "meaningful_sources": Counter(),
+                    "meaningful_tickers": Counter(),
+                    "strong_examples": [],
+                    "neutral_examples": [],
+                    "rare_non_neutral_examples": [],
+                    "segmentation": {
+                        "by_source": [],
+                        "by_ticker": [],
+                        "by_price_band": [],
+                        "timing": {"available": False, "reason": "n/a"},
+                        "headline_category": {"available": False, "reason": "n/a"},
+                    },
+                },
             },
-        }),
+        ),
+        (
+            "paper_performance_drilldown",
+            {
+                "total_trades": 0,
+                "resolved_trades": 0,
+                "open_trades": 0,
+                "win_rate": None,
+                "total_pnl": 0.0,
+            },
+        ),
+        (
+            "match_suppression_audit",
+            {
+                "total_candidates": 0,
+                "safe_count": 0,
+                "risky_count": 0,
+                "by_source": {},
+            },
+        ),
+        (
+            "keyword_feedback",
+            {
+                "no_keyword_misses": 0,
+                "corroborating_keyword_gate_records": 0,
+                "unique_candidate_phrases": 0,
+                "grouped_phrases": {},
+            },
+        ),
+        (
+            "source_scorecard",
+            {
+                "rows": [],
+                "log_meta": {"records_kept": 0},
+                "db_exists": False,
+                "grouped": {
+                    "top performers": [],
+                    "keep": [{"source": "Reuters"}],
+                    "watch / investigate": [],
+                    "incubating": [],
+                    "prune": [],
+                    "remove immediately": [],
+                    "disabled by source": [],
+                    "disabled by family": [],
+                },
+            },
+        ),
     ]:
-        monkeypatch.setattr(f"scripts.daily_review.{stub_target}.summarize",
-                            lambda *a, _v=stub_value, **kw: _v)
+        monkeypatch.setattr(f"scripts.daily_review.{stub_target}.summarize", lambda *a, _v=stub_value, **kw: _v)
 
     lines = build_daily_review(
         trades_path=Path("logs/trades/trades.jsonl"),
         paper_db_path=Path("data/paper_trades.db"),
-        since=None, until=None, top=5, exclude_test=True,
+        since=None,
+        until=None,
+        top=5,
+        exclude_test=True,
         tier_state_path=state_path,
     )
     rendered = "\n".join(lines)

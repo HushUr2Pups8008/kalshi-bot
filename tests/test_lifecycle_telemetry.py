@@ -62,45 +62,56 @@ def test_research_lifecycle_id_is_stable_for_claim_identity() -> None:
 
 
 def test_settlement_source_match_is_strict_tristate() -> None:
-    settlement_sources = (
-        SimpleNamespace(label="Reuters", domain="reuters.com", url="https://reuters.com"),
+    settlement_sources = (SimpleNamespace(label="Reuters", domain="reuters.com", url="https://reuters.com"),)
+
+    assert (
+        settlement_source_match(
+            source="Reuters",
+            url="https://reuters.com/story",
+            source_hint_domain=None,
+            settlement_sources=settlement_sources,
+        )
+        is True
+    )
+    assert (
+        settlement_source_match(
+            source="Associated Press",
+            url="https://apnews.com/story",
+            source_hint_domain=None,
+            settlement_sources=settlement_sources,
+        )
+        is False
+    )
+    assert (
+        settlement_source_match(
+            source="Reuters",
+            url=None,
+            source_hint_domain=None,
+            settlement_sources=(),
+        )
+        is None
+    )
+    assert (
+        settlement_source_match(
+            source="Reuters",
+            url=None,
+            source_hint_domain=None,
+            settlement_sources=("This market resolves according to reporting selected after close.",),
+        )
+        is None
+    )
+    assert (
+        settlement_source_match(
+            source=None,
+            url=None,
+            source_hint_domain=None,
+            settlement_sources=settlement_sources,
+        )
+        is None
     )
 
-    assert settlement_source_match(
-        source="Reuters",
-        url="https://reuters.com/story",
-        source_hint_domain=None,
-        settlement_sources=settlement_sources,
-    ) is True
-    assert settlement_source_match(
-        source="Associated Press",
-        url="https://apnews.com/story",
-        source_hint_domain=None,
-        settlement_sources=settlement_sources,
-    ) is False
-    assert settlement_source_match(
-        source="Reuters",
-        url=None,
-        source_hint_domain=None,
-        settlement_sources=(),
-    ) is None
-    assert settlement_source_match(
-        source="Reuters",
-        url=None,
-        source_hint_domain=None,
-        settlement_sources=(
-            "This market resolves according to reporting selected after close.",
-        ),
-    ) is None
-    assert settlement_source_match(
-        source=None,
-        url=None,
-        source_hint_domain=None,
-        settlement_sources=settlement_sources,
-    ) is None
 
-
-def test_all_six_lifecycle_records_share_top_level_context(tmp_path: Path) -> None:
+def test_all_eight_lifecycle_records_share_top_level_context(tmp_path: Path) -> None:
     logger = TradeLogger(path=tmp_path / "trades.jsonl")
     lifecycle_id = "lc-0123456789abcdef0123456789abcdef"
     signal_meta = {
@@ -161,7 +172,13 @@ def test_all_six_lifecycle_records_share_top_level_context(tmp_path: Path) -> No
             lifecycle_id=lifecycle_id,
             settlement_source_match=None,
         )
-        logger.log_skipped(reason="blocked", ticker="KXTEST-26", signal_meta=signal_meta)
+        logger.log_skipped(
+            reason="blocked",
+            ticker="KXTEST-26",
+            side="yes",
+            venue="kalshi",
+            signal_meta=signal_meta,
+        )
         logger.log_paper_trade(
             trade_id="paper-1",
             ticker="KXTEST-26",
@@ -179,6 +196,27 @@ def test_all_six_lifecycle_records_share_top_level_context(tmp_path: Path) -> No
             signal_source="Reuters",
             signal_meta=signal_meta,
         )
+        logger.log_live_submission_intent(
+            submission_id="submission-1",
+            ticker="KXTEST-26",
+            side="yes",
+            contracts=1,
+            price_cents=50,
+            cost_dollars=0.5,
+            venue="kalshi",
+            signal_meta=signal_meta,
+        )
+        logger.log_live_submission_unknown(
+            submission_id="submission-1",
+            ticker="KXTEST-26",
+            side="yes",
+            contracts=1,
+            price_cents=50,
+            cost_dollars=0.5,
+            outcome="error_result",
+            venue="kalshi",
+            signal_meta=signal_meta,
+        )
         logger.log_live_order(
             order_id="live-1",
             ticker="KXTEST-26",
@@ -187,6 +225,7 @@ def test_all_six_lifecycle_records_share_top_level_context(tmp_path: Path) -> No
             price_cents=50,
             cost_dollars=0.5,
             status="resting",
+            venue="kalshi",
             signal_meta=signal_meta,
         )
 
@@ -197,6 +236,8 @@ def test_all_six_lifecycle_records_share_top_level_context(tmp_path: Path) -> No
         "BLEND_DECISION",
         "SKIPPED",
         "PAPER_TRADE",
+        "LIVE_SUBMISSION_INTENT",
+        "LIVE_SUBMISSION_UNKNOWN",
         "LIVE_ORDER",
     ]
     assert {record["lifecycle_id"] for record in records} == {lifecycle_id}
@@ -204,6 +245,13 @@ def test_all_six_lifecycle_records_share_top_level_context(tmp_path: Path) -> No
     assert all(record["settlement_source_match"] is None for record in records)
     assert all("unrelated" not in record for record in records)
     assert records[-1]["signal_meta"] == signal_meta
+    terminal_records = [
+        record
+        for record in records
+        if record["type"]
+        in {"SKIPPED", "PAPER_TRADE", "LIVE_SUBMISSION_INTENT", "LIVE_SUBMISSION_UNKNOWN", "LIVE_ORDER"}
+    ]
+    assert all({"lifecycle_id", "venue", "ticker", "side"} <= record.keys() for record in terminal_records)
 
 
 @pytest.mark.asyncio
@@ -243,9 +291,7 @@ async def test_real_origin_blend_and_terminal_surfaces_share_lifecycle_context(
         price_method="dollars_fixed_point",
         regime_weights={"fast": 1.0, "interpretation": 0.0, "structural": 0.0},
     )
-    market.settlement_sources = (
-        SettlementSource(label="Reuters", url="https://reuters.com"),
-    )
+    market.settlement_sources = (SettlementSource(label="Reuters", url="https://reuters.com"),)
     matcher = MarketMatcher(MagicMock())
     matcher._cache.get_markets = AsyncMock(return_value=[market])
     monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)

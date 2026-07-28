@@ -1,4 +1,5 @@
 from collections import Counter
+from datetime import datetime, timezone
 import shutil
 import uuid
 from pathlib import Path
@@ -73,7 +74,14 @@ def test_summarize_reads_partitioned_trade_root(local_tmp_dir):
     write_jsonl(
         root / "archive" / "2026" / "04" / "2026-04-11.jsonl",
         [
-            {"type": "ANALYSIS_REJECTED", "reason": "stale_news", "source": "Reuters", "ticker": "KXOLD", "age_seconds": 600, "ts": "2026-04-11T00:00:00+00:00"},
+            {
+                "type": "ANALYSIS_REJECTED",
+                "reason": "stale_news",
+                "source": "Reuters",
+                "ticker": "KXOLD",
+                "age_seconds": 600,
+                "ts": "2026-04-11T00:00:00+00:00",
+            },
         ],
     )
     write_jsonl(
@@ -149,7 +157,12 @@ def test_summarize_aggregates_skip_reasons(local_tmp_dir):
         [
             {"type": "SKIPPED", "reason": "cooldown", "ts": "2026-04-11T00:00:00+00:00"},
             {"type": "SKIPPED", "reason": "cooldown", "skip_category": "cooldown", "ts": "2026-04-11T00:01:00+00:00"},
-            {"type": "SKIPPED", "reason": "same-signal duplicate", "skip_category": "duplicate", "ts": "2026-04-11T00:02:00+00:00"},
+            {
+                "type": "SKIPPED",
+                "reason": "same-signal duplicate",
+                "skip_category": "duplicate",
+                "ts": "2026-04-11T00:02:00+00:00",
+            },
         ],
     )
 
@@ -227,15 +240,9 @@ def test_summarize_tracks_false_positive_neutral_match_reviews(local_tmp_dir):
     assert stats["match_llm_reviews_total"] == 3
     assert stats["match_llm_review_verdicts"]["false_positive_neutral"] == 2
     assert stats["match_llm_review_verdicts"]["true_positive"] == 1
-    assert stats["false_positive_neutral_empty_keyword_sources"] == Counter(
-        {"NYT > U.S. News": 1}
-    )
-    assert stats["false_positive_neutral_empty_keyword_tickers"] == Counter(
-        {"PACCC-USSE-MIDTERMS-2026-11-03-REP": 1}
-    )
-    assert stats["false_positive_neutral_empty_keyword_prefixes"] == Counter(
-        {"polymarket_us:paccc-usse-midterms": 1}
-    )
+    assert stats["false_positive_neutral_empty_keyword_sources"] == Counter({"NYT > U.S. News": 1})
+    assert stats["false_positive_neutral_empty_keyword_tickers"] == Counter({"PACCC-USSE-MIDTERMS-2026-11-03-REP": 1})
+    assert stats["false_positive_neutral_empty_keyword_prefixes"] == Counter({"polymarket_us:paccc-usse-midterms": 1})
     assert stats["false_positive_neutral_empty_keyword_reviews"] == 1
 
 
@@ -428,9 +435,11 @@ def test_print_summary_handles_no_observable_funnel_stages(capsys, local_tmp_dir
 
     assert "DECISION FUNNEL SUMMARY" in output
     assert "Signals logged                : 0" in output
-    assert "Opportunities logged          : 0 (n/a of signals)" in output
+    assert "Opportunities logged          : 0" in output
+    assert "of signals" not in output
     assert "Executor skips               : 0" in output
-    assert "Executions                   : 0" in output
+    assert "Paper-trade records          : 0" in output
+    assert "Live order submissions       : 0" in output
     assert "Path Contribution (decision-stage records)" in output
     assert "  (none)" in output
 
@@ -728,3 +737,818 @@ def test_print_summary_includes_match_attribution_sections(capsys, local_tmp_dir
     assert "raw=0.0821 adjusted=0.0671 threshold=0.06 multiplier=0.8173" in output
     assert "Match Weight Tokens" in output
     assert "ukraine" in output
+
+
+def test_summarize_attributes_same_window_lifecycle_terminals_without_execution_claim(
+    local_tmp_dir,
+):
+    path = local_tmp_dir / "trades.jsonl"
+    write_jsonl(
+        path,
+        [
+            {
+                "type": "OPPORTUNITY",
+                "lifecycle_id": "lc-g7",
+                "venue": "kalshi",
+                "ticker": "KXG7",
+                "side": "no",
+                "ts": "2026-04-11T00:00:00+00:00",
+            },
+            {
+                "type": "SKIPPED",
+                "lifecycle_id": "lc-g7",
+                "reason": "G7_open_exposure_drawdown",
+                "venue": "kalshi",
+                "ticker": "KXG7",
+                "side": "no",
+                "ts": "2026-04-11T00:01:00+00:00",
+            },
+            {
+                "type": "SKIPPED",
+                "lifecycle_id": "lc-g7",
+                "reason": "G7_open_exposure_drawdown",
+                "venue": "kalshi",
+                "ticker": "KXG7",
+                "side": "no",
+                "ts": "2026-04-11T00:01:00+00:00",
+            },
+            {
+                "type": "OPPORTUNITY",
+                "lifecycle_id": "lc-cap",
+                "venue": "kalshi",
+                "ticker": "KXCAP",
+                "side": "no",
+                "ts": "2026-04-11T00:02:00+00:00",
+            },
+            {
+                "type": "SKIPPED",
+                "lifecycle_id": "lc-cap",
+                "reason": "capped_dollars=0",
+                "capped_dollars": 0,
+                "venue": "kalshi",
+                "ticker": "KXCAP",
+                "side": "no",
+                "ts": "2026-04-11T00:03:00+00:00",
+            },
+            {
+                "type": "OPPORTUNITY",
+                "lifecycle_id": "lc-pending",
+                "venue": "kalshi",
+                "ticker": "KXPENDING",
+                "side": "no",
+                "ts": "2026-04-11T00:04:00+00:00",
+            },
+            {
+                "type": "SKIPPED",
+                "lifecycle_id": "lc-orphan",
+                "reason": "cooldown",
+                "venue": "kalshi",
+                "ticker": "KXORPHAN",
+                "side": "no",
+                "ts": "2026-04-11T00:05:00+00:00",
+            },
+            {"type": "OPPORTUNITY", "lifecycle_id": "   ", "ts": "2026-04-11T00:06:00+00:00"},
+            {"type": "PAPER_TRADE", "ts": "2026-04-11T00:07:00+00:00"},
+        ],
+    )
+
+    stats = summarize(path, since=None, until=None)
+
+    assert stats["same_window_lifecycle_attribution"] == {
+        "opportunity_lifecycle_count": 3,
+        "g7_skip_lifecycle_count": 1,
+        "zero_cap_skip_lifecycle_count": 1,
+        "other_skip_lifecycle_count": 0,
+        "pending_opportunity_lifecycle_count": 1,
+        "orphan_skip_lifecycle_count": 1,
+        "paper_trade_opportunity_lifecycle_count": 0,
+        "live_submission_opportunity_lifecycle_count": 0,
+        "unknown_live_submission_opportunity_lifecycle_count": 0,
+        "unresolved_live_submission_intent_opportunity_lifecycle_count": 0,
+        "outcome_conflict_lifecycle_count": 0,
+        "terminal_evidence_conflict_lifecycle_count": 0,
+        "orphan_paper_trade_lifecycle_count": 0,
+        "orphan_live_submission_lifecycle_count": 0,
+        "orphan_unknown_live_submission_lifecycle_count": 0,
+        "orphan_live_submission_intent_lifecycle_count": 0,
+        "conflicted_lifecycle_count": 0,
+        "identity_incomplete_lifecycle_count": 0,
+        "reused_opportunity_lifecycle_count": 0,
+        "quarantined_lifecycle_count": 0,
+        "paper_trade_lifecycle_status": "unavailable",
+        "paper_trade_event_rows": 1,
+        "paper_trade_linked_event_rows": 0,
+        "live_submission_event_rows": 0,
+        "live_submission_linked_event_rows": 0,
+        "unknown_live_submission_event_rows": 0,
+        "unknown_live_submission_linked_event_rows": 0,
+        "live_submission_intent_event_rows": 0,
+        "live_submission_intent_linked_event_rows": 0,
+        "unattributed_event_counts": Counter({"OPPORTUNITY": 1, "PAPER_TRADE": 1}),
+    }
+
+
+def test_summarize_lifecycle_attribution_does_not_bridge_window_boundaries(local_tmp_dir):
+    path = local_tmp_dir / "trades.jsonl"
+    write_jsonl(
+        path,
+        [
+            {
+                "type": "OPPORTUNITY",
+                "lifecycle_id": "lc-before",
+                "venue": "kalshi",
+                "ticker": "KXBEFORE",
+                "side": "no",
+                "ts": "2026-04-11T00:00:00+00:00",
+            },
+            {
+                "type": "SKIPPED",
+                "lifecycle_id": "lc-before",
+                "reason": "cooldown",
+                "venue": "kalshi",
+                "ticker": "KXBEFORE",
+                "side": "no",
+                "ts": "2026-04-11T01:00:00+00:00",
+            },
+            {
+                "type": "OPPORTUNITY",
+                "lifecycle_id": "lc-window",
+                "venue": "kalshi",
+                "ticker": "KXWINDOW",
+                "side": "no",
+                "ts": "2026-04-11T01:00:00+00:00",
+            },
+            {
+                "type": "SKIPPED",
+                "lifecycle_id": "lc-window",
+                "reason": "cooldown",
+                "venue": "kalshi",
+                "ticker": "KXWINDOW",
+                "side": "no",
+                "ts": "2026-04-11T02:00:00+00:00",
+            },
+            {
+                "type": "OPPORTUNITY",
+                "lifecycle_id": "lc-after",
+                "venue": "kalshi",
+                "ticker": "KXAFTER",
+                "side": "no",
+                "ts": "2026-04-11T02:01:00+00:00",
+            },
+        ],
+    )
+
+    stats = summarize(
+        path,
+        since=datetime(2026, 4, 11, 1, tzinfo=timezone.utc),
+        until=datetime(2026, 4, 11, 2, tzinfo=timezone.utc),
+    )
+
+    attribution = stats["same_window_lifecycle_attribution"]
+    assert attribution["opportunity_lifecycle_count"] == 1
+    assert attribution["other_skip_lifecycle_count"] == 1
+    assert attribution["orphan_skip_lifecycle_count"] == 1
+    assert attribution["pending_opportunity_lifecycle_count"] == 0
+
+
+def test_summarize_lifecycle_attribution_requires_execution_join_and_quarantines_conflicts(
+    local_tmp_dir,
+    capsys,
+):
+    path = local_tmp_dir / "trades.jsonl"
+    write_jsonl(
+        path,
+        [
+            {
+                "type": "OPPORTUNITY",
+                "lifecycle_id": "lc-executed",
+                "venue": "kalshi",
+                "ticker": "KXEXEC",
+                "side": "no",
+                "ts": "2026-04-11T00:00:00+00:00",
+            },
+            {
+                "type": "PAPER_TRADE",
+                "trade_id": "paper-executed",
+                "lifecycle_id": "lc-executed",
+                "venue": "kalshi",
+                "ticker": "KXEXEC",
+                "side": "no",
+                "ts": "2026-04-11T00:01:00+00:00",
+            },
+            {
+                "type": "OPPORTUNITY",
+                "lifecycle_id": "lc-pending",
+                "venue": "kalshi",
+                "ticker": "KXPENDING",
+                "side": "no",
+                "ts": "2026-04-11T00:02:00+00:00",
+            },
+            {
+                "type": "PAPER_TRADE",
+                "lifecycle_id": "lc-orphan-execution",
+                "venue": "kalshi",
+                "ticker": "KXORPHAN",
+                "side": "no",
+                "ts": "2026-04-11T00:03:00+00:00",
+            },
+            {
+                "type": "OPPORTUNITY",
+                "lifecycle_id": "lc-terminal-conflict",
+                "venue": "kalshi",
+                "ticker": "KXCONFLICT",
+                "side": "no",
+                "ts": "2026-04-11T00:04:00+00:00",
+            },
+            {
+                "type": "SKIPPED",
+                "lifecycle_id": "lc-terminal-conflict",
+                "reason": "G7_open_exposure_drawdown",
+                "venue": "kalshi",
+                "ticker": "KXCONFLICT",
+                "side": "no",
+                "ts": "2026-04-11T00:05:00+00:00",
+            },
+            {
+                "type": "PAPER_TRADE",
+                "trade_id": "paper-conflict",
+                "lifecycle_id": "lc-terminal-conflict",
+                "venue": "kalshi",
+                "ticker": "KXCONFLICT",
+                "side": "no",
+                "ts": "2026-04-11T00:06:00+00:00",
+            },
+            {
+                "type": "OPPORTUNITY",
+                "lifecycle_id": "lc-reused",
+                "venue": "kalshi",
+                "ticker": "KXONE",
+                "side": "no",
+                "ts": "2026-04-11T00:07:00+00:00",
+            },
+            {
+                "type": "SKIPPED",
+                "lifecycle_id": "lc-reused",
+                "reason": "cooldown",
+                "venue": "kalshi",
+                "ticker": "KXTWO",
+                "side": "no",
+                "ts": "2026-04-11T00:08:00+00:00",
+            },
+            {
+                "type": "OPPORTUNITY",
+                "lifecycle_id": "lc-live-submitted",
+                "venue": "kalshi",
+                "ticker": "KXLIVE",
+                "side": "no",
+                "ts": "2026-04-11T00:09:00+00:00",
+            },
+            {
+                "type": "LIVE_ORDER",
+                "order_id": "live-submitted",
+                "submission_id": "submission-live-submitted",
+                "lifecycle_id": "lc-live-submitted",
+                "venue": "kalshi",
+                "ticker": "KXLIVE",
+                "side": "no",
+                "status": "resting",
+                "filled": 0,
+                "ts": "2026-04-11T00:10:00+00:00",
+            },
+        ],
+    )
+
+    stats = summarize(path, since=None, until=None)
+    attribution = stats["same_window_lifecycle_attribution"]
+
+    assert attribution["opportunity_lifecycle_count"] == 4
+    assert attribution["paper_trade_opportunity_lifecycle_count"] == 1
+    assert attribution["live_submission_opportunity_lifecycle_count"] == 1
+    assert attribution["pending_opportunity_lifecycle_count"] == 1
+    assert attribution["outcome_conflict_lifecycle_count"] == 1
+    assert attribution["g7_skip_lifecycle_count"] == 0
+    assert attribution["orphan_paper_trade_lifecycle_count"] == 1
+    assert attribution["orphan_live_submission_lifecycle_count"] == 0
+    assert attribution["orphan_unknown_live_submission_lifecycle_count"] == 0
+    assert attribution["orphan_live_submission_intent_lifecycle_count"] == 0
+    assert attribution["conflicted_lifecycle_count"] == 1
+    assert attribution["paper_trade_lifecycle_status"] == "unavailable"
+    assert attribution["paper_trade_event_rows"] == 3
+    assert attribution["paper_trade_linked_event_rows"] == 2
+    assert attribution["live_submission_event_rows"] == 1
+    assert attribution["live_submission_linked_event_rows"] == 1
+    assert attribution["unknown_live_submission_event_rows"] == 0
+    assert attribution["unknown_live_submission_linked_event_rows"] == 0
+    assert attribution["live_submission_intent_event_rows"] == 0
+    assert attribution["live_submission_intent_linked_event_rows"] == 0
+    assert attribution["identity_incomplete_lifecycle_count"] == 0
+    assert attribution["reused_opportunity_lifecycle_count"] == 0
+    assert attribution["quarantined_lifecycle_count"] == 1
+
+    print_summary(stats, top=1, since=None, until=None)
+    output = capsys.readouterr().out
+    assert "Opportunities logged          : 5" in output
+    assert "of signals" not in output
+    assert (
+        "Linked outcomes               : G7=0 zero_cap=0 other=0 paper_trades=1 live_submissions=1 "
+        "unknown_live_submissions=0 intents_without_matching_terminal_journal=0 conflicts=1 receipt_conflicts=0 pending=1"
+        in output
+    )
+    assert "Live submission linkage       : 1/1 records linked; not fill or P&L evidence" in output
+    assert "Live submission unknown       : 0/0 records linked; reconciliation required" in output
+    assert (
+        "Live submission intent lineage: 0/0 records linked; 0 without matching terminal journal; "
+        "not fill or P&L evidence; reconciliation required" in output
+    )
+    assert "executed=" not in output
+    assert "Same-window scope              : lifecycle links only; settlement and mark P&L excluded" in output
+
+
+def test_summarize_lifecycle_attribution_quarantines_mixed_terminal_outcomes(local_tmp_dir):
+    path = local_tmp_dir / "trades.jsonl"
+    identity = {
+        "lifecycle_id": "lc-mixed-terminal",
+        "venue": "kalshi",
+        "ticker": "KXMIXED",
+        "side": "yes",
+    }
+    write_jsonl(
+        path,
+        [
+            {"type": "OPPORTUNITY", **identity},
+            {"type": "PAPER_TRADE", "trade_id": "mixed-paper", **identity},
+            {
+                "type": "LIVE_ORDER",
+                "order_id": "mixed-live",
+                "submission_id": "mixed-submission",
+                "status": "resting",
+                **identity,
+            },
+        ],
+    )
+
+    stats = summarize(path, since=None, until=None)
+    attribution = stats["same_window_lifecycle_attribution"]
+
+    assert attribution["opportunity_lifecycle_count"] == 1
+    assert attribution["paper_trade_opportunity_lifecycle_count"] == 0
+    assert attribution["live_submission_opportunity_lifecycle_count"] == 0
+    assert attribution["outcome_conflict_lifecycle_count"] == 1
+    assert attribution["pending_opportunity_lifecycle_count"] == 0
+    assert attribution["paper_trade_event_rows"] == 1
+    assert attribution["paper_trade_linked_event_rows"] == 1
+    assert attribution["live_submission_event_rows"] == 1
+    assert attribution["live_submission_linked_event_rows"] == 1
+
+
+def test_summarize_lifecycle_attribution_surfaces_unknown_live_submission(local_tmp_dir):
+    path = local_tmp_dir / "trades.jsonl"
+    identity = {
+        "lifecycle_id": "lc-unknown-submission",
+        "venue": "kalshi",
+        "ticker": "KXUNKNOWN",
+        "side": "no",
+    }
+    write_jsonl(
+        path,
+        [
+            {"type": "OPPORTUNITY", **identity},
+            {
+                "type": "LIVE_SUBMISSION_UNKNOWN",
+                "submission_id": "unknown-submission",
+                "outcome": "error_result",
+                **identity,
+            },
+        ],
+    )
+
+    stats = summarize(path, since=None, until=None)
+    attribution = stats["same_window_lifecycle_attribution"]
+
+    assert attribution["opportunity_lifecycle_count"] == 1
+    assert attribution["unknown_live_submission_opportunity_lifecycle_count"] == 1
+    assert attribution["pending_opportunity_lifecycle_count"] == 0
+    assert attribution["outcome_conflict_lifecycle_count"] == 0
+    assert attribution["unknown_live_submission_event_rows"] == 1
+    assert attribution["unknown_live_submission_linked_event_rows"] == 1
+    assert attribution["orphan_unknown_live_submission_lifecycle_count"] == 0
+    assert stats["path_counts"]["news"] == 1
+
+
+def test_summarize_lifecycle_attribution_pairs_intent_with_unknown_submission(local_tmp_dir):
+    path = local_tmp_dir / "trades.jsonl"
+    identity = {"lifecycle_id": "lc-intent-unknown", "venue": "kalshi", "ticker": "KXINTENTUNKNOWN", "side": "no"}
+    write_jsonl(
+        path,
+        [
+            {"type": "OPPORTUNITY", **identity},
+            {"type": "LIVE_SUBMISSION_INTENT", "submission_id": "unknown-a", **identity},
+            {
+                "type": "LIVE_SUBMISSION_UNKNOWN",
+                "submission_id": "unknown-a",
+                "outcome": "exception",
+                **identity,
+            },
+        ],
+    )
+
+    attribution = summarize(path, since=None, until=None)["same_window_lifecycle_attribution"]
+
+    assert attribution["unknown_live_submission_opportunity_lifecycle_count"] == 1
+    assert attribution["unresolved_live_submission_intent_opportunity_lifecycle_count"] == 0
+    assert attribution["outcome_conflict_lifecycle_count"] == 0
+    assert attribution["terminal_evidence_conflict_lifecycle_count"] == 0
+
+
+def test_summarize_lifecycle_attribution_surfaces_unresolved_live_submission_intent(local_tmp_dir):
+    path = local_tmp_dir / "trades.jsonl"
+    identity = {
+        "lifecycle_id": "lc-unresolved-intent",
+        "venue": "kalshi",
+        "ticker": "KXINTENT",
+        "side": "yes",
+    }
+    write_jsonl(
+        path,
+        [
+            {"type": "OPPORTUNITY", **identity},
+            {
+                "type": "LIVE_SUBMISSION_INTENT",
+                "submission_id": "intent-1",
+                **identity,
+            },
+        ],
+    )
+
+    attribution = summarize(path, since=None, until=None)["same_window_lifecycle_attribution"]
+
+    assert attribution["opportunity_lifecycle_count"] == 1
+    assert attribution["unresolved_live_submission_intent_opportunity_lifecycle_count"] == 1
+    assert attribution["pending_opportunity_lifecycle_count"] == 0
+    assert attribution["live_submission_intent_event_rows"] == 1
+    assert attribution["live_submission_intent_linked_event_rows"] == 1
+    assert attribution["orphan_live_submission_intent_lifecycle_count"] == 0
+
+
+def test_summarize_lifecycle_attribution_pairs_matching_intent_and_idempotent_live_receipt(local_tmp_dir):
+    path = local_tmp_dir / "trades.jsonl"
+    identity = {
+        "lifecycle_id": "lc-matching-intent",
+        "venue": "kalshi",
+        "ticker": "KXMATCHING",
+        "side": "yes",
+    }
+    live_order = {
+        "type": "LIVE_ORDER",
+        "order_id": "order-matching",
+        "submission_id": "submission-matching",
+        "status": "resting",
+        **identity,
+    }
+    write_jsonl(
+        path,
+        [
+            {"type": "OPPORTUNITY", **identity},
+            {"type": "LIVE_SUBMISSION_INTENT", "submission_id": "submission-matching", **identity},
+            {**live_order, "ts": "2026-04-11T00:00:00+00:00"},
+            {**live_order, "ts": "2026-04-11T00:00:01+00:00"},
+        ],
+    )
+
+    attribution = summarize(path, since=None, until=None)["same_window_lifecycle_attribution"]
+
+    assert attribution["live_submission_opportunity_lifecycle_count"] == 1
+    assert attribution["unresolved_live_submission_intent_opportunity_lifecycle_count"] == 0
+    assert attribution["outcome_conflict_lifecycle_count"] == 0
+    assert attribution["terminal_evidence_conflict_lifecycle_count"] == 0
+    assert attribution["live_submission_event_rows"] == 2
+    assert attribution["live_submission_linked_event_rows"] == 2
+
+
+def test_summarize_lifecycle_attribution_quarantines_mismatched_intent_submission_id(local_tmp_dir):
+    path = local_tmp_dir / "trades.jsonl"
+    identity = {
+        "lifecycle_id": "lc-mismatched-intent",
+        "venue": "kalshi",
+        "ticker": "KXMISMATCH",
+        "side": "yes",
+    }
+    write_jsonl(
+        path,
+        [
+            {"type": "OPPORTUNITY", **identity},
+            {"type": "LIVE_SUBMISSION_INTENT", "submission_id": "submission-a", **identity},
+            {
+                "type": "LIVE_ORDER",
+                "order_id": "order-b",
+                "submission_id": "submission-b",
+                "status": "resting",
+                **identity,
+            },
+        ],
+    )
+
+    attribution = summarize(path, since=None, until=None)["same_window_lifecycle_attribution"]
+
+    assert attribution["live_submission_opportunity_lifecycle_count"] == 0
+    assert attribution["unresolved_live_submission_intent_opportunity_lifecycle_count"] == 1
+    assert attribution["outcome_conflict_lifecycle_count"] == 1
+    assert attribution["terminal_evidence_conflict_lifecycle_count"] == 1
+
+
+def test_summarize_lifecycle_attribution_quarantines_receipt_reuse_across_lifecycles(local_tmp_dir):
+    path = local_tmp_dir / "trades.jsonl"
+    first = {"lifecycle_id": "lc-reuse-one", "venue": "kalshi", "ticker": "KXREUSE1", "side": "yes"}
+    second = {"lifecycle_id": "lc-reuse-two", "venue": "kalshi", "ticker": "KXREUSE2", "side": "yes"}
+    write_jsonl(
+        path,
+        [
+            {"type": "OPPORTUNITY", **first},
+            {"type": "PAPER_TRADE", "trade_id": "reused-trade", **first},
+            {"type": "OPPORTUNITY", **second},
+            {"type": "PAPER_TRADE", "trade_id": "reused-trade", **second},
+        ],
+    )
+
+    attribution = summarize(path, since=None, until=None)["same_window_lifecycle_attribution"]
+
+    assert attribution["paper_trade_opportunity_lifecycle_count"] == 0
+    assert attribution["outcome_conflict_lifecycle_count"] == 2
+    assert attribution["terminal_evidence_conflict_lifecycle_count"] == 2
+
+
+def test_summarize_lifecycle_attribution_quarantines_unknown_venue_receipt_reuse(local_tmp_dir):
+    path = local_tmp_dir / "trades.jsonl"
+    unknown = {"lifecycle_id": "lc-unknown-receipt", "venue": "kalshi", "ticker": "KXUNKNOWN", "side": "yes"}
+    live = {"lifecycle_id": "lc-live-receipt", "venue": "kalshi", "ticker": "KXLIVE", "side": "yes"}
+    write_jsonl(
+        path,
+        [
+            {"type": "OPPORTUNITY", **unknown},
+            {
+                "type": "LIVE_SUBMISSION_UNKNOWN",
+                "submission_id": "unknown-submission",
+                "venue_order_id": "shared-venue-order",
+                **unknown,
+            },
+            {"type": "OPPORTUNITY", **live},
+            {
+                "type": "LIVE_ORDER",
+                "order_id": "shared-venue-order",
+                "submission_id": "live-submission",
+                **live,
+            },
+        ],
+    )
+
+    attribution = summarize(path, since=None, until=None)["same_window_lifecycle_attribution"]
+
+    assert attribution["unknown_live_submission_opportunity_lifecycle_count"] == 0
+    assert attribution["live_submission_opportunity_lifecycle_count"] == 0
+    assert attribution["outcome_conflict_lifecycle_count"] == 2
+    assert attribution["terminal_evidence_conflict_lifecycle_count"] == 2
+
+
+def test_summarize_lifecycle_attribution_requires_verified_live_order_receipt(local_tmp_dir):
+    path = local_tmp_dir / "trades.jsonl"
+    identity = {"lifecycle_id": "lc-missing-order-receipt", "venue": "kalshi", "ticker": "KXORDER", "side": "yes"}
+    write_jsonl(
+        path,
+        [
+            {"type": "OPPORTUNITY", **identity},
+            {"type": "LIVE_SUBMISSION_INTENT", "submission_id": "submission-a", **identity},
+            {"type": "LIVE_ORDER", "submission_id": "submission-a", **identity},
+        ],
+    )
+
+    attribution = summarize(path, since=None, until=None)["same_window_lifecycle_attribution"]
+
+    assert attribution["live_submission_opportunity_lifecycle_count"] == 0
+    assert attribution["outcome_conflict_lifecycle_count"] == 1
+    assert attribution["terminal_evidence_conflict_lifecycle_count"] == 1
+
+
+def test_summarize_lifecycle_attribution_quarantines_changed_live_receipt_payload(local_tmp_dir):
+    path = local_tmp_dir / "trades.jsonl"
+    identity = {"lifecycle_id": "lc-changed-live-receipt", "venue": "kalshi", "ticker": "KXCHANGED", "side": "yes"}
+    write_jsonl(
+        path,
+        [
+            {"type": "OPPORTUNITY", **identity},
+            {"type": "LIVE_SUBMISSION_INTENT", "submission_id": "submission-a", **identity},
+            {
+                "type": "LIVE_ORDER",
+                "order_id": "order-a",
+                "submission_id": "submission-a",
+                "contracts": 1,
+                "status": "resting",
+                **identity,
+            },
+            {
+                "type": "LIVE_ORDER",
+                "order_id": "order-a",
+                "submission_id": "submission-a",
+                "contracts": 2,
+                "status": "filled",
+                **identity,
+            },
+        ],
+    )
+
+    attribution = summarize(path, since=None, until=None)["same_window_lifecycle_attribution"]
+
+    assert attribution["live_submission_opportunity_lifecycle_count"] == 0
+    assert attribution["outcome_conflict_lifecycle_count"] == 1
+    assert attribution["terminal_evidence_conflict_lifecycle_count"] == 1
+
+
+def test_summarize_lifecycle_attribution_quarantines_duplicate_terminal_evidence(local_tmp_dir):
+    path = local_tmp_dir / "trades.jsonl"
+    paper_identity = {"lifecycle_id": "lc-paper-duplicate", "venue": "kalshi", "ticker": "KXPAPER", "side": "yes"}
+    live_identity = {"lifecycle_id": "lc-live-duplicate", "venue": "kalshi", "ticker": "KXLIVE", "side": "yes"}
+    unknown_identity = {
+        "lifecycle_id": "lc-unknown-duplicate",
+        "venue": "kalshi",
+        "ticker": "KXUNKNOWN",
+        "side": "yes",
+    }
+    skip_identity = {"lifecycle_id": "lc-skip-mixed", "venue": "kalshi", "ticker": "KXSKIP", "side": "yes"}
+    write_jsonl(
+        path,
+        [
+            {"type": "OPPORTUNITY", **paper_identity},
+            {"type": "PAPER_TRADE", "trade_id": "paper-1", **paper_identity},
+            {"type": "PAPER_TRADE", "trade_id": "paper-2", **paper_identity},
+            {"type": "OPPORTUNITY", **live_identity},
+            {"type": "LIVE_ORDER", "order_id": "live-1", **live_identity},
+            {"type": "LIVE_ORDER", "order_id": "live-2", **live_identity},
+            {"type": "OPPORTUNITY", **unknown_identity},
+            {
+                "type": "LIVE_SUBMISSION_UNKNOWN",
+                "submission_id": "unknown-1",
+                "outcome": "error_result",
+                **unknown_identity,
+            },
+            {
+                "type": "LIVE_SUBMISSION_UNKNOWN",
+                "submission_id": "unknown-2",
+                "outcome": "error_result",
+                **unknown_identity,
+            },
+            {"type": "OPPORTUNITY", **skip_identity},
+            {"type": "SKIPPED", "reason": "G7_open_exposure_drawdown", **skip_identity},
+            {"type": "SKIPPED", "reason": "capped_dollars=0", "capped_dollars": 0, **skip_identity},
+        ],
+    )
+
+    attribution = summarize(path, since=None, until=None)["same_window_lifecycle_attribution"]
+
+    assert attribution["opportunity_lifecycle_count"] == 4
+    assert attribution["outcome_conflict_lifecycle_count"] == 4
+    assert attribution["terminal_evidence_conflict_lifecycle_count"] == 4
+    assert attribution["paper_trade_opportunity_lifecycle_count"] == 0
+    assert attribution["live_submission_opportunity_lifecycle_count"] == 0
+    assert attribution["unknown_live_submission_opportunity_lifecycle_count"] == 0
+    assert attribution["g7_skip_lifecycle_count"] == 0
+    assert attribution["zero_cap_skip_lifecycle_count"] == 0
+    assert attribution["pending_opportunity_lifecycle_count"] == 0
+
+
+def test_print_summary_defaults_unknown_submission_fields_for_legacy_attribution(local_tmp_dir, capsys):
+    path = local_tmp_dir / "trades.jsonl"
+    write_jsonl(
+        path,
+        [
+            {
+                "type": "OPPORTUNITY",
+                "lifecycle_id": "lc-legacy-summary",
+                "venue": "kalshi",
+                "ticker": "KXLEGACY",
+                "side": "yes",
+            }
+        ],
+    )
+    stats = summarize(path, since=None, until=None)
+    attribution = stats["same_window_lifecycle_attribution"]
+    for key in (
+        "unknown_live_submission_opportunity_lifecycle_count",
+        "unknown_live_submission_event_rows",
+        "unknown_live_submission_linked_event_rows",
+        "orphan_unknown_live_submission_lifecycle_count",
+        "unresolved_live_submission_intent_opportunity_lifecycle_count",
+        "live_submission_intent_event_rows",
+        "live_submission_intent_linked_event_rows",
+        "orphan_live_submission_intent_lifecycle_count",
+        "terminal_evidence_conflict_lifecycle_count",
+    ):
+        attribution.pop(key)
+
+    print_summary(stats, top=1, since=None, until=None)
+
+    output = capsys.readouterr().out
+    assert "unknown_live_submissions=0" in output
+    assert "Live submission unknown       : 0/0 records linked; reconciliation required" in output
+    assert "orphan_unknown_live_submissions=0" in output
+    assert "intents_without_matching_terminal_journal=0" in output
+    assert (
+        "Live submission intent lineage: 0/0 records linked; 0 without matching terminal journal; "
+        "not fill or P&L evidence; reconciliation required" in output
+    )
+    assert "receipt_conflicts=0" in output
+
+
+def test_summarize_lifecycle_attribution_quarantines_incomplete_and_reused_opportunities(
+    local_tmp_dir,
+):
+    path = local_tmp_dir / "trades.jsonl"
+    duplicate = {
+        "type": "OPPORTUNITY",
+        "lifecycle_id": "lc-duplicate",
+        "venue": "kalshi",
+        "ticker": "KXDUPLICATE",
+        "side": "no",
+        "edge": 0.05,
+        "ts": "2026-04-11T00:00:00+00:00",
+    }
+    write_jsonl(
+        path,
+        [
+            duplicate,
+            duplicate,
+            {
+                "type": "OPPORTUNITY",
+                "lifecycle_id": "lc-incomplete",
+                "venue": "kalshi",
+                "ticker": "KXINCOMPLETE",
+                "side": "no",
+                "ts": "2026-04-11T00:01:00+00:00",
+            },
+            {
+                "type": "SKIPPED",
+                "lifecycle_id": "lc-incomplete",
+                "reason": "cooldown",
+                "venue": "kalshi",
+                "ticker": "KXINCOMPLETE",
+                "ts": "2026-04-11T00:02:00+00:00",
+            },
+            {
+                "type": "OPPORTUNITY",
+                "lifecycle_id": "lc-reused-opportunity",
+                "venue": "kalshi",
+                "ticker": "KXREUSED",
+                "side": "no",
+                "edge": 0.05,
+                "ts": "2026-04-11T00:03:00+00:00",
+            },
+            {
+                "type": "OPPORTUNITY",
+                "lifecycle_id": "lc-reused-opportunity",
+                "venue": "kalshi",
+                "ticker": "KXREUSED",
+                "side": "no",
+                "edge": 0.06,
+                "ts": "2026-04-11T00:04:00+00:00",
+            },
+        ],
+    )
+
+    attribution = summarize(path, since=None, until=None)["same_window_lifecycle_attribution"]
+
+    assert attribution["opportunity_lifecycle_count"] == 1
+    assert attribution["identity_incomplete_lifecycle_count"] == 1
+    assert attribution["reused_opportunity_lifecycle_count"] == 1
+    assert attribution["quarantined_lifecycle_count"] == 2
+    assert attribution["other_skip_lifecycle_count"] == 0
+
+
+def test_summarize_lifecycle_attribution_quarantines_timestamp_distinct_opportunities(local_tmp_dir):
+    path = local_tmp_dir / "trades.jsonl"
+    write_jsonl(
+        path,
+        [
+            {
+                "type": "OPPORTUNITY",
+                "lifecycle_id": "lc-timestamp-retry",
+                "venue": "kalshi",
+                "ticker": "KXTIMESTAMP",
+                "side": "no",
+                "edge": 0.05,
+                "ts": "2026-04-11T00:00:00+00:00",
+            },
+            {
+                "type": "OPPORTUNITY",
+                "lifecycle_id": "lc-timestamp-retry",
+                "venue": "kalshi",
+                "ticker": "KXTIMESTAMP",
+                "side": "no",
+                "edge": 0.05,
+                "ts": "2026-04-11T00:00:01+00:00",
+            },
+        ],
+    )
+
+    attribution = summarize(path, since=None, until=None)["same_window_lifecycle_attribution"]
+
+    assert attribution["opportunity_lifecycle_count"] == 0
+    assert attribution["reused_opportunity_lifecycle_count"] == 1
+    assert attribution["quarantined_lifecycle_count"] == 1

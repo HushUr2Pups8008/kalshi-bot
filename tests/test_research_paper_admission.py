@@ -11,6 +11,7 @@ import pytest
 
 from analysis.research_gate import ResearchEvidence
 from kalshi import KalshiMarket
+from scripts.decision_funnel_summary import summarize
 from tasks.blend_task import TradeCandidate
 from tasks.research_dossier import ResearchDossierSnapshot
 from tasks.research_paper_admission import (
@@ -18,8 +19,10 @@ from tasks.research_paper_admission import (
     ResearchPaperAdmissionBridge,
     ResearchPaperSignal,
     _has_counter_query,
+    _market_venue,
 )
 from tasks.research_prewarm_task import ResearchPrewarmResult
+from utils.logger import TradeLogger
 
 
 class FakeResearchStore:
@@ -122,8 +125,8 @@ class SpyLogger:
         self.lane_skipped_records.append(kwargs)
 
 
-def _market() -> KalshiMarket:
-    return KalshiMarket(
+def _market(*, venue: object | None = None) -> KalshiMarket:
+    market = KalshiMarket(
         ticker="KXRESEARCH-1",
         title="Will decision-grade research support YES?",
         yes_bid=49,
@@ -143,6 +146,17 @@ def _market() -> KalshiMarket:
         price_method="dollars_fixed_point",
         liquidity_dollars=Decimal("1000"),
     )
+    if venue is not None:
+        market.venue = venue
+    return market
+
+
+@pytest.mark.parametrize(
+    "report_venue",
+    ["  POLYMARKET_US  ", SimpleNamespace(value="  POLYMARKET_US  ")],
+)
+def test_market_venue_uses_report_venue_when_primary_venue_is_missing(report_venue: object) -> None:
+    assert _market_venue(SimpleNamespace(venue=None, report_venue=report_venue)) == "polymarket_us"
 
 
 def _market_without_current_price() -> KalshiMarket:
@@ -382,6 +396,7 @@ async def test_decision_grade_dossier_enters_paper_review_blend_queue() -> None:
             "kelly_dollars": 0.0,
             "capped_dollars": 0.0,
             "side": "yes",
+            "venue": "kalshi",
             "reasoning": "decision-grade research admitted for paper-review blend",
             "source": "reputable_secondary",
             "headline": "reputable_secondary title",
@@ -396,6 +411,49 @@ async def test_decision_grade_dossier_enters_paper_review_blend_queue() -> None:
             "lifecycle_id": candidate.signal_meta["lifecycle_id"],
         }
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw_venue", "expected_venue"),
+    [
+        ("  POLYMARKET_US  ", "polymarket_us"),
+        (SimpleNamespace(value="  POLYMARKET_US  "), "polymarket_us"),
+    ],
+)
+async def test_research_opportunity_normalizes_market_venue(
+    raw_venue: object,
+    expected_venue: str,
+) -> None:
+    logger = SpyLogger()
+    bridge = ResearchPaperAdmissionBridge(
+        research_store=FakeResearchStore(
+            snapshot=_snapshot(),
+            evidence=_valid_evidence(),
+        ),
+        trading_queue=asyncio.Queue(),
+        logger=logger,
+        now=lambda: datetime(2026, 7, 2, 16, 5, tzinfo=UTC),
+    )
+
+    result = await bridge.admit_prewarm_result(
+        ResearchPrewarmResult(
+            market_ticker="KXRESEARCH-1",
+            status="decision_grade_candidate",
+            attempted=True,
+            research_run_id="rr-decision",
+            research_contract_fingerprint="contract-v1",
+        ),
+        _market(venue=raw_venue),
+    )
+
+    assert result.admitted is True
+    opportunity = logger.opportunity_records[0]
+    assert (opportunity["venue"], opportunity["ticker"], opportunity["side"]) == (
+        expected_venue,
+        "KXRESEARCH-1",
+        "yes",
+    )
 
 
 @pytest.mark.asyncio
@@ -439,6 +497,64 @@ async def test_research_admission_claim_routes_same_proof_once() -> None:
             "outcome_reason": None,
         }
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw_venue", "terminal_venue"),
+    [
+        (None, "kalshi"),
+        (SimpleNamespace(value="  POLYMARKET_US  "), "polymarket_us"),
+    ],
+)
+async def test_research_admission_opportunity_links_to_g7_terminal_in_same_window(
+    tmp_path,
+    raw_venue: object | None,
+    terminal_venue: str,
+) -> None:
+    trade_log = TradeLogger(path=tmp_path / "trades.jsonl")
+
+    async def route_analysis(analysis, _store):
+        trade_log.log_skipped(
+            reason="G7_open_exposure_drawdown",
+            ticker=analysis.market.ticker,
+            side=analysis.side,
+            venue=terminal_venue,
+            signal_meta=analysis.signal_meta,
+        )
+        return SimpleNamespace(
+            ready=False,
+            enqueued=False,
+            trade_blocked_reason="G7_open_exposure_drawdown",
+        )
+
+    bridge = ResearchPaperAdmissionBridge(
+        research_store=FakeResearchStore(snapshot=_snapshot(), evidence=_valid_evidence()),
+        trading_queue=asyncio.Queue(),
+        logger=trade_log,
+        now=lambda: datetime(2026, 7, 2, 16, 5, tzinfo=UTC),
+        route_analysis=route_analysis,
+    )
+
+    result = await bridge.admit_prewarm_result(
+        ResearchPrewarmResult(
+            market_ticker="KXRESEARCH-1",
+            status="decision_grade_candidate",
+            attempted=True,
+            research_run_id="rr-decision",
+            research_contract_fingerprint="contract-v1",
+        ),
+        _market(venue=raw_venue),
+    )
+
+    attribution = summarize(tmp_path / "trades.jsonl", since=None, until=None)["same_window_lifecycle_attribution"]
+    assert result.admitted is False
+    assert result.reason == "G7_open_exposure_drawdown"
+    assert attribution["opportunity_lifecycle_count"] == 1
+    assert attribution["g7_skip_lifecycle_count"] == 1
+    assert attribution["pending_opportunity_lifecycle_count"] == 0
+    assert attribution["identity_incomplete_lifecycle_count"] == 0
+    assert attribution["quarantined_lifecycle_count"] == 0
 
 
 @pytest.mark.asyncio
@@ -693,10 +809,7 @@ async def test_counter_query_fallback_closes_read_only_connection(
 ) -> None:
     db_path = tmp_path / "research.db"
     with sqlite3.connect(db_path) as conn:
-        conn.execute(
-            "CREATE TABLE research_run_queries "
-            "(research_run_id TEXT, query_intent TEXT)"
-        )
+        conn.execute("CREATE TABLE research_run_queries (research_run_id TEXT, query_intent TEXT)")
         if with_counter_row:
             conn.execute(
                 "INSERT INTO research_run_queries VALUES (?, ?)",
@@ -927,8 +1040,7 @@ async def test_no_counter_evidence_does_not_enter_paper_review() -> None:
 async def test_irrelevant_speech_evidence_does_not_enter_paper_review() -> None:
     ticker = "KXTRUMPMENTION-26JUL24-MAGA"
     question = (
-        "What will Donald Trump say during White House Correspondents' Dinner "
-        "originally scheduled for July 24th, 2026?"
+        "What will Donald Trump say during White House Correspondents' Dinner originally scheduled for July 24th, 2026?"
     )
     evidence = [
         ResearchEvidence(
@@ -1036,10 +1148,7 @@ async def test_unrelated_counter_boilerplate_does_not_enter_paper_review() -> No
         ],
         query_texts=[
             question,
-            (
-                f"{question} evidence against YES evidence against NO false not "
-                "confirmed denied opponent objection"
-            ),
+            (f"{question} evidence against YES evidence against NO false not confirmed denied opponent objection"),
         ],
     )
     queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
@@ -1238,6 +1347,8 @@ async def test_invalid_decision_grade_dossiers_do_not_enter_paper_review(
     assert result.admitted is False
     assert result.reason == expected_reason
     assert queue.empty()
+
+
 @pytest.mark.asyncio
 async def test_future_nws_evidence_does_not_enter_paper_review() -> None:
     queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()

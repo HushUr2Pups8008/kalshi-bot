@@ -164,6 +164,8 @@ class BlendTaskResult:
 
 
 StructuralStabilityResolver = Callable[[str], bool | Awaitable[bool]]
+
+
 @dataclass(frozen=True)
 class OpenExposureDrawdownSnapshot:
     """Compact mark provenance carried with a G7 readiness decision."""
@@ -207,10 +209,7 @@ class OpenExposureDrawdownSnapshot:
 
 OpenExposureDrawdownProvider = Callable[
     [],
-    float
-    | None
-    | OpenExposureDrawdownSnapshot
-    | Awaitable[float | None | OpenExposureDrawdownSnapshot],
+    float | None | OpenExposureDrawdownSnapshot | Awaitable[float | None | OpenExposureDrawdownSnapshot],
 ]
 
 
@@ -248,9 +247,7 @@ class BlendTask:
         self._open_exposure_drawdown_provider = open_exposure_drawdown_provider
         self._calibration = calibration
         self._capital_guard_capture_sink = capital_guard_capture_sink
-        self._is_paper_mode = (
-            cfg.is_paper_trading if is_paper_mode is None else is_paper_mode
-        )
+        self._is_paper_mode = cfg.is_paper_trading if is_paper_mode is None else is_paper_mode
         self._now = now if now is not None else lambda: datetime.now(UTC)
         # PROFIT-EXEC-002 series-correlation guard state. Maps series prefix
         # (e.g. "KXFISAEXTEND") to the `time.monotonic()` value at which a
@@ -287,13 +284,9 @@ class BlendTask:
         )
 
         decision_at = self._now()
-        open_exposure_snapshot = await self._open_exposure_drawdown_snapshot(
-            observed_at=decision_at
-        )
+        open_exposure_snapshot = await self._open_exposure_drawdown_snapshot(observed_at=decision_at)
         g7_mark_snapshot = (
-            open_exposure_snapshot.as_log_record(
-                threshold_pct=G7_MAX_OPEN_EXPOSURE_DRAWDOWN_PCT
-            )
+            open_exposure_snapshot.as_log_record(threshold_pct=G7_MAX_OPEN_EXPOSURE_DRAWDOWN_PCT)
             if open_exposure_snapshot is not None
             else None
         )
@@ -307,31 +300,19 @@ class BlendTask:
             default_min_edge=default_min_edge,
             now=decision_at,
             open_exposure_drawdown_pct=(
-                open_exposure_snapshot.drawdown_pct
-                if open_exposure_snapshot is not None
-                else None
+                open_exposure_snapshot.drawdown_pct if open_exposure_snapshot is not None else None
             ),
         )
         try:
             readiness = self._readiness_evaluator(readiness_input, regime_confidence)
         except Exception as exc:
-            raise ReadinessEvaluationError(
-                f"readiness evaluation failed for {ticker}: {exc}"
-            ) from exc
-        source_meta = (
-            fast_lane_result.signal_meta
-            if isinstance(fast_lane_result.signal_meta, dict)
-            else {}
-        )
+            raise ReadinessEvaluationError(f"readiness evaluation failed for {ticker}: {exc}") from exc
+        source_meta = fast_lane_result.signal_meta if isinstance(fast_lane_result.signal_meta, dict) else {}
         raw_lifecycle_id = source_meta.get("lifecycle_id")
         lifecycle_id = (
-            raw_lifecycle_id.strip()
-            if isinstance(raw_lifecycle_id, str) and raw_lifecycle_id.strip()
-            else None
+            raw_lifecycle_id.strip() if isinstance(raw_lifecycle_id, str) and raw_lifecycle_id.strip() else None
         )
-        settlement_source_match = strict_optional_bool(
-            source_meta.get("settlement_source_match")
-        )
+        settlement_source_match = strict_optional_bool(source_meta.get("settlement_source_match"))
         await self._emit_gate_summary(
             ticker=ticker,
             readiness=readiness,
@@ -341,10 +322,7 @@ class BlendTask:
             settlement_source_match=settlement_source_match,
         )
 
-        trade_blocked_reason = (
-            blend_result.trade_blocked_reason
-            or readiness.trade_blocked_reason
-        )
+        trade_blocked_reason = blend_result.trade_blocked_reason or readiness.trade_blocked_reason
 
         # PROFIT-EXEC-002 series-correlation guard. Only fires if no upstream
         # block already exists; the first candidate in a same-series burst
@@ -355,10 +333,7 @@ class BlendTask:
             window = cfg.series_correlation_window_seconds
             if window > 0:
                 last_enqueued_ts = self._recent_series_enqueues.get(series_prefix)
-                if (
-                    last_enqueued_ts is not None
-                    and time.monotonic() - last_enqueued_ts < window
-                ):
+                if last_enqueued_ts is not None and time.monotonic() - last_enqueued_ts < window:
                     trade_blocked_reason = "series_correlation_in_window"
 
         evidence_ids = _evidence_ids_for_blend(
@@ -366,11 +341,14 @@ class BlendTask:
             trigger_evidence_id=(fast_lane_result.signal_meta or {}).get("trigger_evidence_id"),
             include_recent=dossier is not None,
         )
-        venue = _venue_string(
-            getattr(fast_lane_result, "venue", None)
-            or getattr(fast_lane_result.market, "venue", None)
-            or getattr(fast_lane_result.market, "report_venue", None)
-        ) or "kalshi"
+        venue = (
+            _venue_string(
+                getattr(fast_lane_result, "venue", None)
+                or getattr(fast_lane_result.market, "venue", None)
+                or getattr(fast_lane_result.market, "report_venue", None)
+            )
+            or "kalshi"
+        )
         await self._emit_blend_decision(
             ticker=ticker,
             venue=venue,
@@ -440,7 +418,8 @@ class BlendTask:
         except Exception as exc:
             log.warning(
                 "EXEC-002 reverting series guard for %s after queue failure: %s",
-                series_prefix, exc,
+                series_prefix,
+                exc,
             )
             self._recent_series_enqueues.pop(series_prefix, None)
             raise QueueInsertionError(f"failed to enqueue {ticker}: {exc}") from exc
@@ -667,7 +646,8 @@ class BlendTask:
             confidence=confidence,
             lane_id="accumulation",
             signal_kind=self._classify_lane_signal_kind(
-                dossier.current_estimate, confidence,
+                dossier.current_estimate,
+                confidence,
             ),
         )
 
@@ -683,7 +663,8 @@ class BlendTask:
             confidence=confidence,
             lane_id="structural",
             signal_kind=self._classify_lane_signal_kind(
-                structural_prior.prior_estimate, confidence,
+                structural_prior.prior_estimate,
+                confidence,
             ),
         )
 
@@ -777,11 +758,7 @@ class BlendTask:
     ) -> None:
         if not hasattr(self._logger, "log_gate_summary"):
             return
-        g1_threshold = (
-            G1_FAILSAFE_CONFIDENCE_THRESHOLD
-            if readiness.fail_safe_active
-            else G1_CONFIDENCE_THRESHOLD
-        )
+        g1_threshold = G1_FAILSAFE_CONFIDENCE_THRESHOLD if readiness.fail_safe_active else G1_CONFIDENCE_THRESHOLD
         await write_trade_log_async(
             self._logger.log_gate_summary,
             ticker=ticker,
@@ -846,12 +823,11 @@ class BlendTask:
         if readiness.readiness_gate_min_edge_override is not None:
             min_edge_threshold = readiness.readiness_gate_min_edge_override
         else:
-            min_edge_threshold = (
-                PAPER_MIN_EDGE if self._is_paper_mode else cfg.min_edge
-            )
+            min_edge_threshold = PAPER_MIN_EDGE if self._is_paper_mode else cfg.min_edge
         skipped_kwargs: dict[str, Any] = {
             "reason": trade_blocked_reason,
             "ticker": ticker,
+            "side": fast_lane_result.side,
             "headline": headline,
             "source": source,
             "method": method,
@@ -908,17 +884,13 @@ def _readiness_input(
         "blended_confidence": blend_result.blended_confidence,
         "disagreement_score": blend_result.disagreement_score,
         "default_min_edge": default_min_edge,
-        "evidence_source_classes": [
-            record.source_class for record in readiness_records
-        ],
+        "evidence_source_classes": [record.source_class for record in readiness_records],
         "drift_suspect": dossier.drift_suspect if dossier is not None else False,
         "in_recovery": dossier.in_recovery if dossier is not None else False,
         "recency_score": _recency_score(market, readiness_records, now),
         "time_to_close_seconds": _time_to_close_seconds(market, now),
         "settlement_source_relevant": _settlement_source_relevant(analysis),
-        "market_liquidity_dollars": _optional_float(
-            getattr(market, "liquidity_dollars", None)
-        ),
+        "market_liquidity_dollars": _optional_float(getattr(market, "liquidity_dollars", None)),
         "market_price_momentum_cents": _market_price_momentum_cents(market),
         "intended_side": getattr(analysis, "side", None),
         "open_exposure_drawdown_pct": open_exposure_drawdown_pct,
@@ -998,9 +970,7 @@ def _recency_score(
     now: datetime,
 ) -> float:
     pairs = [
-        (record.original_weight, record.ingested_ts)
-        for record in recent_records
-        if record.original_weight is not None
+        (record.original_weight, record.ingested_ts) for record in recent_records if record.original_weight is not None
     ]
     dominant_regime = _dominant_regime(_regime_weights(market))
     half_life_days = half_life_for_regime(dominant_regime)
@@ -1187,14 +1157,7 @@ def _gate_chain(readiness: ReadinessDecision, g1_threshold: float) -> list[str]:
         ),
     ]
     if "G3" in readiness.applied_conditions:
-        chain.append(
-            "G3: "
-            + (
-                "FAIL"
-                if "G3_disagreement_score" in readiness.failure_reasons
-                else "PASS"
-            )
-        )
+        chain.append("G3: " + ("FAIL" if "G3_disagreement_score" in readiness.failure_reasons else "PASS"))
     for reason in readiness.failure_reasons:
         if not reason.startswith(("G1_", "G3_", "G4_")):
             chain.append(f"{reason}: FAIL")
@@ -1221,11 +1184,7 @@ def _dominant_regime(regime_weights: dict[str, float]) -> str:
 def _regime_confidence(regime_weights: dict[str, float]) -> float:
     if not regime_weights:
         return 0.0
-    entropy = -sum(
-        weight * math.log(weight)
-        for weight in regime_weights.values()
-        if weight > 0
-    )
+    entropy = -sum(weight * math.log(weight) for weight in regime_weights.values() if weight > 0)
     max_entropy = math.log(3)
     confidence = 1.0 - (entropy / max_entropy)
     return max(0.0, min(1.0, confidence))

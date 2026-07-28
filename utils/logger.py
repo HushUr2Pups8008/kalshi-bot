@@ -123,11 +123,10 @@ def _promote_lifecycle_context(
         return
     record["lifecycle_id"] = raw_lifecycle_id.strip()
     raw_settlement_match = (
-        settlement_source_match
-        if isinstance(settlement_source_match, bool)
-        else meta.get("settlement_source_match")
+        settlement_source_match if isinstance(settlement_source_match, bool) else meta.get("settlement_source_match")
     )
     record["settlement_source_match"] = strict_optional_bool(raw_settlement_match)
+
 
 CALIBRATION_CHECK_REQUIRED_FIELDS: tuple[str, ...] = (
     "market_ticker",
@@ -158,25 +157,22 @@ for _d in (
     _d.mkdir(parents=True, exist_ok=True)
 
 # ── Log file paths ────────────────────────────────────────────────────────────
-APP_LOG_FILE   = _LOG_APP_DIR    / "bot.log"
-ERROR_LOG_FILE = _LOG_APP_DIR    / "errors.log"   # WARNING+ only -- quick triage
+APP_LOG_FILE = _LOG_APP_DIR / "bot.log"
+ERROR_LOG_FILE = _LOG_APP_DIR / "errors.log"  # WARNING+ only -- quick triage
 LEGACY_TRADE_LOG_FILE = _LOG_TRADES_DIR / "trades.jsonl"  # temporary legacy read path during cutover validation
-TRADE_LOG_FILE = _LOG_TRADES_LIVE_DIR / "trades.jsonl"    # preferred active newline-delimited JSON target
+TRADE_LOG_FILE = _LOG_TRADES_LIVE_DIR / "trades.jsonl"  # preferred active newline-delimited JSON target
 SHADOW_ASSIGNMENT_LOG_FILE = _LOG_TRADES_SHADOW_DIR / "fresh_pass_assignment_shadow.jsonl"
-LOG_REPORTS_DIR = _LOG_REPORTS_DIR                # for paper_trader report output
+LOG_REPORTS_DIR = _LOG_REPORTS_DIR  # for paper_trader report output
 
 # ── Formatters ────────────────────────────────────────────────────────────────
-_COLOR_FORMAT = (
-    "%(log_color)s%(asctime)s UTC %(levelname)-8s%(reset)s "
-    "%(cyan)s%(name)-20s%(reset)s %(message)s"
-)
+_COLOR_FORMAT = "%(log_color)s%(asctime)s UTC %(levelname)-8s%(reset)s %(cyan)s%(name)-20s%(reset)s %(message)s"
 _FILE_FORMAT = "%(asctime)s UTC %(levelname)-8s %(name)-20s %(message)s"
 
 _COLOR_MAP = {
-    "DEBUG":    "white",
-    "INFO":     "green",
-    "WARNING":  "yellow",
-    "ERROR":    "red",
+    "DEBUG": "white",
+    "INFO": "green",
+    "WARNING": "yellow",
+    "ERROR": "red",
     "CRITICAL": "bold_red",
 }
 
@@ -243,6 +239,7 @@ class _DailyRotatingFileHandler(logging.handlers.TimedRotatingFileHandler):
 
     def rotate(self, source: str, dest: str) -> None:
         import sys as _sys
+
         try:
             shutil.copy2(source, dest)
         except Exception as exc:
@@ -265,9 +262,7 @@ class _DailyRotatingFileHandler(logging.handlers.TimedRotatingFileHandler):
         # Nudge peer handlers that may not have received any messages since
         # midnight (e.g. errors.log during a quiet period).
         for peer in self._peers:
-            if peer.shouldRollover(logging.LogRecord(
-                "", 0, "", 0, None, None, None
-            )):
+            if peer.shouldRollover(logging.LogRecord("", 0, "", 0, None, None, None)):
                 peer._rollover_self()
 
     def force_rollover(self) -> None:
@@ -333,16 +328,12 @@ def _maybe_rotate_stale(handler: _DailyRotatingFileHandler) -> None:
 def _ensure_file_handlers() -> tuple[_DailyRotatingFileHandler, _DailyRotatingFileHandler]:
     global _app_fh, _err_fh
     if _app_fh is None:
-        _app_fh = _DailyRotatingFileHandler(
-            APP_LOG_FILE, when="midnight", backupCount=90, encoding="utf-8", utc=True
-        )
+        _app_fh = _DailyRotatingFileHandler(APP_LOG_FILE, when="midnight", backupCount=90, encoding="utf-8", utc=True)
         _app_fh.setLevel(logging.DEBUG)
         _app_fh.setFormatter(_utc_formatter(_FILE_FORMAT))
         _maybe_rotate_stale(_app_fh)
     if _err_fh is None:
-        _err_fh = _DailyRotatingFileHandler(
-            ERROR_LOG_FILE, when="midnight", backupCount=90, encoding="utf-8", utc=True
-        )
+        _err_fh = _DailyRotatingFileHandler(ERROR_LOG_FILE, when="midnight", backupCount=90, encoding="utf-8", utc=True)
         _err_fh.setLevel(logging.WARNING)
         _err_fh.setFormatter(_utc_formatter(_FILE_FORMAT))
         # bot.log rotates on every DEBUG+ message at midnight; nudge errors.log
@@ -364,10 +355,8 @@ def emit_startup_banner(version: str, model: str, env: str) -> None:
         # ===== v0.6.7 | env=demo | model=qwen2.5:7b | py=3.14.0 =====
     """
     import sys
-    banner = (
-        f"# ===== v{version} | env={env} | model={model}"
-        f" | py={sys.version.split()[0]} ====="
-    )
+
+    banner = f"# ===== v{version} | env={env} | model={model} | py={sys.version.split()[0]} ====="
     fh, eh = _ensure_file_handlers()
     for handler in (fh, eh):
         handler._banner = banner
@@ -427,6 +416,7 @@ async def write_trade_log_async(
     caller-visible completion and exception semantics.
     """
     return await asyncio.to_thread(writer, *args, **kwargs)
+
 
 def _parse_trade_ts(value: Any) -> datetime | None:
     if not isinstance(value, str) or not value.strip():
@@ -564,7 +554,7 @@ class TradeLogger:
     def __init__(self, path: Path = TRADE_LOG_FILE):
         self._path = path
         self._store = TradeLogStore(live_path=path)
-        self._log  = get_logger("trade_logger")
+        self._log = get_logger("trade_logger")
 
     def _write(self, record: dict[str, Any]) -> None:
         record.setdefault("ts", datetime.now(timezone.utc).isoformat())
@@ -579,14 +569,16 @@ class TradeLogger:
         signal_strength: float,
         keywords_matched: list[str],
     ) -> None:
-        self._write({
-            "type": "SIGNAL",
-            "source": source,
-            "headline": headline,
-            "url": url,
-            "signal_strength": round(signal_strength, 4),
-            "keywords_matched": keywords_matched,
-        })
+        self._write(
+            {
+                "type": "SIGNAL",
+                "source": source,
+                "headline": headline,
+                "url": url,
+                "signal_strength": round(signal_strength, 4),
+                "keywords_matched": keywords_matched,
+            }
+        )
 
     def log_research_prewarm_result(
         self,
@@ -629,13 +621,9 @@ class TradeLogger:
         if research_persistence_error:
             record["research_persistence_error"] = research_persistence_error
         if research_direct_fetch_failures:
-            record["research_direct_fetch_failures"] = list(
-                research_direct_fetch_failures
-            )
+            record["research_direct_fetch_failures"] = list(research_direct_fetch_failures)
         if research_direct_fetch_failure_count is not None:
-            record["research_direct_fetch_failure_count"] = int(
-                research_direct_fetch_failure_count
-            )
+            record["research_direct_fetch_failure_count"] = int(research_direct_fetch_failure_count)
         if research_timeout_stage:
             record["research_timeout_stage"] = research_timeout_stage
         record["research_provider_error_count"] = max(
@@ -655,7 +643,7 @@ class TradeLogger:
         kelly_fraction: float,
         kelly_dollars: float,
         capped_dollars: float,
-        side: str,           # "yes" or "no"
+        side: str,  # "yes" or "no"
         reasoning: str,
         source: str | None = None,
         headline: str | None = None,
@@ -714,9 +702,7 @@ class TradeLogger:
         if evidence_id:
             record["evidence_id"] = evidence_id
         if settlement_source_match is not None:
-            record["settlement_source_match"] = strict_optional_bool(
-                settlement_source_match
-            )
+            record["settlement_source_match"] = strict_optional_bool(settlement_source_match)
         if research_status is not None:
             record["research_status"] = research_status
         if research_run_id is not None:
@@ -820,8 +806,10 @@ class TradeLogger:
         contracts: int,
         price_cents: int,
         cost_dollars: float,
+        venue: str | None = None,
+        signal_meta: dict[str, Any] | None = None,
     ) -> None:
-        self._write({
+        record = {
             "type": "LIVE_SUBMISSION_INTENT",
             "submission_id": submission_id,
             "ticker": ticker,
@@ -829,7 +817,13 @@ class TradeLogger:
             "contracts": contracts,
             "price_cents": price_cents,
             "cost_dollars": round(cost_dollars, 2),
-        })
+        }
+        if venue:
+            record["venue"] = venue
+        if signal_meta:
+            record["signal_meta"] = signal_meta
+        _promote_lifecycle_context(record, signal_meta=signal_meta)
+        self._write(record)
 
     def log_live_submission_unknown(
         self,
@@ -842,6 +836,8 @@ class TradeLogger:
         cost_dollars: float,
         outcome: str,
         venue_order_id: str | None = None,
+        venue: str | None = None,
+        signal_meta: dict[str, Any] | None = None,
     ) -> None:
         if outcome not in {
             "exception",
@@ -867,6 +863,11 @@ class TradeLogger:
             if not isinstance(venue_order_id, str) or not venue_order_id.strip():
                 raise ValueError("venue order ID must be a non-empty string")
             record["venue_order_id"] = venue_order_id.strip()
+        if venue:
+            record["venue"] = venue
+        if signal_meta:
+            record["signal_meta"] = signal_meta
+        _promote_lifecycle_context(record, signal_meta=signal_meta)
         self._write(record)
 
     def log_live_order(
@@ -879,6 +880,7 @@ class TradeLogger:
         price_cents: int,
         cost_dollars: float,
         status: str,
+        venue: str | None = None,
         model_probability: float | None = None,
         market_price: float | None = None,
         edge: float | None = None,
@@ -896,6 +898,8 @@ class TradeLogger:
             "cost_dollars": round(cost_dollars, 2),
             "status": status,
         }
+        if venue:
+            record["venue"] = venue
         if submission_id is not None:
             record["submission_id"] = submission_id
         if model_probability is not None:
@@ -927,6 +931,7 @@ class TradeLogger:
         edge: float | None = None,
         min_edge_threshold: float | None = None,
         venue: str | None = None,
+        side: str | None = None,
         signal_meta: dict[str, Any] | None = None,
         recency_score: float | None = None,
         recency_threshold: float | None = None,
@@ -991,6 +996,8 @@ class TradeLogger:
             record["min_edge_threshold"] = round(min_edge_threshold, 4)
         if venue:
             record["venue"] = venue
+        if side:
+            record["side"] = side
         if recency_score is not None:
             record["recency_score"] = round(float(recency_score), 4)
         if recency_threshold is not None:
@@ -1138,9 +1145,7 @@ class TradeLogger:
         if research_estimated_edge is not None:
             record["research_estimated_edge"] = round(float(research_estimated_edge), 4)
         if research_decision_grade_reasons:
-            record["research_decision_grade_reasons"] = list(
-                research_decision_grade_reasons
-            )
+            record["research_decision_grade_reasons"] = list(research_decision_grade_reasons)
         if research_open_questions:
             record["research_open_questions"] = list(research_open_questions)
         if research_counterclaims:
@@ -1170,13 +1175,9 @@ class TradeLogger:
         if research_persistence_error:
             record["research_persistence_error"] = research_persistence_error
         if research_direct_fetch_failures:
-            record["research_direct_fetch_failures"] = list(
-                research_direct_fetch_failures
-            )
+            record["research_direct_fetch_failures"] = list(research_direct_fetch_failures)
         if research_direct_fetch_failure_count is not None:
-            record["research_direct_fetch_failure_count"] = int(
-                research_direct_fetch_failure_count
-            )
+            record["research_direct_fetch_failure_count"] = int(research_direct_fetch_failure_count)
         if research_timeout_stage:
             record["research_timeout_stage"] = research_timeout_stage
         if research_provider_error_count is not None:
@@ -1214,24 +1215,34 @@ class TradeLogger:
         headline: str,
         age_seconds: float,
     ) -> None:
-        self._write({
-            "type": "EARLY_FRESH_PASS",
-            "source": source,
-            "headline": headline,
-            "age_seconds": round(age_seconds, 2),
-        })
+        self._write(
+            {
+                "type": "EARLY_FRESH_PASS",
+                "source": source,
+                "headline": headline,
+                "age_seconds": round(age_seconds, 2),
+            }
+        )
 
     # Fields whose value is rounded to 4 decimals when included in the record.
     # Required-float fields are always rounded; optional-float fields are
     # rounded only when not None.
-    _SAD_REQUIRED_ROUND = frozenset({
-        "base_probability", "final_probability", "market_price",
-    })
-    _SAD_OPTIONAL_ROUND = frozenset({
-        "llm_confidence", "pre_llm_semantic_overlap_ratio",
-        "pre_llm_keyword_signal_strength", "llm_probability_movement",
-        "age_at_analysis_seconds",
-    })
+    _SAD_REQUIRED_ROUND = frozenset(
+        {
+            "base_probability",
+            "final_probability",
+            "market_price",
+        }
+    )
+    _SAD_OPTIONAL_ROUND = frozenset(
+        {
+            "llm_confidence",
+            "pre_llm_semantic_overlap_ratio",
+            "pre_llm_keyword_signal_strength",
+            "llm_probability_movement",
+            "age_at_analysis_seconds",
+        }
+    )
 
     def log_signal_analysis_detail(self, detail: SignalAnalysisDetail) -> None:
         """Write one SIGNAL_ANALYSIS_DETAIL record from a typed struct.
@@ -1376,20 +1387,22 @@ class TradeLogger:
         pre_weight_score: float,
         post_weight_score: float,
     ) -> None:
-        self._write({
-            "type": "MATCH_WEIGHT_APPLIED",
-            "source": source,
-            "headline": headline,
-            "ticker": ticker,
-            "market_title": market_title,
-            "market_prefix": market_prefix,
-            "tokens": tokens,
-            "token_weights": token_weights,
-            "composition_rule": composition_rule,
-            "final_multiplier": round(final_multiplier, 4),
-            "pre_weight_score": round(pre_weight_score, 4),
-            "post_weight_score": round(post_weight_score, 4),
-        })
+        self._write(
+            {
+                "type": "MATCH_WEIGHT_APPLIED",
+                "source": source,
+                "headline": headline,
+                "ticker": ticker,
+                "market_title": market_title,
+                "market_prefix": market_prefix,
+                "tokens": tokens,
+                "token_weights": token_weights,
+                "composition_rule": composition_rule,
+                "final_multiplier": round(final_multiplier, 4),
+                "pre_weight_score": round(pre_weight_score, 4),
+                "post_weight_score": round(post_weight_score, 4),
+            }
+        )
 
     def log_market_source_hint_diagnostic(
         self,
@@ -1402,16 +1415,18 @@ class TradeLogger:
         rejected_labels: dict[str, str],
         log_records: list[dict[str, object]],
     ) -> None:
-        self._write({
-            "type": "MARKET_SOURCE_HINT_DIAGNOSTIC",
-            "ticker": ticker,
-            "mode": mode,
-            "shadow_only": shadow_only,
-            "targets": targets,
-            "counters": counters,
-            "rejected_labels": rejected_labels,
-            "log_records": log_records,
-        })
+        self._write(
+            {
+                "type": "MARKET_SOURCE_HINT_DIAGNOSTIC",
+                "ticker": ticker,
+                "mode": mode,
+                "shadow_only": shadow_only,
+                "targets": targets,
+                "counters": counters,
+                "rejected_labels": rejected_labels,
+                "log_records": log_records,
+            }
+        )
 
     def log_blend_decision(
         self,
@@ -1446,7 +1461,9 @@ class TradeLogger:
             "fast_lane_p": round(fast_lane_p, 4) if fast_lane_p is not None else None,
             "fast_lane_confidence": round(fast_lane_confidence, 4) if fast_lane_confidence is not None else None,
             "accumulation_p": round(accumulation_p, 4) if accumulation_p is not None else None,
-            "accumulation_confidence": round(accumulation_confidence, 4) if accumulation_confidence is not None else None,
+            "accumulation_confidence": round(accumulation_confidence, 4)
+            if accumulation_confidence is not None
+            else None,
             "structural_p": round(structural_p, 4) if structural_p is not None else None,
             "structural_confidence": round(structural_confidence, 4) if structural_confidence is not None else None,
             "regime_weights": regime_weights,
@@ -1539,12 +1556,14 @@ class TradeLogger:
         lane_id: str,
         reason: str,
     ) -> None:
-        self._write({
-            "type": "LANE_SKIPPED",
-            "market_ticker": market_ticker,
-            "lane_id": lane_id,
-            "reason": reason,
-        })
+        self._write(
+            {
+                "type": "LANE_SKIPPED",
+                "market_ticker": market_ticker,
+                "lane_id": lane_id,
+                "reason": reason,
+            }
+        )
 
     def log_structural_prior_recompute(
         self,
@@ -1710,9 +1729,7 @@ class TradeLogger:
             "pnl_dollars": round(float(pnl_dollars), 2),
             "cost_dollars": round(float(cost_dollars), 2),
             "llm_magnitude": llm_magnitude,
-            "llm_confidence": (
-                round(float(llm_confidence), 4) if llm_confidence is not None else None
-            ),
+            "llm_confidence": (round(float(llm_confidence), 4) if llm_confidence is not None else None),
             "signal_source": signal_source,
             "ts_entry": ts_entry,
             "ts_resolved": ts_resolved,
@@ -1859,15 +1876,17 @@ class TradeLogger:
         open_since: str,
     ) -> None:
         """Loop C: open position price has drifted significantly from entry."""
-        self._write({
-            "type": "POSITION_DRIFT",
-            "ticker": ticker,
-            "entry_price": round(entry_price, 2),
-            "current_price": round(current_price, 2),
-            "drift_cents": round(drift_cents, 2),
-            "side": side,
-            "open_since": open_since,
-        })
+        self._write(
+            {
+                "type": "POSITION_DRIFT",
+                "ticker": ticker,
+                "entry_price": round(entry_price, 2),
+                "current_price": round(current_price, 2),
+                "drift_cents": round(drift_cents, 2),
+                "side": side,
+                "open_since": open_since,
+            }
+        )
 
     def log_new_market(
         self,
@@ -1877,12 +1896,14 @@ class TradeLogger:
         series_ticker: str,
     ) -> None:
         """Loop D: a market not seen in the previous cache refresh has appeared."""
-        self._write({
-            "type": "NEW_MARKET",
-            "ticker": ticker,
-            "title": title,
-            "series_ticker": series_ticker,
-        })
+        self._write(
+            {
+                "type": "NEW_MARKET",
+                "ticker": ticker,
+                "title": title,
+                "series_ticker": series_ticker,
+            }
+        )
 
     def log_calibration_check(
         self,
