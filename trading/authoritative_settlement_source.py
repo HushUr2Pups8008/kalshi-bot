@@ -55,7 +55,7 @@ class AuthoritativeSettlementSource:
     def __init__(
         self,
         *,
-        kalshi_client: KalshiRestClient,
+        kalshi_client: KalshiRestClient | None,
         polymarket_client: PolymarketPublicClient,
         clock: Callable[[], datetime] | None = None,
         monotonic: Callable[[], float] | None = None,
@@ -83,6 +83,10 @@ class AuthoritativeSettlementSource:
         if not isinstance(market_ref, MarketRef):
             raise TypeError("market_ref must be MarketRef")
         if market_ref.venue is Venue.KALSHI:
+            if self._kalshi_client is None:
+                raise SettlementDriftError(
+                    "Kalshi authoritative settlement client unavailable"
+                )
             self._validate_prior_observation(
                 market_ref,
                 prior_observation,

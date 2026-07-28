@@ -207,6 +207,39 @@ async def test_kalshi_bounded_exact_market_rejects_response_ticker_mismatch(
 
 
 @pytest.mark.asyncio
+async def test_source_allows_polymarket_only_audits_without_kalshi_client() -> None:
+    source = AuthoritativeSettlementSource(
+        kalshi_client=None,
+        polymarket_client=_FakePolymarketClient(
+            [{"slug": "exact", "id": "42", "settlement": 1}],
+            [{"slug": "exact", "id": "42"}],
+        ),
+    )
+
+    observation = await source.get_settlement_exact(
+        MarketRef(Venue.POLYMARKET_US, "42", "exact"),
+        prior_observation=None,
+    )
+
+    assert observation is not None
+    assert observation.market_ref == MarketRef(Venue.POLYMARKET_US, "42", "exact")
+
+
+@pytest.mark.asyncio
+async def test_source_fails_closed_without_a_kalshi_client() -> None:
+    source = AuthoritativeSettlementSource(
+        kalshi_client=None,
+        polymarket_client=_FakePolymarketClient([], []),
+    )
+
+    with pytest.raises(SettlementDriftError, match="client unavailable"):
+        await source.get_settlement_exact(
+            MarketRef(Venue.KALSHI, "KXTEST-1", "KXTEST-1"),
+            prior_observation=None,
+        )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "base",
     [
