@@ -186,9 +186,12 @@ def _record_receipts(
     seed: SeededEvent,
     consumers: tuple[str, ...],
 ) -> None:
+    """Seed delivery bookkeeping for fixture setup, bypassing the disabled API."""
+
     settled_at = datetime.fromisoformat(str(seed.payload["settled_at"]))
-    with SettlementStore(seed.db_path) as store:
-        outbox_row = store.connection.execute(
+    with sqlite3.connect(seed.db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        outbox_row = conn.execute(
             "SELECT created_at FROM paper_settlement_outbox WHERE outbox_id=?",
             (seed.outbox_id,),
         ).fetchone()
@@ -196,25 +199,21 @@ def _record_receipts(
         created_at = datetime.fromisoformat(str(outbox_row["created_at"]))
         claim_at = max(settled_at, created_at)
         processed_at = claim_at + timedelta(seconds=1)
-        for index, consumer_name in enumerate(consumers, start=1):
-            claim_token = f"fixture-token-{index}-{consumer_name}"
-            assert store.acquire_claim(
-                consumer_name,
-                seed.outbox_id,
-                claim_token=claim_token,
-                now=claim_at,
-                lease_seconds=60,
-            )
-            assert store.record_receipt(
-                consumer_name,
-                seed.outbox_id,
-                claim_token=claim_token,
-                processed_at=processed_at,
-                result_sha256=settlement_result_sha256(
-                    seed.outbox_id, consumer_name
+        for consumer_name in consumers:
+            conn.execute(
+                """
+                INSERT INTO paper_settlement_consumer_receipts (
+                    consumer_name, outbox_id, processed_at, result_sha256
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (
+                    consumer_name,
+                    seed.outbox_id,
+                    processed_at.isoformat(),
+                    settlement_result_sha256(seed.outbox_id, consumer_name),
                 ),
             )
-            receipt = store.connection.execute(
+            receipt = conn.execute(
                 """
                 SELECT processed_at FROM paper_settlement_consumer_receipts
                 WHERE outbox_id=? AND consumer_name=?

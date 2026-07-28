@@ -1968,9 +1968,9 @@ async def test_process_candidate_builds_signal_analysis_and_executes(monkeypatch
     assert analysis.kelly_dollars == pytest.approx(15.0)
     assert analysis.capped_dollars == pytest.approx(12.0)
     provenance = analysis.decision_financial_provenance
-    assert provenance.sizing_bankroll_dollars == Decimal("500.0")
+    assert provenance.sizing_bankroll_dollars == Decimal("50.0")
     assert provenance.max_position_dollars == Decimal("75.0")
-    assert provenance.max_ticker_exposure_dollars == Decimal("50.00")
+    assert provenance.max_ticker_exposure_dollars == Decimal("5.00")
     assert provenance.fee_account_precision_dollars == Decimal("0.0001")
     assert provenance.fee_accumulator_dollars == Decimal("0")
     assert analysis.keywords_matched == ["missile strike"]
@@ -2045,7 +2045,7 @@ async def test_organic_main_sizing_through_blend_persists_shadow_candidate(
 
     with patch("main.estimate_probability", new=AsyncMock(return_value=(
         0.65, 0.8, ["missile strike"], "test reasoning", "yes", "moderate", 0.8
-    ))), patch("main.kelly_bet", return_value=(0.12, 15.0, 12.0)), \
+    ))), patch("main.kelly_bet", return_value=(0.04, 4.0, 4.0)), \
          patch("utils.logger.trade_log.log_signal"), \
          patch("utils.logger.trade_log.log_opportunity"):
         await bot._process_candidate(news, market, 0.42, {})
@@ -2063,9 +2063,9 @@ async def test_organic_main_sizing_through_blend_persists_shadow_candidate(
     assert candidate is not None
     assert candidate[0] == 1
     sizing = json.loads(candidate[1])
-    assert sizing["bankroll_dollars"] == "500"
+    assert sizing["bankroll_dollars"] == "50"
     assert sizing["max_position_dollars"] == "75"
-    assert sizing["max_ticker_exposure_dollars"] == "50"
+    assert sizing["max_ticker_exposure_dollars"] == "5"
 
 
 @pytest.mark.asyncio

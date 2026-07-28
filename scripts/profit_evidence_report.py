@@ -4,10 +4,17 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
+import sys
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from trading.settlement_store import SettlementStore
 
 
 EDGE_BUCKETS: tuple[tuple[str, float | None, float | None], ...] = (
@@ -22,6 +29,8 @@ EDGE_BUCKETS: tuple[tuple[str, float | None, float | None], ...] = (
 class PaperExpectationSummary:
     total_trades: int
     resolved_trades: int
+    canonical_delivery_complete_resolved_trades: int
+    profit_attested_resolved_trades: int
     open_trades: int
     wins: int
     losses: int
@@ -115,6 +124,10 @@ def readiness_verdict(
     max_drawdown_pct: float = 0.20,
 ) -> ReadinessVerdict:
     reasons: list[str] = []
+    # Paper/outbox delivery completion is not independently verifiable evidence
+    # of realized money. Keep this false until a separately designed execution
+    # ledger can attest full fills, fees, settlement, and account attribution.
+    reasons.append("independent realized-profit evidence is unavailable")
     if paper.resolved_trades < min_resolved_trades:
         reasons.append(
             f"resolved sample {paper.resolved_trades} below {min_resolved_trades}"
@@ -169,7 +182,10 @@ def render_text(report: ProfitEvidenceReport) -> str:
     lines = [
         "PAPER EXPECTANCY",
         f"  total trades: {paper.total_trades}",
-        f"  resolved/open: {paper.resolved_trades}/{paper.open_trades}",
+        "  canonical delivery-complete resolved/open: "
+        f"{paper.resolved_trades}/{paper.open_trades}",
+        "  independently profit-attested resolved: "
+        f"{paper.profit_attested_resolved_trades}",
         f"  win rate: {_fmt_optional_pct(paper.win_rate)}",
         f"  net P&L: {_fmt_money(paper.net_pnl)}",
         "  expectancy/resolved trade: "
@@ -214,7 +230,7 @@ def _load_paper_rows(paper_db: Path) -> list[dict[str, Any]]:
     uri = f"file:{quote(str(paper_db.resolve()))}?mode=ro"
     with sqlite3.connect(uri, uri=True) as conn:
         conn.row_factory = sqlite3.Row
-        return [
+        rows = [
             dict(row)
             for row in conn.execute(
                 """
@@ -230,6 +246,27 @@ def _load_paper_rows(paper_db: Path) -> list[dict[str, Any]]:
                 """
             )
         ]
+    try:
+        canonical_delivery_complete_ids = _canonical_delivery_complete_trade_ids(paper_db)
+    except (OSError, RuntimeError, sqlite3.Error, ValueError):
+        canonical_delivery_complete_ids = set()
+    for row in rows:
+        row["settlement_canonical_delivery_complete"] = (
+            str(row.get("trade_id")) in canonical_delivery_complete_ids
+        )
+        # The current paper-outbox receipts are local delivery bookkeeping. They
+        # must never be represented as independently verified realized P&L.
+        row["settlement_profit_receipt_attested"] = False
+    return rows
+
+
+def _canonical_delivery_complete_trade_ids(paper_db: Path) -> set[str]:
+    with SettlementStore(paper_db, read_only=True) as settlement_store:
+        return set(
+            settlement_store.canonical_delivery_complete_trade_ids(
+                now=datetime.now(timezone.utc)
+            )
+        )
 
 
 def _summarize_rows(
@@ -238,8 +275,16 @@ def _summarize_rows(
     include_by_venue: bool,
 ) -> PaperExpectationSummary:
     total = len(rows)
-    resolved_rows = [row for row in rows if _as_bool(row.get("resolved"))]
-    open_trades = total - len(resolved_rows)
+    raw_resolved_rows = [row for row in rows if _as_bool(row.get("resolved"))]
+    resolved_rows = [
+        row
+        for row in raw_resolved_rows
+        if _as_bool(row.get("settlement_canonical_delivery_complete"))
+    ]
+    # No current paper database field can supply independently verified cash
+    # settlement proof, even if a caller injects a truthy marker into a row.
+    profit_attested_rows: list[dict[str, Any]] = []
+    open_trades = total - len(raw_resolved_rows)
     pnl_values = [_as_float(row.get("pnl_dollars")) or 0.0 for row in resolved_rows]
     wins = sum(1 for pnl in pnl_values if pnl > 0)
     losses = sum(1 for pnl in pnl_values if pnl < 0)
@@ -258,6 +303,8 @@ def _summarize_rows(
     return PaperExpectationSummary(
         total_trades=total,
         resolved_trades=len(resolved_rows),
+        canonical_delivery_complete_resolved_trades=len(resolved_rows),
+        profit_attested_resolved_trades=len(profit_attested_rows),
         open_trades=open_trades,
         wins=wins,
         losses=losses,
@@ -267,7 +314,7 @@ def _summarize_rows(
         ),
         avg_edge=(sum(edges) / len(edges) if edges else None),
         win_rate=(wins / len(resolved_rows) if resolved_rows else None),
-        max_drawdown_pct=_max_drawdown_pct(rows),
+        max_drawdown_pct=_max_drawdown_pct(resolved_rows),
         edge_buckets=_edge_bucket_summary(rows),
         by_venue=by_venue,
     )
@@ -283,7 +330,12 @@ def _edge_bucket_summary(rows: list[dict[str, Any]]) -> dict[str, dict[str, floa
             and (lo is None or edge >= lo)
             and (hi is None or edge < hi)
         ]
-        resolved_rows = [row for row in bucket_rows if _as_bool(row.get("resolved"))]
+        resolved_rows = [
+            row
+            for row in bucket_rows
+            if _as_bool(row.get("resolved"))
+            and _as_bool(row.get("settlement_canonical_delivery_complete"))
+        ]
         pnl = sum((_as_float(row.get("pnl_dollars")) or 0.0) for row in resolved_rows)
         edges = [
             _as_float(row.get("edge"))
@@ -430,6 +482,10 @@ def _paper_to_dict(summary: PaperExpectationSummary) -> dict[str, Any]:
     return {
         "total_trades": summary.total_trades,
         "resolved_trades": summary.resolved_trades,
+        "canonical_delivery_complete_resolved_trades": (
+            summary.canonical_delivery_complete_resolved_trades
+        ),
+        "profit_attested_resolved_trades": summary.profit_attested_resolved_trades,
         "open_trades": summary.open_trades,
         "wins": summary.wins,
         "losses": summary.losses,

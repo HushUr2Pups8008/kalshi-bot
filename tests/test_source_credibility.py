@@ -4,14 +4,18 @@ Tests for analysis/source_credibility.py
 Covers: neutral vs active multiplier behaviour and recorded outcome updates.
 """
 
+import json
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from config import CREDIBILITY_MIN_SAMPLE
+import tasks.stats.source_credibility as source_credibility_module
 from tasks.stats.source_credibility import (
     SourceCredibility,
     record_outcome_in_transaction,
@@ -80,7 +84,10 @@ class TestSourceCredibilityReads:
 
         assert credibility.get_multiplier("Reuters") == 1.0
 
-    def test_get_multiplier_returns_active_value_at_min_sample(self, credibility):
+    def test_get_multiplier_ignores_telemetry_value_without_canonical_delivery(
+        self,
+        credibility,
+    ):
         credibility._conn.execute(
             """
             INSERT INTO source_credibility (source, wins, losses, total, accuracy, multiplier, last_updated)
@@ -90,7 +97,77 @@ class TestSourceCredibilityReads:
         )
         credibility._conn.commit()
 
-        assert credibility.get_multiplier("Reuters") == pytest.approx(1.3)
+        assert credibility.get_multiplier("Reuters") == 1.0
+
+    def test_get_multiplier_caches_verified_canonical_aggregate(self, credibility, monkeypatch):
+        loader = MagicMock(
+            return_value={
+                "Reuters": (
+                    float(CREDIBILITY_MIN_SAMPLE),
+                    float(CREDIBILITY_MIN_SAMPLE),
+                    CREDIBILITY_MIN_SAMPLE,
+                )
+            }
+        )
+        monkeypatch.setattr(
+            credibility,
+            "_load_canonical_outcomes",
+            loader,
+            raising=False,
+        )
+
+        assert credibility.get_multiplier("Reuters") == 1.5
+        assert credibility.get_multiplier("Reuters") == 1.5
+        loader.assert_called_once()
+
+    def test_canonical_multiplier_time_decays_stale_wins(self, credibility, monkeypatch):
+        now = datetime.now(timezone.utc)
+        events = []
+        for index in range(10):
+            events.append(
+                SimpleNamespace(
+                    trade_id=f"old-win-{index}",
+                    payload_json=json.dumps(
+                        {
+                            "trade_id": f"old-win-{index}",
+                            "signal_source": "Reuters",
+                            "won": True,
+                            "settled_at": (now - timedelta(days=365)).isoformat(),
+                        }
+                    ),
+                )
+            )
+        for index in range(5):
+            events.append(
+                SimpleNamespace(
+                    trade_id=f"recent-loss-{index}",
+                    payload_json=json.dumps(
+                        {
+                            "trade_id": f"recent-loss-{index}",
+                            "signal_source": "Reuters",
+                            "won": False,
+                            "settled_at": now.isoformat(),
+                        }
+                    ),
+                )
+            )
+
+        class DeliveredStore:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def canonical_delivery_complete_outbox_payloads(self, *, now):
+                return tuple(events)
+
+        monkeypatch.setattr(source_credibility_module, "SettlementStore", DeliveredStore)
+
+        assert credibility.get_multiplier("Reuters") < 1.0
 
 
 class TestSourceCredibilityWrites:

@@ -52,6 +52,7 @@ from scripts.throughput_operator_metrics import (
     format_operator_throughput_lines,
     summarize_operator_throughput,
 )
+from trading.settlement_store import SettlementStore
 from utils.trade_log_reader import TradeLogReadStats, iter_trade_records
 from utils.output_paths import (
     PAPER_TRADES_DB,
@@ -400,9 +401,26 @@ def load_db_trades(since_dt=None, until_dt=None):
         return []
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
-    rows = conn.execute("SELECT * FROM paper_trades ORDER BY ts").fetchall()
-    conn.close()
+    try:
+        rows = conn.execute("SELECT * FROM paper_trades ORDER BY ts").fetchall()
+    finally:
+        conn.close()
     trades = [dict(r) for r in rows]
+    try:
+        with SettlementStore(DB_PATH, read_only=True) as settlement_store:
+            canonical_delivery_complete_ids = set(
+                settlement_store.canonical_delivery_complete_trade_ids(
+                    now=datetime.now(timezone.utc)
+                )
+            )
+    except (OSError, RuntimeError, sqlite3.Error, ValueError):
+        canonical_delivery_complete_ids = set()
+    for trade in trades:
+        trade["settlement_canonical_delivery_complete"] = (
+            str(trade.get("trade_id")) in canonical_delivery_complete_ids
+        )
+        # Local outbox delivery is not independent evidence of realized profit.
+        trade["settlement_profit_receipt_attested"] = False
     if since_dt is None and until_dt is None:
         return trades
 
@@ -659,13 +677,33 @@ def section_placed_performance(entries, db_trades, resolution_map):
     if not db_trades:
         return "No trades in database."
 
-    wins = [t for t in resolved if (t.get("pnl_dollars") or 0) > 0]
-    losses = [t for t in resolved if (t.get("pnl_dollars") or 0) <= 0]
-    net_pnl = sum(t.get("pnl_dollars") or 0 for t in resolved)
-    total_cost = sum(t.get("cost_dollars") or 0 for t in db_trades)
-    roi = (net_pnl / total_cost * 100) if total_cost > 0 else 0.0
+    canonical_delivery_complete = [
+        t
+        for t in resolved
+        if t.get("settlement_canonical_delivery_complete") is True
+    ]
+    delivery_incomplete = [
+        t
+        for t in resolved
+        if t.get("settlement_canonical_delivery_complete") is not True
+    ]
+    wins = [t for t in canonical_delivery_complete if (t.get("pnl_dollars") or 0) > 0]
+    losses = [t for t in canonical_delivery_complete if (t.get("pnl_dollars") or 0) <= 0]
+    canonical_delivery_complete_pnl = sum(
+        t.get("pnl_dollars") or 0 for t in canonical_delivery_complete
+    )
+    delivery_incomplete_pnl = sum(
+        t.get("pnl_dollars") or 0 for t in delivery_incomplete
+    )
+    total_cost = sum(t.get("cost_dollars") or 0 for t in canonical_delivery_complete)
+    roi = (
+        canonical_delivery_complete_pnl / total_cost * 100 if total_cost > 0 else 0.0
+    )
     avg_edge = (
-        sum(t.get("edge") or 0 for t in db_trades) / len(db_trades) if db_trades else 0
+        sum(t.get("edge") or 0 for t in canonical_delivery_complete)
+        / len(canonical_delivery_complete)
+        if canonical_delivery_complete
+        else 0
     )
 
     lines = []
@@ -679,21 +717,33 @@ def section_placed_performance(entries, db_trades, resolution_map):
     lines.append("  the figures below.")
     lines.append("")
     lines.append("  Total trades  : %d" % len(db_trades))
-    lines.append("  Resolved      : %d" % len(resolved))
+    lines.append("  Historical resolved: %d" % len(resolved))
     lines.append("  Open          : %d" % len(unresolved))
     lines.append(
-        "  Win rate      : %s  (%d W / %d L)"
-        % (_pct(len(wins), len(resolved)), len(wins), len(losses))
+        "  Canonical delivery-complete paper win rate: %s  (%d W / %d L)"
+        % (_pct(len(wins), len(canonical_delivery_complete)), len(wins), len(losses))
     )
-    lines.append("  Net P&L       : %s" % _fmt_pnl(net_pnl))
-    lines.append("  Total cost    : $%.2f" % total_cost)
-    lines.append("  ROI on cost   : %.1f%%" % roi)
-    lines.append("  Avg edge      : %+.4f" % avg_edge)
+    lines.append(
+        "  Canonical delivery-complete resolved: %d | Paper net P&L: %s"
+        % (len(canonical_delivery_complete), _fmt_pnl(canonical_delivery_complete_pnl))
+    )
+    lines.append(
+        "  Delivery-incomplete resolved: %d | Paper net P&L: %s"
+        % (len(delivery_incomplete), _fmt_pnl(delivery_incomplete_pnl))
+    )
+    lines.append("  Independent profit-attested resolved: 0 | Realized P&L: unavailable")
+    lines.append(
+        "  Canonical paper/outbox completion is not independent realized-profit evidence"
+        " and blocks go-live."
+    )
+    lines.append("  Canonical delivery-complete paper cost    : $%.2f" % total_cost)
+    lines.append("  Canonical delivery-complete paper ROI     : %.1f%%" % roi)
+    lines.append("  Canonical delivery-complete paper avg edge: %+.4f" % avg_edge)
 
-    venue_rows = _venue_performance_rows(db_trades)
+    venue_rows = _venue_performance_rows(canonical_delivery_complete)
     if venue_rows:
         lines.append("")
-        lines.append("By venue:")
+        lines.append("Canonical delivery-complete paper outcomes by venue:")
         lines.append(
             tabulate(
                 venue_rows,
@@ -712,9 +762,15 @@ def section_placed_performance(entries, db_trades, resolution_map):
             )
         )
 
-    if resolved:
-        best = max(resolved, key=lambda t: t.get("pnl_dollars") or -999)
-        worst = min(resolved, key=lambda t: t.get("pnl_dollars") or 999)
+    if canonical_delivery_complete:
+        best = max(
+            canonical_delivery_complete,
+            key=lambda t: t.get("pnl_dollars") or -999,
+        )
+        worst = min(
+            canonical_delivery_complete,
+            key=lambda t: t.get("pnl_dollars") or 999,
+        )
         lines.append("")
         lines.append(
             "  Best  trade: %s | %s %s | edge=%+.3f | P&L=%s"
@@ -740,7 +796,7 @@ def section_placed_performance(entries, db_trades, resolution_map):
     # Resolved trades table
     if resolved:
         lines.append("")
-        lines.append("Resolved trades:")
+        lines.append("Historical resolved trades (delivery status shown):")
         rows = []
         for t in sorted(resolved, key=lambda x: x["ts"]):
             result = "YES" if t.get("resolved_yes") else "NO"
@@ -765,6 +821,11 @@ def section_placed_performance(entries, db_trades, resolution_map):
                     "$%.2f" % (t.get("cost_dollars") or 0),
                     result,
                     _fmt_pnl(t.get("pnl_dollars")),
+                    (
+                        "YES"
+                        if t.get("settlement_canonical_delivery_complete") is True
+                        else "NO"
+                    ),
                     (t.get("signal_source") or "")[:22],
                 ]
             )
@@ -781,6 +842,7 @@ def section_placed_performance(entries, db_trades, resolution_map):
                     "Cost",
                     "Result",
                     "P&L",
+                    "Delivery",
                     "Source",
                 ],
                 tablefmt="simple",
@@ -1840,6 +1902,16 @@ def section_edge_calibration(db_trades):
 
 def section_golive_readiness(db_trades, state, mtm=None):
     resolved_all = [t for t in db_trades if t.get("resolved")]
+    canonical_delivery_complete = [
+        t
+        for t in resolved_all
+        if t.get("settlement_canonical_delivery_complete") is True
+    ]
+    delivery_incomplete = [
+        t
+        for t in resolved_all
+        if t.get("settlement_canonical_delivery_complete") is not True
+    ]
 
     try:
         bankroll_now = float(state.get("notional_bankroll", 0))
@@ -1903,20 +1975,21 @@ def section_golive_readiness(db_trades, state, mtm=None):
     boundary = _parse_p0_boundary(state.get(P0_PRICE_FIX_SENTINEL_KEY))
     if boundary is not None:
         gating = [
-            t for t in resolved_all
+            t for t in canonical_delivery_complete
             if (_parse_ts(t.get("ts")) is not None and _parse_ts(t.get("ts")) >= boundary)
         ]
         gate_basis = "POST-P0"
     else:
-        gating = resolved_all
+        gating = canonical_delivery_complete
         gate_basis = "LIFETIME (post-P0 boundary missing -- fallback)"
 
     g_n, g_wr, g_ptt, g_dd_measurable = _cohort_stats(gating)
-    life_n, life_wr, life_ptt, _ = _cohort_stats(resolved_all)
+    life_n, life_wr, life_ptt, _ = _cohort_stats(canonical_delivery_complete)
     life_dd_startnow = (
         (bankroll_start - bankroll_now) / bankroll_start if bankroll_start > 0 else 0.0
     )
-    dd_ok = g_dd_measurable and g_ptt <= max_drawdown
+    delivery_complete = not delivery_incomplete
+    dd_ok = delivery_complete and g_dd_measurable and g_ptt <= max_drawdown
 
     def gate(val, threshold, mode):
         ok = val >= threshold if mode == "min" else val <= threshold
@@ -1927,14 +2000,20 @@ def section_golive_readiness(db_trades, state, mtm=None):
     lines.append("                    pre-fix pricing bug; matches 7b/7d/7e).")
     lines.append("")
     lines.append(
-        "  Resolved trades : %d / %d required  [%s]"
+        "  Canonical delivery-complete resolved: %d / %d required  [%s]"
         % (g_n, min_resolved, gate(g_n, min_resolved, "min"))
     )
     lines.append(
         "  Win rate        : %.0f%% / %.0f%% required  [%s]"
         % (g_wr * 100, min_win_rate * 100, gate(g_wr, min_win_rate, "min"))
     )
-    if g_dd_measurable:
+    if not delivery_complete:
+        lines.append(
+            "  Drawdown        : n/a / %.0f%% max  [FAIL]  (delivery-incomplete"
+            " outcomes prevent a canonical paper equity reconstruction)"
+            % (max_drawdown * 100)
+        )
+    elif g_dd_measurable:
         lines.append(
             "  Drawdown        : %.1f%% / %.0f%% max  [%s]  (peak-to-trough)"
             % (g_ptt * 100, max_drawdown * 100, "PASS" if dd_ok else "FAIL")
@@ -1966,8 +2045,16 @@ def section_golive_readiness(db_trades, state, mtm=None):
             " conservative)"
         )
     lines.append("")
+    if delivery_incomplete:
+        lines.append(
+            "  %d delivery-incomplete resolved outcomes block paper-readiness"
+            " until canonical delivery completes." % len(delivery_incomplete)
+        )
+        lines.append("")
     lines.append(
-        "  Lifetime view (incl. frozen pre-P0; INFORMATIONAL, not gating):"
+        "  Canonical delivery-complete lifetime paper view (incl. frozen pre-P0;"
+        " INFORMATIONAL,"
+        " not gating):"
     )
     lines.append(
         "    Resolved %d | Win rate %.0f%% | start-vs-now %.1f%% | peak-to-trough %.1f%%"
@@ -1975,29 +2062,31 @@ def section_golive_readiness(db_trades, state, mtm=None):
     )
     lines.append("")
 
-    all_pass = g_n >= min_resolved and g_wr >= min_win_rate and dd_ok
-    if all_pass:
-        lines.append("  OVERALL: READY FOR LIVE TRADING (%s cohort)" % gate_basis)
-    else:
-        missing = []
-        if g_n < min_resolved:
-            missing.append("%d more resolved trades needed" % (min_resolved - g_n))
-        if g_wr < min_win_rate:
+    lines.append("  Independent realized-profit evidence: unavailable  [FAIL]")
+    lines.append(
+        "  Current paper/outbox records are not an independently verified cash"
+        " settlement ledger."
+    )
+    lines.append("")
+    missing = ["independent realized-profit evidence is unavailable"]
+    if g_n < min_resolved:
+        missing.append("%d more resolved paper trades needed" % (min_resolved - g_n))
+    if g_wr < min_win_rate:
+        missing.append(
+            "paper win rate needs %.0f%% (currently %.0f%%)"
+            % (min_win_rate * 100, g_wr * 100)
+        )
+    if not dd_ok:
+        if not delivery_complete:
+            missing.append("delivery-incomplete outcomes require canonical completion")
+        elif not g_dd_measurable:
+            missing.append("drawdown not measurable (too few bankroll samples)")
+        else:
             missing.append(
-                "win rate needs %.0f%% (currently %.0f%%)"
-                % (min_win_rate * 100, g_wr * 100)
+                "drawdown %.1f%% exceeds %.0f%% cap"
+                % (g_ptt * 100, max_drawdown * 100)
             )
-        if not dd_ok:
-            if not g_dd_measurable:
-                missing.append(
-                    "drawdown not measurable (too few bankroll samples)"
-                )
-            else:
-                missing.append(
-                    "drawdown %.1f%% exceeds %.0f%% cap"
-                    % (g_ptt * 100, max_drawdown * 100)
-                )
-        lines.append("  OVERALL: NOT READY -- " + "; ".join(missing))
+    lines.append("  OVERALL: NOT READY -- " + "; ".join(missing))
 
     return "\n".join(lines)
 

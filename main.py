@@ -121,6 +121,7 @@ from tasks.structural_task import StructuralTask
 from trading.executor import TradeExecutor
 from trading.fees import DIRECT_ACCOUNT_PRECISION, INITIAL_ORDER_FEE_ACCUMULATOR
 from trading.paper_trader import PaperTrader
+from trading.profit_evidence import independent_realized_profit_evidence_available
 from trading.settlement import (
     MarketOutcome,
     SettlementObservation,
@@ -2193,8 +2194,9 @@ class TradingBot:
         # Get source credibility multiplier
         source_mult = self.paper.credibility.get_multiplier(news.source)
 
-        # Dynamic max bet based on current notional bankroll
-        notional   = self.paper.get_notional_bankroll()
+        # Dynamic max bet is capped until all historical resolved paper outcomes
+        # have canonical delivery completion; raw legacy wins cannot expand size.
+        notional = _paper_effective_sizing_bankroll(self.paper)
         max_bet    = cfg.dynamic_max_bet(notional)
         min_edge   = PAPER_MIN_EDGE if cfg.is_paper_trading else cfg.min_edge
 
@@ -4138,10 +4140,44 @@ def _check_go_live_gates(paper: PaperTrader) -> list[str]:
       GO_LIVE_MIN_WIN_RATE    -- minimum win rate (default 0.52)
       GO_LIVE_MAX_DRAWDOWN_PCT -- max drawdown as fraction of starting bankroll (default 0.20)
     """
-    trades   = paper.get_all_trades()
-    resolved = [t for t in trades if t["resolved"]]
+    trades = paper.get_all_trades()
+    raw_resolved = [trade for trade in trades if trade["resolved"]]
     notional = paper.get_notional_bankroll()
-    failures = []
+    failures: list[str] = []
+
+    if not independent_realized_profit_evidence_available(db_path=paper.db_path):
+        failures.append(
+            "Independent realized-profit evidence unavailable -- gate fails closed"
+        )
+
+    try:
+        delivery_complete_ids = _go_live_canonical_delivery_complete_ids(paper)
+        unresolved_identity_count = 0
+        resolved = []
+        for trade in raw_resolved:
+            try:
+                trade_id = str(trade["trade_id"])
+            except (KeyError, TypeError):
+                unresolved_identity_count += 1
+                continue
+            if trade_id in delivery_complete_ids:
+                resolved.append(trade)
+            else:
+                unresolved_identity_count += 1
+    except Exception as exc:  # noqa: BLE001 - live-money boundary must fail closed
+        resolved = []
+        unresolved_identity_count = len(raw_resolved)
+        failures.append(
+            "Settlement canonical delivery unavailable "
+            f"({str(exc)[:80]}) -- gate fails closed"
+        )
+
+    if unresolved_identity_count:
+        failures.append(
+            "Settlement canonical delivery: "
+            f"{unresolved_identity_count} resolved outcome(s) are not "
+            "canonical delivery-complete -- gate fails closed"
+        )
 
     n_resolved = len(resolved)
     if n_resolved < cfg.go_live_min_resolved:
@@ -4213,6 +4249,31 @@ def _check_go_live_gates(paper: PaperTrader) -> list[str]:
     return failures
 
 
+def _paper_effective_sizing_bankroll(paper: PaperTrader) -> float:
+    """Use the runtime guard for real PaperTrader instances, safely test doubles otherwise."""
+
+    if isinstance(paper, PaperTrader):
+        return paper.get_effective_sizing_bankroll()
+    return min(float(paper.get_notional_bankroll()), float(cfg.bankroll))
+
+
+def _go_live_canonical_delivery_complete_ids(paper: PaperTrader) -> set[str]:
+    """Return the conservative paper cohort eligible for go-live evaluation.
+
+    This proves only that the local canonical settlement pipeline delivered every
+    required same-database consumer effect. It is not an external proof of real
+    money P&L, but it prevents legacy or half-delivered paper outcomes from
+    qualifying the paper-readiness gate.
+    """
+
+    with SettlementStore(paper.db_path, read_only=True) as settlement_store:
+        return set(
+            settlement_store.canonical_delivery_complete_trade_ids(
+                now=datetime.now(timezone.utc)
+            )
+        )
+
+
 def _handle_go_live(paper: PaperTrader) -> None:
     """
     Interactive go-live confirmation gate.
@@ -4250,8 +4311,9 @@ def _handle_go_live(paper: PaperTrader) -> None:
         for f in gate_failures:
             print(f"    [FAIL] {f}")
         print()
-        print("  Override gates with GO_LIVE_MIN_RESOLVED=0 etc. in .env if intentional.")
+        print("  Live trading remains blocked until every gate passes.")
         print("=" * 60)
+        return
     else:
         print("  All readiness gates passed.")
         print("=" * 60)
@@ -4263,9 +4325,6 @@ def _handle_go_live(paper: PaperTrader) -> None:
     notional = paper.get_notional_bankroll()
     print(f"  Notional bankroll at switch: ${notional:.2f}")
     print(f"  Live max bet: ${cfg.dynamic_max_bet(notional):.2f}")
-    if gate_failures:
-        print()
-        print("  NOTE: Readiness gates have FAILED. Proceeding anyway is your choice.")
     print()
     answer = input("  Type CONFIRM to go live, or anything else to cancel: ").strip()
     if answer == "CONFIRM":

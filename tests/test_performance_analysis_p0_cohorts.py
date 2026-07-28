@@ -289,6 +289,8 @@ def test_golive_readiness_fallback_uses_persisted_start_and_measurable_drawdown(
                 "resolved": 1,
                 "pnl_dollars": 1.0 if i < 11 else -1.0,  # 55% win rate
                 "notional_bankroll_before": before,
+                "settlement_canonical_delivery_complete": True,
+                "settlement_profit_receipt_attested": False,
             }
         )
 
@@ -304,7 +306,8 @@ def test_golive_readiness_fallback_uses_persisted_start_and_measurable_drawdown(
     assert "(peak-to-trough)" in output
     assert "Notional bankroll : $45.25 (started $50.00)" in output
     # 20 resolved, 55% win, 16% drawdown -> READY; no failure reason emitted.
-    assert "OVERALL: READY FOR LIVE TRADING" in output
+    assert "OVERALL: READY FOR LIVE TRADING" not in output
+    assert "independent realized-profit evidence is unavailable" in output
     assert "drawdown" not in output.split("OVERALL:", 1)[1]
 
 
@@ -317,6 +320,8 @@ def _mtm_trades(n=20, start=50.0):
             "resolved": 1,
             "pnl_dollars": 1.0 if i < 11 else -1.0,
             "notional_bankroll_before": start,
+            "settlement_canonical_delivery_complete": True,
+            "settlement_profit_receipt_attested": False,
         }
         for i in range(n)
     ]
@@ -341,7 +346,8 @@ def test_golive_drawdown_uses_mtm_equity_when_available():
     # Equity point = 30 + 18 = 48 -> peak-to-trough (50-48)/50 = 4% PASS.
     assert "Drawdown        : 4.0% / 20% max  [PASS]" in with_mtm
     assert "MTM equity        : $48.00 = notional + $18.00 open-position value" in with_mtm
-    assert "OVERALL: READY FOR LIVE TRADING" in with_mtm
+    assert "OVERALL: READY FOR LIVE TRADING" not in with_mtm
+    assert "independent realized-profit evidence is unavailable" in with_mtm
 
 
 def test_golive_mtm_unavailable_labels_notional_fallback():
@@ -391,6 +397,8 @@ def test_golive_gates_on_post_p0_cohort_not_lifetime():
                 "resolved": 1,
                 "pnl_dollars": 1.0 if i < 4 else -1.0,
                 "notional_bankroll_before": 50.0 if i == 0 else None,
+                "settlement_canonical_delivery_complete": True,
+                "settlement_profit_receipt_attested": False,
             }
         )
     # Post-P0: 5 resolved, ALL wins (100%) — the representative regime.
@@ -402,6 +410,8 @@ def test_golive_gates_on_post_p0_cohort_not_lifetime():
                 "resolved": 1,
                 "pnl_dollars": 2.0,
                 "notional_bankroll_before": None,
+                "settlement_canonical_delivery_complete": True,
+                "settlement_profit_receipt_attested": False,
             }
         )
     state = {
@@ -414,11 +424,11 @@ def test_golive_gates_on_post_p0_cohort_not_lifetime():
     # NOT lifetime's 45%.
     assert "Cohort basis    : POST-P0" in output
     assert "Win rate        : 100% / 52% required  [PASS]" in output
-    assert "Resolved trades : 5 / 20 required  [FAIL]" in output
+    assert "Canonical delivery-complete resolved: 5 / 20 required  [FAIL]" in output
     # A thin post-P0 sample fails on resolved-count even at 100% win rate.
     assert "OVERALL: NOT READY" in output
     assert "READY FOR LIVE TRADING" not in output
-    assert "15 more resolved trades needed" in output
+    assert "15 more resolved paper trades needed" in output
     # Lifetime is surfaced as informational only (45% win rate, 20 resolved).
     assert "INFORMATIONAL, not gating" in output
     assert "Resolved 20" in output
@@ -436,6 +446,8 @@ def test_golive_reports_peak_to_trough_and_cohort_label():
             "resolved": 1,
             "pnl_dollars": -1.0,
             "notional_bankroll_before": 50.0,
+            "settlement_canonical_delivery_complete": True,
+            "settlement_profit_receipt_attested": False,
         },
         {
             "trade_id": "b",
@@ -443,6 +455,8 @@ def test_golive_reports_peak_to_trough_and_cohort_label():
             "resolved": 1,
             "pnl_dollars": -1.0,
             "notional_bankroll_before": 30.0,  # trough
+            "settlement_canonical_delivery_complete": True,
+            "settlement_profit_receipt_attested": False,
         },
     ]
     state = {

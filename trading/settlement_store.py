@@ -14,6 +14,7 @@ from decimal import Decimal, InvalidOperation
 from functools import lru_cache
 from pathlib import Path
 
+from trading.legacy_settlement_cutover import validate_legacy_settlement_cutover
 from trading.settlement import (
     MarketOutcome,
     SettlementObservation,
@@ -432,6 +433,19 @@ class StoreCheck:
     ok: bool
     failures: tuple[str, ...]
     metrics: dict[str, int | str | bool]
+
+
+@dataclass(frozen=True)
+class CanonicalDeliveryCompleteOutbox:
+    """One internally delivered canonical settlement event.
+
+    This records local consumer completion only. It is deliberately not a
+    cryptographic or external proof of realized trading profit.
+    """
+
+    outbox_id: str
+    trade_id: str
+    payload_json: str
 
 
 @dataclass(frozen=True)
@@ -876,13 +890,22 @@ def initialize_fresh_settlement_schema(
 class SettlementStore:
     """Connection-scoped, unwired access to durable settlement state."""
 
-    def __init__(self, db_path: Path | str):
+    def __init__(self, db_path: Path | str, *, read_only: bool = False):
         self._db_path = Path(db_path).expanduser().resolve()
-        self._conn = sqlite3.connect(
-            self._db_path,
-            isolation_level=None,
-            timeout=30.0,
-        )
+        if read_only:
+            self._conn = sqlite3.connect(
+                f"{self._db_path.as_uri()}?mode=ro",
+                uri=True,
+                isolation_level=None,
+                timeout=30.0,
+            )
+            self._conn.execute("PRAGMA query_only = ON")
+        else:
+            self._conn = sqlite3.connect(
+                self._db_path,
+                isolation_level=None,
+                timeout=30.0,
+            )
         self._conn.row_factory = sqlite3.Row
         enable_and_verify_foreign_keys(self._conn)
         self._callback_guard = _CallbackTransactionGuard()
@@ -938,6 +961,54 @@ class SettlementStore:
             (outbox_id, outbox_id),
         ).fetchone()
         return bool(row["event_exists"]) and not bool(row["has_pending"])
+
+    def canonical_delivery_complete_outbox_payloads(
+        self,
+        *,
+        now: datetime,
+    ) -> tuple[CanonicalDeliveryCompleteOutbox, ...]:
+        """Return canonical events whose required local consumers completed.
+
+        The outbox/receipt graph is local bookkeeping, not an independently
+        verifiable settlement or profit receipt. Consumers that use this method
+        must not present its result as realized P&L evidence.
+        """
+        if not self.conservation(now=now).ok:
+            return ()
+        rows = self._conn.execute(
+            """
+            SELECT outbox.outbox_id, outbox.trade_id, outbox.payload_json
+            FROM paper_trades AS trade
+            JOIN paper_settlement_observations AS observation
+              ON observation.observation_sha256 = trade.settlement_observation_sha256
+            JOIN paper_settlement_outbox AS outbox
+              ON outbox.observation_sha256 = observation.observation_sha256
+             AND outbox.trade_id = trade.trade_id
+            WHERE trade.resolved=1
+            ORDER BY outbox.trade_id, outbox.outbox_id
+            """
+        ).fetchall()
+        return tuple(
+            CanonicalDeliveryCompleteOutbox(
+                outbox_id=str(row["outbox_id"]),
+                trade_id=str(row["trade_id"]),
+                payload_json=str(row["payload_json"]),
+            )
+            for row in rows
+            if self.is_outbox_drained(str(row["outbox_id"]))
+        )
+
+    def canonical_delivery_complete_trade_ids(
+        self,
+        *,
+        now: datetime,
+    ) -> tuple[str, ...]:
+        """Return resolved paper trades with complete local canonical delivery."""
+
+        return tuple(
+            event.trade_id
+            for event in self.canonical_delivery_complete_outbox_payloads(now=now)
+        )
 
     def acquire_claim(
         self,
@@ -1055,55 +1126,11 @@ class SettlementStore:
         processed_at: datetime,
         result_sha256: str,
     ) -> bool:
-        _require_aware(processed_at, "processed_at")
-        if _SHA256_TEXT.fullmatch(result_sha256) is None:
-            raise ValueError("result_sha256 must be lowercase SHA-256")
-        self._conn.execute("BEGIN IMMEDIATE")
-        try:
-            existing = self._conn.execute(
-                """
-                SELECT result_sha256 FROM paper_settlement_consumer_receipts
-                WHERE consumer_name=? AND outbox_id=?
-                """,
-                (consumer_name, outbox_id),
-            ).fetchone()
-            if existing is not None:
-                if existing[0] != result_sha256:
-                    raise RuntimeError("receipt result drift")
-                self._conn.commit()
-                return False
-            claim = self._conn.execute(
-                """
-                SELECT claim_token, lease_expires_at
-                FROM paper_settlement_delivery_claims
-                WHERE consumer_name=? AND outbox_id=?
-                """,
-                (consumer_name, outbox_id),
-            ).fetchone()
-            if claim is None or claim["claim_token"] != claim_token:
-                raise RuntimeError("receipt requires the active claim token")
-            if _parse_datetime(claim["lease_expires_at"]) <= processed_at:
-                raise RuntimeError("receipt claim lease expired")
-            self._conn.execute(
-                """
-                INSERT INTO paper_settlement_consumer_receipts (
-                    consumer_name, outbox_id, processed_at, result_sha256
-                ) VALUES (?, ?, ?, ?)
-                """,
-                (consumer_name, outbox_id, processed_at.isoformat(), result_sha256),
-            )
-            self._conn.execute(
-                """
-                DELETE FROM paper_settlement_delivery_claims
-                WHERE consumer_name=? AND outbox_id=? AND claim_token=?
-                """,
-                (consumer_name, outbox_id, claim_token),
-            )
-            self._conn.commit()
-            return True
-        except Exception:
-            self._conn.rollback()
-            raise
+        del consumer_name, outbox_id, claim_token, processed_at, result_sha256
+        raise RuntimeError(
+            "Direct receipt recording is disabled; use complete_claim with a "
+            "transactional consumer effect"
+        )
 
     def complete_claim(
         self,
@@ -1691,8 +1718,16 @@ class SettlementStore:
             """
         ).fetchone()[0]
         metrics["resolved_rows_without_observation"] = unresolved_links
-        if unresolved_links:
+        legacy_cutover = validate_legacy_settlement_cutover(self._conn)
+        metrics["legacy_unattested_exemptions"] = len(
+            legacy_cutover.exempt_trade_ids
+        )
+        if unresolved_links and not legacy_cutover.ok:
+            if legacy_cutover.failures != ("legacy_cutover_unavailable",):
+                failures.extend(legacy_cutover.failures)
             failures.append("resolved_observation_link")
+        elif not unresolved_links and not legacy_cutover.ok:
+            failures.extend(legacy_cutover.failures)
 
         duplicate_receipts = self._conn.execute(
             """
