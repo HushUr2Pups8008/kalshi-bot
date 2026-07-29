@@ -5,6 +5,36 @@ from pathlib import Path
 from scripts.research_activation_status import evaluate_activation_profile
 
 
+def test_shadow_profile_does_not_require_operator_only_brave_probe_configuration(
+    tmp_path,
+):
+    repo_root = Path(__file__).resolve().parents[1]
+    profile = repo_root / "docs" / "governance" / "research-shadow.env.example"
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "REAL_WEB_RESEARCH_MODE=shadow",
+                "REAL_WEB_RESEARCH_MAX_QUERIES=6",
+                "REAL_WEB_RESEARCH_TIMEOUT_SECONDS=12.0",
+                "ENABLE_RESEARCH_PREWARM_TASK=true",
+                "RESEARCH_PREWARM_INTERVAL_SECONDS=300",
+                "RESEARCH_PREWARM_MAX_MARKETS=25",
+                "RESEARCH_PREWARM_MAX_PAGES=5",
+                "RESEARCH_PREWARM_TARGET_COOLDOWN_SECONDS=1800",
+                "LIVE_TRADING_ENABLED=false",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assessment = evaluate_activation_profile(repo_root, profile, env_path=env_path)
+
+    assert assessment.ok
+    assert "ENABLE_BRAVE_SEARCH_SHADOW" not in assessment.profile_values
+    assert "BRAVE_SEARCH_API_KEY" not in assessment.profile_values
+
+
 def test_activation_status_passes_when_env_matches_profile(tmp_path):
     profile = tmp_path / "profile.env"
     env_path = tmp_path / ".env"
