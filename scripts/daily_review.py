@@ -447,6 +447,34 @@ def _format_match_attribution_lines(
     post_admission_weight_demoted = int(
         funnel_stats.get("match_no_candidate_post_admission_weight_demoted", 0) or 0
     )
+    post_admission_counterfactual_shadow_valid_rows = int(
+        funnel_stats.get(
+            "match_no_candidate_post_admission_counterfactual_shadow_valid_rows",
+            0,
+        )
+        or 0
+    )
+    post_admission_counterfactual_shadow_legacy_rows = int(
+        funnel_stats.get(
+            "match_no_candidate_post_admission_counterfactual_shadow_legacy_rows",
+            0,
+        )
+        or 0
+    )
+    post_admission_counterfactual_shadow_invalid_rows = int(
+        funnel_stats.get(
+            "match_no_candidate_post_admission_counterfactual_shadow_invalid_rows",
+            0,
+        )
+        or 0
+    )
+    post_admission_counterfactual_shadow_truncated_rows = int(
+        funnel_stats.get(
+            "match_no_candidate_post_admission_counterfactual_shadow_truncated_rows",
+            0,
+        )
+        or 0
+    )
     drilldowns = [
         ("Drilldown: pre-LLM quality gate", Counter(funnel_stats.get("match_diagnostic_pre_llm_gate", {})), None),
         ("Drilldown: match diagnostic sources", Counter(funnel_stats.get("match_diagnostic_sources", {})), top),
@@ -586,6 +614,21 @@ def _format_match_attribution_lines(
             f"{post_admission_no_token_overlap} ({overlap_percent:.1f}%) "
             f"below_min_score={post_admission_below_min} ({below_percent:.1f}%) "
             f"weight_demoted={post_admission_weight_demoted}"
+        )
+    if any(
+        (
+            post_admission_counterfactual_shadow_valid_rows,
+            post_admission_counterfactual_shadow_legacy_rows,
+            post_admission_counterfactual_shadow_invalid_rows,
+            post_admission_counterfactual_shadow_truncated_rows,
+        )
+    ):
+        lines.append(
+            "  Counterfactual snapshot coverage: "
+            f"valid={post_admission_counterfactual_shadow_valid_rows} "
+            f"legacy={post_admission_counterfactual_shadow_legacy_rows} "
+            f"invalid={post_admission_counterfactual_shadow_invalid_rows} "
+            f"truncated={post_admission_counterfactual_shadow_truncated_rows}"
         )
     if suppressions:
         coverage_parts = [

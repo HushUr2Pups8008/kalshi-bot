@@ -987,6 +987,336 @@ def test_summarize_marks_invalid_post_admission_rejection_breakdowns_unavailable
     assert stats["match_no_candidate_post_admission_min_scores"] == Counter()
 
 
+def test_summarize_tracks_counterfactual_shadow_coverage_without_rendering_candidates(
+    local_tmp_dir,
+    capsys,
+):
+    path = local_tmp_dir / "trades.jsonl"
+    common = {
+        "type": "MATCH_NO_CANDIDATE",
+        "venue": "polymarket_us",
+        "reason": "no_match",
+        "candidate_pool_stage": "post_admission_no_match",
+        "eligible_market_count": 2,
+        "pre_admission_matchable_market_count": 2,
+        "within_admission_horizon_market_count": 2,
+        "post_admission_no_token_overlap_count": 2,
+        "post_admission_below_min_post_weight_score_count": 0,
+        "post_admission_weight_demoted_below_min_score_count": 0,
+        "post_admission_min_match_score": 0.08,
+    }
+    valid_shadow = {
+        "schema_version": 1,
+        "match_clock_utc": "2026-07-29T09:08:36+00:00",
+        "news_headline_token_count": 8,
+        "news_match_token_count": 14,
+        "candidate_count_total": 2,
+        "captured_market_count": 1,
+        "omitted_market_count": 1,
+        "truncated": True,
+        "candidates": [
+                {
+                    "ticker": "0xabc123",
+                    "market_title": "valid_title_sentinel",
+                    "rejection_reason": "market_without_match_tokens",
+                "market_token_count": 0,
+                "matched_token_count": 0,
+            }
+        ],
+    }
+    invalid_shadow = {
+        **valid_shadow,
+        "candidates": [{**valid_shadow["candidates"][0], "matched_tokens": ["unsafe"]}],
+    }
+    historical_unsanitized_title = {
+        **valid_shadow,
+        "candidates": [
+            {
+                **valid_shadow["candidates"][0],
+                "market_title": "historical\x1btitle",
+            }
+        ],
+    }
+    mismatched_total_shadow = {
+        **valid_shadow,
+        "candidate_count_total": 1,
+        "captured_market_count": 1,
+        "omitted_market_count": 0,
+        "truncated": False,
+    }
+    flat_inconsistent_shadow = {
+        **valid_shadow,
+        "candidates": [
+            {
+                "ticker": "0xflat",
+                "rejection_reason": "below_min_post_weight_score",
+                "market_token_count": 1,
+                "matched_token_count": 1,
+                "pre_weight_score": 0.04,
+                "post_weight_score": 0.01,
+            }
+        ],
+    }
+    threshold_inconsistent_shadow = {
+        **valid_shadow,
+        "candidates": [
+            {
+                "ticker": "0xthreshold",
+                "rejection_reason": "below_min_post_weight_score",
+                "market_token_count": 1,
+                "matched_token_count": 1,
+                "pre_weight_score": 0.04,
+                "post_weight_score": 0.08,
+            }
+        ],
+    }
+    write_jsonl(
+        path,
+        [
+            {**common, "source": "Reuters", "headline": "valid", "post_admission_counterfactual_shadow": valid_shadow, "ts": "2026-07-29T09:08:36+00:00"},
+            {**common, "source": "AP", "headline": "legacy", "ts": "2026-07-29T09:09:36+00:00"},
+            {**common, "source": "BBC", "headline": "invalid", "post_admission_counterfactual_shadow": invalid_shadow, "ts": "2026-07-29T09:10:36+00:00"},
+            {**common, "source": "PBS", "headline": "logger invalid", "post_admission_counterfactual_shadow_status": "invalid", "ts": "2026-07-29T09:11:36+00:00"},
+            {**common, "source": "CBC", "headline": "null status", "post_admission_counterfactual_shadow_status": None, "ts": "2026-07-29T09:11:46+00:00"},
+            {**common, "source": "CNN", "headline": "historical title", "post_admission_counterfactual_shadow": historical_unsanitized_title, "ts": "2026-07-29T09:12:36+00:00"},
+            {**common, "source": "NPR", "headline": "mismatched total", "post_admission_counterfactual_shadow": mismatched_total_shadow, "ts": "2026-07-29T09:12:46+00:00"},
+            {**common, "source": "ABC", "headline": "wrong context", "candidate_pool_stage": "eligible_cache_empty", "post_admission_counterfactual_shadow": valid_shadow, "ts": "2026-07-29T09:13:06+00:00"},
+            {**common, "source": "Kalshi", "headline": "other venue", "venue": "kalshi", "post_admission_counterfactual_shadow": valid_shadow, "ts": "2026-07-29T09:13:36+00:00"},
+            {**common, "source": "NBC", "headline": "flat inconsistent", "post_admission_counterfactual_shadow": flat_inconsistent_shadow, "ts": "2026-07-29T09:14:36+00:00"},
+            {
+                **common,
+                "source": "CBS",
+                "headline": "threshold inconsistent",
+                "post_admission_no_token_overlap_count": 1,
+                "post_admission_below_min_post_weight_score_count": 1,
+                "post_admission_best_rejected_pre_weight_score": 0.04,
+                "post_admission_best_rejected_post_weight_score": 0.01,
+                "post_admission_counterfactual_shadow": threshold_inconsistent_shadow,
+                "ts": "2026-07-29T09:15:36+00:00",
+            },
+        ],
+    )
+
+    stats = summarize(path, since=None, until=None)
+
+    assert stats["match_no_candidate_post_admission_counterfactual_shadow_valid_rows"] == 1
+    assert stats["match_no_candidate_post_admission_counterfactual_shadow_legacy_rows"] == 1
+    assert stats["match_no_candidate_post_admission_counterfactual_shadow_invalid_rows"] == 8
+    assert stats["match_no_candidate_post_admission_counterfactual_shadow_truncated_rows"] == 1
+    assert stats["match_no_candidate_post_admission_rejection_complete_rows"] == 10
+
+    print_summary(stats, top=5, since=None, until=None)
+    output = capsys.readouterr().out
+    assert "Counterfactual snapshot coverage: valid=1 legacy=1 invalid=8 truncated=1" in output
+    assert "valid_title_sentinel" not in output
+    assert "0xabc123" not in output
+
+
+def test_summarize_keeps_flat_no_overlap_breakdown_complete_for_empty_market_text(
+    local_tmp_dir,
+):
+    path = local_tmp_dir / "trades.jsonl"
+    write_jsonl(
+        path,
+        [
+            {
+                "type": "MATCH_NO_CANDIDATE",
+                "source": "Reuters",
+                "headline": "Empty market text",
+                "venue": "polymarket_us",
+                "reason": "no_match",
+                "candidate_pool_stage": "post_admission_no_match",
+                "eligible_market_count": 1,
+                "pre_admission_matchable_market_count": 1,
+                "within_admission_horizon_market_count": 1,
+                "post_admission_no_token_overlap_count": 1,
+                "post_admission_below_min_post_weight_score_count": 0,
+                "post_admission_weight_demoted_below_min_score_count": 0,
+                "post_admission_min_match_score": 0.08,
+                "post_admission_counterfactual_shadow": {
+                    "schema_version": 1,
+                    "match_clock_utc": "2026-07-29T09:08:36+00:00",
+                    "news_headline_token_count": 8,
+                    "news_match_token_count": 14,
+                    "candidate_count_total": 1,
+                    "captured_market_count": 1,
+                    "omitted_market_count": 0,
+                    "truncated": False,
+                    "candidates": [
+                        {
+                            "ticker": "0xempty",
+                            "rejection_reason": "market_without_match_tokens",
+                            "market_token_count": 0,
+                            "matched_token_count": 0,
+                        }
+                    ],
+                },
+                "ts": "2026-07-29T09:08:36+00:00",
+            }
+        ],
+    )
+
+    stats = summarize(path, since=None, until=None)
+
+    assert stats["match_no_candidate_post_admission_rejection_complete_rows"] == 1
+    assert stats["match_no_candidate_post_admission_no_token_overlap"] == 1
+    assert stats["match_no_candidate_post_admission_counterfactual_shadow_valid_rows"] == 1
+
+
+@pytest.mark.parametrize(
+    "malformation",
+    (
+        "integer_subclass",
+        "reason_subclass",
+        "snapshot_dict_subclass",
+        "candidate_dict_subclass",
+        "schema_version_subclass",
+    ),
+)
+def test_counterfactual_shadow_parser_rejects_noncanonical_schema_values(malformation):
+    snapshot = {
+        "schema_version": 1,
+        "match_clock_utc": "2026-07-29T09:08:36+00:00",
+        "news_headline_token_count": 8,
+        "news_match_token_count": 14,
+        "candidate_count_total": 1,
+        "captured_market_count": 1,
+        "omitted_market_count": 0,
+        "truncated": False,
+        "candidates": [
+            {
+                "ticker": "0xstrict",
+                "rejection_reason": "no_token_overlap",
+                "market_token_count": 1,
+                "matched_token_count": 0,
+            }
+        ],
+    }
+    if malformation == "integer_subclass":
+        class IntegerSubclass(int):
+            pass
+
+        snapshot["candidate_count_total"] = IntegerSubclass(1)
+    elif malformation == "reason_subclass":
+        class ReasonSubclass(str):
+            pass
+
+        snapshot["candidates"][0]["rejection_reason"] = ReasonSubclass("no_token_overlap")
+    elif malformation == "snapshot_dict_subclass":
+        class SnapshotDictSubclass(dict):
+            pass
+
+        snapshot = SnapshotDictSubclass(snapshot)
+    elif malformation == "candidate_dict_subclass":
+        class CandidateDictSubclass(dict):
+            pass
+
+        snapshot["candidates"][0] = CandidateDictSubclass(snapshot["candidates"][0])
+    else:
+        class SchemaVersionSubclass(int):
+            pass
+
+        snapshot["schema_version"] = SchemaVersionSubclass(1)
+
+    assert (
+        decision_funnel_summary._post_admission_counterfactual_shadow_truncated_or_none(
+            snapshot,
+            within_admission_horizon_market_count=1,
+            post_admission_no_token_overlap_count=1,
+            post_admission_below_min_post_weight_score_count=0,
+            post_admission_weight_demoted_below_min_score_count=0,
+            post_admission_min_match_score=0.08,
+        )
+        is None
+    )
+
+
+def test_counterfactual_shadow_parser_rejects_candidate_list_len_cap_bypass():
+    class LenSpoofingCandidateList(list):
+        def __init__(self, values):
+            super().__init__(values)
+            self._length_calls = 0
+
+        def __len__(self):
+            self._length_calls += 1
+            return 4 if self._length_calls == 1 else 5
+
+    snapshot = {
+        "schema_version": 1,
+        "match_clock_utc": "2026-07-29T09:08:36+00:00",
+        "news_headline_token_count": 8,
+        "news_match_token_count": 14,
+        "candidate_count_total": 5,
+        "captured_market_count": 5,
+        "omitted_market_count": 0,
+        "truncated": False,
+        "candidates": LenSpoofingCandidateList(
+            [
+                {
+                    "ticker": f"0xspoof{index}",
+                    "rejection_reason": "no_token_overlap",
+                    "market_token_count": 1,
+                    "matched_token_count": 0,
+                }
+                for index in range(5)
+            ]
+        ),
+    }
+
+    assert (
+        decision_funnel_summary._post_admission_counterfactual_shadow_truncated_or_none(
+            snapshot,
+            within_admission_horizon_market_count=5,
+            post_admission_no_token_overlap_count=5,
+            post_admission_below_min_post_weight_score_count=0,
+            post_admission_weight_demoted_below_min_score_count=0,
+            post_admission_min_match_score=0.08,
+        )
+        is None
+    )
+
+
+def test_summarize_rejects_zero_post_admission_counterfactual_shadow(local_tmp_dir):
+    path = local_tmp_dir / "trades.jsonl"
+    write_jsonl(
+        path,
+        [
+            {
+                "type": "MATCH_NO_CANDIDATE",
+                "source": "Reuters",
+                "headline": "Zero candidate snapshot",
+                "venue": "polymarket_us",
+                "reason": "no_match",
+                "candidate_pool_stage": "post_admission_no_match",
+                "eligible_market_count": 1,
+                "pre_admission_matchable_market_count": 1,
+                "within_admission_horizon_market_count": 0,
+                "post_admission_no_token_overlap_count": 0,
+                "post_admission_below_min_post_weight_score_count": 0,
+                "post_admission_weight_demoted_below_min_score_count": 0,
+                "post_admission_min_match_score": 0.08,
+                "post_admission_counterfactual_shadow": {
+                    "schema_version": 1,
+                    "match_clock_utc": "2026-07-29T09:08:36+00:00",
+                    "news_headline_token_count": 8,
+                    "news_match_token_count": 14,
+                    "candidate_count_total": 0,
+                    "captured_market_count": 0,
+                    "omitted_market_count": 0,
+                    "truncated": False,
+                    "candidates": [],
+                },
+                "ts": "2026-07-29T09:08:36+00:00",
+            }
+        ],
+    )
+
+    stats = summarize(path, since=None, until=None)
+
+    assert stats["match_no_candidate_post_admission_counterfactual_shadow_valid_rows"] == 0
+    assert stats["match_no_candidate_post_admission_counterfactual_shadow_invalid_rows"] == 1
+
+
 def test_summarize_keeps_matcher_signals_window_local(local_tmp_dir):
     path = local_tmp_dir / "trades.jsonl"
     write_jsonl(

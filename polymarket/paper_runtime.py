@@ -46,6 +46,11 @@ _DEFAULT_MARKET_LIMIT = 500
 _DEFAULT_MARKET_CACHE_TTL_SECONDS = 300.0
 _DEFAULT_MAX_CANDIDATES = PAPER_MAX_CANDIDATES
 _DEFAULT_MIN_MATCH_SCORE = 0.08
+_COUNTERFACTUAL_SNAPSHOT_SCHEMA_VERSION = 1
+_COUNTERFACTUAL_SNAPSHOT_MAX_CANDIDATES = 4
+_COUNTERFACTUAL_SNAPSHOT_MAX_TITLE_CHARS = 160
+_COUNTERFACTUAL_SNAPSHOT_MAX_RAW_TITLE_CHARS = 512
+_COUNTERFACTUAL_SNAPSHOT_MAX_TICKER_CHARS = 128
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 _STOPWORDS = frozenset(
     {
@@ -88,6 +93,82 @@ _DISCOVERY_TOPIC_TOKENS = frozenset({
     "war",
     "world",
 })
+
+
+def _counterfactual_title(value: Any) -> str | None:
+    """Return a bounded ASCII-safe public market title for shadow telemetry."""
+    if type(value) is not str or len(value) > _COUNTERFACTUAL_SNAPSHOT_MAX_RAW_TITLE_CHARS:
+        return None
+    sanitized = "".join(char for char in value if " " <= char <= "~")
+    return sanitized[:_COUNTERFACTUAL_SNAPSHOT_MAX_TITLE_CHARS] or None
+
+
+def _counterfactual_ticker(value: Any) -> str | None:
+    if (
+        type(value) is not str
+        or not value
+        or len(value) > _COUNTERFACTUAL_SNAPSHOT_MAX_TICKER_CHARS
+        or any(not ("!" <= char <= "~") for char in value)
+    ):
+        return None
+    return value
+
+
+def _counterfactual_finite_score(value: float | None) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    normalized = float(value)
+    return normalized if math.isfinite(normalized) else None
+
+
+def _counterfactual_candidate(
+    market: PolymarketMarket,
+    *,
+    rejection_reason: str,
+    market_token_count: int,
+    matched_token_count: int,
+    pre_weight_score: float | None = None,
+    post_weight_score: float | None = None,
+) -> dict[str, Any] | None:
+    ticker = _counterfactual_ticker(market.ticker)
+    if ticker is None:
+        return None
+    candidate: dict[str, Any] = {
+        "ticker": ticker,
+        "rejection_reason": rejection_reason,
+        "market_token_count": market_token_count,
+        "matched_token_count": matched_token_count,
+    }
+    market_title = _counterfactual_title(market.title)
+    if market_title is not None:
+        candidate["market_title"] = market_title
+    finite_pre_weight_score = _counterfactual_finite_score(pre_weight_score)
+    finite_post_weight_score = _counterfactual_finite_score(post_weight_score)
+    if finite_pre_weight_score is not None:
+        candidate["pre_weight_score"] = finite_pre_weight_score
+    if finite_post_weight_score is not None:
+        candidate["post_weight_score"] = finite_post_weight_score
+    return candidate
+
+
+def _counterfactual_candidate_sort_key(candidate: dict[str, Any]) -> tuple[str, float, str]:
+    post_weight_score = candidate.get("post_weight_score")
+    descending_score = (
+        -post_weight_score if isinstance(post_weight_score, float) else 0.0
+    )
+    return (
+        candidate["rejection_reason"],
+        descending_score,
+        candidate["ticker"],
+    )
+
+
+def _append_counterfactual_candidate(
+    candidates: list[dict[str, Any]], candidate: dict[str, Any]
+) -> None:
+    candidates.append(candidate)
+    candidates.sort(key=_counterfactual_candidate_sort_key)
+    del candidates[_COUNTERFACTUAL_SNAPSHOT_MAX_CANDIDATES:]
 
 
 async def _write_funnel_telemetry(
@@ -134,11 +215,12 @@ class _PostAdmissionRejectionTelemetry:
     best_rejected_pre_weight_score: float | None
     best_rejected_post_weight_score: float | None
     qualifying_match_count: int
+    counterfactual_shadow: dict[str, Any] | None = None
 
-    def as_log_fields(self) -> dict[str, int | float]:
+    def as_log_fields(self) -> dict[str, Any]:
         if self.qualifying_match_count:
             return {}
-        fields: dict[str, int | float] = {
+        fields: dict[str, Any] = {
             "post_admission_no_token_overlap_count": self.no_token_overlap_count,
             "post_admission_below_min_post_weight_score_count": (
                 self.below_min_post_weight_score_count
@@ -155,6 +237,10 @@ class _PostAdmissionRejectionTelemetry:
         if self.best_rejected_post_weight_score is not None:
             fields["post_admission_best_rejected_post_weight_score"] = (
                 self.best_rejected_post_weight_score
+            )
+        if self.counterfactual_shadow is not None:
+            fields["post_admission_counterfactual_shadow"] = (
+                self.counterfactual_shadow
             )
         return fields
 
@@ -957,6 +1043,8 @@ def _match_polymarket_markets_with_rejection_telemetry(
     best_rejected_pre_weight_score: float | None = None
     best_rejected_post_weight_score: float | None = None
     qualifying_match_count = 0
+    counterfactual_candidates: list[dict[str, Any]] = []
+    counterfactual_candidate_count_total = 0
     match_time = now or datetime.now(timezone.utc)
     if match_time.tzinfo is None or match_time.utcoffset() is None:
         raise ValueError("Polymarket market matching clock must be timezone-aware")
@@ -972,13 +1060,32 @@ def _match_polymarket_markets_with_rejection_telemetry(
             admission_horizon_days=admission_horizon_days,
         ):
             continue
+        # Covers every admitted market, including rows we cannot safely serialize.
+        counterfactual_candidate_count_total += 1
         market_tokens = _meaningful_tokens(_market_match_text(market))
         if not market_tokens:
+            no_token_overlap_count += 1
+            candidate = _counterfactual_candidate(
+                market,
+                rejection_reason="market_without_match_tokens",
+                market_token_count=0,
+                matched_token_count=0,
+            )
+            if candidate is not None:
+                _append_counterfactual_candidate(counterfactual_candidates, candidate)
             continue
         overlap = news_tokens & market_tokens
         headline_overlap = headline_tokens & market_tokens
         if not overlap:
             no_token_overlap_count += 1
+            candidate = _counterfactual_candidate(
+                market,
+                rejection_reason="no_token_overlap",
+                market_token_count=len(market_tokens),
+                matched_token_count=0,
+            )
+            if candidate is not None:
+                _append_counterfactual_candidate(counterfactual_candidates, candidate)
             continue
         full_score = len(overlap) / max(1, len(news_tokens | market_tokens))
         headline_score = len(headline_overlap) / max(1, len(headline_tokens | market_tokens))
@@ -1007,7 +1114,8 @@ def _match_polymarket_markets_with_rejection_telemetry(
             )
         if score < min_score:
             below_min_post_weight_score_count += 1
-            if pre_weight_score >= min_score:
+            weight_demoted = pre_weight_score >= min_score
+            if weight_demoted:
                 weight_demoted_below_min_score_count += 1
             best_rejected_pre_weight_score = max(
                 best_rejected_pre_weight_score or pre_weight_score,
@@ -1017,6 +1125,20 @@ def _match_polymarket_markets_with_rejection_telemetry(
                 best_rejected_post_weight_score or score,
                 score,
             )
+            candidate = _counterfactual_candidate(
+                market,
+                rejection_reason=(
+                    "weight_demoted_below_min_score"
+                    if weight_demoted
+                    else "below_min_post_weight_score"
+                ),
+                market_token_count=len(market_tokens),
+                matched_token_count=len(overlap),
+                pre_weight_score=pre_weight_score,
+                post_weight_score=score,
+            )
+            if candidate is not None:
+                _append_counterfactual_candidate(counterfactual_candidates, candidate)
             continue
         qualifying_match_count += 1
         rounded_score = round(score, 4)
@@ -1053,6 +1175,23 @@ def _match_polymarket_markets_with_rejection_telemetry(
         scored.append((market, rounded_score, meta))
 
     scored.sort(key=lambda item: item[1], reverse=True)
+    counterfactual_shadow: dict[str, Any] | None = None
+    if not qualifying_match_count and counterfactual_candidate_count_total:
+        captured_market_count = len(counterfactual_candidates)
+        omitted_market_count = (
+            counterfactual_candidate_count_total - captured_market_count
+        )
+        counterfactual_shadow = {
+            "schema_version": _COUNTERFACTUAL_SNAPSHOT_SCHEMA_VERSION,
+            "match_clock_utc": match_time.isoformat(),
+            "news_headline_token_count": len(headline_tokens),
+            "news_match_token_count": len(news_tokens),
+            "candidate_count_total": counterfactual_candidate_count_total,
+            "captured_market_count": captured_market_count,
+            "omitted_market_count": omitted_market_count,
+            "truncated": omitted_market_count > 0,
+            "candidates": counterfactual_candidates,
+        }
     return scored[:max_results], _PostAdmissionRejectionTelemetry(
         no_token_overlap_count=no_token_overlap_count,
         below_min_post_weight_score_count=below_min_post_weight_score_count,
@@ -1061,6 +1200,7 @@ def _match_polymarket_markets_with_rejection_telemetry(
         best_rejected_pre_weight_score=best_rejected_pre_weight_score,
         best_rejected_post_weight_score=best_rejected_post_weight_score,
         qualifying_match_count=qualifying_match_count,
+        counterfactual_shadow=counterfactual_shadow,
     )
 
 

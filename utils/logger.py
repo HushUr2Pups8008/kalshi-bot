@@ -32,6 +32,7 @@ import dataclasses
 import json
 import logging
 import logging.handlers
+import math
 import os
 import re
 import shutil
@@ -67,6 +68,310 @@ _RESEARCH_GENERIC_SEARCH_CIRCUIT_STATES = frozenset(
 _RESEARCH_GENERIC_SEARCH_FAILURE_CLASS_RE = re.compile(
     r"[A-Za-z_][A-Za-z0-9_.]*(?::(?:[A-Za-z_][A-Za-z0-9_.]*|\d{3}))?"
 )
+
+_POST_ADMISSION_COUNTERFACTUAL_SHADOW_FIELDS = frozenset(
+    {
+        "schema_version",
+        "match_clock_utc",
+        "news_headline_token_count",
+        "news_match_token_count",
+        "candidate_count_total",
+        "captured_market_count",
+        "omitted_market_count",
+        "truncated",
+        "candidates",
+    }
+)
+_POST_ADMISSION_COUNTERFACTUAL_SHADOW_CANDIDATE_FIELDS = frozenset(
+    {
+        "ticker",
+        "market_title",
+        "rejection_reason",
+        "market_token_count",
+        "matched_token_count",
+        "pre_weight_score",
+        "post_weight_score",
+    }
+)
+_POST_ADMISSION_COUNTERFACTUAL_SHADOW_REQUIRED_CANDIDATE_FIELDS = frozenset(
+    {
+        "ticker",
+        "rejection_reason",
+        "market_token_count",
+        "matched_token_count",
+    }
+)
+_POST_ADMISSION_COUNTERFACTUAL_SHADOW_REASONS = frozenset(
+    {
+        "no_token_overlap",
+        "below_min_post_weight_score",
+        "weight_demoted_below_min_score",
+        "market_without_match_tokens",
+    }
+)
+_POST_ADMISSION_COUNTERFACTUAL_SHADOW_MAX_CANDIDATES = 4
+_POST_ADMISSION_COUNTERFACTUAL_SHADOW_MAX_COUNT = 10_000
+_POST_ADMISSION_COUNTERFACTUAL_SHADOW_MAX_TICKER_CHARS = 128
+_POST_ADMISSION_COUNTERFACTUAL_SHADOW_MAX_TITLE_RAW_CHARS = 512
+_POST_ADMISSION_COUNTERFACTUAL_SHADOW_MAX_TITLE_CHARS = 160
+_POST_ADMISSION_COUNTERFACTUAL_SHADOW_MAX_BYTES = 4 * 1024
+
+
+def _counterfactual_nonnegative_int(value: Any) -> int | None:
+    if type(value) is not int:
+        return None
+    if value < 0 or value > _POST_ADMISSION_COUNTERFACTUAL_SHADOW_MAX_COUNT:
+        return None
+    return value
+
+
+def _counterfactual_score(value: Any) -> float | None:
+    if type(value) not in (int, float):
+        return None
+    try:
+        score = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return None
+    if not math.isfinite(score) or score < 0 or score > 1:
+        return None
+    return score
+
+
+def _canonical_counterfactual_ticker(value: Any) -> str | None:
+    if type(value) is not str or not value or len(value) > _POST_ADMISSION_COUNTERFACTUAL_SHADOW_MAX_TICKER_CHARS:
+        return None
+    if any(not ("!" <= char <= "~") for char in value):
+        return None
+    return value
+
+
+def _canonical_counterfactual_title(value: Any) -> str | None:
+    if type(value) is not str or len(value) > _POST_ADMISSION_COUNTERFACTUAL_SHADOW_MAX_TITLE_RAW_CHARS:
+        return None
+    printable = "".join(char for char in value if " " <= char <= "~")
+    title = " ".join(printable.split())
+    return title[:_POST_ADMISSION_COUNTERFACTUAL_SHADOW_MAX_TITLE_CHARS] or None
+
+
+def _canonical_counterfactual_match_clock(value: Any) -> str | None:
+    if type(value) is not str or not value or len(value) > 64:
+        return None
+    if any(not (" " <= char <= "~") for char in value):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    offset = parsed.utcoffset()
+    if offset is None or offset.total_seconds() != 0:
+        return None
+    return parsed.astimezone(timezone.utc).isoformat()
+
+
+def _canonical_post_admission_counterfactual_candidate(
+    candidate: Any,
+    *,
+    news_match_token_count: int,
+    min_match_score: float,
+) -> dict[str, Any] | None:
+    if type(candidate) is not dict:
+        return None
+    candidate_fields = set(candidate)
+    if (
+        not _POST_ADMISSION_COUNTERFACTUAL_SHADOW_REQUIRED_CANDIDATE_FIELDS <= candidate_fields
+        or not candidate_fields <= _POST_ADMISSION_COUNTERFACTUAL_SHADOW_CANDIDATE_FIELDS
+    ):
+        return None
+
+    ticker = _canonical_counterfactual_ticker(candidate.get("ticker"))
+    reason = candidate.get("rejection_reason")
+    market_token_count = _counterfactual_nonnegative_int(candidate.get("market_token_count"))
+    matched_token_count = _counterfactual_nonnegative_int(candidate.get("matched_token_count"))
+    if (
+        ticker is None
+        or type(reason) is not str
+        or reason not in _POST_ADMISSION_COUNTERFACTUAL_SHADOW_REASONS
+        or market_token_count is None
+        or matched_token_count is None
+    ):
+        return None
+
+    has_pre_weight_score = "pre_weight_score" in candidate
+    has_post_weight_score = "post_weight_score" in candidate
+    if has_pre_weight_score != has_post_weight_score:
+        return None
+
+    normalized: dict[str, Any] = {
+        "ticker": ticker,
+        "rejection_reason": reason,
+        "market_token_count": market_token_count,
+        "matched_token_count": matched_token_count,
+    }
+    title = _canonical_counterfactual_title(candidate.get("market_title"))
+    if title is not None:
+        normalized["market_title"] = title
+
+    if reason == "market_without_match_tokens":
+        if market_token_count != 0 or matched_token_count != 0 or has_pre_weight_score:
+            return None
+        return normalized
+    if reason == "no_token_overlap":
+        if market_token_count == 0 or matched_token_count != 0 or has_pre_weight_score:
+            return None
+        return normalized
+
+    pre_weight_score = _counterfactual_score(candidate.get("pre_weight_score"))
+    post_weight_score = _counterfactual_score(candidate.get("post_weight_score"))
+    if (
+        market_token_count == 0
+        or matched_token_count == 0
+        or matched_token_count > market_token_count
+        or matched_token_count > news_match_token_count
+        or pre_weight_score is None
+        or post_weight_score is None
+        or post_weight_score > pre_weight_score
+        or post_weight_score >= min_match_score
+    ):
+        return None
+    if reason == "weight_demoted_below_min_score":
+        if post_weight_score >= pre_weight_score or pre_weight_score < min_match_score:
+            return None
+    elif pre_weight_score >= min_match_score:
+        return None
+    normalized["pre_weight_score"] = pre_weight_score
+    normalized["post_weight_score"] = post_weight_score
+    return normalized
+
+
+def _canonical_post_admission_counterfactual_shadow(
+    value: Any,
+    *,
+    within_admission_horizon_market_count: Any,
+    post_admission_no_token_overlap_count: Any,
+    post_admission_below_min_post_weight_score_count: Any,
+    post_admission_weight_demoted_below_min_score_count: Any,
+    post_admission_min_match_score: Any,
+) -> dict[str, Any] | None:
+    if type(value) is not dict or set(value) != _POST_ADMISSION_COUNTERFACTUAL_SHADOW_FIELDS:
+        return None
+
+    schema_version = value.get("schema_version")
+    match_clock_utc = _canonical_counterfactual_match_clock(value.get("match_clock_utc"))
+    news_headline_token_count = _counterfactual_nonnegative_int(value.get("news_headline_token_count"))
+    news_match_token_count = _counterfactual_nonnegative_int(value.get("news_match_token_count"))
+    candidate_count_total = _counterfactual_nonnegative_int(value.get("candidate_count_total"))
+    captured_market_count = _counterfactual_nonnegative_int(value.get("captured_market_count"))
+    omitted_market_count = _counterfactual_nonnegative_int(value.get("omitted_market_count"))
+    within_horizon_market_count = _counterfactual_nonnegative_int(
+        within_admission_horizon_market_count
+    )
+    no_token_overlap_count = _counterfactual_nonnegative_int(
+        post_admission_no_token_overlap_count
+    )
+    below_min_post_weight_score_count = _counterfactual_nonnegative_int(
+        post_admission_below_min_post_weight_score_count
+    )
+    weight_demoted_below_min_score_count = _counterfactual_nonnegative_int(
+        post_admission_weight_demoted_below_min_score_count
+    )
+    min_match_score = _counterfactual_score(post_admission_min_match_score)
+    candidates = value.get("candidates")
+    truncated = value.get("truncated")
+    if (
+        type(schema_version) is not int
+        or schema_version != 1
+        or match_clock_utc is None
+        or news_headline_token_count is None
+        or news_match_token_count is None
+        or candidate_count_total is None
+        or candidate_count_total <= 0
+        or captured_market_count is None
+        or omitted_market_count is None
+        or within_horizon_market_count is None
+        or within_horizon_market_count <= 0
+        or no_token_overlap_count is None
+        or below_min_post_weight_score_count is None
+        or weight_demoted_below_min_score_count is None
+        or min_match_score is None
+        or type(truncated) is not bool
+        or type(candidates) is not list
+        or len(candidates) > _POST_ADMISSION_COUNTERFACTUAL_SHADOW_MAX_CANDIDATES
+        or captured_market_count != len(candidates)
+        or candidate_count_total != captured_market_count + omitted_market_count
+        or candidate_count_total != within_horizon_market_count
+        or no_token_overlap_count + below_min_post_weight_score_count
+        != within_horizon_market_count
+        or weight_demoted_below_min_score_count > below_min_post_weight_score_count
+        or truncated != (omitted_market_count > 0)
+    ):
+        return None
+
+    canonical_candidates: list[dict[str, Any]] = []
+    seen_tickers: set[str] = set()
+    for candidate in candidates:
+        canonical_candidate = _canonical_post_admission_counterfactual_candidate(
+            candidate,
+            news_match_token_count=news_match_token_count,
+            min_match_score=min_match_score,
+        )
+        if canonical_candidate is None or canonical_candidate["ticker"] in seen_tickers:
+            return None
+        seen_tickers.add(canonical_candidate["ticker"])
+        canonical_candidates.append(canonical_candidate)
+    if len(canonical_candidates) != captured_market_count:
+        return None
+    captured_no_token_overlap_count = sum(
+        candidate["rejection_reason"]
+        in {"market_without_match_tokens", "no_token_overlap"}
+        for candidate in canonical_candidates
+    )
+    captured_below_min_count = sum(
+        candidate["rejection_reason"]
+        in {"below_min_post_weight_score", "weight_demoted_below_min_score"}
+        for candidate in canonical_candidates
+    )
+    captured_weight_demoted_count = sum(
+        candidate["rejection_reason"] == "weight_demoted_below_min_score"
+        for candidate in canonical_candidates
+    )
+    if (
+        captured_no_token_overlap_count > no_token_overlap_count
+        or captured_below_min_count > below_min_post_weight_score_count
+        or captured_weight_demoted_count > weight_demoted_below_min_score_count
+    ):
+        return None
+    canonical_candidates.sort(
+        key=lambda candidate: (
+            candidate["rejection_reason"],
+            -candidate.get("post_weight_score", 0.0),
+            candidate["ticker"],
+        )
+    )
+
+    canonical = {
+        "schema_version": 1,
+        "match_clock_utc": match_clock_utc,
+        "news_headline_token_count": news_headline_token_count,
+        "news_match_token_count": news_match_token_count,
+        "candidate_count_total": candidate_count_total,
+        "captured_market_count": captured_market_count,
+        "omitted_market_count": omitted_market_count,
+        "truncated": truncated,
+        "candidates": canonical_candidates,
+    }
+    try:
+        serialized = json.dumps(
+            canonical,
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    except (OverflowError, TypeError, ValueError):
+        return None
+    if len(serialized) > _POST_ADMISSION_COUNTERFACTUAL_SHADOW_MAX_BYTES:
+        return None
+    return canonical
 
 
 EVIDENCE_INGESTION_REQUIRED_FIELDS: tuple[str, ...] = (
@@ -1426,6 +1731,7 @@ class TradeLogger:
         post_admission_min_match_score: float | None = None,
         post_admission_best_rejected_pre_weight_score: float | None = None,
         post_admission_best_rejected_post_weight_score: float | None = None,
+        post_admission_counterfactual_shadow: dict[str, Any] | None = None,
     ) -> None:
         record: dict[str, Any] = {
             "type": "MATCH_NO_CANDIDATE",
@@ -1469,6 +1775,34 @@ class TradeLogger:
             record["post_admission_best_rejected_post_weight_score"] = (
                 post_admission_best_rejected_post_weight_score
             )
+        if post_admission_counterfactual_shadow is not None:
+            try:
+                counterfactual_shadow = _canonical_post_admission_counterfactual_shadow(
+                    post_admission_counterfactual_shadow,
+                    within_admission_horizon_market_count=within_admission_horizon_market_count,
+                    post_admission_no_token_overlap_count=post_admission_no_token_overlap_count,
+                    post_admission_below_min_post_weight_score_count=(
+                        post_admission_below_min_post_weight_score_count
+                    ),
+                    post_admission_weight_demoted_below_min_score_count=(
+                        post_admission_weight_demoted_below_min_score_count
+                    ),
+                    post_admission_min_match_score=post_admission_min_match_score,
+                )
+            except Exception:
+                counterfactual_shadow = None
+            if (
+                counterfactual_shadow is not None
+                and type(candidate_pool_stage) is str
+                and candidate_pool_stage == "post_admission_no_match"
+                and type(reason) is str
+                and reason == "no_match"
+                and type(venue) is str
+                and venue == "polymarket_us"
+            ):
+                record["post_admission_counterfactual_shadow"] = counterfactual_shadow
+            else:
+                record["post_admission_counterfactual_shadow_status"] = "invalid"
         self._write(record)
 
     def log_polymarket_market_cache(

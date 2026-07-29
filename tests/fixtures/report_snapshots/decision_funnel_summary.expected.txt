@@ -96,6 +96,7 @@ Post-Admission Market Rejection Attribution
   Complete breakdown rows: 0
   Breakdown unavailable: 0
   Within-horizon market rows: 0
+  Counterfactual snapshot coverage: valid=0 legacy=0 invalid=0 truncated=0
   No token overlap: 0 (0.0%)
   Overlap below minimum score: 0 (0.0%)
   Weight-demoted below minimum: 0

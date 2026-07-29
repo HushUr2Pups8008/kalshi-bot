@@ -73,6 +73,52 @@ _LIVE_SUBMISSION_UNKNOWN_EVENT_TYPES = frozenset({"LIVE_SUBMISSION_UNKNOWN"})
 _MARKET_AVAILABILITY_NO_CANDIDATE_REASONS = frozenset(
     {"market_fetch_failed", "no_eligible_markets"}
 )
+_POST_ADMISSION_COUNTERFACTUAL_SHADOW_FIELDS = frozenset(
+    {
+        "schema_version",
+        "match_clock_utc",
+        "news_headline_token_count",
+        "news_match_token_count",
+        "candidate_count_total",
+        "captured_market_count",
+        "omitted_market_count",
+        "truncated",
+        "candidates",
+    }
+)
+_POST_ADMISSION_COUNTERFACTUAL_SHADOW_CANDIDATE_FIELDS = frozenset(
+    {
+        "ticker",
+        "market_title",
+        "rejection_reason",
+        "market_token_count",
+        "matched_token_count",
+        "pre_weight_score",
+        "post_weight_score",
+    }
+)
+_POST_ADMISSION_COUNTERFACTUAL_SHADOW_REQUIRED_CANDIDATE_FIELDS = frozenset(
+    {
+        "ticker",
+        "rejection_reason",
+        "market_token_count",
+        "matched_token_count",
+    }
+)
+_POST_ADMISSION_COUNTERFACTUAL_SHADOW_REASONS = frozenset(
+    {
+        "no_token_overlap",
+        "below_min_post_weight_score",
+        "weight_demoted_below_min_score",
+        "market_without_match_tokens",
+    }
+)
+_POST_ADMISSION_COUNTERFACTUAL_SHADOW_MAX_CANDIDATES = 4
+_POST_ADMISSION_COUNTERFACTUAL_SHADOW_MAX_COUNT = 10_000
+_POST_ADMISSION_COUNTERFACTUAL_SHADOW_MAX_TICKER_CHARS = 128
+_POST_ADMISSION_COUNTERFACTUAL_SHADOW_MAX_TITLE_RAW_CHARS = 512
+_POST_ADMISSION_COUNTERFACTUAL_SHADOW_MAX_TITLE_CHARS = 160
+_POST_ADMISSION_COUNTERFACTUAL_SHADOW_MAX_BYTES = 4 * 1024
 
 
 def parse_args() -> argparse.Namespace:
@@ -569,6 +615,221 @@ def _nonnegative_int_or_none(value: Any) -> int | None:
     return value
 
 
+def _counterfactual_nonnegative_int_or_none(value: Any) -> int | None:
+    if type(value) is not int or value < 0 or value > _POST_ADMISSION_COUNTERFACTUAL_SHADOW_MAX_COUNT:
+        return None
+    return value
+
+
+def _counterfactual_score_or_none(value: Any) -> float | None:
+    if type(value) not in (int, float):
+        return None
+    score = float(value)
+    if not math.isfinite(score) or score < 0 or score > 1:
+        return None
+    return score
+
+
+def _canonical_counterfactual_ticker(value: Any) -> str | None:
+    if type(value) is not str or not value or len(value) > _POST_ADMISSION_COUNTERFACTUAL_SHADOW_MAX_TICKER_CHARS:
+        return None
+    if any(not ("!" <= char <= "~") for char in value):
+        return None
+    return value
+
+
+def _canonical_counterfactual_title(value: Any) -> str | None:
+    if type(value) is not str or len(value) > _POST_ADMISSION_COUNTERFACTUAL_SHADOW_MAX_TITLE_RAW_CHARS:
+        return None
+    printable = "".join(char for char in value if " " <= char <= "~")
+    title = " ".join(printable.split())
+    return title[:_POST_ADMISSION_COUNTERFACTUAL_SHADOW_MAX_TITLE_CHARS] or None
+
+
+def _canonical_counterfactual_match_clock(value: Any) -> str | None:
+    if type(value) is not str or not value or len(value) > 64:
+        return None
+    if any(not (" " <= char <= "~") for char in value):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    offset = parsed.utcoffset()
+    if offset is None or offset.total_seconds() != 0:
+        return None
+    return parsed.astimezone(timezone.utc).isoformat()
+
+
+def _post_admission_counterfactual_shadow_truncated_or_none(
+    value: Any,
+    *,
+    within_admission_horizon_market_count: Any,
+    post_admission_no_token_overlap_count: Any,
+    post_admission_below_min_post_weight_score_count: Any,
+    post_admission_weight_demoted_below_min_score_count: Any,
+    post_admission_min_match_score: Any,
+) -> bool | None:
+    if type(value) is not dict or set(value) != _POST_ADMISSION_COUNTERFACTUAL_SHADOW_FIELDS:
+        return None
+
+    schema_version = value.get("schema_version")
+    match_clock_utc = _canonical_counterfactual_match_clock(value.get("match_clock_utc"))
+    news_headline_token_count = _counterfactual_nonnegative_int_or_none(
+        value.get("news_headline_token_count")
+    )
+    news_match_token_count = _counterfactual_nonnegative_int_or_none(
+        value.get("news_match_token_count")
+    )
+    candidate_count_total = _counterfactual_nonnegative_int_or_none(
+        value.get("candidate_count_total")
+    )
+    captured_market_count = _counterfactual_nonnegative_int_or_none(
+        value.get("captured_market_count")
+    )
+    omitted_market_count = _counterfactual_nonnegative_int_or_none(value.get("omitted_market_count"))
+    within_horizon_market_count = _counterfactual_nonnegative_int_or_none(
+        within_admission_horizon_market_count
+    )
+    no_token_overlap_count = _counterfactual_nonnegative_int_or_none(
+        post_admission_no_token_overlap_count
+    )
+    below_min_post_weight_score_count = _counterfactual_nonnegative_int_or_none(
+        post_admission_below_min_post_weight_score_count
+    )
+    weight_demoted_below_min_score_count = _counterfactual_nonnegative_int_or_none(
+        post_admission_weight_demoted_below_min_score_count
+    )
+    min_match_score = _counterfactual_score_or_none(post_admission_min_match_score)
+    candidates = value.get("candidates")
+    truncated = value.get("truncated")
+    if (
+        type(schema_version) is not int
+        or schema_version != 1
+        or match_clock_utc != value.get("match_clock_utc")
+        or news_headline_token_count is None
+        or news_match_token_count is None
+        or candidate_count_total is None
+        or candidate_count_total <= 0
+        or captured_market_count is None
+        or omitted_market_count is None
+        or within_horizon_market_count is None
+        or within_horizon_market_count <= 0
+        or no_token_overlap_count is None
+        or below_min_post_weight_score_count is None
+        or weight_demoted_below_min_score_count is None
+        or min_match_score is None
+        or type(truncated) is not bool
+        or type(candidates) is not list
+        or len(candidates) > _POST_ADMISSION_COUNTERFACTUAL_SHADOW_MAX_CANDIDATES
+        or captured_market_count != len(candidates)
+        or candidate_count_total != captured_market_count + omitted_market_count
+        or candidate_count_total != within_horizon_market_count
+        or no_token_overlap_count + below_min_post_weight_score_count
+        != within_horizon_market_count
+        or weight_demoted_below_min_score_count > below_min_post_weight_score_count
+        or truncated != (omitted_market_count > 0)
+    ):
+        return None
+
+    seen_tickers: set[str] = set()
+    candidate_sort_keys: list[tuple[str, float, str]] = []
+    captured_no_token_overlap_count = 0
+    captured_below_min_count = 0
+    captured_weight_demoted_count = 0
+    for candidate in candidates:
+        if type(candidate) is not dict:
+            return None
+        candidate_fields = set(candidate)
+        if (
+            not _POST_ADMISSION_COUNTERFACTUAL_SHADOW_REQUIRED_CANDIDATE_FIELDS <= candidate_fields
+            or not candidate_fields <= _POST_ADMISSION_COUNTERFACTUAL_SHADOW_CANDIDATE_FIELDS
+        ):
+            return None
+        ticker = _canonical_counterfactual_ticker(candidate.get("ticker"))
+        reason = candidate.get("rejection_reason")
+        market_token_count = _counterfactual_nonnegative_int_or_none(
+            candidate.get("market_token_count")
+        )
+        matched_token_count = _counterfactual_nonnegative_int_or_none(
+            candidate.get("matched_token_count")
+        )
+        if (
+            ticker is None
+            or type(reason) is not str
+            or reason not in _POST_ADMISSION_COUNTERFACTUAL_SHADOW_REASONS
+            or market_token_count is None
+            or matched_token_count is None
+            or ticker in seen_tickers
+        ):
+            return None
+        seen_tickers.add(ticker)
+        if "market_title" in candidate:
+            title = _canonical_counterfactual_title(candidate["market_title"])
+            if title is None or title != candidate["market_title"]:
+                return None
+
+        has_pre_weight_score = "pre_weight_score" in candidate
+        has_post_weight_score = "post_weight_score" in candidate
+        if has_pre_weight_score != has_post_weight_score:
+            return None
+        post_weight_score = 0.0
+        if reason == "market_without_match_tokens":
+            if market_token_count != 0 or matched_token_count != 0 or has_pre_weight_score:
+                return None
+        elif reason == "no_token_overlap":
+            if market_token_count == 0 or matched_token_count != 0 or has_pre_weight_score:
+                return None
+        else:
+            pre_weight_score = _counterfactual_score_or_none(candidate.get("pre_weight_score"))
+            post_weight_score = _counterfactual_score_or_none(candidate.get("post_weight_score"))
+            if (
+                market_token_count == 0
+                or matched_token_count == 0
+                or matched_token_count > market_token_count
+                or matched_token_count > news_match_token_count
+                or pre_weight_score is None
+                or post_weight_score is None
+                or post_weight_score > pre_weight_score
+                or post_weight_score >= min_match_score
+            ):
+                return None
+            if reason == "weight_demoted_below_min_score":
+                if post_weight_score >= pre_weight_score or pre_weight_score < min_match_score:
+                    return None
+            elif pre_weight_score >= min_match_score:
+                return None
+        if reason in {"market_without_match_tokens", "no_token_overlap"}:
+            captured_no_token_overlap_count += 1
+        elif reason in {"below_min_post_weight_score", "weight_demoted_below_min_score"}:
+            captured_below_min_count += 1
+            if reason == "weight_demoted_below_min_score":
+                captured_weight_demoted_count += 1
+        candidate_sort_keys.append((reason, -post_weight_score, ticker))
+
+    if (
+        len(candidate_sort_keys) != captured_market_count
+        or candidate_sort_keys != sorted(candidate_sort_keys)
+        or captured_no_token_overlap_count > no_token_overlap_count
+        or captured_below_min_count > below_min_post_weight_score_count
+        or captured_weight_demoted_count > weight_demoted_below_min_score_count
+    ):
+        return None
+    try:
+        serialized = json.dumps(
+            value,
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    except (OverflowError, TypeError, ValueError):
+        return None
+    if len(serialized) > _POST_ADMISSION_COUNTERFACTUAL_SHADOW_MAX_BYTES:
+        return None
+    return truncated
+
+
 def _post_admission_rejection_breakdown(record: dict[str, Any]) -> dict[str, int | float] | None:
     if (
         record.get("candidate_pool_stage") != "post_admission_no_match"
@@ -696,6 +957,10 @@ def summarize(
         "match_no_candidate_post_admission_weight_demoted": 0,
         "match_no_candidate_post_admission_min_scores": Counter(),
         "match_no_candidate_post_admission_best_rejected_post_score": None,
+        "match_no_candidate_post_admission_counterfactual_shadow_valid_rows": 0,
+        "match_no_candidate_post_admission_counterfactual_shadow_legacy_rows": 0,
+        "match_no_candidate_post_admission_counterfactual_shadow_invalid_rows": 0,
+        "match_no_candidate_post_admission_counterfactual_shadow_truncated_rows": 0,
         "match_llm_reviews_total": 0,
         "match_llm_review_verdicts": Counter(),
         "false_positive_neutral_empty_keyword_sources": Counter(),
@@ -799,6 +1064,64 @@ def summarize(
                 ] += 1
             else:
                 stats["match_no_candidate_missing_candidate_pool_stage"] += 1
+            shadow_field = "post_admission_counterfactual_shadow"
+            shadow_status_field = f"{shadow_field}_status"
+            shadow_or_status_present = (
+                shadow_field in record or shadow_status_field in record
+            )
+            raw_reason = record.get("reason")
+            raw_venue = record.get("venue")
+            if type(raw_venue) is str and raw_venue == "polymarket_us":
+                if (
+                    type(candidate_pool_stage) is str
+                    and candidate_pool_stage == "post_admission_no_match"
+                    and type(raw_reason) is str
+                    and raw_reason == "no_match"
+                ):
+                    shadow_status_present = shadow_status_field in record
+                    if shadow_field in record:
+                        truncated = _post_admission_counterfactual_shadow_truncated_or_none(
+                            record.get(shadow_field),
+                            within_admission_horizon_market_count=record.get(
+                                "within_admission_horizon_market_count"
+                            ),
+                            post_admission_no_token_overlap_count=record.get(
+                                "post_admission_no_token_overlap_count"
+                            ),
+                            post_admission_below_min_post_weight_score_count=record.get(
+                                "post_admission_below_min_post_weight_score_count"
+                            ),
+                            post_admission_weight_demoted_below_min_score_count=record.get(
+                                "post_admission_weight_demoted_below_min_score_count"
+                            ),
+                            post_admission_min_match_score=record.get(
+                                "post_admission_min_match_score"
+                            ),
+                        )
+                        if shadow_status_present or truncated is None:
+                            stats[
+                                "match_no_candidate_post_admission_counterfactual_shadow_invalid_rows"
+                            ] += 1
+                        else:
+                            stats[
+                                "match_no_candidate_post_admission_counterfactual_shadow_valid_rows"
+                            ] += 1
+                            if truncated:
+                                stats[
+                                    "match_no_candidate_post_admission_counterfactual_shadow_truncated_rows"
+                                ] += 1
+                    elif not shadow_status_present:
+                        stats[
+                            "match_no_candidate_post_admission_counterfactual_shadow_legacy_rows"
+                        ] += 1
+                    else:
+                        stats[
+                            "match_no_candidate_post_admission_counterfactual_shadow_invalid_rows"
+                        ] += 1
+                elif shadow_or_status_present:
+                    stats[
+                        "match_no_candidate_post_admission_counterfactual_shadow_invalid_rows"
+                    ] += 1
             if candidate_pool_stage == "post_admission_no_match":
                 breakdown = _post_admission_rejection_breakdown(record)
                 if breakdown is None:
@@ -1350,6 +1673,17 @@ def print_summary(stats: dict[str, Any], top: int, since: datetime | None, until
     print(f"  Complete breakdown rows: {complete_rows}")
     print(f"  Breakdown unavailable: {unavailable_rows}")
     print(f"  Within-horizon market rows: {market_denominator}")
+    print(
+        "  Counterfactual snapshot coverage: "
+        "valid="
+        f"{stats['match_no_candidate_post_admission_counterfactual_shadow_valid_rows']} "
+        "legacy="
+        f"{stats['match_no_candidate_post_admission_counterfactual_shadow_legacy_rows']} "
+        "invalid="
+        f"{stats['match_no_candidate_post_admission_counterfactual_shadow_invalid_rows']} "
+        "truncated="
+        f"{stats['match_no_candidate_post_admission_counterfactual_shadow_truncated_rows']}"
+    )
     for label, key in (
         ("No token overlap", "match_no_candidate_post_admission_no_token_overlap"),
         ("Overlap below minimum score", "match_no_candidate_post_admission_below_min"),
