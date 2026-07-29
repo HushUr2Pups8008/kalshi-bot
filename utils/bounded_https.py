@@ -8,7 +8,7 @@ import socket
 import threading
 import urllib.error
 import urllib.parse
-from collections.abc import AsyncIterator, Callable, Iterable
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -259,12 +259,30 @@ async def _noop_admission() -> AsyncIterator[None]:
     yield
 
 
+def _validated_request_headers(headers: Mapping[str, str] | None) -> dict[str, str]:
+    if headers is None:
+        return {}
+    validated: dict[str, str] = {}
+    for name, value in headers.items():
+        normalized = name.strip().lower() if isinstance(name, str) else ""
+        if (
+            not normalized
+            or normalized in {"host", "user-agent"}
+            or not isinstance(value, str)
+            or any(char in name or char in value for char in ("\r", "\n", "\x00"))
+        ):
+            raise ValueError("request headers are invalid")
+        validated[name] = value
+    return validated
+
+
 async def fetch_bounded_https_ipv4(
     url: str,
     *,
     canonical_host: str,
     provider_name: str,
     user_agent: str,
+    request_headers: Mapping[str, str] | None = None,
     timeout: float,
     max_bytes: int,
     admission_factory: AsyncAdmissionFactory | None = None,
@@ -292,6 +310,7 @@ async def fetch_bounded_https_ipv4(
         )
     if not math.isfinite(timeout) or timeout <= 0 or max_bytes <= 0:
         raise ValueError(f"{provider_name} transport bounds must be positive")
+    extra_headers = _validated_request_headers(request_headers)
 
     loop = asyncio.get_running_loop()
     started_at = loop.time()
@@ -354,7 +373,7 @@ async def fetch_bounded_https_ipv4(
                     async with session_factory(
                         connector=connector,
                         timeout=client_timeout,
-                        headers={"User-Agent": user_agent},
+                        headers={"User-Agent": user_agent, **extra_headers},
                     ) as session:
                         async with session.get(url, allow_redirects=False) as response:
                             response_headers_ms = _elapsed_ms(

@@ -326,6 +326,69 @@ async def test_no_admission_factory_uses_noop_context() -> None:
 
 
 @pytest.mark.asyncio
+async def test_private_headers_are_merged_without_overriding_user_agent() -> None:
+    response = _Response(body=b"{}")
+    connectors, sessions, connector_factory, session_factory = _transport_factories(
+        response
+    )
+
+    raw = await fetch_bounded_https_ipv4(
+        "https://api.search.brave.com/res/v1/web/search?q=contract",
+        canonical_host="api.search.brave.com",
+        provider_name="Brave Search API Shadow",
+        user_agent="kalshi-bot-brave-shadow/1.0",
+        timeout=1.0,
+        max_bytes=100,
+        request_headers={
+            "Accept": "application/json",
+            "X-Subscription-Token": "test-secret",
+        },
+        resolver_factory=_Resolver,
+        connector_factory=connector_factory,
+        session_factory=session_factory,
+    )
+
+    assert raw == b"{}"
+    assert sessions[0].headers == {
+        "User-Agent": "kalshi-bot-brave-shadow/1.0",
+        "Accept": "application/json",
+        "X-Subscription-Token": "test-secret",
+    }
+    _assert_resources_closed(connectors, sessions)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "headers",
+    (
+        {"Host": "other.example"},
+        {" hOsT ": "other.example"},
+        {"User-Agent": "other-agent"},
+        {" User-Agent ": "other-agent"},
+        {"X\rTest": "bad-header"},
+        {"X\nTest": "bad-header"},
+        {"X\x00Test": "bad-header"},
+        {"X-Test": "bad\r\nheader"},
+        {"X-Test": "bad\nheader"},
+        {"X-Test": "bad\x00header"},
+    ),
+)
+async def test_private_headers_cannot_override_routing_or_inject_lines(
+    headers: dict[str, str],
+) -> None:
+    with pytest.raises(ValueError, match="request headers"):
+        await fetch_bounded_https_ipv4(
+            "https://api.search.brave.com/res/v1/web/search?q=contract",
+            canonical_host="api.search.brave.com",
+            provider_name="Brave Search API Shadow",
+            user_agent="kalshi-bot-brave-shadow/1.0",
+            timeout=1.0,
+            max_bytes=100,
+            request_headers=headers,
+        )
+
+
+@pytest.mark.asyncio
 async def test_admission_wait_consumes_total_deadline() -> None:
     started = asyncio.Event()
     finalized = asyncio.Event()
