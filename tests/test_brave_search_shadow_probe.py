@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
 import json
 import os
 import stat
+import tempfile
 import urllib.error
 from io import BytesIO
 from pathlib import Path
@@ -21,6 +23,27 @@ from scripts.brave_search_shadow_probe import (
     main,
     run_probe,
 )
+
+
+@pytest.fixture
+def tmp_path() -> Iterator[Path]:
+    """Keep probe output tests out of pytest's shared system temporary directory."""
+    repo_root = Path(__file__).resolve().parents[1]
+    with tempfile.TemporaryDirectory(
+        prefix=".brave-search-shadow-test-",
+        dir=repo_root,
+    ) as path:
+        private_path = Path(path)
+        private_path.chmod(0o700)
+        yield private_path
+
+
+def test_private_tmp_path_fixture_is_repo_owned_and_private(tmp_path: Path) -> None:
+    path_stat = tmp_path.stat()
+
+    assert tmp_path.parent == Path(__file__).resolve().parents[1]
+    assert path_stat.st_uid == os.geteuid()
+    assert stat.S_IMODE(path_stat.st_mode) == 0o700
 
 
 def test_research_shadow_env_example_marks_brave_probe_as_operator_only() -> None:
