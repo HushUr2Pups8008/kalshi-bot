@@ -10,10 +10,16 @@ import math
 from pathlib import Path
 from typing import Any
 
-from scripts.runtime_paper_cohort_scope import (
-    record_has_runtime_paper_cohort_lineage,
-    validate_runtime_paper_cohort_lineage,
-)
+if __package__:
+    from .runtime_paper_cohort_scope import (
+        record_has_runtime_paper_cohort_lineage,
+        validate_runtime_paper_cohort_lineage,
+    )
+else:
+    from runtime_paper_cohort_scope import (
+        record_has_runtime_paper_cohort_lineage,
+        validate_runtime_paper_cohort_lineage,
+    )
 
 
 _EVENT_TYPE = "POLYMARKET_HORIZON_SHADOW"

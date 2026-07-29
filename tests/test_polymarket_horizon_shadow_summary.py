@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from scripts import polymarket_horizon_shadow_summary as summary
 
@@ -131,3 +135,30 @@ def test_summarize_records_excludes_other_horizon_regimes():
     assert result["production_candidate_count"] == 2
     assert result["shadow_candidate_count"] == 3
     assert result["review_trigger"] == "need_49_more_valid_snapshots_or_7d_elapsed"
+
+
+def test_cli_runs_directly_from_repo_root(tmp_path):
+    trades_path = tmp_path / "trades.jsonl"
+    trades_path.write_text("", encoding="utf-8")
+    repo_root = Path(__file__).resolve().parents[1]
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/polymarket_horizon_shadow_summary.py",
+            "--trades",
+            str(trades_path),
+            "--runtime-paper-cohort-id",
+            _COHORT_ID,
+            "--runtime-paper-cohort-kind",
+            _COHORT_KIND,
+            "--json",
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["valid_snapshots"] == 0
