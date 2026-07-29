@@ -20,6 +20,17 @@ from scripts.brave_search_shadow_probe import (
 )
 
 
+def test_research_shadow_env_example_marks_brave_probe_as_operator_only() -> None:
+    rendered = Path("docs/governance/research-shadow.env.example").read_text(
+        encoding="utf-8"
+    )
+
+    assert "ENABLE_BRAVE_SEARCH_SHADOW=false" in rendered
+    assert "BRAVE_SEARCH_API_KEY=" in rendered
+    assert "operator-only" in rendered
+    assert "does not enable runtime research or admission" in rendered
+
+
 def _input_file(
     tmp_path: Path,
     *,
