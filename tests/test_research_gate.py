@@ -10326,7 +10326,13 @@ async def test_run_research_gate_reports_provider_exception(monkeypatch):
     assert verdict.status == ResearchStatus.RESEARCH_PROVIDER_ERROR
     assert verdict.skip_reason == "research_provider_error"
     assert verdict.research_provider_error_count == provider_calls
+    assert verdict.research_provider_error_attributions == (
+        "generic_search_unavailable",
+    )
     assert verdict.log_fields()["research_provider_error_count"] == provider_calls
+    assert verdict.log_fields()["research_provider_error_attributions"] == [
+        "generic_search_unavailable"
+    ]
     assert [event.kind for event in events].count("gate_provider_error_verdict") == 1
 
 
@@ -10381,11 +10387,17 @@ async def test_enforced_open_blocked_generic_search_emits_one_gate_error_verdict
     monkeypatch,
 ):
     events = []
+    original_event_sink = research_gate_module._log_generic_search_circuit_event
+
+    def capture_event(event):
+        events.append(event)
+        original_event_sink(event)
+
     monkeypatch.setattr(research_gate_module.cfg, "generic_search_circuit_mode", "enforce")
     monkeypatch.setattr(
         research_gate_module,
         "_log_generic_search_circuit_event",
-        events.append,
+        capture_event,
     )
     monkeypatch.setattr(
         research_gate_module,
@@ -10423,8 +10435,102 @@ async def test_enforced_open_blocked_generic_search_emits_one_gate_error_verdict
     )
 
     assert verdict.status == ResearchStatus.RESEARCH_PROVIDER_ERROR
+    assert verdict.research_generic_search_circuit_state == "open"
+    assert verdict.research_generic_search_failure_classes == (
+        "TimeoutError",
+        "ConnectionError",
+    )
+    assert verdict.research_generic_search_attempt_delta > 0
+    assert verdict.research_generic_search_blocked_call_delta > 0
     assert [event.kind for event in events].count("gate_provider_error_verdict") == 1
     assert "private pre-open query" not in repr(events)
+
+
+@pytest.mark.asyncio
+async def test_generic_search_circuit_event_collector_is_task_local():
+    def event(*, kind, state, failure_classes=()):
+        return research_gate_module.GenericSearchCircuitEvent(
+            kind=kind,
+            mode="enforce",
+            state=state,
+            generation=1,
+            failure_classes=failure_classes,
+            cooldown_seconds=120.0,
+            remaining_cooldown_seconds=60.0,
+            total_attempts=1,
+            double_availability_failures=1,
+            open_transitions=1,
+            would_open_transitions=0,
+            blocked_calls=0,
+            would_block_calls=0,
+            probe_successes=0,
+            probe_failures=0,
+        )
+
+    release = asyncio.Event()
+
+    async def collect(circuit_event, ready):
+        collected = []
+        token = research_gate_module._GENERIC_SEARCH_CIRCUIT_EVENT_COLLECTOR.set(
+            collected
+        )
+        try:
+            ready.set()
+            await release.wait()
+            research_gate_module._log_generic_search_circuit_event(circuit_event)
+            return collected
+        finally:
+            research_gate_module._GENERIC_SEARCH_CIRCUIT_EVENT_COLLECTOR.reset(token)
+
+    first_ready = asyncio.Event()
+    second_ready = asyncio.Event()
+    first_event = event(
+        kind="blocked",
+        state="open",
+        failure_classes=("TimeoutError",),
+    )
+    second_event = event(kind="closed", state="closed")
+    first_task = asyncio.create_task(collect(first_event, first_ready))
+    second_task = asyncio.create_task(collect(second_event, second_ready))
+    await first_ready.wait()
+    await second_ready.wait()
+    release.set()
+
+    first_events, second_events = await asyncio.gather(first_task, second_task)
+
+    assert first_events == [first_event]
+    assert second_events == [second_event]
+
+
+def test_generic_search_circuit_diagnostics_ignore_stale_recovery_failure_class():
+    stale_closed_event = research_gate_module.GenericSearchCircuitEvent(
+        kind="closed",
+        mode="enforce",
+        state="closed",
+        generation=2,
+        failure_classes=("TimeoutError",),
+        cooldown_seconds=120.0,
+        remaining_cooldown_seconds=0.0,
+        total_attempts=2,
+        double_availability_failures=1,
+        open_transitions=1,
+        would_open_transitions=0,
+        blocked_calls=0,
+        would_block_calls=0,
+        probe_successes=1,
+        probe_failures=0,
+    )
+
+    state, failure_classes, attempt_delta, blocked_call_delta = (
+        research_gate_module._generic_search_circuit_diagnostics(
+            [stale_closed_event]
+        )
+    )
+
+    assert state == "closed"
+    assert failure_classes == ()
+    assert attempt_delta == 0
+    assert blocked_call_delta == 0
 
 
 @pytest.mark.asyncio
@@ -10723,12 +10829,14 @@ async def test_run_research_gate_times_out_hung_search_provider(tmp_path):
     assert verdict.skip_reason == "research_timeout"
     assert verdict.research_timeout_stage == "provider_fanout"
     assert verdict.research_provider_error_count == 0
+    assert verdict.research_provider_error_attributions == ("timeout",)
     assert verdict.research_run_id
     assert verdict.research_persisted is True
     fields = verdict.log_fields()
     assert fields["research_contract_fingerprint"] == _contract_fingerprint(market)
     assert fields["research_timeout_stage"] == "provider_fanout"
     assert fields["research_provider_error_count"] == 0
+    assert fields["research_provider_error_attributions"] == ["timeout"]
     snapshot = await store.get_dossier_snapshot(market.ticker)
     assert snapshot is not None
     assert snapshot.last_contract_fingerprint == _contract_fingerprint(market)

@@ -33,6 +33,7 @@ import json
 import logging
 import logging.handlers
 import os
+import re
 import shutil
 import sys
 import threading
@@ -55,6 +56,17 @@ from utils.output_paths import (
 from analysis.feedback_counterfactual import FeedbackDecisionRecord
 from utils.log_records import SignalAnalysisDetail
 from utils.lifecycle import strict_optional_bool
+
+
+_RESEARCH_PROVIDER_ERROR_ATTRIBUTIONS = frozenset(
+    {"timeout", "generic_search_unavailable", "provider_exception"}
+)
+_RESEARCH_GENERIC_SEARCH_CIRCUIT_STATES = frozenset(
+    {"closed", "open", "half_open"}
+)
+_RESEARCH_GENERIC_SEARCH_FAILURE_CLASS_RE = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_.]*(?::(?:[A-Za-z_][A-Za-z0-9_.]*|\d{3}))?"
+)
 
 
 EVIDENCE_INGESTION_REQUIRED_FIELDS: tuple[str, ...] = (
@@ -622,6 +634,11 @@ class TradeLogger:
         research_direct_fetch_failure_count: int | None = None,
         research_timeout_stage: str | None = None,
         research_provider_error_count: int = 0,
+        research_provider_error_attributions: list[str] | None = None,
+        research_generic_search_circuit_state: str | None = None,
+        research_generic_search_failure_classes: list[str] | None = None,
+        research_generic_search_attempt_delta: int = 0,
+        research_generic_search_blocked_call_delta: int = 0,
     ) -> None:
         record: dict[str, Any] = {
             "type": "RESEARCH_PREWARM_RESULT",
@@ -654,6 +671,35 @@ class TradeLogger:
             0,
             int(research_provider_error_count),
         )
+        record["research_provider_error_attributions"] = [
+            attribution
+            for attribution in (research_provider_error_attributions or [])
+            if attribution in _RESEARCH_PROVIDER_ERROR_ATTRIBUTIONS
+        ]
+        if (
+            research_generic_search_circuit_state
+            in _RESEARCH_GENERIC_SEARCH_CIRCUIT_STATES
+        ):
+            record["research_generic_search_circuit_state"] = (
+                research_generic_search_circuit_state
+            )
+        if research_generic_search_failure_classes:
+            record["research_generic_search_failure_classes"] = [
+                failure_class
+                for failure_class in research_generic_search_failure_classes
+                if isinstance(failure_class, str)
+                and _RESEARCH_GENERIC_SEARCH_FAILURE_CLASS_RE.fullmatch(failure_class)
+            ]
+        if research_generic_search_attempt_delta:
+            record["research_generic_search_attempt_delta"] = max(
+                0,
+                int(research_generic_search_attempt_delta),
+            )
+        if research_generic_search_blocked_call_delta:
+            record["research_generic_search_blocked_call_delta"] = max(
+                0,
+                int(research_generic_search_blocked_call_delta),
+            )
         self._write(record)
 
     def log_opportunity(
@@ -1093,6 +1139,11 @@ class TradeLogger:
         research_direct_fetch_failure_count: int | None = None,
         research_timeout_stage: str | None = None,
         research_provider_error_count: int | None = None,
+        research_provider_error_attributions: list[str] | None = None,
+        research_generic_search_circuit_state: str | None = None,
+        research_generic_search_failure_classes: list[str] | None = None,
+        research_generic_search_attempt_delta: int = 0,
+        research_generic_search_blocked_call_delta: int = 0,
     ) -> None:
         record = {
             "type": "ANALYSIS_REJECTED",
@@ -1208,6 +1259,36 @@ class TradeLogger:
             record["research_provider_error_count"] = max(
                 0,
                 int(research_provider_error_count),
+            )
+        if research_provider_error_attributions is not None:
+            record["research_provider_error_attributions"] = [
+                attribution
+                for attribution in research_provider_error_attributions
+                if attribution in _RESEARCH_PROVIDER_ERROR_ATTRIBUTIONS
+            ]
+        if (
+            research_generic_search_circuit_state
+            in _RESEARCH_GENERIC_SEARCH_CIRCUIT_STATES
+        ):
+            record["research_generic_search_circuit_state"] = (
+                research_generic_search_circuit_state
+            )
+        if research_generic_search_failure_classes:
+            record["research_generic_search_failure_classes"] = [
+                failure_class
+                for failure_class in research_generic_search_failure_classes
+                if isinstance(failure_class, str)
+                and _RESEARCH_GENERIC_SEARCH_FAILURE_CLASS_RE.fullmatch(failure_class)
+            ]
+        if research_generic_search_attempt_delta:
+            record["research_generic_search_attempt_delta"] = max(
+                0,
+                int(research_generic_search_attempt_delta),
+            )
+        if research_generic_search_blocked_call_delta:
+            record["research_generic_search_blocked_call_delta"] = max(
+                0,
+                int(research_generic_search_blocked_call_delta),
             )
         self._write(record)
 

@@ -132,6 +132,11 @@ class ResearchPrewarmResult:
     research_direct_fetch_failures: tuple[str, ...] = ()
     research_timeout_stage: str | None = None
     research_provider_error_count: int = 0
+    research_provider_error_attributions: tuple[str, ...] = ()
+    research_generic_search_circuit_state: str | None = None
+    research_generic_search_failure_classes: tuple[str, ...] = ()
+    research_generic_search_attempt_delta: int = 0
+    research_generic_search_blocked_call_delta: int = 0
 
 
 class ResearchPrewarmTask:
@@ -323,6 +328,33 @@ class ResearchPrewarmTask:
                 research_timeout_stage=getattr(verdict, "research_timeout_stage", None),
                 research_provider_error_count=int(
                     getattr(verdict, "research_provider_error_count", 0) or 0
+                ),
+                research_provider_error_attributions=tuple(
+                    getattr(verdict, "research_provider_error_attributions", ()) or ()
+                ),
+                research_generic_search_circuit_state=getattr(
+                    verdict,
+                    "research_generic_search_circuit_state",
+                    None,
+                ),
+                research_generic_search_failure_classes=tuple(
+                    getattr(
+                        verdict,
+                        "research_generic_search_failure_classes",
+                        (),
+                    )
+                    or ()
+                ),
+                research_generic_search_attempt_delta=int(
+                    getattr(verdict, "research_generic_search_attempt_delta", 0) or 0
+                ),
+                research_generic_search_blocked_call_delta=int(
+                    getattr(
+                        verdict,
+                        "research_generic_search_blocked_call_delta",
+                        0,
+                    )
+                    or 0
                 ),
             )
         except Exception as exc:
@@ -912,6 +944,21 @@ async def _write_research_prewarm_result(result: ResearchPrewarmResult) -> None:
         research_direct_fetch_failure_count=len(result.research_direct_fetch_failures),
         research_timeout_stage=result.research_timeout_stage,
         research_provider_error_count=result.research_provider_error_count,
+        research_provider_error_attributions=list(
+            result.research_provider_error_attributions
+        ),
+        research_generic_search_circuit_state=(
+            result.research_generic_search_circuit_state
+        ),
+        research_generic_search_failure_classes=list(
+            result.research_generic_search_failure_classes
+        ),
+        research_generic_search_attempt_delta=(
+            result.research_generic_search_attempt_delta
+        ),
+        research_generic_search_blocked_call_delta=(
+            result.research_generic_search_blocked_call_delta
+        ),
     )
 
 

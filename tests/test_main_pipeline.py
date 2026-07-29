@@ -2712,6 +2712,14 @@ async def test_process_candidate_persists_provider_error_count_with_real_logger(
         skip_reason="research_provider_error",
         research_timeout_stage="provider_fanout",
         research_provider_error_count=3,
+        research_provider_error_attributions=(
+            "timeout",
+            "generic_search_unavailable",
+        ),
+        research_generic_search_circuit_state="open",
+        research_generic_search_failure_classes=("TimeoutError", "HTTPError:403"),
+        research_generic_search_attempt_delta=4,
+        research_generic_search_blocked_call_delta=2,
     )
     log_path = tmp_path / "trades.jsonl"
 
@@ -2742,6 +2750,17 @@ async def test_process_candidate_persists_provider_error_count_with_real_logger(
     assert record["reason"] == "research_operational_error"
     assert record["research_timeout_stage"] == "provider_fanout"
     assert record["research_provider_error_count"] == 3
+    assert record["research_provider_error_attributions"] == [
+        "timeout",
+        "generic_search_unavailable",
+    ]
+    assert record["research_generic_search_circuit_state"] == "open"
+    assert record["research_generic_search_failure_classes"] == [
+        "TimeoutError",
+        "HTTPError:403",
+    ]
+    assert record["research_generic_search_attempt_delta"] == 4
+    assert record["research_generic_search_blocked_call_delta"] == 2
 
 
 @pytest.mark.asyncio
