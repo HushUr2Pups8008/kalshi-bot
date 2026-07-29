@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import stat
 import urllib.error
 from io import BytesIO
 from pathlib import Path
@@ -278,6 +279,47 @@ async def test_untrusted_output_ancestor_prevents_transport_calls(
             )
     finally:
         output_root.chmod(0o700)
+
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_nonroot_owned_output_ancestor_prevents_transport_calls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output_root = tmp_path / "output-root"
+    output_parent = output_root / "trusted-output"
+    output_root.mkdir(mode=0o700)
+    output_parent.mkdir(mode=0o700)
+    calls: list[object] = []
+    other_nonroot_uid = 1 if os.geteuid() != 1 else 2
+    path_type = type(output_root)
+    original_stat = path_type.stat
+
+    def stat_with_other_owner(
+        path: Path, *, follow_symlinks: bool = True
+    ) -> os.stat_result:
+        result = original_stat(path, follow_symlinks=follow_symlinks)
+        if path == output_root:
+            values = list(result)
+            values[4] = other_nonroot_uid
+            return os.stat_result(values)
+        return result
+
+    async def fetcher(*args: object, **kwargs: object) -> bytes:
+        calls.append((args, kwargs))
+        return b'{"web":{"results":[]}}'
+
+    monkeypatch.setattr(path_type, "stat", stat_with_other_owner)
+
+    with pytest.raises(ProbeInputError, match="output destination"):
+        await run_probe(
+            _input_file(tmp_path),
+            output_parent / "probe.jsonl",
+            enabled=True,
+            api_key="brave-test-secret",
+            fetcher=fetcher,
+        )
 
     assert calls == []
 
@@ -638,6 +680,70 @@ async def test_staging_descriptor_lives_through_transport_and_closes_after_publi
     assert reservations[0].directory_fd is None
     assert len(tracked_outputs) == 1
     assert tracked_outputs[0].closed is True
+
+
+@pytest.mark.asyncio
+async def test_publish_syncs_staged_file_then_directory_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    synced_file_types: list[bool] = []
+    original_fsync = brave_search_shadow_probe.os.fsync
+
+    def track_fsync(descriptor: int) -> None:
+        synced_file_types.append(stat.S_ISDIR(os.fstat(descriptor).st_mode))
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(brave_search_shadow_probe.os, "fsync", track_fsync)
+
+    result = await run_probe(
+        _input_file(tmp_path),
+        tmp_path / "probe.jsonl",
+        enabled=True,
+        api_key="brave-test-secret",
+        fetcher=lambda *args, **kwargs: asyncio.sleep(0, result=b'{"web":{"results":[]}}'),
+    )
+
+    assert result.exit_code == 0
+    assert synced_file_types == [False, True]
+
+
+@pytest.mark.asyncio
+async def test_directory_sync_failure_does_not_report_success_and_cleans_reservation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reservations: list[object] = []
+    original_reserve_output = brave_search_shadow_probe._reserve_output
+    original_fsync = brave_search_shadow_probe.os.fsync
+
+    def reserve_output(path: Path) -> object:
+        reservation = original_reserve_output(path)
+        reservations.append(reservation)
+        return reservation
+
+    def fail_directory_fsync(descriptor: int) -> None:
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise OSError("directory sync failure")
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(brave_search_shadow_probe, "_reserve_output", reserve_output)
+    monkeypatch.setattr(brave_search_shadow_probe.os, "fsync", fail_directory_fsync)
+
+    with pytest.raises(ProbeInputError, match="output destination cannot be published"):
+        await run_probe(
+            _input_file(tmp_path),
+            tmp_path / "probe.jsonl",
+            enabled=True,
+            api_key="brave-test-secret",
+            fetcher=lambda *args, **kwargs: asyncio.sleep(
+                0, result=b'{"web":{"results":[]}}'
+            ),
+        )
+
+    assert len(reservations) == 1
+    assert reservations[0].descriptor is None
+    assert reservations[0].directory_fd is None
+    assert (tmp_path / "probe.jsonl").exists()
+    assert list(tmp_path.glob(".brave-search-shadow-*.tmp")) == []
 
 
 @pytest.mark.asyncio

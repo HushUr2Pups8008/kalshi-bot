@@ -261,11 +261,13 @@ def _write_output(reservation: ReservedOutput, records: Sequence[ProbeRecord]) -
         raise ProbeInputError("output destination cannot be written") from exc
 
 
-def _validate_output_parent_chain(resolved_parent: Path) -> None:
+def _validate_output_parent_chain(resolved_parent: Path, *, effective_uid: int) -> None:
     for ancestor in (resolved_parent, *resolved_parent.parents):
         ancestor_stat = ancestor.stat()
         if not stat.S_ISDIR(ancestor_stat.st_mode):
             raise RuntimeError("output parent chain contains a nondirectory")
+        if ancestor_stat.st_uid not in (effective_uid, 0):
+            raise RuntimeError("output parent chain has an unexpected owner")
         if ancestor_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
             raise RuntimeError("output parent chain is writable by another user")
 
@@ -291,7 +293,7 @@ def _reserve_output(output_path: Path) -> ReservedOutput:
         if not destination_name:
             raise ValueError("output destination has no filename")
         destination = resolved_parent / destination_name
-        _validate_output_parent_chain(resolved_parent)
+        _validate_output_parent_chain(resolved_parent, effective_uid=effective_uid)
 
         directory_fd = os.open(
             resolved_parent,
@@ -393,6 +395,7 @@ def _publish_output(reservation: ReservedOutput) -> None:
             src_dir_fd=directory_fd,
             dst_dir_fd=directory_fd,
         )
+        os.fsync(directory_fd)
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
         raise ProbeInputError("output destination cannot be published") from exc
 
