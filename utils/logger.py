@@ -556,8 +556,17 @@ class TradeLogger:
         self._path = path
         self._store = TradeLogStore(live_path=path)
         self._log = get_logger("trade_logger")
+        self._runtime_context: dict[str, str] = {}
+
+    def bind_runtime_context(self, *, cohort_id: str, cohort_kind: str) -> None:
+        """Attach immutable runtime lineage to future primary durable records."""
+        self._runtime_context = {
+            "cohort_id": cohort_id,
+            "cohort_kind": cohort_kind,
+        }
 
     def _write(self, record: dict[str, Any]) -> None:
+        record = {**self._runtime_context, **record}
         record.setdefault("ts", datetime.now(timezone.utc).isoformat())
         self._store.append(record)
 

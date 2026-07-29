@@ -247,6 +247,43 @@ def _cleanup(tmp: Path) -> None:
     tmp.rmdir()
 
 
+def test_trade_logger_binds_runtime_cohort_context(tmp_path: Path):
+    log_file = tmp_path / "trades.jsonl"
+    logger = TradeLogger(log_file)
+
+    logger.bind_runtime_context(
+        cohort_id="legacy-pending-20260729",
+        cohort_kind="legacy_pending",
+    )
+    logger.log_signal(
+        source="Reuters",
+        headline="Example",
+        url="https://example.test",
+        signal_strength=0.5,
+        keywords_matched=["example"],
+    )
+
+    record = json.loads(log_file.read_text(encoding="utf-8"))
+    assert record["cohort_id"] == "legacy-pending-20260729"
+    assert record["cohort_kind"] == "legacy_pending"
+
+
+def test_trade_logger_omits_runtime_cohort_context_when_unbound(tmp_path: Path):
+    log_file = tmp_path / "trades.jsonl"
+
+    TradeLogger(log_file).log_signal(
+        source="Reuters",
+        headline="Example",
+        url="https://example.test",
+        signal_strength=0.5,
+        keywords_matched=["example"],
+    )
+
+    record = json.loads(log_file.read_text(encoding="utf-8"))
+    assert "cohort_id" not in record
+    assert "cohort_kind" not in record
+
+
 def test_logger_emits_required_only_record():
     """Required-only detail emits required fields plus implicit 'type' marker.
     Optional None fields are omitted (preserves prior emission contract).
