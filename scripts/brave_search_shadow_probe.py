@@ -7,9 +7,10 @@ import asyncio
 import json
 import math
 import os
+import re
+import secrets
 import stat
 import sys
-import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -32,12 +33,14 @@ BRAVE_ENDPOINT = f"https://{BRAVE_HOST}/res/v1/web/search"
 MAX_QUERIES = 30
 TIMEOUT_SECONDS = 2.0
 MAX_BYTES = 256_000
-MAX_IDENTIFIER_UTF8_BYTES = 256
+MAX_IDENTIFIER_UTF8_BYTES = 128
 MAX_QUERY_UTF8_BYTES = 2_048
 MAX_ENCODED_URL_BYTES = 4_096
+MAX_OUTPUT_RESERVATION_ATTEMPTS = 16
 
 _INPUT_FIELDS = ("probe_window_id", "ticker", "research_run_id", "query")
 _IDENTIFIER_FIELDS = ("probe_window_id", "ticker", "research_run_id")
+_IDENTIFIER_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 
 
 class ProbeInputError(ValueError):
@@ -67,12 +70,15 @@ class ProbeRunResult:
     exit_code: int
     attempts: int
     successes: int
+    output_path: Path | None = None
 
 
 @dataclass
 class ReservedOutput:
     destination: Path
-    staged_path: Path
+    directory_fd: int | None
+    destination_name: str
+    stage_name: str
     descriptor: int | None
 
 
@@ -115,6 +121,8 @@ def _validate_identifier(value: str, line_number: int) -> None:
         kind="identifier",
         max_bytes=MAX_IDENTIFIER_UTF8_BYTES,
     )
+    if not value.isascii() or _IDENTIFIER_PATTERN.fullmatch(value) is None:
+        raise ProbeInputError(f"input line {line_number} has an invalid identifier")
 
 
 def _build_request_url(query: str, line_number: int) -> str:
@@ -254,13 +262,32 @@ def _write_output(reservation: ReservedOutput, records: Sequence[ProbeRecord]) -
 
 
 def _reserve_output(output_path: Path) -> ReservedOutput:
+    directory_fd: int | None = None
+    descriptor: int | None = None
+    stage_name: str | None = None
     try:
         get_effective_uid = getattr(os, "geteuid", None)
-        if get_effective_uid is None:
-            raise RuntimeError("effective user ID is unavailable")
+        if (
+            get_effective_uid is None
+            or not hasattr(os, "O_DIRECTORY")
+            or not hasattr(os, "O_NOFOLLOW")
+            or os.open not in os.supports_dir_fd
+            or os.lstat not in os.supports_dir_fd
+            or os.unlink not in os.supports_dir_fd
+        ):
+            raise RuntimeError("directory descriptor support is unavailable")
         effective_uid = get_effective_uid()
         resolved_parent = output_path.parent.resolve(strict=True)
-        parent_stat = resolved_parent.stat()
+        destination_name = output_path.name
+        if not destination_name:
+            raise ValueError("output destination has no filename")
+        destination = resolved_parent / destination_name
+
+        directory_fd = os.open(
+            resolved_parent,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        )
+        parent_stat = os.fstat(directory_fd)
         if not stat.S_ISDIR(parent_stat.st_mode):
             raise RuntimeError("output parent is not a directory")
         if parent_stat.st_uid != effective_uid:
@@ -268,36 +295,77 @@ def _reserve_output(output_path: Path) -> ReservedOutput:
         if parent_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
             raise RuntimeError("output parent is writable by another user")
 
-        destination_name = output_path.name
-        if not destination_name:
-            raise ValueError("output destination has no filename")
-        destination = resolved_parent / destination_name
         try:
-            destination_mode = destination.lstat().st_mode
+            destination_mode = os.lstat(destination_name, dir_fd=directory_fd).st_mode
         except FileNotFoundError:
             pass
         else:
-            if stat.S_ISLNK(destination_mode) or stat.S_ISDIR(destination_mode):
+            if not stat.S_ISREG(destination_mode):
                 raise RuntimeError("output destination is not a regular path")
 
-        descriptor, staged_path = tempfile.mkstemp(
-            dir=resolved_parent,
-            prefix=".brave-search-shadow-",
-            suffix=".tmp",
+        for _ in range(MAX_OUTPUT_RESERVATION_ATTEMPTS):
+            stage_name = f".brave-search-shadow-{secrets.token_hex(16)}.tmp"
+            try:
+                descriptor = os.open(
+                    stage_name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o600,
+                    dir_fd=directory_fd,
+                )
+            except FileExistsError:
+                continue
+            break
+        else:
+            raise RuntimeError("output staging name cannot be reserved")
+
+        if stage_name is None or descriptor is None:
+            raise RuntimeError("output staging name cannot be reserved")
+
+        # Confirm the required dir_fd replace form before any provider request.
+        os.replace(
+            stage_name,
+            stage_name,
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
         )
-    except (AttributeError, OSError, ValueError, RuntimeError) as exc:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except (OSError, RuntimeError, TypeError, ValueError):
+                pass
+        if stage_name is not None and directory_fd is not None:
+            try:
+                os.unlink(stage_name, dir_fd=directory_fd)
+            except (FileNotFoundError, OSError, RuntimeError, TypeError, ValueError):
+                pass
+        if directory_fd is not None:
+            try:
+                os.close(directory_fd)
+            except (OSError, RuntimeError, TypeError, ValueError):
+                pass
         raise ProbeInputError("output destination cannot be reserved") from exc
     return ReservedOutput(
         destination=destination,
-        staged_path=Path(staged_path),
+        directory_fd=directory_fd,
+        destination_name=destination_name,
+        stage_name=stage_name,
         descriptor=descriptor,
     )
 
 
 def _publish_output(reservation: ReservedOutput) -> None:
+    directory_fd = reservation.directory_fd
+    if directory_fd is None:
+        raise ProbeInputError("output destination cannot be published")
     try:
-        os.replace(reservation.staged_path, reservation.destination)
-    except (OSError, ValueError, RuntimeError) as exc:
+        os.replace(
+            reservation.stage_name,
+            reservation.destination_name,
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+        )
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
         raise ProbeInputError("output destination cannot be published") from exc
 
 
@@ -305,13 +373,20 @@ def _cleanup_reserved_output(reservation: ReservedOutput) -> None:
     if reservation.descriptor is not None:
         try:
             os.close(reservation.descriptor)
-        except (OSError, ValueError, RuntimeError):
+        except (OSError, RuntimeError, TypeError, ValueError):
             pass
         reservation.descriptor = None
-    try:
-        reservation.staged_path.unlink(missing_ok=True)
-    except (OSError, ValueError, RuntimeError):
-        pass
+    directory_fd = reservation.directory_fd
+    if directory_fd is not None:
+        try:
+            os.unlink(reservation.stage_name, dir_fd=directory_fd)
+        except (FileNotFoundError, OSError, RuntimeError, TypeError, ValueError):
+            pass
+        try:
+            os.close(directory_fd)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            pass
+        reservation.directory_fd = None
 
 
 async def run_probe(
@@ -462,7 +537,12 @@ async def run_probe(
         _write_output(reserved_output, records)
         _publish_output(reserved_output)
         successes = sum(record.outcome == "success" for record in records)
-        return ProbeRunResult(exit_code=0, attempts=len(records), successes=successes)
+        return ProbeRunResult(
+            exit_code=0,
+            attempts=len(records),
+            successes=successes,
+            output_path=reserved_output.destination,
+        )
     finally:
         _cleanup_reserved_output(reserved_output)
 
@@ -475,13 +555,13 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _print_summary(result: ProbeRunResult, output_path: Path | None = None) -> None:
+def _print_summary(result: ProbeRunResult) -> None:
     summary = (
         "BRAVE_SEARCH_SHADOW_RUN "
         f"exit_code={result.exit_code} attempts={result.attempts} successes={result.successes}"
     )
-    if result.exit_code == 0 and output_path is not None:
-        summary = f"{summary} output_path={output_path}"
+    if result.exit_code == 0 and result.output_path is not None:
+        summary = f"{summary} output_path={result.output_path}"
     print(summary)
 
 
@@ -516,7 +596,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         _print_summary(result)
         return result.exit_code
 
-    _print_summary(result, output_path)
+    _print_summary(result)
     return result.exit_code
 
 

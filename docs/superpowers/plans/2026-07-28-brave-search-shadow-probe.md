@@ -15,7 +15,7 @@
 - Use only canonical HTTPS host `api.search.brave.com`, pinned global IPv4 resolution, redirects disabled, serial calls, a 2.0-second timeout, 256,000-byte response cap, at most 30 inputs, 2,048 UTF-8 query bytes, and a 4,096-byte encoded URL.
 - Do not modify `main.py`, `analysis/research_gate.py`, `tasks/research_prewarm_task.py`, `analysis/generic_search_circuit.py`, any dossier store, paper admission, execution, sizing, or `trades.jsonl`.
 - Output may contain only fixed safety fields, input index, provider, outcome, duration milliseconds, HTTP status, body byte count, JSON schema validity, result count, safe exception class, and safe aggregate counts or percentiles. It must never contain `probe_window_id`, `ticker`, `research_run_id`, query text, URL, headers, API key, response body, title, snippet, publisher URL, exception message, or repr.
-- Before any fetch, the output parent must resolve to an existing directory owned by the current effective UID and not group/world writable; the destination must not be a symlink or directory. Keep the staging descriptor open in that resolved parent and publish only with same-directory `os.replace`.
+- Before any fetch, resolve the operator's output-parent alias only to retain the canonical reporting destination, then open the canonical parent directory descriptor and `fstat` it for current-effective-UID ownership, directory type, and no group/world write permission. The destination must not be a symlink, directory, or other nonregular path. Keep both staging and directory descriptors open through transport; create, publish, and clean the stage only with directory-FD-relative `os.open`, `os.replace`, and `os.unlink` operations. Do not use a post-validation stage or destination absolute path.
 - A successful probe is transport evidence only. It cannot create `ResearchEvidence`, alter a verdict, enqueue paper review, or establish relevance, edge, or profitability.
 - Before execution, the operator must record account-specific commercial-use, retention, caching, redistribution, and attribution terms. Do not retain result content before that review.
 
@@ -267,7 +267,7 @@ class ProbeRecord:
     error_class: str | None
 ```
 
-`run_probe(...)` must parse and validate all input lines before its first call. Reject blank required fields, duplicate `research_run_id`, and more than 30 rows. Required identifiers accept bounded nonblank UTF-8 without controls but are never used in the request URL or persisted. Validate the query as bounded nonblank UTF-8 without controls, build and retain its URL with `urllib.parse.urlencode({"q": query, "count": 3, "country": "US", "search_lang": "en"})`, and reject an over-limit encoded URL before transport. The retained URL is then passed to:
+`run_probe(...)` must parse and validate all input lines before its first call. Reject blank required fields, duplicate `research_run_id`, and more than 30 rows. Required identifiers must match the bounded ASCII grammar `[A-Za-z0-9][A-Za-z0-9._:-]{0,127}`; reject whitespace, `=`, slash, non-ASCII text, controls, and overlong values. They are never used in the request URL or persisted. Validate the query as bounded nonblank UTF-8 without controls, build and retain its URL with `urllib.parse.urlencode({"q": query, "count": 3, "country": "US", "search_lang": "en"})`, and reject an over-limit encoded URL before transport. The retained URL is then passed to:
 
 ```python
 await fetcher(

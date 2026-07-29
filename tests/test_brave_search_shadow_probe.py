@@ -252,6 +252,35 @@ async def test_untrusted_output_parent_prevents_transport_calls(
 
 
 @pytest.mark.asyncio
+async def test_unsupported_dir_fd_replace_prevents_transport_calls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[object] = []
+
+    def unsupported_replace(*args: object, **kwargs: object) -> None:
+        raise TypeError("directory descriptors are unavailable")
+
+    async def fetcher(*args: object, **kwargs: object) -> bytes:
+        calls.append((args, kwargs))
+        return b'{"web":{"results":[]}}'
+
+    monkeypatch.setattr(brave_search_shadow_probe.os, "replace", unsupported_replace)
+
+    with pytest.raises(ProbeInputError, match="output destination"):
+        await run_probe(
+            _input_file(tmp_path),
+            tmp_path / "probe.jsonl",
+            enabled=True,
+            api_key="brave-test-secret",
+            fetcher=fetcher,
+        )
+
+    assert calls == []
+    assert not (tmp_path / "probe.jsonl").exists()
+    assert list(tmp_path.glob(".brave-search-shadow-*.tmp")) == []
+
+
+@pytest.mark.asyncio
 async def test_malformed_output_path_prevents_transport_calls(tmp_path: Path) -> None:
     calls: list[object] = []
 
@@ -320,8 +349,91 @@ async def test_resolved_output_parent_resists_parent_symlink_swap(tmp_path: Path
     )
 
     assert result.exit_code == 0
+    assert result.output_path == trusted_parent / "probe.jsonl"
     assert (trusted_parent / "probe.jsonl").exists()
     assert not (alternate_parent / "probe.jsonl").exists()
+
+
+@pytest.mark.asyncio
+async def test_fd_anchored_output_survives_canonical_parent_replacement(tmp_path: Path) -> None:
+    trusted_parent = tmp_path / "trusted-output"
+    displaced_parent = tmp_path / "reserved-output"
+    attacker_parent = tmp_path / "attacker-output"
+    trusted_parent.mkdir(mode=0o700)
+    attacker_parent.mkdir(mode=0o700)
+    alias_parent = tmp_path / "output-alias"
+    alias_parent.symlink_to(trusted_parent, target_is_directory=True)
+
+    async def fetcher(*args: object, **kwargs: object) -> bytes:
+        trusted_parent.rename(displaced_parent)
+        trusted_parent.symlink_to(attacker_parent, target_is_directory=True)
+        return b'{"web":{"results":[]}}'
+
+    result = await run_probe(
+        _input_file(tmp_path),
+        alias_parent / "probe.jsonl",
+        enabled=True,
+        api_key="brave-test-secret",
+        fetcher=fetcher,
+    )
+
+    assert result.exit_code == 0
+    assert (displaced_parent / "probe.jsonl").exists()
+    assert not (attacker_parent / "probe.jsonl").exists()
+
+
+def test_main_reports_canonical_output_after_parent_alias_swap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    trusted_parent = tmp_path / "trusted-output"
+    attacker_parent = tmp_path / "attacker-output"
+    trusted_parent.mkdir(mode=0o700)
+    attacker_parent.mkdir(mode=0o700)
+    alias_parent = tmp_path / "output-alias"
+    alias_parent.symlink_to(trusted_parent, target_is_directory=True)
+    original_run_probe = brave_search_shadow_probe.run_probe
+
+    async def run_probe_with_alias_swap(
+        input_path: Path,
+        output_path: Path,
+        *,
+        enabled: bool,
+        api_key: str,
+    ) -> brave_search_shadow_probe.ProbeRunResult:
+        async def fetcher(*args: object, **kwargs: object) -> bytes:
+            alias_parent.unlink()
+            alias_parent.symlink_to(attacker_parent, target_is_directory=True)
+            return b'{"web":{"results":[]}}'
+
+        return await original_run_probe(
+            input_path,
+            output_path,
+            enabled=enabled,
+            api_key=api_key,
+            fetcher=fetcher,
+        )
+
+    monkeypatch.setenv("ENABLE_BRAVE_SEARCH_SHADOW", "true")
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "brave-test-secret")
+    monkeypatch.setattr(brave_search_shadow_probe, "run_probe", run_probe_with_alias_swap)
+
+    exit_code = main(
+        [
+            "--execute",
+            "--input",
+            str(_input_file(tmp_path)),
+            "--output",
+            str(alias_parent / "probe.jsonl"),
+        ]
+    )
+
+    summary = capsys.readouterr().out
+    canonical_output = trusted_parent / "probe.jsonl"
+    assert exit_code == 0
+    assert f"output_path={canonical_output}" in summary
+    assert str(alias_parent / "probe.jsonl") not in summary
+    assert canonical_output.exists()
+    assert not (attacker_parent / "probe.jsonl").exists()
 
 
 @pytest.mark.asyncio
@@ -401,8 +513,11 @@ async def test_staging_descriptor_lives_through_transport_and_closes_after_publi
     async def fetcher(*args: object, **kwargs: object) -> bytes:
         assert len(reservations) == 1
         descriptor = reservations[0].descriptor
+        directory_fd = reservations[0].directory_fd
         assert descriptor is not None
+        assert directory_fd is not None
         os.fstat(descriptor)
+        os.fstat(directory_fd)
         assert tracked_outputs == []
         return b'{"web":{"results":[]}}'
 
@@ -416,16 +531,53 @@ async def test_staging_descriptor_lives_through_transport_and_closes_after_publi
 
     assert result.exit_code == 0
     assert reservations[0].descriptor is None
+    assert reservations[0].directory_fd is None
     assert len(tracked_outputs) == 1
     assert tracked_outputs[0].closed is True
 
 
 @pytest.mark.asyncio
+async def test_failed_output_write_closes_staging_and_directory_descriptors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reservations: list[object] = []
+    original_reserve_output = brave_search_shadow_probe._reserve_output
+
+    def reserve_output(path: Path) -> object:
+        reservation = original_reserve_output(path)
+        reservations.append(reservation)
+        return reservation
+
+    def fail_fsync(*args: object, **kwargs: object) -> None:
+        raise OSError("write failure")
+
+    monkeypatch.setattr(brave_search_shadow_probe, "_reserve_output", reserve_output)
+    monkeypatch.setattr(brave_search_shadow_probe.os, "fsync", fail_fsync)
+
+    with pytest.raises(ProbeInputError, match="cannot be written"):
+        await run_probe(
+            _input_file(tmp_path),
+            tmp_path / "probe.jsonl",
+            enabled=True,
+            api_key="brave-test-secret",
+            fetcher=lambda *args, **kwargs: asyncio.sleep(
+                0, result=b'{"web":{"results":[]}}'
+            ),
+        )
+
+    assert len(reservations) == 1
+    assert reservations[0].descriptor is None
+    assert reservations[0].directory_fd is None
+    assert not (tmp_path / "probe.jsonl").exists()
+    assert list(tmp_path.glob(".brave-search-shadow-*.tmp")) == []
+
+
+@pytest.mark.asyncio
 async def test_key_and_query_shaped_identifiers_never_persisted(tmp_path: Path) -> None:
     identifier_values = {
-        "probe_window_id": "BRAVE_SEARCH_API_KEY=identifier-secret",
-        "ticker": "query-shaped identifier: market terms",
-        "research_run_id": "q=identifier-search&not=output",
+        "probe_window_id": "BRAVE_SEARCH_API_KEY-identifier-secret",
+        "ticker": "query-shaped-identifier-market-terms",
+        "research_run_id": "q-identifier-search-not-output",
     }
     input_path = _input_file(tmp_path, query="probe-query-distinct-from-identifiers")
     rows = [
@@ -464,9 +616,13 @@ async def test_key_and_query_shaped_identifiers_never_persisted(tmp_path: Path) 
     (
         ("probe_window_id", "window\x00identifier"),
         ("ticker", "\ud800"),
+        ("ticker", "market terms"),
+        ("research_run_id", "BRAVE_SEARCH_API_KEY=identifier-secret"),
+        ("probe_window_id", "path/to/identifier"),
+        ("ticker", "m\u00e1rket-identifier"),
         ("research_run_id", "R" * 10_000),
     ),
-    ids=("control", "lone_surrogate", "overlong"),
+    ids=("control", "lone_surrogate", "whitespace", "equals", "slash", "non_ascii", "overlong"),
 )
 async def test_invalid_identifier_is_rejected_before_transport(
     tmp_path: Path, field: str, invalid_value: str
@@ -495,6 +651,7 @@ async def test_invalid_identifier_is_rejected_before_transport(
         )
 
     assert calls == []
+    assert not (tmp_path / "probe.jsonl").exists()
 
 
 @pytest.mark.asyncio
