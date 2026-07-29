@@ -199,6 +199,170 @@ async def test_input_is_fully_validated_before_any_transport_call(tmp_path: Path
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("destination_kind", ("missing_parent", "directory"))
+async def test_unusable_output_destination_prevents_transport_calls(
+    tmp_path: Path, destination_kind: str
+) -> None:
+    if destination_kind == "missing_parent":
+        output_path = tmp_path / "missing" / "probe.jsonl"
+    else:
+        output_path = tmp_path / "output-directory"
+        output_path.mkdir()
+    calls: list[object] = []
+
+    async def fetcher(*args: object, **kwargs: object) -> bytes:
+        calls.append((args, kwargs))
+        return b'{"web":{"results":[]}}'
+
+    with pytest.raises(ProbeInputError, match="output destination"):
+        await run_probe(
+            _input_file(tmp_path),
+            output_path,
+            enabled=True,
+            api_key="brave-test-secret",
+            fetcher=fetcher,
+        )
+
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_probe_stages_output_then_atomically_replaces_destination(tmp_path: Path) -> None:
+    output_path = tmp_path / "probe.jsonl"
+    output_path.write_text("previous-artifact\n", encoding="utf-8")
+    staged_paths: list[Path] = []
+
+    async def fetcher(*args: object, **kwargs: object) -> bytes:
+        staged_paths.extend(tmp_path.glob(".probe.jsonl.*.tmp"))
+        assert output_path.read_text(encoding="utf-8") == "previous-artifact\n"
+        return b'{"web":{"results":[]}}'
+
+    with output_path.open(encoding="utf-8") as prior_artifact:
+        result = await run_probe(
+            _input_file(tmp_path),
+            output_path,
+            enabled=True,
+            api_key="brave-test-secret",
+            fetcher=fetcher,
+        )
+        prior_artifact.seek(0)
+        assert prior_artifact.read() == "previous-artifact\n"
+
+    assert result.exit_code == 0
+    assert len(staged_paths) == 1
+    assert staged_paths[0].parent == output_path.parent
+    assert staged_paths[0] != output_path
+    assert output_path.read_text(encoding="utf-8") != "previous-artifact\n"
+    assert list(tmp_path.glob(".probe.jsonl.*.tmp")) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    (
+        ("probe_window_id", "window 1"),
+        ("ticker", "market-specific query"),
+        ("research_run_id", "q=market-specific-query"),
+        ("ticker", "T" * 129),
+    ),
+    ids=("whitespace", "free_form", "query_like", "overlong"),
+)
+async def test_free_form_identifier_rejected_before_transport(
+    tmp_path: Path, field: str, invalid_value: str
+) -> None:
+    input_path = _input_file(tmp_path, count=2)
+    rows = [
+        json.loads(line) for line in input_path.read_text(encoding="utf-8").splitlines()
+    ]
+    rows[1][field] = invalid_value
+    input_path.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+    )
+    calls: list[object] = []
+
+    async def fetcher(*args: object, **kwargs: object) -> bytes:
+        calls.append((args, kwargs))
+        return b'{"web":{"results":[]}}'
+
+    with pytest.raises(ProbeInputError, match="invalid identifier"):
+        await run_probe(
+            input_path,
+            tmp_path / "probe.jsonl",
+            enabled=True,
+            api_key="brave-test-secret",
+            fetcher=fetcher,
+        )
+
+    assert calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid_query", ("\ud800", "market\x00specific-query"), ids=("lone_surrogate", "control"),
+)
+async def test_invalid_query_rejected_before_transport(
+    tmp_path: Path, invalid_query: str
+) -> None:
+    input_path = _input_file(tmp_path, count=1)
+    with input_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "probe_window_id": "window-1",
+                    "ticker": "TICKER-1",
+                    "research_run_id": "run-1",
+                    "query": invalid_query,
+                }
+            )
+            + "\n"
+        )
+    calls: list[object] = []
+
+    async def fetcher(*args: object, **kwargs: object) -> bytes:
+        calls.append((args, kwargs))
+        return b'{"web":{"results":[]}}'
+
+    with pytest.raises(ProbeInputError, match="invalid query"):
+        await run_probe(
+            input_path,
+            tmp_path / "probe.jsonl",
+            enabled=True,
+            api_key="brave-test-secret",
+            fetcher=fetcher,
+        )
+
+    assert calls == []
+    assert not (tmp_path / "probe.jsonl").exists()
+
+
+@pytest.mark.asyncio
+async def test_normal_cohort_market_and_run_identifiers_are_accepted(tmp_path: Path) -> None:
+    input_path = tmp_path / "probe-input.jsonl"
+    input_path.write_text(
+        json.dumps(
+            {
+                "probe_window_id": "legacy-pending-20260729",
+                "ticker": "KXFISAEXTEND-26MAY-JUN15",
+                "research_run_id": "rr-prewarm-20260729T034240Z",
+                "query": "market-specific query",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = await run_probe(
+        input_path,
+        tmp_path / "probe.jsonl",
+        enabled=True,
+        api_key="brave-test-secret",
+        fetcher=lambda *args, **kwargs: asyncio.sleep(0, result=b'{"web":{"results":[]}}'),
+    )
+
+    assert result.exit_code == 0
+
+
+@pytest.mark.asyncio
 async def test_probe_uses_the_pinned_bounded_transport_in_serial_order(tmp_path: Path) -> None:
     calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
     in_flight = 0

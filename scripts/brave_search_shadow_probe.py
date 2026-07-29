@@ -7,7 +7,9 @@ import asyncio
 import json
 import math
 import os
+import re
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -32,6 +34,8 @@ TIMEOUT_SECONDS = 2.0
 MAX_BYTES = 256_000
 
 _INPUT_FIELDS = ("probe_window_id", "ticker", "research_run_id", "query")
+_IDENTIFIER_FIELDS = ("probe_window_id", "ticker", "research_run_id")
+_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 
 class ProbeInputError(ValueError):
@@ -81,6 +85,20 @@ def _object_with_unique_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return record
 
 
+def _validate_identifier(value: str, line_number: int) -> None:
+    if not _IDENTIFIER_PATTERN.fullmatch(value):
+        raise ProbeInputError(f"input line {line_number} has an invalid identifier")
+
+
+def _validate_query(value: str, line_number: int) -> None:
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ProbeInputError(f"input line {line_number} has an invalid query") from exc
+    if any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in value):
+        raise ProbeInputError(f"input line {line_number} has an invalid query")
+
+
 def _load_inputs(input_path: Path) -> list[ProbeInput]:
     try:
         lines = input_path.read_text(encoding="utf-8").splitlines()
@@ -111,6 +129,10 @@ def _load_inputs(input_path: Path) -> list[ProbeInput]:
             value = parsed[field]
             if not isinstance(value, str) or not value.strip():
                 raise ProbeInputError(f"input line {line_number} has a blank required field")
+            if field in _IDENTIFIER_FIELDS:
+                _validate_identifier(value, line_number)
+            elif field == "query":
+                _validate_query(value, line_number)
             values[field] = value
 
         research_run_id = values["research_run_id"]
@@ -178,6 +200,21 @@ def _write_output(output_path: Path, records: Sequence[ProbeRecord]) -> None:
     output_path.write_text(rendered, encoding="utf-8")
 
 
+def _reserve_output(output_path: Path) -> Path:
+    if output_path.is_dir() or not output_path.parent.is_dir():
+        raise ProbeInputError("output destination cannot be reserved")
+    try:
+        descriptor, staged_path = tempfile.mkstemp(
+            dir=output_path.parent,
+            prefix=f".{output_path.name}.",
+            suffix=".tmp",
+        )
+    except OSError as exc:
+        raise ProbeInputError("output destination cannot be reserved") from exc
+    os.close(descriptor)
+    return Path(staged_path)
+
+
 async def run_probe(
     input_path: Path,
     output_path: Path,
@@ -191,110 +228,151 @@ async def run_probe(
         return ProbeRunResult(exit_code=2, attempts=0, successes=0)
 
     inputs = _load_inputs(input_path)
-    records: list[ProbeRecord] = []
-    for input_index, probe_input in enumerate(inputs):
-        query_string = urllib.parse.urlencode(
-            {
-                "q": probe_input.query,
-                "count": 3,
-                "country": "US",
-                "search_lang": "en",
-            }
-        )
-        url = f"{BRAVE_ENDPOINT}?{query_string}"
-        started_at = time.monotonic()
-        try:
-            response = await fetcher(
-                url,
-                canonical_host=BRAVE_HOST,
-                provider_name="Brave Search API Shadow",
-                user_agent="kalshi-bot-brave-shadow/1.0",
-                timeout=TIMEOUT_SECONDS,
-                max_bytes=MAX_BYTES,
-                request_headers={
-                    "Accept": "application/json",
-                    "X-Subscription-Token": api_key,
-                },
+    staged_output_path = _reserve_output(output_path)
+    try:
+        records: list[ProbeRecord] = []
+        for input_index, probe_input in enumerate(inputs):
+            query_string = urllib.parse.urlencode(
+                {
+                    "q": probe_input.query,
+                    "count": 3,
+                    "country": "US",
+                    "search_lang": "en",
+                }
             )
-        except TimeoutError:
-            records.append(
-                ProbeRecord(
-                    input_index=input_index,
-                    probe_window_id=probe_input.probe_window_id,
-                    ticker=probe_input.ticker,
-                    research_run_id=probe_input.research_run_id,
-                    provider="brave_search",
-                    outcome="timeout",
-                    duration_ms=_duration_ms(started_at),
-                    http_status=None,
-                    body_bytes=0,
-                    schema_valid=False,
-                    result_count=0,
-                    error_class="TimeoutError",
+            url = f"{BRAVE_ENDPOINT}?{query_string}"
+            started_at = time.monotonic()
+            try:
+                response = await fetcher(
+                    url,
+                    canonical_host=BRAVE_HOST,
+                    provider_name="Brave Search API Shadow",
+                    user_agent="kalshi-bot-brave-shadow/1.0",
+                    timeout=TIMEOUT_SECONDS,
+                    max_bytes=MAX_BYTES,
+                    request_headers={
+                        "Accept": "application/json",
+                        "X-Subscription-Token": api_key,
+                    },
                 )
-            )
-            continue
-        except urllib.error.HTTPError as exc:
-            http_status = exc.code if isinstance(exc.code, int) else None
-            records.append(
-                ProbeRecord(
-                    input_index=input_index,
-                    probe_window_id=probe_input.probe_window_id,
-                    ticker=probe_input.ticker,
-                    research_run_id=probe_input.research_run_id,
-                    provider="brave_search",
-                    outcome="http_error",
-                    duration_ms=_duration_ms(started_at),
-                    http_status=http_status,
-                    body_bytes=0,
-                    schema_valid=False,
-                    result_count=0,
-                    error_class="HTTPError",
+            except TimeoutError:
+                records.append(
+                    ProbeRecord(
+                        input_index=input_index,
+                        probe_window_id=probe_input.probe_window_id,
+                        ticker=probe_input.ticker,
+                        research_run_id=probe_input.research_run_id,
+                        provider="brave_search",
+                        outcome="timeout",
+                        duration_ms=_duration_ms(started_at),
+                        http_status=None,
+                        body_bytes=0,
+                        schema_valid=False,
+                        result_count=0,
+                        error_class="TimeoutError",
+                    )
                 )
-            )
-            continue
-        except Exception:
-            records.append(
-                ProbeRecord(
-                    input_index=input_index,
-                    probe_window_id=probe_input.probe_window_id,
-                    ticker=probe_input.ticker,
-                    research_run_id=probe_input.research_run_id,
-                    provider="brave_search",
-                    outcome="provider_exception",
-                    duration_ms=_duration_ms(started_at),
-                    http_status=None,
-                    body_bytes=0,
-                    schema_valid=False,
-                    result_count=0,
-                    error_class="ProviderError",
+                continue
+            except urllib.error.HTTPError as exc:
+                http_status = exc.code if isinstance(exc.code, int) else None
+                records.append(
+                    ProbeRecord(
+                        input_index=input_index,
+                        probe_window_id=probe_input.probe_window_id,
+                        ticker=probe_input.ticker,
+                        research_run_id=probe_input.research_run_id,
+                        provider="brave_search",
+                        outcome="http_error",
+                        duration_ms=_duration_ms(started_at),
+                        http_status=http_status,
+                        body_bytes=0,
+                        schema_valid=False,
+                        result_count=0,
+                        error_class="HTTPError",
+                    )
                 )
-            )
-            continue
+                continue
+            except Exception:
+                records.append(
+                    ProbeRecord(
+                        input_index=input_index,
+                        probe_window_id=probe_input.probe_window_id,
+                        ticker=probe_input.ticker,
+                        research_run_id=probe_input.research_run_id,
+                        provider="brave_search",
+                        outcome="provider_exception",
+                        duration_ms=_duration_ms(started_at),
+                        http_status=None,
+                        body_bytes=0,
+                        schema_valid=False,
+                        result_count=0,
+                        error_class="ProviderError",
+                    )
+                )
+                continue
 
-        duration_ms = _duration_ms(started_at)
-        if not isinstance(response, bytes):
-            records.append(
-                ProbeRecord(
-                    input_index=input_index,
-                    probe_window_id=probe_input.probe_window_id,
-                    ticker=probe_input.ticker,
-                    research_run_id=probe_input.research_run_id,
-                    provider="brave_search",
-                    outcome="malformed_response",
-                    duration_ms=duration_ms,
-                    http_status=None,
-                    body_bytes=0,
-                    schema_valid=False,
-                    result_count=0,
-                    error_class="ProviderError",
+            duration_ms = _duration_ms(started_at)
+            if not isinstance(response, bytes):
+                records.append(
+                    ProbeRecord(
+                        input_index=input_index,
+                        probe_window_id=probe_input.probe_window_id,
+                        ticker=probe_input.ticker,
+                        research_run_id=probe_input.research_run_id,
+                        provider="brave_search",
+                        outcome="malformed_response",
+                        duration_ms=duration_ms,
+                        http_status=None,
+                        body_bytes=0,
+                        schema_valid=False,
+                        result_count=0,
+                        error_class="ProviderError",
+                    )
                 )
-            )
-            continue
+                continue
 
-        try:
-            parsed_response = json.loads(response)
-        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            try:
+                parsed_response = json.loads(response)
+            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                records.append(
+                    ProbeRecord(
+                        input_index=input_index,
+                        probe_window_id=probe_input.probe_window_id,
+                        ticker=probe_input.ticker,
+                        research_run_id=probe_input.research_run_id,
+                        provider="brave_search",
+                        outcome="malformed_response",
+                        duration_ms=duration_ms,
+                        http_status=None,
+                        body_bytes=len(response),
+                        schema_valid=False,
+                        result_count=0,
+                        error_class=type(exc).__name__,
+                    )
+                )
+                continue
+
+            web = parsed_response.get("web") if isinstance(parsed_response, dict) else None
+            results = web.get("results") if isinstance(web, dict) else None
+            if not isinstance(results, list):
+                records.append(
+                    ProbeRecord(
+                        input_index=input_index,
+                        probe_window_id=probe_input.probe_window_id,
+                        ticker=probe_input.ticker,
+                        research_run_id=probe_input.research_run_id,
+                        provider="brave_search",
+                        outcome="malformed_response",
+                        duration_ms=duration_ms,
+                        http_status=None,
+                        body_bytes=len(response),
+                        schema_valid=False,
+                        result_count=0,
+                        error_class="ProviderError",
+                    )
+                )
+                continue
+
             records.append(
                 ProbeRecord(
                     input_index=input_index,
@@ -302,58 +380,22 @@ async def run_probe(
                     ticker=probe_input.ticker,
                     research_run_id=probe_input.research_run_id,
                     provider="brave_search",
-                    outcome="malformed_response",
+                    outcome="success",
                     duration_ms=duration_ms,
                     http_status=None,
                     body_bytes=len(response),
-                    schema_valid=False,
-                    result_count=0,
-                    error_class=type(exc).__name__,
+                    schema_valid=True,
+                    result_count=len(results),
+                    error_class=None,
                 )
             )
-            continue
 
-        web = parsed_response.get("web") if isinstance(parsed_response, dict) else None
-        results = web.get("results") if isinstance(web, dict) else None
-        if not isinstance(results, list):
-            records.append(
-                ProbeRecord(
-                    input_index=input_index,
-                    probe_window_id=probe_input.probe_window_id,
-                    ticker=probe_input.ticker,
-                    research_run_id=probe_input.research_run_id,
-                    provider="brave_search",
-                    outcome="malformed_response",
-                    duration_ms=duration_ms,
-                    http_status=None,
-                    body_bytes=len(response),
-                    schema_valid=False,
-                    result_count=0,
-                    error_class="ProviderError",
-                )
-            )
-            continue
-
-        records.append(
-            ProbeRecord(
-                input_index=input_index,
-                probe_window_id=probe_input.probe_window_id,
-                ticker=probe_input.ticker,
-                research_run_id=probe_input.research_run_id,
-                provider="brave_search",
-                outcome="success",
-                duration_ms=duration_ms,
-                http_status=None,
-                body_bytes=len(response),
-                schema_valid=True,
-                result_count=len(results),
-                error_class=None,
-            )
-        )
-
-    _write_output(output_path, records)
-    successes = sum(record.outcome == "success" for record in records)
-    return ProbeRunResult(exit_code=0, attempts=len(records), successes=successes)
+        _write_output(staged_output_path, records)
+        os.replace(staged_output_path, output_path)
+        successes = sum(record.outcome == "success" for record in records)
+        return ProbeRunResult(exit_code=0, attempts=len(records), successes=successes)
+    finally:
+        staged_output_path.unlink(missing_ok=True)
 
 
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
