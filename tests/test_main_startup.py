@@ -51,6 +51,17 @@ def _cutover_eligible_legacy_db(path: Path) -> None:
         conn.execute("CREATE TABLE legacy_provenance (value TEXT)")
 
 
+def _legacy_pending_state_db(path: Path) -> None:
+    """Create the minimum unresolved legacy ledger for pending paper isolation."""
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE bot_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        conn.execute(
+            "INSERT INTO bot_state(key, value) VALUES ('notional_bankroll', '500.0')"
+        )
+        conn.execute("CREATE TABLE paper_trades (resolved INTEGER NOT NULL)")
+        conn.executemany("INSERT INTO paper_trades(resolved) VALUES (?)", [(0,), (0,)])
+
+
 def test_is_cli_only_command_distinguishes_short_lived_modes():
     assert _is_cli_only_command(
         Namespace(report=True, credibility=False, resolve=None, go_live=False, rotate_logs=False)
@@ -155,6 +166,62 @@ def test_active_runtime_cohort_requires_manifest_before_paper_trader_bootstrap(
     assert runtime == cohort
     assert [item.cohort_id for item in risk_cohorts] == ["legacy", "active-20260728"]
     assert block_reason == "active paper cohort remains isolated from live trading"
+
+
+def test_legacy_pending_runtime_binds_distinct_manifest_and_remains_paper_only(
+    monkeypatch,
+    tmp_path: Path,
+):
+    from trading.paper_cohorts import (
+        initialize_legacy_pending_paper_cohort_manifest,
+        legacy_open_exposure_fingerprint,
+        resolve_runtime_paper_cohort,
+    )
+
+    pending_cfg = SimpleNamespace(
+        bankroll=500.0,
+        paper_cohort_id="pending-20260728",
+        paper_cohort_kind="legacy_pending",
+        paper_active_cohort_starting_bankroll=125.0,
+        paper_active_cohort_max_days_to_close=14.0,
+    )
+    monkeypatch.setattr(main, "cfg", pending_cfg)
+
+    with pytest.raises(FileNotFoundError, match="manifest"):
+        main._runtime_paper_cohort_from_config(db_root=tmp_path)
+    assert not (tmp_path / "legacy_pending_paper_cohorts" / "pending-20260728").exists()
+
+    legacy_path = tmp_path / "paper_trades.db"
+    _legacy_pending_state_db(legacy_path)
+    cohort = resolve_runtime_paper_cohort(
+        pending_cfg.paper_cohort_id,
+        legacy_starting_bankroll=None,
+        active_starting_bankroll=pending_cfg.paper_active_cohort_starting_bankroll,
+        cohort_kind="legacy_pending",
+        db_root=tmp_path,
+    )
+    exposure = legacy_open_exposure_fingerprint(legacy_path)
+    initialize_legacy_pending_paper_cohort_manifest(
+        cohort,
+        max_days_to_close=pending_cfg.paper_active_cohort_max_days_to_close,
+        legacy_db_path=legacy_path,
+        legacy_starting_bankroll=pending_cfg.bankroll,
+        expected_legacy_open_trade_count=exposure.unresolved_trade_count,
+        expected_legacy_open_rows_sha256=exposure.rows_sha256,
+    )
+
+    runtime, risk_cohorts, block_reason = main._runtime_paper_cohort_from_config(
+        db_root=tmp_path
+    )
+
+    assert runtime == cohort
+    assert [item.cohort_id for item in risk_cohorts] == [
+        "legacy-pending-baseline",
+        "pending-20260728",
+    ]
+    assert block_reason == (
+        "legacy-pending paper cohort remains permanently isolated from live trading"
+    )
 
 
 def test_legacy_runtime_config_is_refused_after_active_cohort_provisioning(

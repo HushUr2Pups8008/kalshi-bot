@@ -56,6 +56,14 @@ def _optional_env_float(name: str) -> float | None:
     return float(raw)
 
 
+def _resolve_paper_cohort_kind() -> str:
+    """Default legacy only for the historical cohort; new cohorts are active."""
+
+    cohort_id = os.getenv("PAPER_COHORT_ID", "legacy").strip().lower()
+    default = "legacy" if cohort_id == "legacy" else "active"
+    return os.getenv("PAPER_COHORT_KIND", default).strip().lower() or default
+
+
 def _resolve_keyword_override_mode() -> str:
     """Resolve the pre-LLM keyword override mode from env, defaulting to `all_required`.
 
@@ -1272,6 +1280,7 @@ class BotConfig:
     paper_cohort_id: str = field(
         default_factory=lambda: os.getenv("PAPER_COHORT_ID", "legacy").strip().lower()
     )
+    paper_cohort_kind: str = field(default_factory=_resolve_paper_cohort_kind)
     paper_active_cohort_starting_bankroll: float | None = field(
         default_factory=lambda: _optional_env_float("PAPER_ACTIVE_COHORT_BANKROLL")
     )
@@ -1698,6 +1707,15 @@ class BotConfig:
             errors.append(
                 "PAPER_COHORT_ID must contain only lowercase letters, digits, and hyphens"
             )
+        if self.paper_cohort_kind not in {"legacy", "active", "legacy_pending"}:
+            errors.append(
+                "PAPER_COHORT_KIND must be one of legacy|active|legacy_pending, "
+                f"got '{self.paper_cohort_kind}'"
+            )
+        elif self.paper_cohort_id == "legacy" and self.paper_cohort_kind != "legacy":
+            errors.append("PAPER_COHORT_KIND must be legacy when PAPER_COHORT_ID=legacy")
+        elif self.paper_cohort_id != "legacy" and self.paper_cohort_kind == "legacy":
+            errors.append("PAPER_COHORT_KIND=legacy requires PAPER_COHORT_ID=legacy")
         if self.paper_cohort_id != "legacy":
             active_bankroll = self.paper_active_cohort_starting_bankroll
             if (
@@ -1791,7 +1809,7 @@ class BotConfig:
 
     @property
     def paper_admission_max_days_to_close(self) -> float:
-        """Tighten active-paper routing without changing the observed universe cap."""
+        """Tighten every nonlegacy paper cohort without changing the universe cap."""
 
         if self.is_paper_trading and self.paper_cohort_id != "legacy":
             return self.paper_active_cohort_max_days_to_close

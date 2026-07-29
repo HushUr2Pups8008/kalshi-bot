@@ -38,10 +38,11 @@ from tasks.stats.source_credibility import SourceCredibility
 from config import cfg, DATA_DIR
 from trading.fees import FeeUnscorableError, fee_schedule_at
 from trading.paper_cohorts import (
-    active_cohort_binding_for_db,
-    assert_initialized_active_cohort_schema,
+    assert_initialized_paper_cohort_schema,
     immutable_paper_database_block_reason,
-    mark_active_cohort_database_initialized,
+    mark_paper_cohort_database_initialized,
+    paper_cohort_binding_for_db,
+    paper_runtime_database_topology_block_reason,
     unbound_paper_runtime_database_block_reason,
 )
 from trading.paper_accounting import (
@@ -80,6 +81,13 @@ from utils.logger import get_logger, trade_log, TRADE_LOG_FILE
 log = get_logger("paper_trader")
 
 DB_PATH = DATA_DIR / "paper_trades.db"
+
+_ACTIVE_COHORT_LIVE_TRANSITION_BLOCK = (
+    "active paper cohort remains isolated from live trading"
+)
+_LEGACY_PENDING_COHORT_LIVE_TRANSITION_BLOCK = (
+    "legacy-pending paper cohort remains permanently isolated from live trading"
+)
 
 
 def _resolve_starting_bankroll(value: float | None) -> float:
@@ -469,7 +477,20 @@ class PaperTrader:
         self._paper_cohort_storage_root = (
             Path(paper_cohort_storage_root) if paper_cohort_storage_root is not None else None
         )
-        active_cohort_binding = active_cohort_binding_for_db(
+        self._startup_context = startup_context
+        self._validate_startup_context()
+        topology_block = paper_runtime_database_topology_block_reason(self._db_path)
+        if topology_block is not None:
+            raise RuntimeError(f"immutable paper cohort database is blocked: {topology_block}")
+        if (
+            self._startup_context in {"runtime", "cli"}
+            and not self._is_in_memory_db_path()
+            and self._paper_cohort_storage_root is None
+        ):
+            raise RuntimeError(
+                "PaperTrader runtime/CLI requires paper_cohort_storage_root"
+            )
+        paper_cohort_binding = paper_cohort_binding_for_db(
             self._db_path,
             cohort_id=cohort_id,
         )
@@ -478,13 +499,13 @@ class PaperTrader:
             if starting_bankroll is not None
             else None
         )
-        if active_cohort_binding is not None:
+        if paper_cohort_binding is not None:
             if (
                 requested_starting_bankroll is not None
-                and requested_starting_bankroll != active_cohort_binding.cohort.starting_bankroll
+                and requested_starting_bankroll != paper_cohort_binding.cohort.starting_bankroll
             ):
-                raise ValueError("active cohort starting bankroll does not match its manifest")
-            self._starting_bankroll = active_cohort_binding.cohort.starting_bankroll
+                raise ValueError("paper cohort starting bankroll does not match its manifest")
+            self._starting_bankroll = paper_cohort_binding.cohort.starting_bankroll
             self._legacy_runtime_write_block_reason = None
         else:
             immutable_database_block_reason = immutable_paper_database_block_reason(
@@ -513,20 +534,20 @@ class PaperTrader:
             if live_transition_block_reason is not None
             else None
         )
-        self._active_cohort_binding = active_cohort_binding
+        self._paper_cohort_binding = paper_cohort_binding
         self._live_transition_block_reason = (
-            "active paper cohort remains isolated from live trading"
-            if active_cohort_binding is not None
+            _LEGACY_PENDING_COHORT_LIVE_TRANSITION_BLOCK
+            if getattr(paper_cohort_binding, "cohort_type", None) == "legacy_pending"
+            else _ACTIVE_COHORT_LIVE_TRANSITION_BLOCK
+            if paper_cohort_binding is not None
             else self._legacy_runtime_write_block_reason or requested_live_transition_block
         )
-        self._startup_context = startup_context
         self._initialized = False
         self._transaction_lock = threading.RLock()
         self._settlement_schema_present = False
         self._paper_accounting_schema_present = False
         self._paper_accounting_handlers = paper_accounting_handlers
         self._calibration_task = calibration_task
-        self._validate_startup_context()
         self._enforce_runtime_guards()
         self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False, timeout=30.0)
         try:
@@ -550,10 +571,10 @@ class PaperTrader:
         """
         if self._initialized:
             return
-        if self._active_cohort_binding is not None:
-            assert_initialized_active_cohort_schema(
+        if self._paper_cohort_binding is not None:
+            assert_initialized_paper_cohort_schema(
                 self._conn,
-                self._active_cohort_binding,
+                self._paper_cohort_binding,
             )
         fresh_database = self._conn.execute(
             "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='paper_trades'"
@@ -569,13 +590,13 @@ class PaperTrader:
                     self._conn,
                     migration_plan_sha256=PAPER_ACCOUNTING_FRESH_PLAN_SHA256,
                 )
-            if self._active_cohort_binding is not None:
+            if self._paper_cohort_binding is not None:
                 # This update shares the first durable schema transaction. A
                 # later crash can resume migrations, but it can never reset a
                 # cohort whose initial schema has already committed.
-                mark_active_cohort_database_initialized(
+                mark_paper_cohort_database_initialized(
                     self._conn,
-                    self._active_cohort_binding,
+                    self._paper_cohort_binding,
                     commit=False,
                 )
         self._migrate_db()

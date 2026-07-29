@@ -27,14 +27,30 @@ LEGACY_PAPER_COHORT_ID = "legacy"
 _COHORT_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 _IDENTITY_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 _ACTIVE_COHORTS_DIRNAME = "paper_cohorts"
+_LEGACY_PENDING_COHORTS_DIRNAME = "legacy_pending_paper_cohorts"
+_PROVISIONED_COHORTS_DIRNAMES = frozenset(
+    (_ACTIVE_COHORTS_DIRNAME, _LEGACY_PENDING_COHORTS_DIRNAME)
+)
 _MANIFEST_FILENAME = "cohort.json"
 _LEGACY_SNAPSHOT_FILENAME = "legacy_cutover.db"
 _MANIFEST_SCHEMA_VERSION = 4
+_LEGACY_PENDING_MANIFEST_SCHEMA_VERSION = 1
 _IDENTITY_TABLE = "paper_cohort_identity"
 _SQLITE_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
 _IDENTITY_PROVISIONED = "provisioned"
 _IDENTITY_INITIALIZED = "initialized"
 _LEGACY_BASELINE_VERIFICATION = "operator_attested_unverified"
+PAPER_COHORT_KIND_LEGACY = "legacy"
+PAPER_COHORT_KIND_ACTIVE = "active"
+PAPER_COHORT_KIND_LEGACY_PENDING = "legacy_pending"
+_PAPER_COHORT_KINDS = frozenset(
+    (
+        PAPER_COHORT_KIND_LEGACY,
+        PAPER_COHORT_KIND_ACTIVE,
+        PAPER_COHORT_KIND_LEGACY_PENDING,
+    )
+)
+LEGACY_PENDING_BASELINE_COHORT_ID = "legacy-pending-baseline"
 
 
 @dataclass(frozen=True)
@@ -62,6 +78,48 @@ class ActivePaperCohortBinding:
     legacy_baseline_attestation: str
     legacy_baseline_verification: str
     legacy_snapshot_sha256: str
+
+    @property
+    def cohort_type(self) -> str:
+        return PAPER_COHORT_KIND_ACTIVE
+
+
+@dataclass(frozen=True)
+class LegacyOpenExposureFingerprint:
+    """Canonical unresolved legacy rows captured before pending-paper admission."""
+
+    unresolved_trade_count: int
+    rows_sha256: str
+
+
+@dataclass(frozen=True)
+class LegacyPendingPaperCohortBinding:
+    """Manifest and database identity for a non-live pending-legacy cohort."""
+
+    cohort: PaperCohort
+    cohort_identity: str
+    manifest_sha256: str
+    max_days_to_close: float
+    legacy_db_path: Path
+    legacy_snapshot_path: Path
+    legacy_starting_bankroll: float
+    legacy_baseline_attestation: str
+    legacy_baseline_verification: str
+    legacy_snapshot_sha256: str
+    legacy_open_exposure: LegacyOpenExposureFingerprint
+
+    @property
+    def cohort_type(self) -> str:
+        return PAPER_COHORT_KIND_LEGACY_PENDING
+
+
+PaperCohortBinding = ActivePaperCohortBinding | LegacyPendingPaperCohortBinding
+
+
+def _paper_cohort_label(binding: PaperCohortBinding) -> str:
+    if isinstance(binding, LegacyPendingPaperCohortBinding):
+        return "legacy pending cohort"
+    return "active cohort"
 
 
 @dataclass(frozen=True)
@@ -142,11 +200,13 @@ def resolve_runtime_paper_cohort(
     legacy_starting_bankroll: float | None,
     active_starting_bankroll: float | None,
     db_root: Path = DB_STATE_DIR,
+    cohort_kind: str | None = None,
 ) -> PaperCohort:
     """Resolve the one writable runtime cohort without opening or creating state."""
 
     normalized_id = _validate_cohort_id(cohort_id)
     root = Path(db_root)
+    normalized_kind = _runtime_cohort_kind(cohort_kind, cohort_id=normalized_id)
     if normalized_id == LEGACY_PAPER_COHORT_ID:
         legacy_bankroll = _positive_finite_bankroll(
             legacy_starting_bankroll,
@@ -164,9 +224,14 @@ def resolve_runtime_paper_cohort(
         active_starting_bankroll,
         label="active starting bankroll",
     )
+    cohort_root = (
+        _ACTIVE_COHORTS_DIRNAME
+        if normalized_kind == PAPER_COHORT_KIND_ACTIVE
+        else _LEGACY_PENDING_COHORTS_DIRNAME
+    )
     return PaperCohort(
         cohort_id=normalized_id,
-        db_path=root / _ACTIVE_COHORTS_DIRNAME / normalized_id / "paper_trades.db",
+        db_path=root / cohort_root / normalized_id / "paper_trades.db",
         starting_bankroll=active_bankroll,
         writable=True,
         storage_root=root,
@@ -178,10 +243,15 @@ def risk_cohorts_for_runtime(
     *,
     legacy_starting_bankroll: float,
 ) -> tuple[PaperCohort, ...]:
-    """Compatibility helper; live readiness must use discovery instead."""
+    """Compatibility helper; pending and live readiness must use discovery."""
 
     if runtime_cohort.cohort_id == LEGACY_PAPER_COHORT_ID:
         return (runtime_cohort,)
+    _, cohort_kind = _storage_root_and_kind_for_cohort_db(runtime_cohort.db_path)
+    if cohort_kind == PAPER_COHORT_KIND_LEGACY_PENDING:
+        raise ValueError(
+            "legacy pending runtime risk must use discover_legacy_pending_paper_risk_cohorts"
+        )
     legacy = PaperCohort(
         cohort_id=LEGACY_PAPER_COHORT_ID,
         db_path=runtime_cohort.storage_root / "paper_trades.db",
@@ -224,6 +294,8 @@ def initialize_active_paper_cohort_manifest(
     with _runtime_lock(cohort.storage_root):
         if cohort_dir.exists():
             raise FileExistsError("active cohort directory already exists; refusing to adopt state")
+        if discover_legacy_pending_paper_risk_cohorts(cohort.storage_root):
+            raise ValueError("active cutover cannot coexist with a legacy pending cohort")
         existing_cohorts = discover_paper_risk_cohorts(cohort.storage_root)
         if existing_cohorts and existing_cohorts[0].starting_bankroll != legacy_bankroll:
             raise ValueError("active cohorts disagree on immutable legacy starting bankroll")
@@ -288,6 +360,120 @@ def initialize_active_paper_cohort_manifest(
     return cohort_dir / _MANIFEST_FILENAME
 
 
+def initialize_legacy_pending_paper_cohort_manifest(
+    cohort: PaperCohort,
+    *,
+    max_days_to_close: float,
+    legacy_db_path: Path,
+    legacy_starting_bankroll: float,
+    expected_legacy_open_trade_count: int,
+    expected_legacy_open_rows_sha256: str,
+) -> Path:
+    """Publish an isolated, permanently non-live cohort while legacy remains open."""
+
+    _require_legacy_pending_cohort(cohort)
+    horizon = _active_horizon(max_days_to_close)
+    legacy_bankroll = _positive_finite_bankroll(
+        legacy_starting_bankroll,
+        label="legacy starting bankroll",
+    )
+    legacy_path = _validate_legacy_db_path(legacy_db_path, cohort.storage_root)
+    cohort_dir = cohort.db_path.parent
+    cohorts_root = cohort_dir.parent
+    cohorts_root.mkdir(parents=True, exist_ok=True)
+    if cohorts_root.is_symlink() or not cohorts_root.is_dir():
+        raise ValueError("legacy pending cohort root is not a directory")
+
+    with _runtime_lock(cohort.storage_root):
+        active_cohorts = discover_paper_risk_cohorts(cohort.storage_root)
+        if active_cohorts:
+            raise ValueError("legacy pending cohort cannot coexist with an active cutover")
+        if cohort_dir.exists():
+            raise FileExistsError(
+                "legacy pending cohort directory already exists; refusing to adopt state"
+            )
+        _database_file_stat(legacy_path, label="legacy database")
+        legacy_source_sha256 = _verified_sqlite_sha256(legacy_path)
+        legacy_open_exposure = legacy_open_exposure_fingerprint(legacy_path)
+        if legacy_open_exposure.unresolved_trade_count == 0:
+            raise ValueError(
+                "legacy pending cohort requires unresolved legacy paper trades; "
+                "use a normal active cutover after reconciliation"
+            )
+        _validate_pending_legacy_open_exposure_confirmation(
+            legacy_open_exposure,
+            expected_trade_count=expected_legacy_open_trade_count,
+            expected_rows_sha256=expected_legacy_open_rows_sha256,
+        )
+        existing_pending = discover_legacy_pending_paper_risk_cohorts(cohort.storage_root)
+        if existing_pending:
+            first_pending = _load_legacy_pending_binding(
+                _legacy_pending_manifest_path_for(existing_pending[1]),
+                cohort.storage_root,
+            )
+            if first_pending.legacy_starting_bankroll != legacy_bankroll:
+                raise ValueError(
+                    "legacy pending cohorts disagree on immutable legacy starting bankroll"
+                )
+            if first_pending.legacy_snapshot_sha256 != legacy_source_sha256:
+                raise ValueError(
+                    "legacy pending cohorts require reviewed finalization before a new snapshot"
+                )
+
+        cohort_identity = uuid.uuid4().hex
+        staging_dir = cohorts_root / f".{cohort.cohort_id}-{cohort_identity}.provisioning"
+        published = False
+        try:
+            os.mkdir(staging_dir, 0o700)
+            staged_snapshot_path = staging_dir / _LEGACY_SNAPSHOT_FILENAME
+            _copy_verified_sqlite_snapshot(
+                legacy_path,
+                staged_snapshot_path,
+                expected_sha256=legacy_source_sha256,
+            )
+            if _verified_sqlite_sha256(legacy_path) != legacy_source_sha256:
+                raise RuntimeError("legacy database changed during pending cohort provisioning")
+            if legacy_open_exposure_fingerprint(staged_snapshot_path) != legacy_open_exposure:
+                raise RuntimeError("legacy pending snapshot open exposure does not match source")
+            payload = _legacy_pending_manifest_payload(
+                cohort,
+                cohort_identity=cohort_identity,
+                max_days_to_close=horizon,
+                legacy_db_path=legacy_path,
+                legacy_snapshot_path=cohort_dir / _LEGACY_SNAPSHOT_FILENAME,
+                legacy_starting_bankroll=legacy_bankroll,
+                legacy_source_sha256=legacy_source_sha256,
+                legacy_snapshot_sha256=legacy_source_sha256,
+                legacy_open_exposure=legacy_open_exposure,
+            )
+            encoded = _encode_manifest(payload)
+            manifest_sha256 = hashlib.sha256(encoded).hexdigest()
+            staged_db_path = staging_dir / cohort.db_path.name
+            _bootstrap_identity_database(
+                staged_db_path,
+                cohort_id=cohort.cohort_id,
+                cohort_identity=cohort_identity,
+                manifest_sha256=manifest_sha256,
+            )
+            _assert_distinct_cohort_database_files(
+                (
+                    ("legacy database", legacy_path),
+                    ("legacy pending database", staged_db_path),
+                    ("legacy pending snapshot", staged_snapshot_path),
+                )
+            )
+            _write_new_file(staging_dir / _MANIFEST_FILENAME, encoded)
+            _fsync_directory(staging_dir)
+            os.rename(staging_dir, cohort_dir)
+            published = True
+            _fsync_directory(cohorts_root)
+        except BaseException:
+            if not published:
+                _remove_staging_directory(staging_dir)
+            raise
+    return cohort_dir / _MANIFEST_FILENAME
+
+
 def validate_active_paper_cohort_manifest(
     cohort: PaperCohort,
     *,
@@ -298,6 +484,8 @@ def validate_active_paper_cohort_manifest(
     """Validate selected runtime config, immutable cutover snapshot, and DB identity."""
 
     _require_active_cohort(cohort)
+    if discover_legacy_pending_paper_risk_cohorts(cohort.storage_root):
+        raise ValueError("active cutover cannot coexist with a legacy pending cohort")
     binding = _load_active_binding(_manifest_path_for(cohort), cohort.storage_root)
     expected_legacy_path = _validate_legacy_db_path(legacy_db_path, cohort.storage_root)
     # Current legacy risk remains independently checked. Its hash is deliberately
@@ -332,34 +520,106 @@ def validate_active_paper_cohort_manifest(
     return binding
 
 
+def validate_legacy_pending_paper_cohort_manifest(
+    cohort: PaperCohort,
+    *,
+    max_days_to_close: float,
+    legacy_db_path: Path,
+    legacy_starting_bankroll: float | None = None,
+) -> LegacyPendingPaperCohortBinding:
+    """Validate an isolated pending cohort without requiring legacy hash stasis.
+
+    The root legacy database may settle after this cohort is provisioned. The
+    immutable pending snapshot, not the mutable root database, defines the
+    baseline that must continue to validate.
+    """
+
+    _require_legacy_pending_cohort(cohort)
+    if discover_paper_risk_cohorts(cohort.storage_root):
+        raise ValueError("legacy pending cohort cannot coexist with an active cutover")
+    binding = _load_legacy_pending_binding(
+        _legacy_pending_manifest_path_for(cohort),
+        cohort.storage_root,
+    )
+    expected_legacy_path = _validate_legacy_db_path(legacy_db_path, cohort.storage_root)
+    _verified_sqlite_sha256(expected_legacy_path)
+    expected = {
+        "schema_version": _LEGACY_PENDING_MANIFEST_SCHEMA_VERSION,
+        "cohort_type": PAPER_COHORT_KIND_LEGACY_PENDING,
+        "cohort_id": cohort.cohort_id,
+        "db_path_relative_to_storage_root": _relative_to_storage_root(
+            cohort.db_path,
+            cohort.storage_root,
+        ),
+        "starting_bankroll": cohort.starting_bankroll,
+        "max_days_to_close": _active_horizon(max_days_to_close),
+        "legacy_db_path_relative_to_storage_root": _relative_to_storage_root(
+            expected_legacy_path,
+            cohort.storage_root,
+        ),
+    }
+    if legacy_starting_bankroll is not None:
+        expected["legacy_starting_bankroll"] = _positive_finite_bankroll(
+            legacy_starting_bankroll,
+            label="legacy starting bankroll",
+        )
+    actual = _read_manifest_payload(_legacy_pending_manifest_path_for(cohort))
+    for key, expected_value in expected.items():
+        if actual.get(key) != expected_value:
+            label = "horizon" if key == "max_days_to_close" else key
+            raise ValueError(f"legacy pending cohort manifest {label} does not match runtime")
+    _validate_legacy_pending_database_identity(binding)
+    return binding
+
+
+def paper_cohort_binding_for_db(
+    db_path: Path,
+    *,
+    cohort_id: str | None = None,
+) -> PaperCohortBinding | None:
+    """Resolve a manifest-bound provisioned DB; runtime callers guard unbound paths."""
+
+    path = Path(db_path)
+    manifest_path = path.parent / _MANIFEST_FILENAME
+    if manifest_path.is_symlink():
+        raise ValueError("paper cohort manifest must not be a symlink")
+    if manifest_path.is_file():
+        storage_root, cohort_kind = _storage_root_and_kind_for_cohort_db(path)
+        if cohort_kind == PAPER_COHORT_KIND_ACTIVE:
+            binding: PaperCohortBinding = _load_active_binding(manifest_path, storage_root)
+        else:
+            binding = _load_legacy_pending_binding(manifest_path, storage_root)
+        if _absolute_path(binding.cohort.db_path) != _absolute_path(path):
+            raise ValueError("paper cohort manifest database path does not match runtime")
+        if cohort_id is not None and binding.cohort.cohort_id != _validate_cohort_id(cohort_id):
+            raise ValueError("paper cohort identity does not match runtime cohort")
+        _validate_paper_cohort_database_identity(binding)
+        # A direct PaperTrader construction must not bypass all-cohort baseline
+        # reconciliation by validating only its adjacent manifest.
+        discover_provisioned_paper_risk_cohorts(storage_root)
+        return binding
+    if _active_database_identity_for_path(path) is not None:
+        raise ValueError("orphaned active cohort identity database")
+    if any(root_name in path.parts for root_name in _PROVISIONED_COHORTS_DIRNAMES):
+        raise ValueError("paper cohort database manifest missing")
+    if cohort_id is not None and _validate_cohort_id(cohort_id) != LEGACY_PAPER_COHORT_ID:
+        raise ValueError("paper cohort database manifest missing")
+    return None
+
+
 def active_cohort_binding_for_db(
     db_path: Path,
     *,
     cohort_id: str | None = None,
 ) -> ActivePaperCohortBinding | None:
-    """Resolve an active DB from its manifest and refuse unbound standard paths."""
+    """Compatibility lookup that accepts only normal active cohort manifests."""
 
-    path = Path(db_path)
-    manifest_path = path.parent / _MANIFEST_FILENAME
-    if manifest_path.is_file():
-        storage_root = _storage_root_for_active_db(path)
-        binding = _load_active_binding(manifest_path, storage_root)
-        if _absolute_path(binding.cohort.db_path) != _absolute_path(path):
-            raise ValueError("active cohort manifest database path does not match runtime")
-        if cohort_id is not None and binding.cohort.cohort_id != _validate_cohort_id(cohort_id):
-            raise ValueError("active cohort identity does not match runtime cohort")
-        _validate_active_database_identity(binding)
-        # A direct PaperTrader construction must not bypass all-cohort cutover
-        # reconciliation by validating only its adjacent manifest.
-        discover_paper_risk_cohorts(storage_root)
-        return binding
-    if _active_database_identity_for_path(path) is not None:
-        raise ValueError("orphaned active cohort identity database")
-    if _ACTIVE_COHORTS_DIRNAME in path.parts:
-        raise ValueError("active cohort database manifest missing")
-    if cohort_id is not None and _validate_cohort_id(cohort_id) != LEGACY_PAPER_COHORT_ID:
-        raise ValueError("active cohort database manifest missing")
-    return None
+    binding = paper_cohort_binding_for_db(db_path, cohort_id=cohort_id)
+    if binding is None:
+        return None
+    if not isinstance(binding, ActivePaperCohortBinding):
+        raise ValueError("legacy pending cohort requires a generic paper cohort binding")
+    return binding
 
 
 def discover_paper_risk_cohorts(db_root: Path = DB_STATE_DIR) -> tuple[PaperCohort, ...]:
@@ -432,19 +692,132 @@ def discover_paper_risk_cohorts(db_root: Path = DB_STATE_DIR) -> tuple[PaperCoho
     return (legacy, *active)
 
 
-def provisioned_active_cohort_block_reason(storage_root: Path = DB_STATE_DIR) -> str | None:
-    """Return a non-bypassable live-transition block for every active cohort."""
+def discover_legacy_pending_paper_risk_cohorts(
+    db_root: Path = DB_STATE_DIR,
+) -> tuple[PaperCohort, ...]:
+    """Discover pending cohorts with their immutable unresolved-legacy snapshot.
+
+    This intentionally does not compare the current root legacy hash to the
+    snapshot. Later real settlement changes the root ledger and must not make an
+    already provisioned, permanently paper-only cohort unusable.
+    """
+
+    storage_root = Path(db_root)
+    cohorts_root = storage_root / _LEGACY_PENDING_COHORTS_DIRNAME
+    if cohorts_root.is_symlink():
+        raise ValueError("legacy pending cohort root must not be a symlink")
+    if not cohorts_root.exists():
+        return ()
+    if not cohorts_root.is_dir():
+        raise ValueError("legacy pending cohort root is not a directory")
+
+    bindings: list[LegacyPendingPaperCohortBinding] = []
+    for entry in sorted(cohorts_root.iterdir(), key=lambda item: item.name):
+        if entry.is_symlink() or not entry.is_dir():
+            raise ValueError("legacy pending cohort root contains an unknown file")
+        manifest_path = entry / _MANIFEST_FILENAME
+        if manifest_path.is_symlink() or not manifest_path.is_file():
+            raise ValueError(f"legacy pending cohort manifest missing: {manifest_path}")
+        binding = _load_legacy_pending_binding(manifest_path, storage_root)
+        if binding.cohort.db_path.parent.resolve() != entry.resolve():
+            raise ValueError("legacy pending manifest is outside its provisioned directory")
+        _validate_legacy_pending_database_identity(binding)
+        bindings.append(binding)
+
+    if not bindings:
+        return ()
+    _assert_distinct_cohort_database_files(_all_bound_database_files(bindings))
+    baseline_values = {binding.legacy_starting_bankroll for binding in bindings}
+    if len(baseline_values) != 1:
+        raise ValueError("legacy pending cohorts disagree on immutable legacy starting bankroll")
+    attestation_values = {binding.legacy_baseline_attestation for binding in bindings}
+    if len(attestation_values) != 1:
+        raise ValueError("legacy pending cohorts disagree on legacy baseline attestation")
+    snapshot_hashes = {binding.legacy_snapshot_sha256 for binding in bindings}
+    if len(snapshot_hashes) != 1:
+        raise ValueError("legacy pending cohorts require reviewed finalization before a new snapshot")
+    legacy_paths = {binding.legacy_db_path.resolve() for binding in bindings}
+    if len(legacy_paths) != 1:
+        raise ValueError("legacy pending cohorts disagree on immutable legacy database path")
+    exposure_values = {binding.legacy_open_exposure for binding in bindings}
+    if len(exposure_values) != 1:
+        raise ValueError("legacy pending cohorts disagree on immutable legacy open exposure")
+
+    baseline = PaperCohort(
+        cohort_id=LEGACY_PENDING_BASELINE_COHORT_ID,
+        db_path=bindings[0].legacy_snapshot_path,
+        starting_bankroll=next(iter(baseline_values)),
+        writable=False,
+        storage_root=storage_root,
+    )
+    pending = tuple(
+        PaperCohort(
+            cohort_id=binding.cohort.cohort_id,
+            db_path=binding.cohort.db_path,
+            starting_bankroll=binding.cohort.starting_bankroll,
+            writable=False,
+            storage_root=storage_root,
+        )
+        for binding in bindings
+    )
+    return (baseline, *pending)
+
+
+def discover_provisioned_paper_risk_cohorts(
+    db_root: Path = DB_STATE_DIR,
+) -> tuple[PaperCohort, ...]:
+    """Discover the single permitted provisioned cohort family, fail-closed."""
+
+    active = discover_paper_risk_cohorts(db_root)
+    pending = discover_legacy_pending_paper_risk_cohorts(db_root)
+    if active and pending:
+        raise ValueError("active and legacy pending cohort roots cannot coexist")
+    return active or pending
+
+
+def provisioned_paper_cohort_block_reason(storage_root: Path = DB_STATE_DIR) -> str | None:
+    """Return a non-bypassable live-transition block for every cohort family."""
 
     try:
-        cohorts = discover_paper_risk_cohorts(storage_root)
+        cohorts = discover_provisioned_paper_risk_cohorts(storage_root)
     except Exception as exc:  # noqa: BLE001 - live-money boundary must fail closed
         return f"paper cohort discovery is unavailable ({str(exc)[:80]})"
     if not cohorts:
         return None
+    if cohorts[0].cohort_id == LEGACY_PENDING_BASELINE_COHORT_ID:
+        return (
+            "legacy pending paper cohort remains permanently isolated from live trading "
+            "until reviewed legacy settlement and realized-profit reconciliation"
+        )
     return (
         "active paper cohort remains isolated from live trading until all-cohort "
         "settlement and realized-profit reconciliation is explicitly reviewed"
     )
+
+
+def provisioned_active_cohort_block_reason(storage_root: Path = DB_STATE_DIR) -> str | None:
+    """Compatibility name for the generic provisioned-cohort live block."""
+
+    return provisioned_paper_cohort_block_reason(storage_root)
+
+
+def paper_runtime_database_topology_block_reason(db_path: Path) -> str | None:
+    """Reject an existing runtime DB alias before any SQLite connection opens."""
+
+    path = Path(db_path)
+    try:
+        file_stat = path.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        return f"paper runtime database is unavailable ({str(exc)[:80]})"
+    if stat.S_ISLNK(file_stat.st_mode):
+        return "paper runtime database must not be a symlink"
+    if not stat.S_ISREG(file_stat.st_mode):
+        return "paper runtime database must be a regular file"
+    if file_stat.st_nlink != 1:
+        return "paper runtime database must not be a hard link"
+    return None
 
 
 def immutable_paper_database_block_reason(
@@ -455,18 +828,21 @@ def immutable_paper_database_block_reason(
     """Block every alias to a legacy root or manifest-bound cutover snapshot."""
 
     path = Path(db_path)
+    topology_block = paper_runtime_database_topology_block_reason(path)
+    if topology_block is not None:
+        return topology_block
     for candidate_root in _candidate_storage_roots_for_immutable_database(
         path,
         storage_root=storage_root,
     ):
         try:
-            if not _active_cohort_root_entry_exists(candidate_root):
+            if not _provisioned_cohort_root_entry_exists(candidate_root):
                 continue
             immutable_paths = _immutable_database_paths(candidate_root)
         except Exception as exc:  # noqa: BLE001 - immutable state must fail closed
             return f"paper cohort discovery is unavailable ({str(exc)[:80]})"
         if any(_same_database_file(path, immutable_path) for immutable_path in immutable_paths):
-            return "active paper cohort keeps legacy cutover databases immutable"
+            return "paper cohort keeps legacy baseline databases immutable"
     return None
 
 
@@ -477,15 +853,19 @@ def unbound_paper_runtime_database_block_reason(
 ) -> str | None:
     """Require runtime and CLI callers to use the manifest-bound active database."""
 
+    path = Path(db_path)
+    topology_block = paper_runtime_database_topology_block_reason(path)
+    if topology_block is not None:
+        return topology_block
     for candidate_root in _candidate_storage_roots_for_immutable_database(
-        Path(db_path),
+        path,
         storage_root=storage_root,
     ):
         try:
-            if not _active_cohort_root_entry_exists(candidate_root):
+            if not _provisioned_cohort_root_entry_exists(candidate_root):
                 continue
-            if discover_paper_risk_cohorts(candidate_root):
-                return "active paper cohort requires a manifest-bound runtime database"
+            if discover_provisioned_paper_risk_cohorts(candidate_root):
+                return "paper cohort requires a manifest-bound runtime database"
         except Exception as exc:  # noqa: BLE001 - runtime money paths must fail closed
             return f"paper cohort discovery is unavailable ({str(exc)[:80]})"
     return None
@@ -631,27 +1011,148 @@ def _load_active_binding(manifest_path: Path, storage_root: Path) -> ActivePaper
     )
 
 
-def _validate_active_database_identity(binding: ActivePaperCohortBinding) -> _ActiveDatabaseIdentity:
+def _load_legacy_pending_binding(
+    manifest_path: Path,
+    storage_root: Path,
+) -> LegacyPendingPaperCohortBinding:
+    payload = _read_manifest_payload(manifest_path)
+    if payload.get("schema_version") != _LEGACY_PENDING_MANIFEST_SCHEMA_VERSION:
+        raise ValueError("legacy pending cohort manifest schema_version is unsupported")
+    if payload.get("cohort_type") != PAPER_COHORT_KIND_LEGACY_PENDING:
+        raise ValueError("legacy pending cohort manifest cohort_type is invalid")
+    cohort_id = _validate_cohort_id(_required_text(payload, "cohort_id"))
+    if cohort_id == LEGACY_PAPER_COHORT_ID:
+        raise ValueError("legacy cohort does not use a pending manifest")
+    db_path = _path_from_relative(
+        _required_text(payload, "db_path_relative_to_storage_root"),
+        storage_root,
+    )
+    if db_path.name != "paper_trades.db":
+        raise ValueError("legacy pending cohort manifest database filename is invalid")
+    if _absolute_path(db_path.parent) != _absolute_path(manifest_path.parent):
+        raise ValueError("legacy pending cohort manifest database path is invalid")
+    if db_path.is_symlink():
+        raise ValueError("legacy pending cohort manifest database must not be a symlink")
+    legacy_db_path = _path_from_relative(
+        _required_text(payload, "legacy_db_path_relative_to_storage_root"),
+        storage_root,
+    )
+    if _absolute_path(legacy_db_path) != _absolute_path(Path(storage_root) / "paper_trades.db"):
+        raise ValueError("legacy pending cohort manifest legacy database path is invalid")
+    if legacy_db_path.is_symlink():
+        raise ValueError("legacy pending cohort manifest legacy database must not be a symlink")
+    legacy_snapshot_path = _path_from_relative(
+        _required_text(payload, "legacy_snapshot_path_relative_to_storage_root"),
+        storage_root,
+    )
+    if _absolute_path(legacy_snapshot_path) != _absolute_path(
+        manifest_path.parent / _LEGACY_SNAPSHOT_FILENAME
+    ):
+        raise ValueError("legacy pending cohort manifest snapshot path is invalid")
+    _database_file_stat(db_path, label="legacy pending cohort database")
+    _database_file_stat(legacy_db_path, label="legacy database")
+    _database_file_stat(legacy_snapshot_path, label="legacy pending snapshot")
+    cohort = PaperCohort(
+        cohort_id=cohort_id,
+        db_path=db_path,
+        starting_bankroll=_positive_finite_bankroll(
+            payload.get("starting_bankroll"),
+            label="legacy pending starting bankroll",
+        ),
+        writable=False,
+        storage_root=Path(storage_root),
+    )
+    cohort_identity = _required_text(payload, "cohort_identity")
+    if not _IDENTITY_PATTERN.fullmatch(cohort_identity):
+        raise ValueError("legacy pending cohort manifest identity is invalid")
+    legacy_source_sha256 = _required_sha256(payload, "legacy_source_db_sha256")
+    legacy_snapshot_sha256 = _required_sha256(payload, "legacy_snapshot_sha256")
+    if legacy_source_sha256 != legacy_snapshot_sha256:
+        raise ValueError("legacy pending source does not match its snapshot")
+    legacy_starting_bankroll = _positive_finite_bankroll(
+        payload.get("legacy_starting_bankroll"),
+        label="legacy starting bankroll",
+    )
+    legacy_baseline_attestation = _required_sha256(
+        payload,
+        "legacy_baseline_attestation",
+    )
+    if legacy_baseline_attestation != _legacy_baseline_attestation(
+        legacy_snapshot_sha256,
+        legacy_starting_bankroll,
+    ):
+        raise ValueError("legacy pending cohort baseline attestation is invalid")
+    if payload.get("legacy_baseline_verification") != _LEGACY_BASELINE_VERIFICATION:
+        raise ValueError("legacy pending cohort baseline verification is invalid")
+    legacy_open_trade_count = _required_nonnegative_int(
+        payload.get("legacy_pending_open_trade_count"),
+        label="legacy pending open trade count",
+    )
+    if legacy_open_trade_count == 0:
+        raise ValueError("legacy pending cohort manifest requires unresolved legacy exposure")
+    return LegacyPendingPaperCohortBinding(
+        cohort=cohort,
+        cohort_identity=cohort_identity,
+        manifest_sha256=hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        max_days_to_close=_active_horizon(payload.get("max_days_to_close")),
+        legacy_db_path=legacy_db_path,
+        legacy_snapshot_path=legacy_snapshot_path,
+        legacy_starting_bankroll=legacy_starting_bankroll,
+        legacy_baseline_attestation=legacy_baseline_attestation,
+        legacy_baseline_verification=_LEGACY_BASELINE_VERIFICATION,
+        legacy_snapshot_sha256=legacy_snapshot_sha256,
+        legacy_open_exposure=LegacyOpenExposureFingerprint(
+            unresolved_trade_count=legacy_open_trade_count,
+            rows_sha256=_required_sha256(payload, "legacy_pending_open_rows_sha256"),
+        ),
+    )
+
+
+def _validate_paper_cohort_database_identity(
+    binding: PaperCohortBinding,
+) -> _ActiveDatabaseIdentity:
     _assert_distinct_cohort_database_files(_bound_database_files(binding))
     identity = _active_database_identity_for_path(
         binding.cohort.db_path,
         require_identity=True,
     )
     assert identity is not None
-    _assert_active_database_identity_matches_binding(identity, binding)
+    _assert_paper_cohort_database_identity_matches_binding(identity, binding)
     return identity
+
+
+def _validate_active_database_identity(binding: ActivePaperCohortBinding) -> _ActiveDatabaseIdentity:
+    return _validate_paper_cohort_database_identity(binding)
+
+
+def _validate_legacy_pending_database_identity(
+    binding: LegacyPendingPaperCohortBinding,
+) -> _ActiveDatabaseIdentity:
+    return _validate_paper_cohort_database_identity(binding)
+
+
+def _assert_paper_cohort_database_identity_matches_binding(
+    identity: _ActiveDatabaseIdentity,
+    binding: PaperCohortBinding,
+) -> None:
+    if identity.cohort_id != binding.cohort.cohort_id or identity.cohort_identity != binding.cohort_identity:
+        raise ValueError("paper cohort database identity does not match manifest")
+    if identity.manifest_sha256 != binding.manifest_sha256:
+        raise ValueError("paper cohort database identity does not match manifest")
+    if _verified_sqlite_sha256(binding.legacy_snapshot_path) != binding.legacy_snapshot_sha256:
+        raise ValueError("paper cohort manifest legacy_snapshot_sha256 does not match baseline snapshot")
+    if isinstance(binding, LegacyPendingPaperCohortBinding):
+        if legacy_open_exposure_fingerprint(binding.legacy_snapshot_path) != binding.legacy_open_exposure:
+            raise ValueError("legacy pending snapshot open exposure does not match manifest")
 
 
 def _assert_active_database_identity_matches_binding(
     identity: _ActiveDatabaseIdentity,
     binding: ActivePaperCohortBinding,
 ) -> None:
-    if identity.cohort_id != binding.cohort.cohort_id or identity.cohort_identity != binding.cohort_identity:
-        raise ValueError("active cohort database identity does not match manifest")
-    if identity.manifest_sha256 != binding.manifest_sha256:
-        raise ValueError("active cohort database identity does not match manifest")
-    if _verified_sqlite_sha256(binding.legacy_snapshot_path) != binding.legacy_snapshot_sha256:
-        raise ValueError("active cohort manifest legacy_snapshot_sha256 does not match cutover snapshot")
+    """Compatibility helper for active-only callers."""
+
+    _assert_paper_cohort_database_identity_matches_binding(identity, binding)
 
 
 def _manifest_payload(
@@ -698,6 +1199,46 @@ def _manifest_payload(
         "legacy_source_db_sha256": legacy_source_sha256,
         "legacy_snapshot_sha256": legacy_snapshot_sha256,
     }
+
+
+def _legacy_pending_manifest_payload(
+    cohort: PaperCohort,
+    *,
+    cohort_identity: str,
+    max_days_to_close: float,
+    legacy_db_path: Path,
+    legacy_snapshot_path: Path,
+    legacy_starting_bankroll: float,
+    legacy_source_sha256: str,
+    legacy_snapshot_sha256: str,
+    legacy_open_exposure: LegacyOpenExposureFingerprint,
+) -> dict[str, object]:
+    if (
+        isinstance(legacy_open_exposure.unresolved_trade_count, bool)
+        or legacy_open_exposure.unresolved_trade_count <= 0
+    ):
+        raise ValueError("legacy pending open trade count is invalid")
+    if not re.fullmatch(r"[0-9a-f]{64}", legacy_open_exposure.rows_sha256):
+        raise ValueError("legacy pending open rows fingerprint is invalid")
+    payload = _manifest_payload(
+        cohort,
+        cohort_identity=cohort_identity,
+        max_days_to_close=max_days_to_close,
+        legacy_db_path=legacy_db_path,
+        legacy_snapshot_path=legacy_snapshot_path,
+        legacy_starting_bankroll=legacy_starting_bankroll,
+        legacy_source_sha256=legacy_source_sha256,
+        legacy_snapshot_sha256=legacy_snapshot_sha256,
+    )
+    payload.update(
+        {
+            "schema_version": _LEGACY_PENDING_MANIFEST_SCHEMA_VERSION,
+            "cohort_type": PAPER_COHORT_KIND_LEGACY_PENDING,
+            "legacy_pending_open_trade_count": legacy_open_exposure.unresolved_trade_count,
+            "legacy_pending_open_rows_sha256": legacy_open_exposure.rows_sha256,
+        }
+    )
+    return payload
 
 
 def _legacy_baseline_attestation(snapshot_sha256: str, bankroll: float) -> str:
@@ -837,59 +1378,79 @@ def _active_database_identity_from_row(row: object) -> _ActiveDatabaseIdentity:
     )
 
 
-def active_cohort_initialized_table_names(
-    binding: ActivePaperCohortBinding,
+def paper_cohort_initialized_table_names(
+    binding: PaperCohortBinding,
 ) -> tuple[str, ...] | None:
     """Return immutable bootstrap tables, after validating binding and snapshot."""
 
-    return _validate_active_database_identity(binding).initialized_table_names
+    return _validate_paper_cohort_database_identity(binding).initialized_table_names
+
+
+def active_cohort_initialized_table_names(
+    binding: ActivePaperCohortBinding,
+) -> tuple[str, ...] | None:
+    """Compatibility wrapper for active-only callers."""
+
+    return paper_cohort_initialized_table_names(binding)
+
+
+def assert_initialized_paper_cohort_schema(
+    connection: sqlite3.Connection,
+    binding: PaperCohortBinding,
+) -> None:
+    """Reject a damaged initialized cohort before any bootstrap DDL can run."""
+
+    expected = paper_cohort_initialized_table_names(binding)
+    if expected is None:
+        return
+    missing = sorted(set(expected) - _application_table_names(connection))
+    if missing:
+        label = _paper_cohort_label(binding)
+        raise RuntimeError(
+            f"initialized {label} database is missing core schema: "
+            + ", ".join(missing)
+        )
 
 
 def assert_initialized_active_cohort_schema(
     connection: sqlite3.Connection,
     binding: ActivePaperCohortBinding,
 ) -> None:
-    """Reject a damaged initialized cohort before any bootstrap DDL can run."""
+    """Compatibility wrapper for active-only callers."""
 
-    expected = active_cohort_initialized_table_names(binding)
-    if expected is None:
-        return
-    missing = sorted(set(expected) - _application_table_names(connection))
-    if missing:
-        raise RuntimeError(
-            "initialized active cohort database is missing core schema: "
-            + ", ".join(missing)
-        )
+    assert_initialized_paper_cohort_schema(connection, binding)
 
 
-def mark_active_cohort_database_initialized(
+def mark_paper_cohort_database_initialized(
     connection: sqlite3.Connection,
-    binding: ActivePaperCohortBinding,
+    binding: PaperCohortBinding,
     *,
     commit: bool = True,
 ) -> None:
     """Persist bootstrap completion only after PaperTrader initialized every schema."""
 
     identity = (
-        _validate_active_database_identity(binding)
+        _validate_paper_cohort_database_identity(binding)
         if commit
         else _active_database_identity_from_connection(connection)
     )
     if not commit:
-        _assert_active_database_identity_matches_binding(identity, binding)
+        _assert_paper_cohort_database_identity_matches_binding(identity, binding)
     table_names = tuple(sorted(_application_table_names(connection)))
     if not table_names or {"paper_trades", "bot_state"} - set(table_names):
-        raise RuntimeError("active cohort initialization did not create required paper schema")
+        raise RuntimeError(
+            f"{_paper_cohort_label(binding)} initialization did not create required paper schema"
+        )
     if identity.initialization_state == _IDENTITY_INITIALIZED:
         missing = sorted(set(identity.initialized_table_names or ()) - set(table_names))
         if missing:
             raise RuntimeError(
-                "initialized active cohort database is missing core schema: "
+                f"initialized {_paper_cohort_label(binding)} database is missing core schema: "
                 + ", ".join(missing)
             )
         return
     if identity.initialization_state != _IDENTITY_PROVISIONED:
-        raise RuntimeError("active cohort database initialization state is invalid")
+        raise RuntimeError(f"{_paper_cohort_label(binding)} database initialization state is invalid")
     statement = (
         f"UPDATE {_IDENTITY_TABLE} SET initialization_state = ?, "
         "initialized_table_names_json = ? WHERE singleton = 1 "
@@ -906,7 +1467,18 @@ def mark_active_cohort_database_initialized(
     else:
         updated = connection.execute(statement, parameters).rowcount
     if updated != 1:
-        raise RuntimeError("active cohort initialization state changed concurrently")
+        raise RuntimeError(f"{_paper_cohort_label(binding)} initialization state changed concurrently")
+
+
+def mark_active_cohort_database_initialized(
+    connection: sqlite3.Connection,
+    binding: ActivePaperCohortBinding,
+    *,
+    commit: bool = True,
+) -> None:
+    """Compatibility wrapper for active-only callers."""
+
+    mark_paper_cohort_database_initialized(connection, binding, commit=commit)
 
 
 def _application_table_names(connection: sqlite3.Connection) -> set[str]:
@@ -997,6 +1569,93 @@ def _copy_verified_sqlite_snapshot(
         os.fsync(snapshot_file.fileno())
     if _verified_sqlite_sha256(snapshot_path) != expected_sha256:
         raise RuntimeError("legacy cutover snapshot does not match the quiesced source database")
+
+
+def legacy_open_exposure_fingerprint(path: Path) -> LegacyOpenExposureFingerprint:
+    """Return a deterministic fingerprint of every unresolved legacy trade row."""
+
+    database_path = Path(path)
+    _database_file_stat(database_path, label="legacy database")
+    _verified_sqlite_sha256(database_path)
+    uri = f"{database_path.resolve().as_uri()}?mode=ro"
+    try:
+        with sqlite3.connect(uri, uri=True) as conn:
+            table = conn.execute(
+                "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'paper_trades'"
+            ).fetchone()
+            if table is None:
+                raise ValueError("legacy database lacks paper_trades for pending cohort")
+            column_rows = conn.execute("PRAGMA table_info(paper_trades)").fetchall()
+            column_names = [str(column[1]) for column in column_rows]
+            if not column_names or "resolved" not in column_names:
+                raise ValueError("legacy paper trade resolved state is invalid")
+            invalid_state = conn.execute(
+                """
+                SELECT 1
+                FROM paper_trades
+                WHERE typeof(resolved) != 'integer' OR resolved NOT IN (0, 1)
+                LIMIT 1
+                """
+            ).fetchone()
+            if invalid_state is not None:
+                raise ValueError("legacy paper trade resolved state is invalid")
+            selected_columns = ", ".join(_quote_sqlite_identifier(name) for name in column_names)
+            unresolved_rows = conn.execute(
+                f"SELECT {selected_columns} FROM paper_trades WHERE resolved = 0"
+            ).fetchall()
+    except ValueError:
+        raise
+    except sqlite3.Error as exc:
+        raise ValueError("legacy paper trade state is unreadable for pending cohort") from exc
+
+    canonical_rows = [
+        [_canonical_sqlite_value(value) for value in row]
+        for row in unresolved_rows
+    ]
+    canonical_rows.sort(
+        key=lambda row: json.dumps(row, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    )
+    canonical = {
+        "schema": "legacy-open-exposure-v1",
+        "columns": [
+            {
+                "name": str(column[1]),
+                "declared_type": str(column[2] or ""),
+            }
+            for column in column_rows
+        ],
+        "rows": canonical_rows,
+    }
+    return LegacyOpenExposureFingerprint(
+        unresolved_trade_count=len(canonical_rows),
+        rows_sha256=hashlib.sha256(
+            json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode(
+                "utf-8"
+            )
+        ).hexdigest(),
+    )
+
+
+def _quote_sqlite_identifier(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
+def _canonical_sqlite_value(value: object) -> dict[str, str]:
+    if value is None:
+        return {"type": "null", "value": ""}
+    if isinstance(value, bool):
+        raise ValueError("legacy open exposure contains an unsupported value")
+    if isinstance(value, int):
+        return {"type": "integer", "value": str(value)}
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("legacy open exposure contains a non-finite number")
+        return {"type": "real", "value": value.hex()}
+    if isinstance(value, str):
+        return {"type": "text", "value": value}
+    if isinstance(value, bytes):
+        return {"type": "blob", "value": value.hex()}
+    raise ValueError("legacy open exposure contains an unsupported value")
 
 
 def _legacy_unresolved_trade_count(path: Path) -> int:
@@ -1135,26 +1794,28 @@ def _database_file_stat(path: Path, *, label: str) -> os.stat_result:
 
 
 def _bound_database_files(
-    binding: ActivePaperCohortBinding,
+    binding: PaperCohortBinding,
 ) -> tuple[tuple[str, Path], ...]:
+    label = "legacy pending" if isinstance(binding, LegacyPendingPaperCohortBinding) else "active"
     return (
         ("legacy database", binding.legacy_db_path),
-        (f"active cohort database {binding.cohort.cohort_id}", binding.cohort.db_path),
-        (f"legacy cutover snapshot {binding.cohort.cohort_id}", binding.legacy_snapshot_path),
+        (f"{label} cohort database {binding.cohort.cohort_id}", binding.cohort.db_path),
+        (f"{label} baseline snapshot {binding.cohort.cohort_id}", binding.legacy_snapshot_path),
     )
 
 
 def _all_bound_database_files(
-    bindings: Sequence[ActivePaperCohortBinding],
+    bindings: Sequence[PaperCohortBinding],
 ) -> tuple[tuple[str, Path], ...]:
     if not bindings:
         return ()
     files: list[tuple[str, Path]] = [("legacy database", bindings[0].legacy_db_path)]
     for binding in bindings:
+        label = "legacy pending" if isinstance(binding, LegacyPendingPaperCohortBinding) else "active"
         files.extend(
             (
-                (f"active cohort database {binding.cohort.cohort_id}", binding.cohort.db_path),
-                (f"legacy cutover snapshot {binding.cohort.cohort_id}", binding.legacy_snapshot_path),
+                (f"{label} cohort database {binding.cohort.cohort_id}", binding.cohort.db_path),
+                (f"{label} baseline snapshot {binding.cohort.cohort_id}", binding.legacy_snapshot_path),
             )
         )
     return tuple(files)
@@ -1188,10 +1849,10 @@ def _candidate_storage_roots_for_immutable_database(
     def add(directory: Path) -> None:
         candidate = _absolute_path(directory)
         candidates.setdefault(str(candidate), candidate)
-        if candidate.name == _ACTIVE_COHORTS_DIRNAME:
+        if candidate.name in _PROVISIONED_COHORTS_DIRNAMES:
             root = candidate.parent
             candidates.setdefault(str(root), root)
-        elif candidate.parent.name == _ACTIVE_COHORTS_DIRNAME:
+        elif candidate.parent.name in _PROVISIONED_COHORTS_DIRNAMES:
             root = candidate.parent.parent
             candidates.setdefault(str(root), root)
 
@@ -1207,8 +1868,23 @@ def _candidate_storage_roots_for_immutable_database(
     return tuple(candidates.values())
 
 
+def _provisioned_cohort_root_entry_exists(storage_root: Path) -> bool:
+    """Only genuinely absent provisioned roots may be ignored by money paths."""
+
+    found = False
+    for root_name in _PROVISIONED_COHORTS_DIRNAMES:
+        try:
+            (Path(storage_root) / root_name).lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise ValueError("paper cohort root is unavailable") from exc
+        found = True
+    return found
+
+
 def _active_cohort_root_entry_exists(storage_root: Path) -> bool:
-    """Only a genuinely absent cohort root may be ignored by money-path guards."""
+    """Compatibility helper for active-only callers."""
 
     try:
         (Path(storage_root) / _ACTIVE_COHORTS_DIRNAME).lstat()
@@ -1221,13 +1897,19 @@ def _active_cohort_root_entry_exists(storage_root: Path) -> bool:
 
 def _immutable_database_paths(storage_root: Path) -> tuple[Path, ...]:
     root = _absolute_path(storage_root)
-    if not discover_paper_risk_cohorts(root):
+    if not discover_provisioned_paper_risk_cohorts(root):
         return ()
     snapshots: list[Path] = []
-    cohorts_root = root / _ACTIVE_COHORTS_DIRNAME
-    for entry in sorted(cohorts_root.iterdir(), key=lambda item: item.name):
-        binding = _load_active_binding(entry / _MANIFEST_FILENAME, root)
-        snapshots.append(binding.legacy_snapshot_path)
+    for root_name, loader in (
+        (_ACTIVE_COHORTS_DIRNAME, _load_active_binding),
+        (_LEGACY_PENDING_COHORTS_DIRNAME, _load_legacy_pending_binding),
+    ):
+        cohorts_root = root / root_name
+        if not cohorts_root.exists():
+            continue
+        for entry in sorted(cohorts_root.iterdir(), key=lambda item: item.name):
+            binding = loader(entry / _MANIFEST_FILENAME, root)
+            snapshots.append(binding.legacy_snapshot_path)
     return (root / "paper_trades.db", *snapshots)
 
 
@@ -1255,11 +1937,21 @@ def _validate_legacy_db_path(path: Path, storage_root: Path) -> Path:
     return candidate
 
 
-def _storage_root_for_active_db(path: Path) -> Path:
+def _storage_root_and_kind_for_cohort_db(path: Path) -> tuple[Path, str]:
     parent = path.parent
-    if parent.parent.name != _ACTIVE_COHORTS_DIRNAME:
+    cohort_root = parent.parent
+    if cohort_root.name == _ACTIVE_COHORTS_DIRNAME:
+        return cohort_root.parent, PAPER_COHORT_KIND_ACTIVE
+    if cohort_root.name == _LEGACY_PENDING_COHORTS_DIRNAME:
+        return cohort_root.parent, PAPER_COHORT_KIND_LEGACY_PENDING
+    raise ValueError("paper cohort database path is outside a provisioned cohort root")
+
+
+def _storage_root_for_active_db(path: Path) -> Path:
+    storage_root, cohort_kind = _storage_root_and_kind_for_cohort_db(path)
+    if cohort_kind != PAPER_COHORT_KIND_ACTIVE:
         raise ValueError("active cohort database path is outside the standard cohort root")
-    return parent.parent.parent
+    return storage_root
 
 
 def _path_from_relative(value: str, storage_root: Path) -> Path:
@@ -1290,9 +1982,68 @@ def _manifest_path_for(cohort: PaperCohort) -> Path:
     return cohort.db_path.parent / _MANIFEST_FILENAME
 
 
+def _legacy_pending_manifest_path_for(cohort: PaperCohort) -> Path:
+    _require_legacy_pending_cohort(cohort)
+    return _manifest_path_for(cohort)
+
+
 def _require_active_cohort(cohort: PaperCohort) -> None:
     if cohort.cohort_id == LEGACY_PAPER_COHORT_ID:
         raise ValueError("legacy cohort does not use an active manifest")
+    storage_root, cohort_kind = _storage_root_and_kind_for_cohort_db(cohort.db_path)
+    if cohort_kind != PAPER_COHORT_KIND_ACTIVE or _absolute_path(storage_root) != _absolute_path(
+        cohort.storage_root
+    ):
+        raise ValueError("active cohort database path is outside the standard cohort root")
+
+
+def _require_legacy_pending_cohort(cohort: PaperCohort) -> None:
+    if cohort.cohort_id == LEGACY_PAPER_COHORT_ID:
+        raise ValueError("legacy cohort does not use a pending manifest")
+    storage_root, cohort_kind = _storage_root_and_kind_for_cohort_db(cohort.db_path)
+    if cohort_kind != PAPER_COHORT_KIND_LEGACY_PENDING or _absolute_path(
+        storage_root
+    ) != _absolute_path(cohort.storage_root):
+        raise ValueError("legacy pending database path is outside its standard cohort root")
+
+
+def _runtime_cohort_kind(value: str | None, *, cohort_id: str) -> str:
+    normalized_id = _validate_cohort_id(cohort_id)
+    if value is None:
+        normalized_kind = (
+            PAPER_COHORT_KIND_LEGACY
+            if normalized_id == LEGACY_PAPER_COHORT_ID
+            else PAPER_COHORT_KIND_ACTIVE
+        )
+    else:
+        normalized_kind = str(value).strip().lower()
+    if normalized_kind not in _PAPER_COHORT_KINDS:
+        choices = ", ".join(sorted(_PAPER_COHORT_KINDS))
+        raise ValueError(f"paper cohort kind must be one of: {choices}")
+    if normalized_id == LEGACY_PAPER_COHORT_ID:
+        if normalized_kind != PAPER_COHORT_KIND_LEGACY:
+            raise ValueError("legacy paper cohort id requires legacy cohort kind")
+    elif normalized_kind == PAPER_COHORT_KIND_LEGACY:
+        raise ValueError("nonlegacy paper cohort id requires active or legacy_pending kind")
+    return normalized_kind
+
+
+def _validate_pending_legacy_open_exposure_confirmation(
+    observed: LegacyOpenExposureFingerprint,
+    *,
+    expected_trade_count: int,
+    expected_rows_sha256: str,
+) -> None:
+    if isinstance(expected_trade_count, bool) or not isinstance(expected_trade_count, int):
+        raise ValueError("expected legacy open exposure trade count is invalid")
+    if expected_trade_count != observed.unresolved_trade_count:
+        raise ValueError("expected legacy open exposure trade count does not match legacy")
+    if not isinstance(expected_rows_sha256, str) or not re.fullmatch(
+        r"[0-9a-f]{64}", expected_rows_sha256
+    ):
+        raise ValueError("expected legacy open exposure rows fingerprint is invalid")
+    if expected_rows_sha256 != observed.rows_sha256:
+        raise ValueError("expected legacy open exposure rows fingerprint does not match legacy")
 
 
 def _validate_cohort_id(value: str) -> str:
@@ -1431,6 +2182,12 @@ def _nonnegative_int(value: object, *, label: str) -> int:
     if numeric < 0 or numeric != value:
         raise ValueError(f"{label} must be a non-negative integer")
     return numeric
+
+
+def _required_nonnegative_int(value: object, *, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{label} is invalid")
+    return value
 
 
 def _optional_text(value: object) -> str | None:

@@ -19,6 +19,32 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.24] - 2026-07-28
+
+### Added
+
+- **Legacy-pending paper cohorts.** A separately rooted, explicitly
+  `legacy_pending` cohort can collect fresh isolated paper evidence while the
+  historical legacy ledger still contains unresolved positions. Provisioning
+  snapshots and fingerprints every unresolved row, requires repeated operator
+  confirmations, and never mutates the root legacy database.
+- **Permanent live exclusion.** Pending cohorts are blocked at config,
+  manifest, `PaperTrader`, persisted auto-live restoration, direct go-live
+  confirmation, and all-cohort go-live gate paths. Their baseline snapshot and
+  fresh cohort remain visible to aggregate paper-risk reporting.
+
+### Fixed
+
+- **Legacy settlement continuity.** Later legitimate settlement updates to the
+  root legacy ledger no longer invalidate a pending cohort's immutable baseline;
+  normal active cutovers remain unchanged and still require zero unresolved
+  legacy trades.
+
+### Verification
+
+- `pytest tests/test_paper_cohorts.py tests/test_paper_trader.py tests/test_main_startup.py tests/test_go_live_gates.py tests/test_initialize_active_paper_cohort.py tests/test_initialize_legacy_pending_paper_cohort.py tests/test_paper_cohort_kind_config.py -q`
+- `ruff check config.py main.py trading/paper_cohorts.py trading/paper_trader.py scripts/initialize_legacy_pending_paper_cohort.py tests/test_paper_cohorts.py tests/test_paper_trader.py tests/test_main_startup.py tests/test_go_live_gates.py tests/test_initialize_legacy_pending_paper_cohort.py tests/test_paper_cohort_kind_config.py`
+
 ## [0.33.23] - 2026-07-28
 
 ### Added

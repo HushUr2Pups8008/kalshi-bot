@@ -57,6 +57,7 @@ def _cfg(
     min_win_rate=0.52,
     max_dd=0.20,
     paper_cohort_id="legacy",
+    paper_cohort_kind=None,
 ):
     return SimpleNamespace(
         bankroll=bankroll,
@@ -64,6 +65,7 @@ def _cfg(
         go_live_min_win_rate=min_win_rate,
         go_live_max_drawdown_pct=max_dd,
         paper_cohort_id=paper_cohort_id,
+        paper_cohort_kind=paper_cohort_kind,
     )
 
 
@@ -166,6 +168,74 @@ def test_gate_hard_blocks_nonlegacy_cohort_even_when_other_local_checks_pass():
         failures = main._check_go_live_gates(paper)
 
     assert any("active paper cohort remains isolated" in failure for failure in failures)
+
+
+def test_gate_hard_blocks_legacy_pending_cohort_even_when_profit_metrics_pass():
+    paper = _paper(notional=60.0, resolved_trades=_passing_resolved())
+    with patch.object(
+        main,
+        "cfg",
+        _cfg(
+            paper_cohort_id="pending-20260728",
+            paper_cohort_kind="legacy_pending",
+        ),
+    ), patch.object(
+        main,
+        "_provisioned_cohort_live_risk_gate_failures",
+        return_value=(False, []),
+    ), patch.object(
+        main,
+        "independent_realized_profit_evidence_available",
+        return_value=True,
+    ), patch.object(
+        main,
+        "_go_live_canonical_delivery_complete_ids",
+        return_value={trade["trade_id"] for trade in paper.get_all_trades()},
+    ), patch(
+        "scripts.mark_open_positions.compute_open_position_marks",
+        return_value={"marked_value": 0.0, "unpriced_count": 0},
+    ):
+        failures = main._check_go_live_gates(paper)
+
+    assert any(
+        "legacy-pending paper cohort remains permanently isolated" in failure
+        for failure in failures
+    )
+
+
+def test_provisioned_legacy_pending_root_always_blocks_live_cutover(tmp_path):
+    (tmp_path / "legacy_pending_paper_cohorts").mkdir()
+    snapshot = SimpleNamespace(
+        ok=True,
+        failure_status="none",
+        cohorts=(
+            SimpleNamespace(
+                cohort_id="legacy-pending-baseline",
+                unresolved_trade_count=2,
+                drawdown_pct=0.0,
+            ),
+            SimpleNamespace(
+                cohort_id="pending-20260728",
+                unresolved_trade_count=0,
+                drawdown_pct=0.0,
+            ),
+        ),
+    )
+    with patch.object(main, "cfg", _cfg()), patch.object(
+        main,
+        "discover_legacy_pending_paper_risk_cohorts",
+        return_value=(SimpleNamespace(), SimpleNamespace()),
+    ), patch.object(main, "aggregate_open_exposure_snapshot", return_value=snapshot):
+        cohort_present, failures = main._provisioned_cohort_live_risk_gate_failures(
+            db_root=tmp_path
+        )
+
+    assert cohort_present is True
+    assert any(
+        "legacy-pending paper cohort remains permanently isolated" in failure
+        for failure in failures
+    )
+    assert any("legacy-pending-baseline: 2 unresolved paper trade" in failure for failure in failures)
 
 
 def test_provisioned_cohort_gate_checks_each_drawdown_without_aggregate_dilution(tmp_path):
