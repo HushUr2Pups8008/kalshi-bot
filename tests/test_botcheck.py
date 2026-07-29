@@ -77,6 +77,41 @@ def _caff_proc(pid: int = 74107, ppid: int = 74105) -> ProcessInfo:
     )
 
 
+def _write_pending_paper_cohort_topology(
+    data_dir: Path,
+    *,
+    cohort_id: str = "legacy-pending-20260729",
+) -> tuple[str, Path, Path, Path, Path]:
+    cohort_dir = data_dir / "legacy_pending_paper_cohorts" / cohort_id
+    database_path = cohort_dir / "paper_trades.db"
+    legacy_database_path = data_dir / "paper_trades.db"
+    snapshot_path = cohort_dir / "legacy_cutover.db"
+    manifest_path = cohort_dir / "cohort.json"
+    cohort_dir.mkdir(parents=True)
+    for path in (database_path, legacy_database_path, snapshot_path):
+        path.write_bytes(b"not a SQLite database")
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "cohort_type": "legacy_pending",
+                "cohort_id": cohort_id,
+                "db_path_relative_to_storage_root": str(
+                    database_path.relative_to(data_dir)
+                ),
+                "legacy_db_path_relative_to_storage_root": str(
+                    legacy_database_path.relative_to(data_dir)
+                ),
+                "legacy_snapshot_path_relative_to_storage_root": str(
+                    snapshot_path.relative_to(data_dir)
+                ),
+            }
+        ),
+        encoding="utf-8",
+    )
+    return cohort_id, database_path, legacy_database_path, snapshot_path, manifest_path
+
+
 # ---------------------------------------------------------------------------
 # human_duration
 # ---------------------------------------------------------------------------
@@ -219,28 +254,22 @@ def test_pending_cohort_reports_absent_root_without_creating(tmp_path):
     assert not data_dir.exists()
 
 
-def test_pending_cohort_manifest_reports_cohort_id_and_database_path(capsys, tmp_path):
+def test_pending_cohort_manifest_reports_unverified_regular_topology_without_database_access(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
     data_dir = tmp_path / "data"
-    cohort_id = "legacy-pending-20260729"
-    cohort_dir = data_dir / "legacy_pending_paper_cohorts" / cohort_id
-    database_path = cohort_dir / "paper_trades.db"
-    manifest_path = cohort_dir / "cohort.json"
-    manifest_path.parent.mkdir(parents=True)
-    manifest_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "cohort_type": "legacy_pending",
-                "cohort_id": cohort_id,
-                "db_path_relative_to_storage_root": str(database_path.relative_to(data_dir)),
-            }
-        ),
-        encoding="utf-8",
-    )
+    cohort_id, database_path, _, _, _ = _write_pending_paper_cohort_topology(data_dir)
+
+    def unexpected_connect(*args, **kwargs):
+        pytest.fail(f"pending cohort status opened SQLite: {args!r} {kwargs!r}")
+
+    monkeypatch.setattr(botcheck.sqlite3, "connect", unexpected_connect)
 
     summary = botcheck.summarize_pending_paper_cohorts(data_dir)
 
-    assert summary["status"] == "present"
+    assert summary["status"] == "present_unverified"
     assert summary["cohorts"] == (
         {"cohort_id": cohort_id, "database_path": database_path},
     )
@@ -248,6 +277,68 @@ def test_pending_cohort_manifest_reports_cohort_id_and_database_path(capsys, tmp
     out = capsys.readouterr().out
     assert cohort_id in out
     assert str(database_path) in out
+    assert "binding/identity remains unverified" in out
+
+
+def test_pending_cohort_manifest_reports_invalid_when_pending_database_is_missing(tmp_path):
+    data_dir = tmp_path / "data"
+    _, database_path, _, _, _ = _write_pending_paper_cohort_topology(data_dir)
+    database_path.unlink()
+
+    summary = botcheck.summarize_pending_paper_cohorts(data_dir)
+
+    assert summary["status"] == "invalid"
+    assert "database missing" in str(summary["detail"])
+
+
+def test_pending_cohort_manifest_reports_invalid_when_required_database_is_a_symlink(tmp_path):
+    data_dir = tmp_path / "data"
+    _, database_path, _, _, _ = _write_pending_paper_cohort_topology(data_dir)
+    database_path.unlink()
+    target = tmp_path / "outside.db"
+    target.write_bytes(b"not a SQLite database")
+    try:
+        database_path.symlink_to(target)
+    except OSError as exc:
+        pytest.skip(f"cannot create symlink in test environment: {exc}")
+
+    summary = botcheck.summarize_pending_paper_cohorts(data_dir)
+
+    assert summary["status"] == "invalid"
+    assert "symlink" in str(summary["detail"])
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "detail"),
+    [
+        (
+            "legacy_db_path_relative_to_storage_root",
+            "other/paper_trades.db",
+            "legacy database path",
+        ),
+        (
+            "legacy_snapshot_path_relative_to_storage_root",
+            "other/legacy_cutover.db",
+            "snapshot path",
+        ),
+    ],
+)
+def test_pending_cohort_manifest_reports_invalid_when_required_path_mismatches_layout(
+    tmp_path,
+    field,
+    replacement,
+    detail,
+):
+    data_dir = tmp_path / "data"
+    _, _, _, _, manifest_path = _write_pending_paper_cohort_topology(data_dir)
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload[field] = replacement
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    summary = botcheck.summarize_pending_paper_cohorts(data_dir)
+
+    assert summary["status"] == "invalid"
+    assert detail in str(summary["detail"])
 
 
 def test_pending_cohort_manifest_reports_invalid_malformed_manifest(tmp_path):

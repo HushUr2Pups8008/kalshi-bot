@@ -338,6 +338,20 @@ def _invalid_pending_paper_cohort_summary(root: Path, detail: str) -> dict[str, 
     return {"root": root, "status": "invalid", "detail": detail, "cohorts": ()}
 
 
+def _pending_paper_cohort_regular_file_error(path: Path, *, label: str) -> str | None:
+    try:
+        file_mode = path.lstat().st_mode
+    except FileNotFoundError:
+        return f"legacy pending cohort {label} missing: {path}"
+    except OSError:
+        return f"legacy pending cohort {label} is unavailable: {path}"
+    if stat.S_ISLNK(file_mode):
+        return f"legacy pending cohort {label} is a symlink: {path}"
+    if not stat.S_ISREG(file_mode):
+        return f"legacy pending cohort {label} is not a regular file: {path}"
+    return None
+
+
 def summarize_pending_paper_cohorts(data_dir: Path) -> dict[str, object]:
     """Inspect pending-cohort manifests without opening their databases."""
     root = data_dir / PENDING_PAPER_COHORTS_DIRNAME
@@ -410,6 +424,12 @@ def summarize_pending_paper_cohorts(data_dir: Path) -> dict[str, object]:
         db_path_relative_to_storage_root = payload.get(
             "db_path_relative_to_storage_root"
         )
+        legacy_db_path_relative_to_storage_root = payload.get(
+            "legacy_db_path_relative_to_storage_root"
+        )
+        legacy_snapshot_path_relative_to_storage_root = payload.get(
+            "legacy_snapshot_path_relative_to_storage_root"
+        )
         if (
             type(payload.get("schema_version")) is not int
             or payload["schema_version"] != PENDING_PAPER_COHORT_MANIFEST_SCHEMA_VERSION
@@ -419,6 +439,10 @@ def summarize_pending_paper_cohorts(data_dir: Path) -> dict[str, object]:
             or cohort_id != entry.name
             or not isinstance(db_path_relative_to_storage_root, str)
             or not db_path_relative_to_storage_root
+            or not isinstance(legacy_db_path_relative_to_storage_root, str)
+            or not legacy_db_path_relative_to_storage_root
+            or not isinstance(legacy_snapshot_path_relative_to_storage_root, str)
+            or not legacy_snapshot_path_relative_to_storage_root
         ):
             return _invalid_pending_paper_cohort_summary(
                 root, f"legacy pending cohort manifest is invalid: {manifest_path}"
@@ -435,11 +459,44 @@ def summarize_pending_paper_cohorts(data_dir: Path) -> dict[str, object]:
             return _invalid_pending_paper_cohort_summary(
                 root, f"legacy pending cohort database path is invalid: {manifest_path}"
             )
+
+        legacy_database_path = data_dir / Path(legacy_db_path_relative_to_storage_root)
+        if (
+            Path(legacy_db_path_relative_to_storage_root).is_absolute()
+            or ".." in Path(legacy_db_path_relative_to_storage_root).parts
+            or legacy_database_path != data_dir / "paper_trades.db"
+        ):
+            return _invalid_pending_paper_cohort_summary(
+                root,
+                f"legacy pending cohort legacy database path is invalid: {manifest_path}",
+            )
+
+        legacy_snapshot_path = data_dir / Path(
+            legacy_snapshot_path_relative_to_storage_root
+        )
+        if (
+            Path(legacy_snapshot_path_relative_to_storage_root).is_absolute()
+            or ".." in Path(legacy_snapshot_path_relative_to_storage_root).parts
+            or legacy_snapshot_path != entry / "legacy_cutover.db"
+        ):
+            return _invalid_pending_paper_cohort_summary(
+                root,
+                f"legacy pending cohort snapshot path is invalid: {manifest_path}",
+            )
+
+        for path, label in (
+            (database_path, "database"),
+            (legacy_database_path, "legacy database"),
+            (legacy_snapshot_path, "snapshot"),
+        ):
+            file_error = _pending_paper_cohort_regular_file_error(path, label=label)
+            if file_error is not None:
+                return _invalid_pending_paper_cohort_summary(root, file_error)
         cohorts.append({"cohort_id": cohort_id, "database_path": database_path})
 
     return {
         "root": root,
-        "status": "present" if cohorts else "empty",
+        "status": "present_unverified" if cohorts else "empty",
         "cohorts": tuple(cohorts),
     }
 
@@ -1954,6 +2011,8 @@ def print_pending_paper_cohort_section(summary: dict[str, object]) -> None:
                 continue
             print(f"Cohort     : {cohort.get('cohort_id', 'n/a')}")
             print(f"Database   : {cohort.get('database_path', 'n/a')}")
+        if status == "present_unverified":
+            print("Result     : topology present; runtime binding/identity remains unverified")
     print()
 
 
