@@ -25,7 +25,7 @@ from analysis.feedback_counterfactual import (
 )
 from utils import logger as logger_module
 from utils.log_records import SignalAnalysisDetail
-from utils.logger import TradeLogger
+from utils.logger import ShadowTradeLogger, TradeLogger
 
 
 # Locked snapshot of every key the logger may emit for SIGNAL_ANALYSIS_DETAIL
@@ -101,6 +101,37 @@ def _required_only_detail() -> SignalAnalysisDetail:
         final_probability=0.55,
         market_price=0.5,
     )
+
+
+def test_shadow_trade_logger_persists_immutable_runtime_cohort_context(tmp_path):
+    log_path = tmp_path / "fresh_pass_assignment_shadow.jsonl"
+    logger = ShadowTradeLogger(log_path)
+    logger.bind_runtime_context(
+        cohort_id="legacy-pending-20260729",
+        cohort_kind="legacy_pending",
+    )
+    logger.log_fresh_pass_assignment_shadow(
+        {
+            "type": "FRESH_PASS_ASSIGNMENT_SHADOW",
+            "assigned": True,
+            "runtime_paper_cohort_id": "spoofed",
+            "runtime_paper_cohort_kind": "active",
+        }
+    )
+
+    record = json.loads(log_path.read_text(encoding="utf-8").strip())
+    assert record["runtime_paper_cohort_id"] == "legacy-pending-20260729"
+    assert record["runtime_paper_cohort_kind"] == "legacy_pending"
+
+    logger.bind_runtime_context(
+        cohort_id="legacy-pending-20260729",
+        cohort_kind="legacy_pending",
+    )
+    with pytest.raises(RuntimeError, match="refusing to rebind"):
+        logger.bind_runtime_context(
+            cohort_id="other-pending-20260729",
+            cohort_kind="legacy_pending",
+        )
 
 
 def test_feedback_decision_record_preserves_counterfactual_receipts():

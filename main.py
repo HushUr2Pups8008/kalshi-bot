@@ -152,6 +152,7 @@ from utils.logger import (
     get_logger,
     emit_startup_banner,
     rotate_logs,
+    shadow_trade_log,
     trade_log,
     write_trade_log_async,
 )
@@ -593,6 +594,7 @@ class _RuntimeInstanceGuard:
     def __init__(self, lock_path):
         self._lock_path = lock_path
         self._handle = None
+        self._metadata: dict[str, object] | None = None
 
     def acquire(self) -> bool:
         self._lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -618,7 +620,54 @@ class _RuntimeInstanceGuard:
         except OSError:
             pass
         self._handle = handle
+        self._metadata = metadata
         return True
+
+    def bind_runtime_paper_cohort(self, cohort_id: str, cohort_kind: str) -> None:
+        """Persist immutable paper-cohort provenance for the held runtime."""
+        if self._handle is None or self._metadata is None:
+            raise RuntimeError("runtime lock must be acquired before binding paper cohort")
+        if not isinstance(cohort_id, str) or not cohort_id:
+            raise ValueError("runtime paper cohort ID must be a non-empty string")
+        if not isinstance(cohort_kind, str) or not cohort_kind:
+            raise ValueError("runtime paper cohort kind must be a non-empty string")
+
+        existing = self._metadata.get("runtime_paper_cohort")
+        if existing is not None:
+            if (
+                isinstance(existing, dict)
+                and existing.get("cohort_id") == cohort_id
+                and existing.get("cohort_kind") == cohort_kind
+            ):
+                return
+            raise RuntimeError("runtime paper cohort provenance is already bound")
+
+        pid = self._metadata.get("pid")
+        started_utc = self._metadata.get("started_utc")
+        if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+            raise RuntimeError("runtime lock metadata is missing a valid owner PID")
+        if not isinstance(started_utc, str) or not started_utc:
+            raise RuntimeError("runtime lock metadata is missing a boot timestamp")
+        metadata = {
+            **self._metadata,
+            "runtime_paper_cohort": {
+                "schema_version": 1,
+                "cohort_id": cohort_id,
+                "cohort_kind": cohort_kind,
+                "owner_pid": pid,
+                "boot_started_utc": started_utc,
+            },
+        }
+        handle = self._handle
+        handle.seek(0)
+        handle.truncate()
+        handle.write(json.dumps(metadata, separators=(",", ":")) + "\n")
+        handle.flush()
+        try:
+            os.fsync(handle.fileno())
+        except OSError:
+            pass
+        self._metadata = metadata
 
     def describe_owner(self) -> str:
         try:
@@ -987,6 +1036,10 @@ class TradingBot:
             _live_transition_block_reason,
         ) = _runtime_paper_cohort_from_config()
         trade_log.bind_runtime_context(
+            cohort_id=self.paper_cohort.cohort_id,
+            cohort_kind=_configured_paper_cohort_kind(),
+        )
+        shadow_trade_log.bind_runtime_context(
             cohort_id=self.paper_cohort.cohort_id,
             cohort_kind=_configured_paper_cohort_kind(),
         )
@@ -1837,7 +1890,6 @@ class TradingBot:
     async def _emit_fresh_pass_assignment_shadow(self, news: NewsItem) -> None:
         try:
             from analysis.candidate_assignment_shadow import build_shadow_assignment
-            from utils.logger import shadow_trade_log
 
             if not self.matcher._cache.has_market_snapshot():
                 log.debug("[SHADOW_ASSIGNMENT] market cache cold; skipping diagnostic row")
@@ -4305,6 +4357,14 @@ async def async_main() -> None:
 
     try:
         bot = TradingBot()
+        try:
+            runtime_guard.bind_runtime_paper_cohort(
+                bot.paper_cohort.cohort_id,
+                _configured_paper_cohort_kind(),
+            )
+        except (OSError, RuntimeError, TypeError, ValueError):
+            log.exception("[BOOT] runtime_paper_cohort_lock_binding=unavailable")
+            raise SystemExit(1) from None
 
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):

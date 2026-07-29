@@ -153,6 +153,129 @@ def test_summarize_counts_funnel_stages(local_tmp_dir):
     assert stats["path_counts"]["news"] == 6
 
 
+def test_summarize_runtime_paper_cohort_scope_excludes_legacy_and_untagged_rows(local_tmp_dir, capsys):
+    path = local_tmp_dir / "trades.jsonl"
+    write_jsonl(
+        path,
+        [
+            {
+                "type": "SKIPPED",
+                "reason": "G7_open_exposure_drawdown",
+                "runtime_paper_cohort_id": "legacy-pending-20260728",
+                "runtime_paper_cohort_kind": "legacy_pending",
+                "ts": "2026-07-29T00:00:00+00:00",
+            },
+            {
+                "type": "SKIPPED",
+                "reason": "G7_open_exposure_drawdown",
+                "ts": "2026-07-29T00:01:00+00:00",
+            },
+            {
+                "type": "SKIPPED",
+                "reason": "G7_open_exposure_drawdown",
+                "runtime_paper_cohort_id": [],
+                "runtime_paper_cohort_kind": "legacy_pending",
+                "ts": "2026-07-29T00:01:30+00:00",
+            },
+            {
+                "type": "SIGNAL",
+                "runtime_paper_cohort_id": "legacy-pending-20260729",
+                "runtime_paper_cohort_kind": "legacy_pending",
+                "ts": "2026-07-29T00:02:00+00:00",
+            },
+            {
+                "type": "SKIPPED",
+                "reason": "active_cohort_guard",
+                "runtime_paper_cohort_id": "legacy-pending-20260729",
+                "runtime_paper_cohort_kind": "legacy_pending",
+                "ts": "2026-07-29T00:03:00+00:00",
+            },
+        ],
+    )
+
+    unfiltered = summarize(path, since=None, until=None)
+    scoped = summarize(
+        path,
+        since=None,
+        until=None,
+        runtime_paper_cohort_id="legacy-pending-20260729",
+        runtime_paper_cohort_kind="legacy_pending",
+    )
+
+    assert unfiltered["records_kept"] == 5
+    assert unfiltered["skip_reasons"]["G7_open_exposure_drawdown"] == 3
+    assert scoped["records_kept"] == 2
+    assert scoped["event_counts"] == Counter({"SIGNAL": 1, "SKIPPED": 1})
+    assert scoped["skip_reasons"] == Counter({"active_cohort_guard": 1})
+    assert scoped["runtime_paper_cohort_filter_id"] == "legacy-pending-20260729"
+    assert scoped["runtime_paper_cohort_excluded_untagged_records"] == 1
+    assert scoped["runtime_paper_cohort_excluded_other_cohort_records"] == 1
+    assert scoped["runtime_paper_cohort_excluded_malformed_records"] == 1
+
+    print_summary(unfiltered, top=5, since=None, until=None)
+    assert "Runtime paper cohort scope" not in capsys.readouterr().out
+    print_summary(scoped, top=5, since=None, until=None)
+    output = capsys.readouterr().out
+    assert "Runtime paper cohort scope" in output
+    assert "legacy-pending-20260729" in output
+    assert "Excluded untagged rows      : 1" in output
+    assert "Excluded other-cohort rows : 1" in output
+    assert "Excluded malformed rows     : 1" in output
+
+
+def test_summarize_runtime_paper_cohort_scope_excludes_cross_cohort_lifecycle_terminals(local_tmp_dir):
+    path = local_tmp_dir / "trades.jsonl"
+    write_jsonl(
+        path,
+        [
+            {
+                "type": "OPPORTUNITY",
+                "lifecycle_id": "lc-cross-cohort",
+                "venue": "kalshi",
+                "ticker": "KXCROSS",
+                "side": "yes",
+                "runtime_paper_cohort_id": "legacy-pending-20260729",
+                "runtime_paper_cohort_kind": "legacy_pending",
+                "ts": "2026-07-29T00:00:00+00:00",
+            },
+            {
+                "type": "SKIPPED",
+                "lifecycle_id": "lc-cross-cohort",
+                "venue": "kalshi",
+                "ticker": "KXCROSS",
+                "side": "yes",
+                "reason": "G7_open_exposure_drawdown",
+                "runtime_paper_cohort_id": "legacy-pending-20260729",
+                "runtime_paper_cohort_kind": "legacy",
+                "ts": "2026-07-29T00:01:00+00:00",
+            },
+            {
+                "type": "SKIPPED",
+                "lifecycle_id": "lc-cross-cohort",
+                "venue": "kalshi",
+                "ticker": "KXCROSS",
+                "side": "yes",
+                "reason": "G7_open_exposure_drawdown",
+                "runtime_paper_cohort_id": "legacy-pending-20260728",
+                "ts": "2026-07-29T00:02:00+00:00",
+            },
+        ],
+    )
+
+    stats = summarize(
+        path,
+        since=None,
+        until=None,
+        runtime_paper_cohort_id="legacy-pending-20260729",
+        runtime_paper_cohort_kind="legacy_pending",
+    )
+
+    attribution = stats["same_window_lifecycle_attribution"]
+    assert stats["event_counts"] == Counter({"OPPORTUNITY": 1})
+    assert attribution["g7_skip_lifecycle_count"] == 0
+    assert attribution["pending_opportunity_lifecycle_count"] == 1
+
+
 def test_summarize_aggregates_skip_reasons(local_tmp_dir):
     path = local_tmp_dir / "trades.jsonl"
     write_jsonl(
@@ -2354,11 +2477,21 @@ def test_main_uses_exact_utc_bounds(monkeypatch, local_tmp_dir):
     path = local_tmp_dir / "trades.jsonl"
     captured: dict[str, object] = {}
 
-    def fake_summarize(path_arg, since, until, *, exclude_test=False):
+    def fake_summarize(
+        path_arg,
+        since,
+        until,
+        *,
+        exclude_test=False,
+        runtime_paper_cohort_id=None,
+        runtime_paper_cohort_kind=None,
+    ):
         captured["path"] = path_arg
         captured["since"] = since
         captured["until"] = until
         captured["exclude_test"] = exclude_test
+        captured["runtime_paper_cohort_id"] = runtime_paper_cohort_id
+        captured["runtime_paper_cohort_kind"] = runtime_paper_cohort_kind
         return {}
 
     monkeypatch.setattr(decision_funnel_summary, "summarize", fake_summarize)
@@ -2383,6 +2516,50 @@ def test_main_uses_exact_utc_bounds(monkeypatch, local_tmp_dir):
         "since": datetime(2026, 7, 29, 0, 32, 3, 836000, tzinfo=timezone.utc),
         "until": datetime(2026, 7, 29, 2, 3, 54, 472000, tzinfo=timezone.utc),
         "exclude_test": False,
+        "runtime_paper_cohort_id": None,
+        "runtime_paper_cohort_kind": None,
+    }
+
+
+def test_main_forwards_runtime_paper_cohort_scope(monkeypatch, local_tmp_dir):
+    path = local_tmp_dir / "trades.jsonl"
+    captured: dict[str, object] = {}
+
+    def fake_summarize(
+        path_arg,
+        since,
+        until,
+        *,
+        exclude_test=False,
+        runtime_paper_cohort_id=None,
+        runtime_paper_cohort_kind=None,
+    ):
+        captured["path"] = path_arg
+        captured["runtime_paper_cohort_id"] = runtime_paper_cohort_id
+        captured["runtime_paper_cohort_kind"] = runtime_paper_cohort_kind
+        return {}
+
+    monkeypatch.setattr(decision_funnel_summary, "summarize", fake_summarize)
+    monkeypatch.setattr(decision_funnel_summary, "print_summary", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "decision_funnel_summary.py",
+            "--path",
+            str(path),
+            "--runtime-paper-cohort-id",
+            "legacy-pending-20260729",
+            "--runtime-paper-cohort-kind",
+            "legacy_pending",
+        ],
+    )
+
+    assert decision_funnel_summary.main() == 0
+    assert captured == {
+        "path": path,
+        "runtime_paper_cohort_id": "legacy-pending-20260729",
+        "runtime_paper_cohort_kind": "legacy_pending",
     }
 
 
@@ -2403,6 +2580,53 @@ def test_parse_args_rejects_mixed_calendar_and_utc_bounds(monkeypatch, capsys):
         parse_args()
 
     assert "cannot be combined" in capsys.readouterr().err
+
+
+def test_parse_args_rejects_blank_runtime_paper_cohort_id(monkeypatch, capsys):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "decision_funnel_summary.py",
+            "--runtime-paper-cohort-id",
+            "   ",
+            "--runtime-paper-cohort-kind",
+            "legacy_pending",
+        ],
+    )
+
+    with pytest.raises(SystemExit):
+        parse_args()
+
+    assert "runtime paper cohort id" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--runtime-paper-cohort-id", "legacy-pending-20260729"],
+        ["--runtime-paper-cohort-kind", "legacy_pending"],
+        [
+            "--runtime-paper-cohort-id",
+            " legacy-pending-20260729 ",
+            "--runtime-paper-cohort-kind",
+            "legacy_pending",
+        ],
+        [
+            "--runtime-paper-cohort-id",
+            "legacy-pending-20260729",
+            "--runtime-paper-cohort-kind",
+            "legacy",
+        ],
+    ],
+)
+def test_parse_args_rejects_ambiguous_runtime_paper_cohort_scope(monkeypatch, capsys, args):
+    monkeypatch.setattr(sys, "argv", ["decision_funnel_summary.py", *args])
+
+    with pytest.raises(SystemExit):
+        parse_args()
+
+    assert "runtime paper cohort" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("timestamp", ["not-a-timestamp", "2026-07-29T00:32:03"])
