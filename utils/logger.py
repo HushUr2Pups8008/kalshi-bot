@@ -577,7 +577,7 @@ class TradeLogger:
             )
 
     def _write(self, record: dict[str, Any]) -> None:
-        record = {**record, **self._runtime_paper_context}
+        record = {**record, **getattr(self, "_runtime_paper_context", {})}
         record.setdefault("ts", datetime.now(timezone.utc).isoformat())
         self._store.append(record)
 
