@@ -830,6 +830,163 @@ def test_print_summary_includes_fresh_pass_route_log_linkage(capsys, local_tmp_d
     assert "no_match" in output
 
 
+def test_summarize_tracks_post_admission_rejection_attribution(local_tmp_dir, capsys):
+    path = local_tmp_dir / "trades.jsonl"
+    write_jsonl(
+        path,
+        [
+            {
+                "type": "MATCH_NO_CANDIDATE",
+                "source": "Reuters",
+                "headline": "No overlap event",
+                "venue": "polymarket_us",
+                "reason": "no_match",
+                "candidate_pool_stage": "post_admission_no_match",
+                "eligible_market_count": 2,
+                "pre_admission_matchable_market_count": 2,
+                "within_admission_horizon_market_count": 2,
+                "post_admission_no_token_overlap_count": 2,
+                "post_admission_below_min_post_weight_score_count": 0,
+                "post_admission_weight_demoted_below_min_score_count": 0,
+                "post_admission_min_match_score": 0.08,
+                "ts": "2026-04-11T00:00:01+00:00",
+            },
+            {
+                "type": "MATCH_NO_CANDIDATE",
+                "source": "AP",
+                "headline": "Low score event",
+                "venue": "polymarket_us",
+                "reason": "no_match",
+                "candidate_pool_stage": "post_admission_no_match",
+                "eligible_market_count": 1,
+                "pre_admission_matchable_market_count": 1,
+                "within_admission_horizon_market_count": 1,
+                "post_admission_no_token_overlap_count": 0,
+                "post_admission_below_min_post_weight_score_count": 1,
+                "post_admission_weight_demoted_below_min_score_count": 1,
+                "post_admission_min_match_score": 0.08,
+                "post_admission_best_rejected_pre_weight_score": 0.12,
+                "post_admission_best_rejected_post_weight_score": 0.012,
+                "ts": "2026-04-11T00:01:01+00:00",
+            },
+            {
+                "type": "MATCH_NO_CANDIDATE",
+                "source": "Legacy",
+                "headline": "Legacy post admission row",
+                "venue": "polymarket_us",
+                "reason": "no_match",
+                "candidate_pool_stage": "post_admission_no_match",
+                "within_admission_horizon_market_count": 1,
+                "ts": "2026-04-11T00:02:01+00:00",
+            },
+        ],
+    )
+
+    stats = summarize(path, since=None, until=None)
+
+    assert stats["match_no_candidate_post_admission_rejection_complete_rows"] == 2
+    assert stats["match_no_candidate_post_admission_rejection_missing_breakdown_rows"] == 1
+    assert stats["match_no_candidate_post_admission_rejection_within_horizon_markets"] == 3
+    assert stats["match_no_candidate_post_admission_no_token_overlap"] == 2
+    assert stats["match_no_candidate_post_admission_below_min"] == 1
+    assert stats["match_no_candidate_post_admission_weight_demoted"] == 1
+    assert stats["match_no_candidate_post_admission_min_scores"] == Counter({0.08: 2})
+    assert stats["match_no_candidate_post_admission_best_rejected_post_score"] == 0.012
+
+    print_summary(stats, top=5, since=None, until=None)
+    output = capsys.readouterr().out
+    assert "Post-Admission Market Rejection Attribution" in output
+    assert "Complete breakdown rows: 2" in output
+    assert "Breakdown unavailable: 1" in output
+    assert "No token overlap: 2 (66.7%)" in output
+    assert "Overlap below minimum score: 1 (33.3%)" in output
+    assert "Weight-demoted below minimum: 1" in output
+
+
+def test_summarize_marks_invalid_post_admission_rejection_breakdowns_unavailable(
+    local_tmp_dir,
+):
+    path = local_tmp_dir / "trades.jsonl"
+    write_jsonl(
+        path,
+        [
+            {
+                "type": "MATCH_NO_CANDIDATE",
+                "candidate_pool_stage": "post_admission_no_match",
+                "eligible_market_count": 0,
+                "pre_admission_matchable_market_count": 0,
+                "within_admission_horizon_market_count": 0,
+                "post_admission_no_token_overlap_count": 0,
+                "post_admission_below_min_post_weight_score_count": 0,
+                "post_admission_weight_demoted_below_min_score_count": 0,
+                "post_admission_min_match_score": 0.08,
+                "ts": "2026-04-11T00:00:01+00:00",
+            },
+            {
+                "type": "MATCH_NO_CANDIDATE",
+                "candidate_pool_stage": "post_admission_no_match",
+                "eligible_market_count": 1,
+                "pre_admission_matchable_market_count": 1,
+                "within_admission_horizon_market_count": 1,
+                "post_admission_no_token_overlap_count": 1,
+                "post_admission_below_min_post_weight_score_count": 0,
+                "post_admission_weight_demoted_below_min_score_count": 0,
+                "post_admission_min_match_score": True,
+                "ts": "2026-04-11T00:01:01+00:00",
+            },
+            {
+                "type": "MATCH_NO_CANDIDATE",
+                "candidate_pool_stage": "post_admission_no_match",
+                "eligible_market_count": 1,
+                "pre_admission_matchable_market_count": 1,
+                "within_admission_horizon_market_count": 2,
+                "post_admission_no_token_overlap_count": 2,
+                "post_admission_below_min_post_weight_score_count": 0,
+                "post_admission_weight_demoted_below_min_score_count": 0,
+                "post_admission_min_match_score": 0.08,
+                "ts": "2026-04-11T00:02:01+00:00",
+            },
+            {
+                "type": "MATCH_NO_CANDIDATE",
+                "candidate_pool_stage": "post_admission_no_match",
+                "eligible_market_count": 1,
+                "pre_admission_matchable_market_count": 1,
+                "within_admission_horizon_market_count": 1,
+                "post_admission_no_token_overlap_count": 0,
+                "post_admission_below_min_post_weight_score_count": 1,
+                "post_admission_weight_demoted_below_min_score_count": 1,
+                "post_admission_min_match_score": 0.08,
+                "post_admission_best_rejected_pre_weight_score": 0.02,
+                "post_admission_best_rejected_post_weight_score": 0.01,
+                "ts": "2026-04-11T00:03:01+00:00",
+            },
+            {
+                "type": "MATCH_NO_CANDIDATE",
+                "reason": "market_fetch_failed",
+                "candidate_pool_stage": "post_admission_no_match",
+                "eligible_market_count": 1,
+                "pre_admission_matchable_market_count": 1,
+                "within_admission_horizon_market_count": 1,
+                "post_admission_no_token_overlap_count": 1,
+                "post_admission_below_min_post_weight_score_count": 0,
+                "post_admission_weight_demoted_below_min_score_count": 0,
+                "post_admission_min_match_score": 0.08,
+                "ts": "2026-04-11T00:04:01+00:00",
+            },
+        ],
+    )
+
+    stats = summarize(path, since=None, until=None)
+
+    assert stats["match_no_candidate_post_admission_rejection_complete_rows"] == 0
+    assert stats["match_no_candidate_post_admission_rejection_missing_breakdown_rows"] == 5
+    assert stats["match_no_candidate_post_admission_rejection_within_horizon_markets"] == 0
+    assert stats["match_no_candidate_post_admission_no_token_overlap"] == 0
+    assert stats["match_no_candidate_post_admission_below_min"] == 0
+    assert stats["match_no_candidate_post_admission_weight_demoted"] == 0
+    assert stats["match_no_candidate_post_admission_min_scores"] == Counter()
+
+
 def test_summarize_keeps_matcher_signals_window_local(local_tmp_dir):
     path = local_tmp_dir / "trades.jsonl"
     write_jsonl(

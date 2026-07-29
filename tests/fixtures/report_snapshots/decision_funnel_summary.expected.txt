@@ -90,7 +90,17 @@ Explicit No-Candidate Reasons
 
 No-Candidate Candidate Pool Stages
   (none)
-  No-candidate records missing candidate-pool stage: 0
+No-candidate records missing candidate-pool stage: 0
+
+Post-Admission Market Rejection Attribution
+  Complete breakdown rows: 0
+  Breakdown unavailable: 0
+  Within-horizon market rows: 0
+  No token overlap: 0 (0.0%)
+  Overlap below minimum score: 0 (0.0%)
+  Weight-demoted below minimum: 0
+  Minimum-score thresholds:
+  (none)
 
 Explicit No-Candidate Venues (top 5)
   (none)

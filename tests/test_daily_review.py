@@ -111,6 +111,13 @@ def test_format_match_attribution_lines_surfaces_suppression_drilldowns():
             "match_weight_tokens": Counter({"iran": 4}),
             "match_weight_prefixes": Counter({"KXIRANCRUDE": 4}),
             "match_weight_score_delta_total": -0.125,
+            "match_no_candidate_total": 3,
+            "match_no_candidate_post_admission_rejection_complete_rows": 2,
+            "match_no_candidate_post_admission_rejection_missing_breakdown_rows": 1,
+            "match_no_candidate_post_admission_rejection_within_horizon_markets": 3,
+            "match_no_candidate_post_admission_no_token_overlap": 2,
+            "match_no_candidate_post_admission_below_min": 1,
+            "match_no_candidate_post_admission_weight_demoted": 1,
         },
         top=2,
     )
@@ -128,6 +135,8 @@ def test_format_match_attribution_lines_surfaces_suppression_drilldowns():
     assert "  3  minimal_overlap" in rendered
     assert "Drilldown: match weight prefixes" in rendered
     assert "  4  KXIRANCRUDE" in rendered
+    assert "Post-admission rejection attribution: complete=2 unavailable=1 market_rows=3" in rendered
+    assert "no_token_overlap=2 (66.7%) below_min_score=1 (33.3%) weight_demoted=1" in rendered
 
 
 def test_summarize_fresh_pass_assignment_shadow_counts_assignment_outcomes(tmp_path):

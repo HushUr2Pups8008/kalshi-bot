@@ -299,6 +299,10 @@ async def test_legacy_process_news_logs_30_day_post_admission_stage(monkeypatch)
                 pre_admission_matchable_market_count=1,
                 within_admission_horizon_market_count=1,
                 admission_horizon_days=30.0,
+                post_admission_no_token_overlap_count=1,
+                post_admission_below_min_post_weight_score_count=0,
+                post_admission_weight_demoted_below_min_score_count=0,
+                post_admission_min_match_score=0.08,
             ),
         ]
     )
@@ -457,6 +461,10 @@ async def test_process_news_logs_no_candidate_when_no_market_scores(monkeypatch)
                 pre_admission_matchable_market_count=1,
                 within_admission_horizon_market_count=1,
                 admission_horizon_days=30.0,
+                post_admission_no_token_overlap_count=1,
+                post_admission_below_min_post_weight_score_count=0,
+                post_admission_weight_demoted_below_min_score_count=0,
+                post_admission_min_match_score=0.08,
             ),
         ]
     )
@@ -614,9 +622,88 @@ async def test_process_news_logs_post_admission_no_match_after_low_score(monkeyp
                 pre_admission_matchable_market_count=1,
                 within_admission_horizon_market_count=1,
                 admission_horizon_days=30.0,
+                post_admission_no_token_overlap_count=0,
+                post_admission_below_min_post_weight_score_count=1,
+                post_admission_weight_demoted_below_min_score_count=0,
+                post_admission_min_match_score=0.08,
+                post_admission_best_rejected_pre_weight_score=1 / 22,
+                post_admission_best_rejected_post_weight_score=1 / 22,
             ),
         ]
     )
+
+
+@pytest.mark.asyncio
+async def test_process_news_logs_weight_demoted_post_admission_rejection(monkeypatch):
+    _configure_legacy_paper_horizon(monkeypatch)
+    news = _news("Kansas governor election tightens after new polling")
+    market = _market(
+        market_id="ewc-usgub-ks-2026-11-03-dem",
+        title="Democratic Party",
+        question="Kansas Governor Election Winner",
+        subtitle="2026 race",
+    )
+    token_weights = {
+        "polymarket_us:ewc-usgub-ks:election": {"weight": 0.1},
+        "polymarket_us:ewc-usgub-ks:governor": {"weight": 0.1},
+        "polymarket_us:ewc-usgub-ks:kansas": {"weight": 0.1},
+    }
+    monkeypatch.setattr(
+        "polymarket.paper_runtime._load_match_weights", lambda: token_weights
+    )
+    runtime = PolymarketPaperRuntime(
+        client=_FakeClient([market]),
+        route_analysis=AsyncMock(),
+        keyword_stats=None,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+    )
+
+    with (
+        patch("polymarket.paper_runtime.trade_log") as trade_log_mock,
+        patch(
+            "polymarket.paper_runtime.write_trade_log_async",
+            new_callable=AsyncMock,
+        ) as write_log_mock,
+    ):
+        routed_count = await runtime.process_news(news)
+
+    assert routed_count == 0
+    fields = write_log_mock.await_args_list[-1].kwargs
+    assert fields["post_admission_below_min_post_weight_score_count"] == 1
+    assert fields["post_admission_weight_demoted_below_min_score_count"] == 1
+    assert fields["post_admission_best_rejected_pre_weight_score"] >= 0.08
+    assert fields["post_admission_best_rejected_post_weight_score"] < 0.08
+    assert trade_log_mock.log_match_weight_applied.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_process_news_omits_rejection_breakdown_when_candidate_limit_truncates(
+    monkeypatch,
+):
+    _configure_legacy_paper_horizon(monkeypatch)
+    runtime = PolymarketPaperRuntime(
+        client=_FakeClient([_market()]),
+        route_analysis=AsyncMock(),
+        keyword_stats=None,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+        max_candidates=0,
+    )
+
+    with (
+        patch("polymarket.paper_runtime.trade_log"),
+        patch(
+            "polymarket.paper_runtime.write_trade_log_async",
+            new_callable=AsyncMock,
+        ) as write_log_mock,
+    ):
+        routed_count = await runtime.process_news(_news())
+
+    assert routed_count == 0
+    fields = write_log_mock.await_args_list[-1].kwargs
+    assert fields["candidate_pool_stage"] == "post_admission_no_match"
+    assert not any(key.startswith("post_admission_") for key in fields)
 
 
 @pytest.mark.asyncio

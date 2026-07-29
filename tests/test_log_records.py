@@ -430,6 +430,59 @@ def test_trade_logger_omits_optional_no_candidate_pool_fields():
         assert "pre_admission_matchable_market_count" not in record
         assert "within_admission_horizon_market_count" not in record
         assert "admission_horizon_days" not in record
+        assert "post_admission_no_token_overlap_count" not in record
+        assert "post_admission_below_min_post_weight_score_count" not in record
+        assert "post_admission_weight_demoted_below_min_score_count" not in record
+        assert "post_admission_min_match_score" not in record
+        assert "post_admission_best_rejected_pre_weight_score" not in record
+        assert "post_admission_best_rejected_post_weight_score" not in record
+    finally:
+        _cleanup(tmp)
+
+
+def test_trade_logger_records_post_admission_rejection_fields():
+    tmp = make_tmp_dir("polymarket_post_admission_rejection_schema")
+    try:
+        log_file = tmp / "trades.jsonl"
+        TradeLogger(log_file).log_match_no_candidate(
+            source="Example Wire",
+            headline="Example event gets more likely",
+            venue="polymarket_us",
+            eligible_market_count=2,
+            reason="no_match",
+            candidate_pool_stage="post_admission_no_match",
+            pre_admission_matchable_market_count=2,
+            within_admission_horizon_market_count=2,
+            admission_horizon_days=14.0,
+            post_admission_no_token_overlap_count=1,
+            post_admission_below_min_post_weight_score_count=1,
+            post_admission_weight_demoted_below_min_score_count=1,
+            post_admission_min_match_score=0.08,
+            post_admission_best_rejected_pre_weight_score=0.12,
+            post_admission_best_rejected_post_weight_score=0.012,
+        )
+
+        record = json.loads(log_file.read_text(encoding="utf-8").strip())
+
+        assert record == {
+            "type": "MATCH_NO_CANDIDATE",
+            "ts": record["ts"],
+            "source": "Example Wire",
+            "headline": "Example event gets more likely",
+            "venue": "polymarket_us",
+            "eligible_market_count": 2,
+            "reason": "no_match",
+            "candidate_pool_stage": "post_admission_no_match",
+            "pre_admission_matchable_market_count": 2,
+            "within_admission_horizon_market_count": 2,
+            "admission_horizon_days": 14.0,
+            "post_admission_no_token_overlap_count": 1,
+            "post_admission_below_min_post_weight_score_count": 1,
+            "post_admission_weight_demoted_below_min_score_count": 1,
+            "post_admission_min_match_score": 0.08,
+            "post_admission_best_rejected_pre_weight_score": 0.12,
+            "post_admission_best_rejected_post_weight_score": 0.012,
+        }
     finally:
         _cleanup(tmp)
 
