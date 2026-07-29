@@ -247,7 +247,7 @@ def _cleanup(tmp: Path) -> None:
     tmp.rmdir()
 
 
-def test_trade_logger_binds_runtime_cohort_context(tmp_path: Path):
+def test_trade_logger_binds_explicit_runtime_paper_cohort_fields(tmp_path: Path):
     log_file = tmp_path / "trades.jsonl"
     logger = TradeLogger(log_file)
 
@@ -264,8 +264,108 @@ def test_trade_logger_binds_runtime_cohort_context(tmp_path: Path):
     )
 
     record = json.loads(log_file.read_text(encoding="utf-8"))
-    assert record["cohort_id"] == "legacy-pending-20260729"
-    assert record["cohort_kind"] == "legacy_pending"
+    assert record["runtime_paper_cohort_id"] == "legacy-pending-20260729"
+    assert record["runtime_paper_cohort_kind"] == "legacy_pending"
+    assert "cohort_id" not in record
+    assert "cohort_kind" not in record
+
+
+def test_trade_logger_allows_idempotent_runtime_paper_cohort_rebind(tmp_path: Path):
+    log_file = tmp_path / "trades.jsonl"
+    logger = TradeLogger(log_file)
+
+    logger.bind_runtime_context(
+        cohort_id="legacy-pending-20260729",
+        cohort_kind="legacy_pending",
+    )
+    logger.bind_runtime_context(
+        cohort_id="legacy-pending-20260729",
+        cohort_kind="legacy_pending",
+    )
+    logger.log_signal(
+        source="Reuters",
+        headline="Example",
+        url="https://example.test",
+        signal_strength=0.5,
+        keywords_matched=["example"],
+    )
+
+    record = json.loads(log_file.read_text(encoding="utf-8"))
+    assert record["runtime_paper_cohort_id"] == "legacy-pending-20260729"
+    assert record["runtime_paper_cohort_kind"] == "legacy_pending"
+
+
+def test_trade_logger_rejects_conflicting_runtime_paper_cohort_rebind(tmp_path: Path):
+    log_file = tmp_path / "trades.jsonl"
+    logger = TradeLogger(log_file)
+    logger.bind_runtime_context(
+        cohort_id="legacy-pending-20260729",
+        cohort_kind="legacy_pending",
+    )
+
+    with pytest.raises(RuntimeError, match="runtime paper cohort is already bound"):
+        logger.bind_runtime_context(
+            cohort_id="new-cohort-20260730",
+            cohort_kind="new_pending",
+        )
+
+    logger.log_signal(
+        source="Reuters",
+        headline="Example",
+        url="https://example.test",
+        signal_strength=0.5,
+        keywords_matched=["example"],
+    )
+    record = json.loads(log_file.read_text(encoding="utf-8"))
+    assert record["runtime_paper_cohort_id"] == "legacy-pending-20260729"
+    assert record["runtime_paper_cohort_kind"] == "legacy_pending"
+
+
+def test_trade_logger_runtime_paper_context_wins_over_record_values(tmp_path: Path):
+    log_file = tmp_path / "trades.jsonl"
+    logger = TradeLogger(log_file)
+    logger.bind_runtime_context(
+        cohort_id="legacy-pending-20260729",
+        cohort_kind="legacy_pending",
+    )
+
+    logger._write(
+        {
+            "type": "TEST_RECORD",
+            "runtime_paper_cohort_id": "caller-provided-id",
+            "runtime_paper_cohort_kind": "caller-provided-kind",
+        }
+    )
+
+    record = json.loads(log_file.read_text(encoding="utf-8"))
+    assert record["runtime_paper_cohort_id"] == "legacy-pending-20260729"
+    assert record["runtime_paper_cohort_kind"] == "legacy_pending"
+
+
+def test_live_order_uses_explicit_runtime_paper_cohort_provenance(tmp_path: Path):
+    log_file = tmp_path / "trades.jsonl"
+    logger = TradeLogger(log_file)
+    logger.bind_runtime_context(
+        cohort_id="legacy-pending-20260729",
+        cohort_kind="legacy_pending",
+    )
+
+    logger.log_live_order(
+        order_id="order-123",
+        ticker="KXTEST-25DEC31",
+        side="yes",
+        contracts=1,
+        price_cents=50,
+        cost_dollars=0.5,
+        status="resting",
+    )
+
+    record = json.loads(log_file.read_text(encoding="utf-8"))
+    assert record["type"] == "LIVE_ORDER"
+    assert record["runtime_paper_cohort_id"] == "legacy-pending-20260729"
+    assert record["runtime_paper_cohort_kind"] == "legacy_pending"
+    assert "cohort_id" not in record
+    assert "cohort_kind" not in record
 
 
 def test_trade_logger_omits_runtime_cohort_context_when_unbound(tmp_path: Path):
@@ -280,6 +380,8 @@ def test_trade_logger_omits_runtime_cohort_context_when_unbound(tmp_path: Path):
     )
 
     record = json.loads(log_file.read_text(encoding="utf-8"))
+    assert "runtime_paper_cohort_id" not in record
+    assert "runtime_paper_cohort_kind" not in record
     assert "cohort_id" not in record
     assert "cohort_kind" not in record
 

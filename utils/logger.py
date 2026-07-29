@@ -556,17 +556,28 @@ class TradeLogger:
         self._path = path
         self._store = TradeLogStore(live_path=path)
         self._log = get_logger("trade_logger")
-        self._runtime_context: dict[str, str] = {}
+        self._runtime_paper_context: dict[str, str] = {}
 
     def bind_runtime_context(self, *, cohort_id: str, cohort_kind: str) -> None:
         """Attach immutable runtime lineage to future primary durable records."""
-        self._runtime_context = {
-            "cohort_id": cohort_id,
-            "cohort_kind": cohort_kind,
+        runtime_paper_context = {
+            "runtime_paper_cohort_id": cohort_id,
+            "runtime_paper_cohort_kind": cohort_kind,
         }
+        if not self._runtime_paper_context:
+            self._runtime_paper_context = runtime_paper_context
+            return
+        if self._runtime_paper_context != runtime_paper_context:
+            existing_id = self._runtime_paper_context["runtime_paper_cohort_id"]
+            existing_kind = self._runtime_paper_context["runtime_paper_cohort_kind"]
+            raise RuntimeError(
+                "runtime paper cohort is already bound to "
+                f"({existing_id!r}, {existing_kind!r}); refusing to rebind to "
+                f"({cohort_id!r}, {cohort_kind!r})"
+            )
 
     def _write(self, record: dict[str, Any]) -> None:
-        record = {**self._runtime_context, **record}
+        record = {**record, **self._runtime_paper_context}
         record.setdefault("ts", datetime.now(timezone.utc).isoformat())
         self._store.append(record)
 
