@@ -1779,3 +1779,4 @@ def test_print_summary_includes_raw_funnel_and_synthetic_breakdown(capsys, local
     assert "SIGNAL                      : 0" in output
     assert "OPPORTUNITY                 : 0" in output
     assert "PAPER_TRADE                 : 0" in output
+    assert "Same-window lifecycle attribution" in output

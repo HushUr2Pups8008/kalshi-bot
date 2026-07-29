@@ -853,6 +853,8 @@ def print_summary(stats: dict[str, Any], top: int, since: datetime | None, until
     print(f"  OPPORTUNITY                 : {opportunities}")
     print(f"  PAPER_TRADE                 : {paper_trades}")
 
+    print()
+    print("Same-window lifecycle attribution")
     print(f"  Linkable opportunities        : {attribution['opportunity_lifecycle_count']}")
     print(
         "  Linked outcomes               : "
