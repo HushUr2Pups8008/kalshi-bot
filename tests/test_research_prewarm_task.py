@@ -1984,6 +1984,17 @@ async def test_prewarm_result_writer_emits_timeout_attribution(monkeypatch):
             attempted=True,
             research_timeout_stage="provider_fanout",
             research_provider_error_count=3,
+            research_provider_error_attributions=(
+                "timeout",
+                "generic_search_unavailable",
+            ),
+            research_generic_search_circuit_state="open",
+            research_generic_search_failure_classes=(
+                "TimeoutError",
+                "TimeoutError",
+            ),
+            research_generic_search_attempt_delta=2,
+            research_generic_search_blocked_call_delta=1,
         )
     )
 
@@ -1991,6 +2002,17 @@ async def test_prewarm_result_writer_emits_timeout_attribution(monkeypatch):
     _, fields = emitted[0]
     assert fields["research_timeout_stage"] == "provider_fanout"
     assert fields["research_provider_error_count"] == 3
+    assert fields["research_provider_error_attributions"] == [
+        "timeout",
+        "generic_search_unavailable",
+    ]
+    assert fields["research_generic_search_circuit_state"] == "open"
+    assert fields["research_generic_search_failure_classes"] == [
+        "TimeoutError",
+        "TimeoutError",
+    ]
+    assert fields["research_generic_search_attempt_delta"] == 2
+    assert fields["research_generic_search_blocked_call_delta"] == 1
 
 
 @pytest.mark.asyncio
@@ -2017,6 +2039,11 @@ async def test_prewarm_run_once_emits_structured_result_events(tmp_path):
             research_direct_fetch_failures=("resolution_source:https://bad.example:boom",),
             research_timeout_stage="provider_fanout",
             research_provider_error_count=3,
+            research_provider_error_attributions=("timeout",),
+            research_generic_search_circuit_state="open",
+            research_generic_search_failure_classes=("TimeoutError", "HTTPError:403"),
+            research_generic_search_attempt_delta=4,
+            research_generic_search_blocked_call_delta=2,
         )
 
     async def result_sink(result):
@@ -2049,6 +2076,14 @@ async def test_prewarm_run_once_emits_structured_result_events(tmp_path):
     assert len(emitted[1].research_direct_fetch_failures) == 1
     assert emitted[1].research_timeout_stage == "provider_fanout"
     assert emitted[1].research_provider_error_count == 3
+    assert emitted[1].research_provider_error_attributions == ("timeout",)
+    assert emitted[1].research_generic_search_circuit_state == "open"
+    assert emitted[1].research_generic_search_failure_classes == (
+        "TimeoutError",
+        "HTTPError:403",
+    )
+    assert emitted[1].research_generic_search_attempt_delta == 4
+    assert emitted[1].research_generic_search_blocked_call_delta == 2
 
 
 @pytest.mark.asyncio

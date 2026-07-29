@@ -10,6 +10,7 @@ import asyncio
 import csv
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from email.utils import parsedate_to_datetime
 import hashlib
 import html
@@ -66,12 +67,18 @@ from utils.research_evidence_quality import (
 
 log = get_logger("research_gate")
 _GENERIC_SEARCH_CIRCUIT: GenericSearchCircuit | None = None
+_GENERIC_SEARCH_CIRCUIT_EVENT_COLLECTOR: ContextVar[
+    list[GenericSearchCircuitEvent] | None
+] = ContextVar("generic_search_circuit_event_collector", default=None)
 _GENERIC_WEB_SEARCH_MAX_CONCURRENCY = 4
 _GENERIC_WEB_SEARCH_SLOW_ADMISSION_MS = 100
 _GENERIC_SEARCH_TRANSPORT_PROVIDER_LABELS = {
     "Google News RSS": "google_news_rss",
     "DuckDuckGo Lite": "duckduckgo_lite",
 }
+_GENERIC_SEARCH_FAILURE_CLASS_RE = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_.]*(?::(?:[A-Za-z_][A-Za-z0-9_.]*|\d{3}))?"
+)
 
 
 @dataclass(frozen=True)
@@ -174,6 +181,9 @@ def _log_generic_search_transport_event(event: BoundedHTTPSAttemptTelemetry) -> 
 
 
 def _log_generic_search_circuit_event(event: GenericSearchCircuitEvent) -> None:
+    collector = _GENERIC_SEARCH_CIRCUIT_EVENT_COLLECTOR.get()
+    if collector is not None:
+        collector.append(event)
     log.info("%s", generic_search_circuit_event_record(event))
     if event.kind in {"open", "would_open"}:
         log.warning(
@@ -203,6 +213,67 @@ def _get_generic_search_circuit() -> GenericSearchCircuit:
 def _reset_generic_search_circuit_for_tests() -> None:
     global _GENERIC_SEARCH_CIRCUIT
     _GENERIC_SEARCH_CIRCUIT = None
+
+
+def _research_provider_error_attributions(
+    errors: Iterable[BaseException],
+    *,
+    timeout_stage: str | None = None,
+) -> tuple[str, ...]:
+    """Return stable, non-sensitive failure labels for durable telemetry."""
+    attributions: list[str] = []
+    for error in errors:
+        if isinstance(error, GenericSearchUnavailable):
+            attribution = "generic_search_unavailable"
+        elif isinstance(error, TimeoutError):
+            attribution = "timeout"
+        else:
+            attribution = "provider_exception"
+        if attribution not in attributions:
+            attributions.append(attribution)
+    if timeout_stage in {"provider_fanout", "counter_query"}:
+        if "timeout" not in attributions:
+            attributions.append("timeout")
+    return tuple(attributions)
+
+
+def _generic_search_circuit_diagnostics(
+    events: Iterable[GenericSearchCircuitEvent],
+) -> tuple[str | None, tuple[str, ...], int, int]:
+    """Summarize only circuit events emitted in this research-gate task."""
+    observed_events = tuple(events)
+    if not observed_events:
+        return None, (), 0, 0
+
+    state = observed_events[-1].state
+    state_value = state if state in {"closed", "open", "half_open"} else None
+    failure_classes: list[str] = []
+    failure_event_kinds = {
+        "provider_error",
+        "double_availability_failure",
+        "open",
+        "would_open",
+        "blocked",
+        "would_block",
+        "probe_failed",
+    }
+    for event in observed_events:
+        if event.kind not in failure_event_kinds:
+            continue
+        for value in event.failure_classes:
+            safe_value = (
+                value
+                if _GENERIC_SEARCH_FAILURE_CLASS_RE.fullmatch(value)
+                else "UnknownFailure"
+            )
+            if safe_value not in failure_classes:
+                failure_classes.append(safe_value)
+    return (
+        state_value,
+        tuple(failure_classes),
+        sum(event.kind == "attempt" for event in observed_events),
+        sum(event.kind == "blocked" for event in observed_events),
+    )
 
 
 class ResearchStatus(str, Enum):
@@ -314,6 +385,11 @@ class ResearchVerdict:
     research_direct_fetch_failures: tuple[str, ...] = ()
     research_timeout_stage: str | None = None
     research_provider_error_count: int = 0
+    research_provider_error_attributions: tuple[str, ...] = ()
+    research_generic_search_circuit_state: str | None = None
+    research_generic_search_failure_classes: tuple[str, ...] = ()
+    research_generic_search_attempt_delta: int = 0
+    research_generic_search_blocked_call_delta: int = 0
     research_contract_fingerprint: str | None = None
 
     def log_fields(self) -> dict[str, object]:
@@ -356,6 +432,25 @@ class ResearchVerdict:
         fields["research_provider_error_count"] = int(
             self.research_provider_error_count
         )
+        fields["research_provider_error_attributions"] = list(
+            self.research_provider_error_attributions
+        )
+        if self.research_generic_search_circuit_state:
+            fields["research_generic_search_circuit_state"] = (
+                self.research_generic_search_circuit_state
+            )
+        if self.research_generic_search_failure_classes:
+            fields["research_generic_search_failure_classes"] = list(
+                self.research_generic_search_failure_classes
+            )
+        if self.research_generic_search_attempt_delta:
+            fields["research_generic_search_attempt_delta"] = int(
+                self.research_generic_search_attempt_delta
+            )
+        if self.research_generic_search_blocked_call_delta:
+            fields["research_generic_search_blocked_call_delta"] = int(
+                self.research_generic_search_blocked_call_delta
+            )
         if self.research_direct_fetch_failures:
             fields["research_direct_fetch_failures"] = list(
                 self.research_direct_fetch_failures
@@ -6207,6 +6302,10 @@ async def run_research_gate(
     loop = asyncio.get_running_loop()
     deadline = loop.time() + max(0.001, float(research_timeout_seconds))
     provider_errors: list[Exception] = []
+    generic_search_circuit_events: list[GenericSearchCircuitEvent] = []
+    generic_search_circuit_event_collector_token = (
+        _GENERIC_SEARCH_CIRCUIT_EVENT_COLLECTOR.set(generic_search_circuit_events)
+    )
 
     def remaining_budget() -> float:
         return max(0.0, deadline - loop.time())
@@ -6298,6 +6397,36 @@ async def run_research_gate(
                 verdict,
                 research_provider_error_count=len(provider_errors),
             )
+        provider_error_attributions = _research_provider_error_attributions(
+            provider_errors,
+            timeout_stage=verdict.research_timeout_stage,
+        )
+        if verdict.research_provider_error_attributions != provider_error_attributions:
+            verdict = replace(
+                verdict,
+                research_provider_error_attributions=provider_error_attributions,
+            )
+        (
+            circuit_state,
+            circuit_failure_classes,
+            circuit_attempt_delta,
+            circuit_blocked_call_delta,
+        ) = _generic_search_circuit_diagnostics(
+            generic_search_circuit_events
+        )
+        if (
+            circuit_state is not None
+            or circuit_failure_classes
+            or circuit_attempt_delta
+            or circuit_blocked_call_delta
+        ):
+            verdict = replace(
+                verdict,
+                research_generic_search_circuit_state=circuit_state,
+                research_generic_search_failure_classes=circuit_failure_classes,
+                research_generic_search_attempt_delta=circuit_attempt_delta,
+                research_generic_search_blocked_call_delta=circuit_blocked_call_delta,
+            )
         if direct_fetch_failures:
             verdict = replace(
                 verdict,
@@ -6373,6 +6502,9 @@ async def run_research_gate(
                     research_persisted=False,
                     research_persistence_error=str(exc),
                 )
+        _GENERIC_SEARCH_CIRCUIT_EVENT_COLLECTOR.reset(
+            generic_search_circuit_event_collector_token
+        )
         return verdict
 
     if cache_only:
