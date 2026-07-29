@@ -38,7 +38,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Optional, TypeVar
+from typing import Any, Callable, Literal, Optional, TypeVar
 
 import colorlog
 
@@ -1302,6 +1302,46 @@ class TradeLogger:
                 "headline": headline,
                 "reason": reason,
                 "market_price": round(market_price, 4),
+            }
+        )
+
+    def log_match_no_candidate(
+        self,
+        *,
+        source: str,
+        headline: str,
+        venue: str,
+        eligible_market_count: int,
+        reason: Literal["no_eligible_markets", "no_match"],
+    ) -> None:
+        self._write(
+            {
+                "type": "MATCH_NO_CANDIDATE",
+                "source": source,
+                "headline": headline,
+                "venue": venue,
+                "eligible_market_count": eligible_market_count,
+                "reason": reason,
+            }
+        )
+
+    def log_polymarket_market_cache(
+        self,
+        *,
+        raw_fetched: int,
+        cursor_present: bool,
+        eligible_30d: int,
+        candidate_14d: int,
+        market_limit: int,
+    ) -> None:
+        self._write(
+            {
+                "type": "POLYMARKET_MARKET_CACHE",
+                "raw_fetched": raw_fetched,
+                "cursor_present": cursor_present,
+                "eligible_30d": eligible_30d,
+                "candidate_14d": candidate_14d,
+                "market_limit": market_limit,
             }
         )
 

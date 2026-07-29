@@ -74,13 +74,14 @@ def test_market_match_text_includes_polymarket_public_context_fields():
 
 
 class _FakeClient:
-    def __init__(self, markets):
+    def __init__(self, markets, cursor=None):
         self.markets = markets
+        self.cursor = cursor
         self.calls = 0
 
     def get_markets(self, *, limit: int):
         self.calls += 1
-        return self.markets[:limit], None
+        return self.markets[:limit], self.cursor
 
 
 class _FakeSourceStats:
@@ -135,6 +136,97 @@ async def test_warm_cache_rejects_missing_and_beyond_universe_horizon_close_time
 
     assert warmed == 1
     assert runtime.cached_markets() == [near]
+
+
+@pytest.mark.asyncio
+async def test_cache_refresh_logs_real_source_cache_counts(monkeypatch):
+    monkeypatch.setattr(cfg, "paper_active_cohort_max_days_to_close", 14.0)
+    candidate = _market(market_id="candidate")
+    eligible_only = _market(
+        market_id="eligible-only",
+        close_time=(datetime.now(timezone.utc) + timedelta(days=20)).isoformat(),
+    )
+    beyond_30d = _market(
+        market_id="beyond-30d",
+        close_time=(datetime.now(timezone.utc) + timedelta(days=31)).isoformat(),
+    )
+    client = _FakeClient([candidate, eligible_only, beyond_30d], cursor="next-page")
+    runtime = PolymarketPaperRuntime(
+        client=client,
+        route_analysis=AsyncMock(),
+        keyword_stats=None,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+    )
+
+    with patch("polymarket.paper_runtime.trade_log") as trade_log_mock:
+        warmed = await runtime.warm_cache()
+
+    assert warmed == 2
+    assert runtime.cached_markets() == [candidate, eligible_only]
+    assert client.calls == 1
+    trade_log_mock.log_polymarket_market_cache.assert_called_once_with(
+        raw_fetched=3,
+        cursor_present=True,
+        eligible_30d=2,
+        candidate_14d=1,
+        market_limit=10,
+    )
+
+
+@pytest.mark.asyncio
+async def test_process_news_logs_no_candidate_for_empty_eligible_cache():
+    runtime = PolymarketPaperRuntime(
+        client=_FakeClient([]),
+        route_analysis=AsyncMock(),
+        keyword_stats=None,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+    )
+    news = _news()
+
+    with patch("polymarket.paper_runtime.trade_log") as trade_log_mock:
+        routed_count = await runtime.process_news(news)
+
+    assert routed_count == 0
+    trade_log_mock.log_match_no_candidate.assert_called_once_with(
+        source=news.source,
+        headline=news.headline,
+        venue=Venue.POLYMARKET_US.value,
+        eligible_market_count=0,
+        reason="no_eligible_markets",
+    )
+
+
+@pytest.mark.asyncio
+async def test_process_news_logs_no_candidate_when_no_market_scores():
+    runtime = PolymarketPaperRuntime(
+        client=_FakeClient(
+            [
+                _market(
+                    title="Will a volcano erupt this year?",
+                    question="Will a volcano erupt this year?",
+                )
+            ]
+        ),
+        route_analysis=AsyncMock(),
+        keyword_stats=None,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+    )
+    news = _news("Central bank releases an interest rate decision")
+
+    with patch("polymarket.paper_runtime.trade_log") as trade_log_mock:
+        routed_count = await runtime.process_news(news)
+
+    assert routed_count == 0
+    trade_log_mock.log_match_no_candidate.assert_called_once_with(
+        source=news.source,
+        headline=news.headline,
+        venue=Venue.POLYMARKET_US.value,
+        eligible_market_count=1,
+        reason="no_match",
+    )
 
 
 @pytest.mark.asyncio

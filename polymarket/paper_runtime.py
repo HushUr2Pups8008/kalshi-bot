@@ -279,6 +279,13 @@ class PolymarketPaperRuntime:
         markets = await self._get_markets()
         if not markets:
             self._last_match_count = 0
+            trade_log.log_match_no_candidate(
+                source=news.source,
+                headline=news.headline,
+                venue=Venue.POLYMARKET_US.value,
+                eligible_market_count=0,
+                reason="no_eligible_markets",
+            )
             self._log_heartbeat()
             return 0
 
@@ -296,6 +303,13 @@ class PolymarketPaperRuntime:
                 "[POLYMARKET_MATCH] no_match markets=%d headline=%s",
                 len(markets),
                 news.headline[:80],
+            )
+            trade_log.log_match_no_candidate(
+                source=news.source,
+                headline=news.headline,
+                venue=Venue.POLYMARKET_US.value,
+                eligible_market_count=len(markets),
+                reason="no_match",
             )
             self._log_heartbeat()
             return 0
@@ -518,6 +532,13 @@ class PolymarketPaperRuntime:
                     max_days_to_close=MAX_MARKET_DAYS_TO_EXPIRY,
                 ).eligible
             ]
+            trade_log.log_polymarket_market_cache(
+                raw_fetched=len(markets),
+                cursor_present=bool(_cursor),
+                eligible_30d=len(self._markets),
+                candidate_14d=len(self.cached_candidate_markets()),
+                market_limit=self._market_limit,
+            )
             self._last_fetch = time.monotonic()
             self._last_error = None
             log.info(

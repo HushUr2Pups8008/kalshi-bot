@@ -568,3 +568,50 @@ def test_logger_rounds_optional_floats_to_four_decimals():
         assert record["age_at_analysis_seconds"] == 123.4568
     finally:
         _cleanup(tmp)
+
+
+def test_trade_logger_records_polymarket_funnel_event_schemas():
+    tmp = make_tmp_dir("polymarket_funnel_events")
+    try:
+        log_file = tmp / "trades.jsonl"
+        logger = TradeLogger(log_file)
+
+        logger.log_match_no_candidate(
+            source="Example Wire",
+            headline="Example event gets more likely",
+            venue="polymarket_us",
+            eligible_market_count=2,
+            reason="no_match",
+        )
+        logger.log_polymarket_market_cache(
+            raw_fetched=3,
+            cursor_present=True,
+            eligible_30d=2,
+            candidate_14d=1,
+            market_limit=10,
+        )
+
+        no_candidate, cache = [
+            json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()
+        ]
+
+        assert no_candidate == {
+            "type": "MATCH_NO_CANDIDATE",
+            "ts": no_candidate["ts"],
+            "source": "Example Wire",
+            "headline": "Example event gets more likely",
+            "venue": "polymarket_us",
+            "eligible_market_count": 2,
+            "reason": "no_match",
+        }
+        assert cache == {
+            "type": "POLYMARKET_MARKET_CACHE",
+            "ts": cache["ts"],
+            "raw_fetched": 3,
+            "cursor_present": True,
+            "eligible_30d": 2,
+            "candidate_14d": 1,
+            "market_limit": 10,
+        }
+    finally:
+        _cleanup(tmp)
