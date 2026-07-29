@@ -1827,6 +1827,125 @@ class TradeLogger:
             }
         )
 
+    def log_polymarket_horizon_shadow(
+        self,
+        *,
+        source: str,
+        headline: str,
+        venue: str,
+        production_horizon_days: float,
+        shadow_horizon_start_days: float,
+        shadow_horizon_end_days: float,
+        production_candidate_count: int,
+        shadow_candidate_count: int,
+        production_qualifying_match_count: int,
+        shadow_qualifying_match_count: int,
+        production_no_token_overlap_count: int,
+        production_below_min_post_weight_score_count: int,
+        production_weight_demoted_below_min_score_count: int,
+        production_min_match_score: float,
+        shadow_no_token_overlap_count: int,
+        shadow_below_min_post_weight_score_count: int,
+        shadow_weight_demoted_below_min_score_count: int,
+        shadow_min_match_score: float,
+        shadow_analysis_status: str,
+        production_best_rejected_pre_weight_score: float | None = None,
+        production_best_rejected_post_weight_score: float | None = None,
+        shadow_best_rejected_pre_weight_score: float | None = None,
+        shadow_best_rejected_post_weight_score: float | None = None,
+        production_counterfactual_shadow: dict[str, Any] | None = None,
+        shadow_counterfactual_shadow: dict[str, Any] | None = None,
+    ) -> None:
+        """Record a disjoint market-horizon comparison with no routing effect."""
+        record: dict[str, Any] = {
+            "type": "POLYMARKET_HORIZON_SHADOW",
+            "source": source,
+            "headline": headline,
+            "venue": venue,
+            "production_horizon_days": production_horizon_days,
+            "shadow_horizon_start_days": shadow_horizon_start_days,
+            "shadow_horizon_end_days": shadow_horizon_end_days,
+            "production_candidate_count": production_candidate_count,
+            "shadow_candidate_count": shadow_candidate_count,
+            "production_qualifying_match_count": production_qualifying_match_count,
+            "shadow_qualifying_match_count": shadow_qualifying_match_count,
+            "production_no_token_overlap_count": production_no_token_overlap_count,
+            "production_below_min_post_weight_score_count": (
+                production_below_min_post_weight_score_count
+            ),
+            "production_weight_demoted_below_min_score_count": (
+                production_weight_demoted_below_min_score_count
+            ),
+            "production_min_match_score": production_min_match_score,
+            "shadow_no_token_overlap_count": shadow_no_token_overlap_count,
+            "shadow_below_min_post_weight_score_count": (
+                shadow_below_min_post_weight_score_count
+            ),
+            "shadow_weight_demoted_below_min_score_count": (
+                shadow_weight_demoted_below_min_score_count
+            ),
+            "shadow_min_match_score": shadow_min_match_score,
+            "shadow_analysis_status": shadow_analysis_status,
+        }
+        for field, value in (
+            (
+                "production_best_rejected_pre_weight_score",
+                production_best_rejected_pre_weight_score,
+            ),
+            (
+                "production_best_rejected_post_weight_score",
+                production_best_rejected_post_weight_score,
+            ),
+            (
+                "shadow_best_rejected_pre_weight_score",
+                shadow_best_rejected_pre_weight_score,
+            ),
+            (
+                "shadow_best_rejected_post_weight_score",
+                shadow_best_rejected_post_weight_score,
+            ),
+        ):
+            if value is not None:
+                record[field] = value
+        for field, value, candidate_count, no_token_overlap_count, below_min_count, weight_demoted_count, min_match_score, qualifying_match_count in (
+            (
+                "production_counterfactual_shadow",
+                production_counterfactual_shadow,
+                production_candidate_count,
+                production_no_token_overlap_count,
+                production_below_min_post_weight_score_count,
+                production_weight_demoted_below_min_score_count,
+                production_min_match_score,
+                production_qualifying_match_count,
+            ),
+            (
+                "shadow_counterfactual_shadow",
+                shadow_counterfactual_shadow,
+                shadow_candidate_count,
+                shadow_no_token_overlap_count,
+                shadow_below_min_post_weight_score_count,
+                shadow_weight_demoted_below_min_score_count,
+                shadow_min_match_score,
+                shadow_qualifying_match_count,
+            ),
+        ):
+            if value is None or qualifying_match_count:
+                continue
+            try:
+                snapshot = _canonical_post_admission_counterfactual_shadow(
+                    value,
+                    within_admission_horizon_market_count=candidate_count,
+                    post_admission_no_token_overlap_count=no_token_overlap_count,
+                    post_admission_below_min_post_weight_score_count=below_min_count,
+                    post_admission_weight_demoted_below_min_score_count=weight_demoted_count,
+                    post_admission_min_match_score=min_match_score,
+                )
+            except Exception:
+                snapshot = None
+            if snapshot is not None:
+                record[field] = snapshot
+        self._write(record)
+
     def log_match_diagnostic(
         self,
         *,
