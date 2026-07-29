@@ -420,6 +420,12 @@ def _format_match_attribution_lines(
         fresh_pass_linkage.get("unknown_route_exit_keys_without_fresh_pass", 0) or 0
     )
     match_no_candidate_total = int(funnel_stats.get("match_no_candidate_total", 0) or 0)
+    no_candidate_pool_stages = Counter(
+        funnel_stats.get("match_no_candidate_candidate_pool_stages", {})
+    )
+    no_candidate_missing_pool_stage = int(
+        funnel_stats.get("match_no_candidate_missing_candidate_pool_stage", 0) or 0
+    )
     drilldowns = [
         ("Drilldown: pre-LLM quality gate", Counter(funnel_stats.get("match_diagnostic_pre_llm_gate", {})), None),
         ("Drilldown: match diagnostic sources", Counter(funnel_stats.get("match_diagnostic_sources", {})), top),
@@ -430,6 +436,7 @@ def _format_match_attribution_lines(
             top,
         ),
         ("Drilldown: explicit no-candidate reasons", Counter(funnel_stats.get("match_no_candidate_reasons", {})), None),
+        ("Drilldown: no-candidate pool stages", no_candidate_pool_stages, top),
         ("Drilldown: explicit no-candidate venues", Counter(funnel_stats.get("match_no_candidate_venues", {})), top),
         ("Drilldown: match suppression reasons", Counter(funnel_stats.get("match_suppressed_reasons", {})), top),
         ("Drilldown: match suppression tokens", Counter(funnel_stats.get("match_suppressed_tokens", {})), top),
@@ -465,6 +472,7 @@ def _format_match_attribution_lines(
             fresh_pass_rows,
             fresh_pass_unique_keys,
             match_no_candidate_total,
+            no_candidate_missing_pool_stage,
             candidate_diagnostic_keys_without_fresh_pass,
             explicit_no_match_keys_without_fresh_pass,
             market_availability_keys_without_fresh_pass,
@@ -497,7 +505,7 @@ def _format_match_attribution_lines(
             "    candidate_diagnostic="
             f"{fresh_pass_keys_with_candidate_diagnostic}/{fresh_pass_unique_keys} "
             f"({fmt_pct(fresh_pass_keys_with_candidate_diagnostic, fresh_pass_unique_keys)}) "
-            "explicit_no_match="
+            "logged_no_match="
             f"{fresh_pass_keys_with_explicit_no_match}/{fresh_pass_unique_keys} "
             f"({fmt_pct(fresh_pass_keys_with_explicit_no_match, fresh_pass_unique_keys)}) "
             "market_availability="
@@ -522,12 +530,16 @@ def _format_match_attribution_lines(
         lines.append(
             "    signal_without_fresh="
             f"candidate_diagnostic={candidate_diagnostic_keys_without_fresh_pass} "
-            f"explicit_no_match={explicit_no_match_keys_without_fresh_pass} "
+            f"logged_no_match={explicit_no_match_keys_without_fresh_pass} "
             f"market_availability={market_availability_keys_without_fresh_pass} "
             f"unknown_or_other_exit={unknown_route_exit_keys_without_fresh_pass}"
         )
     if match_no_candidate_total:
         lines.append(f"  Explicit no-candidate rows      : {match_no_candidate_total}")
+        lines.append(
+            "  No-candidate records missing pool-stage: "
+            f"{no_candidate_missing_pool_stage}"
+        )
     if suppressions:
         coverage_parts = [
             f"{column}={suppression_coverage.get(column, 0)}/{suppressions}"

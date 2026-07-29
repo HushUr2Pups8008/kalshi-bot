@@ -283,6 +283,10 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
             "fresh_pass_without_tracked_route_signal_sources": Counter({"Reuters": 1}),
             "match_no_candidate_total": 2,
             "match_no_candidate_reasons": Counter({"no_match": 2}),
+            "match_no_candidate_candidate_pool_stages": Counter(
+                {"post_admission_no_match": 2}
+            ),
+            "match_no_candidate_missing_candidate_pool_stage": 0,
             "match_no_candidate_venues": Counter({"polymarket_us": 2}),
             "match_diagnostic_pre_llm_gate": Counter({"would_fail": 7, "would_pass": 1}),
             "match_diagnostic_sources": Counter({"Reuters": 5, "AP": 3}),
@@ -682,16 +686,19 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     )
     assert "Fresh-pass route linkage        : venue-agnostic, window-local log signals; not attempt, conversion, or per-venue coverage; signal rates overlap" in rendered
     assert (
-        "candidate_diagnostic=6/8 (75.0%) explicit_no_match=2/8 (25.0%) "
+        "candidate_diagnostic=6/8 (75.0%) logged_no_match=2/8 (25.0%) "
         "market_availability=1/8 (12.5%) unknown_or_other_exit=1/8 (12.5%)"
     ) in rendered
     assert "multiple=1 no_signal=1" in rendered
     assert "ambiguous=0 missing_identity=fresh=1 diagnostic=2 no_candidate=0" in rendered
     assert (
-        "signal_without_fresh=candidate_diagnostic=0 explicit_no_match=0 "
+        "signal_without_fresh=candidate_diagnostic=0 logged_no_match=0 "
         "market_availability=0 unknown_or_other_exit=0"
     ) in rendered
     assert "Explicit no-candidate rows      : 2" in rendered
+    assert "No-candidate records missing pool-stage: 0" in rendered
+    assert "Drilldown: no-candidate pool stages" in rendered
+    assert "post_admission_no_match" in rendered
     assert "Same-window linkable cohort      : 3 opportunities" in rendered
     assert "Paper-trade lineage            : unavailable (0/2 event rows linked)" in rendered
     assert "Live submission lineage        : 0/0 event rows linked; not fill or P&L evidence" in rendered

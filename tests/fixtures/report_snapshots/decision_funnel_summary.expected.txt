@@ -32,14 +32,14 @@ Fresh-pass Route Log Linkage
   Fresh pass rows                 : 0
   Linkable unique fresh keys      : 0
   Candidate diagnostic observed   : 0 (n/a)
-  Explicit no-match observed      : 0 (n/a)
+  Logged no_match event observed : 0 (n/a)
   Market-unavailable exit observed: 0 (n/a)
   Unknown/other route exit observed: 0 (n/a)
   Multiple route signals observed : 0
   No tracked route signal observed: 0
   Ambiguous duplicate fresh keys  : 0
   Missing join fields             : fresh=0 diagnostic=0 no_candidate=0
-  Route signal keys without fresh pass: candidate_diagnostic=0 explicit_no_match=0 market_availability=0 unknown_or_other=0
+  Route signal keys without fresh pass: candidate_diagnostic=0 logged_no_match=0 market_availability=0 unknown_or_other=0
   Explicit no-candidate rows      : 0
 
 Same-window lifecycle attribution
@@ -87,6 +87,10 @@ Fresh-pass Keys Without Tracked Route Signals (top 5)
 
 Explicit No-Candidate Reasons
   (none)
+
+No-Candidate Candidate Pool Stages
+  (none)
+  No-candidate records missing candidate-pool stage: 0
 
 Explicit No-Candidate Venues (top 5)
   (none)

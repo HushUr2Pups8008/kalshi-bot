@@ -98,6 +98,13 @@ def _empty_runtime_match_weights(monkeypatch):
     monkeypatch.setattr("polymarket.paper_runtime._load_match_weights", lambda: {})
 
 
+def _configure_legacy_paper_horizon(monkeypatch) -> None:
+    monkeypatch.setattr(cfg, "is_paper_trading", True)
+    monkeypatch.setattr(cfg, "paper_cohort_id", "legacy")
+    monkeypatch.setattr(cfg, "paper_cohort_kind", "legacy")
+    monkeypatch.setattr(cfg, "paper_active_cohort_max_days_to_close", 14.0)
+
+
 @pytest.mark.asyncio
 async def test_warm_cache_populates_cached_markets_for_shared_getters():
     market = _market()
@@ -239,7 +246,67 @@ async def test_legacy_cache_refresh_reports_30_day_admission_horizon(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_process_news_logs_no_candidate_for_empty_eligible_cache():
+async def test_legacy_process_news_logs_30_day_post_admission_stage(monkeypatch):
+    _configure_legacy_paper_horizon(monkeypatch)
+    now = datetime(2026, 4, 18, tzinfo=timezone.utc)
+    runtime = PolymarketPaperRuntime(
+        client=_FakeClient(
+            [
+                _market(
+                    title="Will unrelated bill pass?",
+                    question="Will unrelated bill pass?",
+                    close_time=(now + timedelta(days=20)).isoformat(),
+                )
+            ]
+        ),
+        route_analysis=AsyncMock(),
+        keyword_stats=None,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+        now_provider=lambda: now,
+    )
+    news = _news("Central bank releases an interest rate decision")
+
+    with (
+        patch("polymarket.paper_runtime.trade_log") as trade_log_mock,
+        patch(
+            "polymarket.paper_runtime.write_trade_log_async",
+            new_callable=AsyncMock,
+        ) as write_log_mock,
+    ):
+        routed_count = await runtime.process_news(news)
+
+    assert routed_count == 0
+    write_log_mock.assert_has_awaits(
+        [
+            call(
+                trade_log_mock.log_polymarket_market_cache,
+                raw_fetched=1,
+                cursor_present=False,
+                eligible_30d=1,
+                candidate_within_admission_horizon=1,
+                admission_horizon_days=30.0,
+                market_limit=10,
+            ),
+            call(
+                trade_log_mock.log_match_no_candidate,
+                source=news.source,
+                headline=news.headline,
+                venue=Venue.POLYMARKET_US.value,
+                eligible_market_count=1,
+                reason="no_match",
+                candidate_pool_stage="post_admission_no_match",
+                pre_admission_matchable_market_count=1,
+                within_admission_horizon_market_count=1,
+                admission_horizon_days=30.0,
+            ),
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_process_news_logs_no_candidate_for_empty_eligible_cache(monkeypatch):
+    _configure_legacy_paper_horizon(monkeypatch)
     runtime = PolymarketPaperRuntime(
         client=_FakeClient([]),
         route_analysis=AsyncMock(),
@@ -277,13 +344,71 @@ async def test_process_news_logs_no_candidate_for_empty_eligible_cache():
                 venue=Venue.POLYMARKET_US.value,
                 eligible_market_count=0,
                 reason="no_eligible_markets",
+                candidate_pool_stage="eligible_cache_empty",
+                pre_admission_matchable_market_count=0,
+                within_admission_horizon_market_count=0,
+                admission_horizon_days=30.0,
             ),
         ]
     )
 
 
 @pytest.mark.asyncio
-async def test_process_news_logs_no_candidate_when_no_market_scores():
+async def test_process_news_logs_eligible_cache_empty_after_universe_filter(monkeypatch):
+    _configure_legacy_paper_horizon(monkeypatch)
+    now = datetime(2026, 4, 18, tzinfo=timezone.utc)
+    runtime = PolymarketPaperRuntime(
+        client=_FakeClient(
+            [_market(close_time=(now + timedelta(days=31)).isoformat())]
+        ),
+        route_analysis=AsyncMock(),
+        keyword_stats=None,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+        now_provider=lambda: now,
+    )
+    news = _news()
+
+    with (
+        patch("polymarket.paper_runtime.trade_log") as trade_log_mock,
+        patch(
+            "polymarket.paper_runtime.write_trade_log_async",
+            new_callable=AsyncMock,
+        ) as write_log_mock,
+    ):
+        routed_count = await runtime.process_news(news)
+
+    assert routed_count == 0
+    write_log_mock.assert_has_awaits(
+        [
+            call(
+                trade_log_mock.log_polymarket_market_cache,
+                raw_fetched=1,
+                cursor_present=False,
+                eligible_30d=0,
+                candidate_within_admission_horizon=0,
+                admission_horizon_days=30.0,
+                market_limit=10,
+            ),
+            call(
+                trade_log_mock.log_match_no_candidate,
+                source=news.source,
+                headline=news.headline,
+                venue=Venue.POLYMARKET_US.value,
+                eligible_market_count=0,
+                reason="no_eligible_markets",
+                candidate_pool_stage="eligible_cache_empty",
+                pre_admission_matchable_market_count=0,
+                within_admission_horizon_market_count=0,
+                admission_horizon_days=30.0,
+            ),
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_process_news_logs_no_candidate_when_no_market_scores(monkeypatch):
+    _configure_legacy_paper_horizon(monkeypatch)
     runtime = PolymarketPaperRuntime(
         client=_FakeClient(
             [
@@ -328,6 +453,272 @@ async def test_process_news_logs_no_candidate_when_no_market_scores():
                 venue=Venue.POLYMARKET_US.value,
                 eligible_market_count=1,
                 reason="no_match",
+                candidate_pool_stage="post_admission_no_match",
+                pre_admission_matchable_market_count=1,
+                within_admission_horizon_market_count=1,
+                admission_horizon_days=30.0,
+            ),
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_process_news_logs_input_without_match_tokens_stage(monkeypatch):
+    _configure_legacy_paper_horizon(monkeypatch)
+    route_analysis = AsyncMock()
+    runtime = PolymarketPaperRuntime(
+        client=_FakeClient([_market()]),
+        route_analysis=route_analysis,
+        keyword_stats=None,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+    )
+    news = _news("the and or")
+
+    with (
+        patch("polymarket.paper_runtime.trade_log") as trade_log_mock,
+        patch(
+            "polymarket.paper_runtime.write_trade_log_async",
+            new_callable=AsyncMock,
+        ) as write_log_mock,
+    ):
+        routed_count = await runtime.process_news(news)
+
+    assert routed_count == 0
+    route_analysis.assert_not_awaited()
+    write_log_mock.assert_has_awaits(
+        [
+            call(
+                trade_log_mock.log_polymarket_market_cache,
+                raw_fetched=1,
+                cursor_present=False,
+                eligible_30d=1,
+                candidate_within_admission_horizon=1,
+                admission_horizon_days=30.0,
+                market_limit=10,
+            ),
+            call(
+                trade_log_mock.log_match_no_candidate,
+                source=news.source,
+                headline=news.headline,
+                venue=Venue.POLYMARKET_US.value,
+                eligible_market_count=1,
+                reason="no_match",
+                candidate_pool_stage="input_without_match_tokens",
+                pre_admission_matchable_market_count=1,
+                within_admission_horizon_market_count=1,
+                admission_horizon_days=30.0,
+            ),
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_process_news_prioritizes_input_stage_before_admission_horizon(monkeypatch):
+    now = datetime(2026, 4, 18, tzinfo=timezone.utc)
+    monkeypatch.setattr(cfg, "is_paper_trading", True)
+    monkeypatch.setattr(cfg, "paper_cohort_id", "active-test")
+    monkeypatch.setattr(cfg, "paper_cohort_kind", "active")
+    monkeypatch.setattr(cfg, "paper_active_cohort_max_days_to_close", 14.0)
+    runtime = PolymarketPaperRuntime(
+        client=_FakeClient(
+            [_market(close_time=(now + timedelta(days=15)).isoformat())]
+        ),
+        route_analysis=AsyncMock(),
+        keyword_stats=None,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+        now_provider=lambda: now,
+    )
+    news = _news("the and or")
+
+    with (
+        patch("polymarket.paper_runtime.trade_log") as trade_log_mock,
+        patch(
+            "polymarket.paper_runtime.write_trade_log_async",
+            new_callable=AsyncMock,
+        ) as write_log_mock,
+    ):
+        routed_count = await runtime.process_news(news)
+
+    assert routed_count == 0
+    write_log_mock.assert_has_awaits(
+        [
+            call(
+                trade_log_mock.log_polymarket_market_cache,
+                raw_fetched=1,
+                cursor_present=False,
+                eligible_30d=1,
+                candidate_within_admission_horizon=0,
+                admission_horizon_days=14.0,
+                market_limit=10,
+            ),
+            call(
+                trade_log_mock.log_match_no_candidate,
+                source=news.source,
+                headline=news.headline,
+                venue=Venue.POLYMARKET_US.value,
+                eligible_market_count=1,
+                reason="no_match",
+                candidate_pool_stage="input_without_match_tokens",
+                pre_admission_matchable_market_count=1,
+                within_admission_horizon_market_count=0,
+                admission_horizon_days=14.0,
+            ),
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_process_news_logs_post_admission_no_match_after_low_score(monkeypatch):
+    _configure_legacy_paper_horizon(monkeypatch)
+    market_text = "Example amber birch cedar dogwood elm fir granite hazel ivy juniper"
+    runtime = PolymarketPaperRuntime(
+        client=_FakeClient([_market(title=market_text, question=market_text)]),
+        route_analysis=AsyncMock(),
+        keyword_stats=None,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+    )
+    news = _news("Example atlas beacon citadel delta ember frost glacier harbor island jade")
+
+    with (
+        patch("polymarket.paper_runtime.trade_log") as trade_log_mock,
+        patch(
+            "polymarket.paper_runtime.write_trade_log_async",
+            new_callable=AsyncMock,
+        ) as write_log_mock,
+    ):
+        routed_count = await runtime.process_news(news)
+
+    assert routed_count == 0
+    write_log_mock.assert_has_awaits(
+        [
+            call(
+                trade_log_mock.log_polymarket_market_cache,
+                raw_fetched=1,
+                cursor_present=False,
+                eligible_30d=1,
+                candidate_within_admission_horizon=1,
+                admission_horizon_days=30.0,
+                market_limit=10,
+            ),
+            call(
+                trade_log_mock.log_match_no_candidate,
+                source=news.source,
+                headline=news.headline,
+                venue=Venue.POLYMARKET_US.value,
+                eligible_market_count=1,
+                reason="no_match",
+                candidate_pool_stage="post_admission_no_match",
+                pre_admission_matchable_market_count=1,
+                within_admission_horizon_market_count=1,
+                admission_horizon_days=30.0,
+            ),
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_process_news_logs_pre_admission_filter_empty_stage(monkeypatch):
+    _configure_legacy_paper_horizon(monkeypatch)
+    runtime = PolymarketPaperRuntime(
+        client=_FakeClient([_market(yes_ask_cents=None)]),
+        route_analysis=AsyncMock(),
+        keyword_stats=None,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+    )
+    news = _news()
+
+    with (
+        patch("polymarket.paper_runtime.trade_log") as trade_log_mock,
+        patch(
+            "polymarket.paper_runtime.write_trade_log_async",
+            new_callable=AsyncMock,
+        ) as write_log_mock,
+    ):
+        routed_count = await runtime.process_news(news)
+
+    assert routed_count == 0
+    write_log_mock.assert_has_awaits(
+        [
+            call(
+                trade_log_mock.log_polymarket_market_cache,
+                raw_fetched=1,
+                cursor_present=False,
+                eligible_30d=1,
+                candidate_within_admission_horizon=0,
+                admission_horizon_days=30.0,
+                market_limit=10,
+            ),
+            call(
+                trade_log_mock.log_match_no_candidate,
+                source=news.source,
+                headline=news.headline,
+                venue=Venue.POLYMARKET_US.value,
+                eligible_market_count=1,
+                reason="no_match",
+                candidate_pool_stage="pre_admission_filter_empty",
+                pre_admission_matchable_market_count=0,
+                within_admission_horizon_market_count=0,
+                admission_horizon_days=30.0,
+            ),
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_process_news_logs_admission_horizon_pruned_stage(monkeypatch):
+    now = datetime(2026, 4, 18, tzinfo=timezone.utc)
+    monkeypatch.setattr(cfg, "is_paper_trading", True)
+    monkeypatch.setattr(cfg, "paper_cohort_id", "active-test")
+    monkeypatch.setattr(cfg, "paper_cohort_kind", "active")
+    monkeypatch.setattr(cfg, "paper_active_cohort_max_days_to_close", 14.0)
+    runtime = PolymarketPaperRuntime(
+        client=_FakeClient(
+            [_market(close_time=(now + timedelta(days=15)).isoformat())]
+        ),
+        route_analysis=AsyncMock(),
+        keyword_stats=None,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+        now_provider=lambda: now,
+    )
+    news = _news()
+
+    with (
+        patch("polymarket.paper_runtime.trade_log") as trade_log_mock,
+        patch(
+            "polymarket.paper_runtime.write_trade_log_async",
+            new_callable=AsyncMock,
+        ) as write_log_mock,
+    ):
+        routed_count = await runtime.process_news(news)
+
+    assert routed_count == 0
+    write_log_mock.assert_has_awaits(
+        [
+            call(
+                trade_log_mock.log_polymarket_market_cache,
+                raw_fetched=1,
+                cursor_present=False,
+                eligible_30d=1,
+                candidate_within_admission_horizon=0,
+                admission_horizon_days=14.0,
+                market_limit=10,
+            ),
+            call(
+                trade_log_mock.log_match_no_candidate,
+                source=news.source,
+                headline=news.headline,
+                venue=Venue.POLYMARKET_US.value,
+                eligible_market_count=1,
+                reason="no_match",
+                candidate_pool_stage="admission_horizon_pruned",
+                pre_admission_matchable_market_count=1,
+                within_admission_horizon_market_count=0,
+                admission_horizon_days=14.0,
             ),
         ]
     )
@@ -883,7 +1274,8 @@ async def test_process_news_skips_when_no_polymarket_market_matches(caplog):
 
 
 @pytest.mark.asyncio
-async def test_process_news_fail_closed_when_public_market_fetch_fails(caplog):
+async def test_process_news_fail_closed_when_public_market_fetch_fails(caplog, monkeypatch):
+    _configure_legacy_paper_horizon(monkeypatch)
     class FailingClient:
         def get_markets(self, *, limit: int):
             raise RuntimeError("public gateway unavailable")
@@ -925,6 +1317,10 @@ async def test_process_news_fail_closed_when_public_market_fetch_fails(caplog):
         venue=Venue.POLYMARKET_US.value,
         eligible_market_count=0,
         reason="market_fetch_failed",
+        candidate_pool_stage="provider_fetch_failed",
+        pre_admission_matchable_market_count=0,
+        within_admission_horizon_market_count=0,
+        admission_horizon_days=30.0,
     )
 
 

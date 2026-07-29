@@ -605,6 +605,7 @@ def test_summarize_tracks_fresh_pass_route_log_linkage_and_route_exit_types(
                 "headline": "Beta event",
                 "venue": "polymarket_us",
                 "reason": "no_match",
+                "candidate_pool_stage": "post_admission_no_match",
                 "eligible_market_count": 15,
                 "ts": "2026-04-11T00:01:01+00:00",
             },
@@ -614,6 +615,7 @@ def test_summarize_tracks_fresh_pass_route_log_linkage_and_route_exit_types(
                 "headline": "Beta event",
                 "venue": "polymarket_us",
                 "reason": "no_match",
+                "candidate_pool_stage": "post_admission_no_match",
                 "eligible_market_count": 15,
                 "ts": "2026-04-11T00:01:02+00:00",
             },
@@ -636,6 +638,7 @@ def test_summarize_tracks_fresh_pass_route_log_linkage_and_route_exit_types(
                 "headline": "Shared cross-venue event",
                 "venue": "polymarket_us",
                 "reason": "no_match",
+                "candidate_pool_stage": "post_admission_no_match",
                 "eligible_market_count": 15,
                 "ts": "2026-04-11T00:02:02+00:00",
             },
@@ -645,6 +648,7 @@ def test_summarize_tracks_fresh_pass_route_log_linkage_and_route_exit_types(
                 "headline": "Empty candidate cache",
                 "venue": "polymarket_us",
                 "reason": "no_eligible_markets",
+                "candidate_pool_stage": "eligible_cache_empty",
                 "eligible_market_count": 0,
                 "ts": "2026-04-11T00:02:03+00:00",
             },
@@ -678,6 +682,7 @@ def test_summarize_tracks_fresh_pass_route_log_linkage_and_route_exit_types(
                 "headline": "Market fetch failure event",
                 "venue": "polymarket_us",
                 "reason": "market_fetch_failed",
+                "candidate_pool_stage": "provider_fetch_failed",
                 "eligible_market_count": 0,
                 "ts": "2026-04-11T00:04:03+00:00",
             },
@@ -693,6 +698,7 @@ def test_summarize_tracks_fresh_pass_route_log_linkage_and_route_exit_types(
                 "headline": "Unknown route exit event",
                 "venue": "polymarket_us",
                 "reason": "future_route_exit",
+                "candidate_pool_stage": "future_pool_stage",
                 "eligible_market_count": 0,
                 "ts": "2026-04-11T00:04:05+00:00",
             },
@@ -751,6 +757,15 @@ def test_summarize_tracks_fresh_pass_route_log_linkage_and_route_exit_types(
             "future_route_exit": 1,
         }
     )
+    assert stats["match_no_candidate_candidate_pool_stages"] == Counter(
+        {
+            "post_admission_no_match": 3,
+            "eligible_cache_empty": 1,
+            "provider_fetch_failed": 1,
+            "future_pool_stage": 1,
+        }
+    )
+    assert stats["match_no_candidate_missing_candidate_pool_stage"] == 1
     assert stats["match_no_candidate_venues"] == Counter({"polymarket_us": 7})
     assert stats["match_no_candidate_eligible_market_counts"] == Counter({"15": 3, "0": 4})
 
@@ -785,6 +800,7 @@ def test_print_summary_includes_fresh_pass_route_log_linkage(capsys, local_tmp_d
                 "headline": "Beta event",
                 "venue": "polymarket_us",
                 "reason": "no_match",
+                "candidate_pool_stage": "post_admission_no_match",
                 "eligible_market_count": 15,
                 "ts": "2026-04-11T00:01:01+00:00",
             },
@@ -800,7 +816,7 @@ def test_print_summary_includes_fresh_pass_route_log_linkage(capsys, local_tmp_d
     assert "Fresh pass rows                 : 2" in output
     assert "Linkable unique fresh keys      : 2" in output
     assert "Candidate diagnostic observed   : 1 (50.0%)" in output
-    assert "Explicit no-match observed      : 1 (50.0%)" in output
+    assert "Logged no_match event observed : 1 (50.0%)" in output
     assert "Market-unavailable exit observed: 0 (0.0%)" in output
     assert "Unknown/other route exit observed: 0 (0.0%)" in output
     assert "Multiple route signals observed : 0" in output
@@ -808,6 +824,9 @@ def test_print_summary_includes_fresh_pass_route_log_linkage(capsys, local_tmp_d
     assert "Explicit no-candidate rows      : 1" in output
     assert "Fresh-pass Keys Without Tracked Route Signals (top 5)" in output
     assert "Explicit No-Candidate Reasons" in output
+    assert "No-Candidate Candidate Pool Stages" in output
+    assert "post_admission_no_match" in output
+    assert "No-candidate records missing candidate-pool stage: 0" in output
     assert "no_match" in output
 
 
