@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
 
 from trading.venue import Venue
 
@@ -44,6 +44,97 @@ class BinaryMarketBook:
                 raise ValueError("crossed binary book")
         if len(self.raw_payload_hash) != 64:
             raise ValueError("raw_payload_hash must be a SHA-256 digest")
+
+
+@dataclass(frozen=True)
+class ExecutableLiquidity:
+    """Fresh, side-aware executable liquidity derived from one binary book."""
+
+    market_ticker: str
+    side: Literal["yes", "no"]
+    limit_price: Decimal
+    best_price: Decimal | None
+    executable_quantity: Decimal
+    executable_notional: Decimal
+    as_of: datetime
+    raw_payload_hash: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.market_ticker, str) or not self.market_ticker.strip():
+            raise ValueError("market_ticker is required")
+        if self.side not in ("yes", "no"):
+            raise ValueError("side must be yes or no")
+        if (
+            not isinstance(self.limit_price, Decimal)
+            or not self.limit_price.is_finite()
+            or self.limit_price <= 0
+            or self.limit_price >= 1
+        ):
+            raise ValueError("limit_price must be between zero and one")
+        if self.best_price is not None and (
+            not isinstance(self.best_price, Decimal)
+            or not self.best_price.is_finite()
+            or self.best_price <= 0
+            or self.best_price > self.limit_price
+        ):
+            raise ValueError("best_price must be positive and no worse than the limit")
+        for field_name, value in (
+            ("executable_quantity", self.executable_quantity),
+            ("executable_notional", self.executable_notional),
+        ):
+            if not isinstance(value, Decimal) or not value.is_finite() or value < 0:
+                raise ValueError(f"{field_name} must be finite and non-negative")
+        if self.executable_quantity == 0 and (
+            self.best_price is not None or self.executable_notional != 0
+        ):
+            raise ValueError("empty executable liquidity cannot have price or notional")
+        if self.executable_quantity > 0 and self.best_price is None:
+            raise ValueError("executable liquidity requires a best price")
+        if self.as_of.tzinfo is None:
+            raise ValueError("liquidity timestamp must be timezone-aware")
+        if len(self.raw_payload_hash) != 64:
+            raise ValueError("raw_payload_hash must be a SHA-256 digest")
+
+
+def executable_buy_liquidity(
+    book: BinaryMarketBook,
+    *,
+    side: Literal["yes", "no"],
+    limit_price: Decimal,
+) -> ExecutableLiquidity:
+    """Return fillable binary-contract notional at or better than a buy limit."""
+
+    if side not in ("yes", "no"):
+        raise ValueError("side must be yes or no")
+    if (
+        not isinstance(limit_price, Decimal)
+        or not limit_price.is_finite()
+        or limit_price <= 0
+        or limit_price >= 1
+    ):
+        raise ValueError("limit_price must be between zero and one")
+
+    opposing_bids = book.no_bids if side == "yes" else book.yes_bids
+    eligible_levels = [
+        (Decimal("1") - level.price, level.quantity)
+        for level in opposing_bids
+        if Decimal("1") - level.price <= limit_price
+    ]
+    executable_quantity = sum((quantity for _, quantity in eligible_levels), Decimal("0"))
+    executable_notional = sum(
+        (price * quantity for price, quantity in eligible_levels),
+        Decimal("0"),
+    )
+    return ExecutableLiquidity(
+        market_ticker=book.venue_market_id,
+        side=side,
+        limit_price=limit_price,
+        best_price=eligible_levels[0][0] if eligible_levels else None,
+        executable_quantity=executable_quantity,
+        executable_notional=executable_notional,
+        as_of=book.as_of,
+        raw_payload_hash=book.raw_payload_hash,
+    )
 
 
 def decimal_value(value: Any) -> Decimal:

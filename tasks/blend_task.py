@@ -13,6 +13,7 @@ import math
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any, Awaitable, Callable, Protocol
 
 from analysis import SignalAnalysis
@@ -34,12 +35,14 @@ from tasks.trade_readiness_gate import (
     ReadinessDecision,
     evaluate_readiness,
 )
+from trading.orderbook import ExecutableLiquidity
 from utils.logger import get_logger, trade_log, write_trade_log_async
 from utils.lifecycle import strict_optional_bool
 
 
 log = get_logger("blend_task")
 _PROCESS_CONTROL_EXCEPTIONS = (KeyboardInterrupt, SystemExit, GeneratorExit)
+_READINESS_LIQUIDITY_UNSET = object()
 
 
 def _log_capital_guard_capture_diagnostic_noexcept(
@@ -212,6 +215,11 @@ OpenExposureDrawdownProvider = Callable[
     float | None | OpenExposureDrawdownSnapshot | Awaitable[float | None | OpenExposureDrawdownSnapshot],
 ]
 
+ExecutionLiquidityProvider = Callable[
+    [SignalAnalysis],
+    ExecutableLiquidity | Awaitable[ExecutableLiquidity],
+]
+
 
 class CapitalGuardCaptureSinkLike(Protocol):
     async def capture(self, envelope: CapitalGuardShadowCaptureEnvelope) -> object: ...
@@ -237,6 +245,7 @@ class BlendTask:
         now: Callable[[], datetime] | None = None,
         calibration: CalibrationLike | None = None,
         capital_guard_capture_sink: CapitalGuardCaptureSinkLike | None = None,
+        execution_liquidity_provider: ExecutionLiquidityProvider | None = None,
     ) -> None:
         self._trading_queue = trading_queue
         self._store = store if store is not None else evidence_store.default_store()
@@ -247,6 +256,7 @@ class BlendTask:
         self._open_exposure_drawdown_provider = open_exposure_drawdown_provider
         self._calibration = calibration
         self._capital_guard_capture_sink = capital_guard_capture_sink
+        self._execution_liquidity_provider = execution_liquidity_provider
         self._is_paper_mode = cfg.is_paper_trading if is_paper_mode is None else is_paper_mode
         self._now = now if now is not None else lambda: datetime.now(UTC)
         # PROFIT-EXEC-002 series-correlation guard state. Maps series prefix
@@ -290,6 +300,11 @@ class BlendTask:
             if open_exposure_snapshot is not None
             else None
         )
+        use_execution_liquidity = (
+            isinstance(market, KalshiMarket)
+            and self._execution_liquidity_provider is not None
+            and blend_result.trade_blocked_reason is None
+        )
         readiness_input = _readiness_input(
             blend_result=blend_result,
             dossier=dossier,
@@ -302,11 +317,40 @@ class BlendTask:
             open_exposure_drawdown_pct=(
                 open_exposure_snapshot.drawdown_pct if open_exposure_snapshot is not None else None
             ),
+            market_liquidity_override=(
+                None if use_execution_liquidity else _READINESS_LIQUIDITY_UNSET
+            ),
         )
         try:
             readiness = self._readiness_evaluator(readiness_input, regime_confidence)
         except Exception as exc:
             raise ReadinessEvaluationError(f"readiness evaluation failed for {ticker}: {exc}") from exc
+        if use_execution_liquidity and readiness.trade_blocked_reason is None:
+            execution_liquidity = await self._execution_liquidity_for(fast_lane_result)
+            readiness_input = _readiness_input(
+                blend_result=blend_result,
+                dossier=dossier,
+                recent_records=recent_records,
+                trigger_record=_trigger_evidence_record(fast_lane_result),
+                market=market,
+                analysis=fast_lane_result,
+                default_min_edge=default_min_edge,
+                now=decision_at,
+                open_exposure_drawdown_pct=(
+                    open_exposure_snapshot.drawdown_pct if open_exposure_snapshot is not None else None
+                ),
+                market_liquidity_override=(
+                    float(execution_liquidity.executable_notional)
+                    if execution_liquidity is not None
+                    else 0.0
+                ),
+            )
+            try:
+                readiness = self._readiness_evaluator(readiness_input, regime_confidence)
+            except Exception as exc:
+                raise ReadinessEvaluationError(
+                    f"readiness evaluation failed for {ticker}: {exc}"
+                ) from exc
         source_meta = fast_lane_result.signal_meta if isinstance(fast_lane_result.signal_meta, dict) else {}
         raw_lifecycle_id = source_meta.get("lifecycle_id")
         lifecycle_id = (
@@ -432,6 +476,78 @@ class BlendTask:
             candidate=candidate,
             enqueued=True,
         )
+
+    async def _execution_liquidity_for(
+        self,
+        analysis: SignalAnalysis,
+    ) -> ExecutableLiquidity | None:
+        provider = self._execution_liquidity_provider
+        if provider is None:
+            return None
+        try:
+            result = provider(analysis)
+            liquidity = await result if inspect.isawaitable(result) else result
+            self._validate_execution_liquidity(liquidity, analysis)
+        except Exception as exc:
+            self._set_execution_liquidity_meta(
+                analysis,
+                {
+                    "source": "kalshi_orderbook",
+                    "status": "unavailable",
+                    "reason": type(exc).__name__,
+                },
+            )
+            return None
+
+        self._set_execution_liquidity_meta(
+            analysis,
+            {
+                "source": "kalshi_orderbook",
+                "side": liquidity.side,
+                "limit_price": float(liquidity.limit_price),
+                "best_price": (
+                    float(liquidity.best_price) if liquidity.best_price is not None else None
+                ),
+                "executable_quantity": float(liquidity.executable_quantity),
+                "executable_notional": float(liquidity.executable_notional),
+                "as_of": liquidity.as_of.isoformat(),
+                "raw_payload_hash": liquidity.raw_payload_hash,
+            },
+        )
+        return liquidity
+
+    @staticmethod
+    def _validate_execution_liquidity(
+        liquidity: object,
+        analysis: SignalAnalysis,
+    ) -> None:
+        if not isinstance(liquidity, ExecutableLiquidity):
+            raise TypeError("execution liquidity provider returned an invalid result")
+        if liquidity.market_ticker != analysis.market.ticker:
+            raise ValueError("execution liquidity market does not match analysis")
+        if liquidity.side != analysis.side:
+            raise ValueError("execution liquidity side does not match analysis")
+        executed_price_cents = analysis.executed_price_cents
+        if (
+            isinstance(executed_price_cents, bool)
+            or not isinstance(executed_price_cents, int)
+            or not 0 < executed_price_cents < 100
+        ):
+            raise ValueError("executed price must be an integer between 1 and 99 cents")
+        expected_limit = Decimal(executed_price_cents) / Decimal("100")
+        if liquidity.limit_price != expected_limit:
+            raise ValueError("execution liquidity limit does not match analysis")
+
+    @staticmethod
+    def _set_execution_liquidity_meta(
+        analysis: SignalAnalysis,
+        record: dict[str, object],
+    ) -> None:
+        source_meta = analysis.signal_meta if isinstance(analysis.signal_meta, dict) else {}
+        analysis.signal_meta = {
+            **source_meta,
+            "g7_execution_liquidity": record,
+        }
 
     async def _capture_capital_guard_shadow(
         self,
@@ -876,6 +992,7 @@ def _readiness_input(
     default_min_edge: float,
     now: datetime,
     open_exposure_drawdown_pct: float | None = None,
+    market_liquidity_override: float | None | object = _READINESS_LIQUIDITY_UNSET,
 ) -> dict[str, Any]:
     source_lane = "accumulation" if (dossier is not None and dossier.current_estimate is not None) else "fast"
     readiness_records = _readiness_records(recent_records, trigger_record)
@@ -890,7 +1007,11 @@ def _readiness_input(
         "recency_score": _recency_score(market, readiness_records, now),
         "time_to_close_seconds": _time_to_close_seconds(market, now),
         "settlement_source_relevant": _settlement_source_relevant(analysis),
-        "market_liquidity_dollars": _optional_float(getattr(market, "liquidity_dollars", None)),
+        "market_liquidity_dollars": (
+            _optional_float(getattr(market, "liquidity_dollars", None))
+            if market_liquidity_override is _READINESS_LIQUIDITY_UNSET
+            else _optional_float(market_liquidity_override)
+        ),
         "market_price_momentum_cents": _market_price_momentum_cents(market),
         "intended_side": getattr(analysis, "side", None),
         "open_exposure_drawdown_pct": open_exposure_drawdown_pct,
@@ -1054,7 +1175,7 @@ def _trade_candidate(
                 signal_meta[key] = value.strip()
         elif key == "settlement_source_match":
             signal_meta[key] = strict_optional_bool(value)
-        elif key.startswith(("research_", "trigger_evidence_")):
+        elif key.startswith(("research_", "trigger_evidence_")) or key == "g7_execution_liquidity":
             signal_meta[key] = value
     # F-11 P1-A: SignalAnalysis.market_yes_price was deleted; the canonical
     # post-P0 source for the executed-side entry price is executed_price_cents.

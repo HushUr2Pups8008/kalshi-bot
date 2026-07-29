@@ -1758,6 +1758,7 @@ async def test_research_analysis_route_uses_validated_store_without_feed_side_ef
     assert kwargs["store"] is research_store
     assert kwargs["calibration"] is bot._calibration_task
     assert kwargs["is_paper_mode"] is True
+    assert kwargs["execution_liquidity_provider"] == bot._execution_liquidity_provider
     research_blend_task.process_fast_lane_result.assert_awaited_once_with(analysis)
     assert bot._evidence_queue.empty()
     bot.ws.watch.assert_not_called()

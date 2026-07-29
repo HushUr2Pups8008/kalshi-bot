@@ -25,6 +25,7 @@ from tasks.blend_task import (
 )
 from tasks.trade_readiness_gate import evaluate_readiness
 from tasks.evidence_store import DossierState, EvidenceRecord, StructuralPriorRecord
+from trading.orderbook import ExecutableLiquidity
 
 
 class FakeStore:
@@ -361,6 +362,147 @@ async def test_readiness_input_carries_capital_defense_market_fields():
     assert captured["market_price_momentum_cents"] == pytest.approx(-1.0)
     assert captured["intended_side"] == "yes"
     assert result.trade_blocked_reason == "G7_zero_liquidity"
+
+
+@pytest.mark.asyncio
+async def test_execution_orderbook_liquidity_replaces_zero_summary_for_kalshi_g7():
+    observed_inputs: list[dict] = []
+    provider_calls: list[SignalAnalysis] = []
+
+    def capture_and_evaluate(payload, regime_confidence):  # noqa: ANN001
+        observed_inputs.append(dict(payload))
+        return evaluate_readiness(payload, regime_confidence)
+
+    async def execution_liquidity_provider(analysis: SignalAnalysis) -> ExecutableLiquidity:
+        provider_calls.append(analysis)
+        return ExecutableLiquidity(
+            market_ticker=analysis.market.ticker,
+            side="yes",
+            limit_price=Decimal("0.50"),
+            best_price=Decimal("0.50"),
+            executable_quantity=Decimal("2"),
+            executable_notional=Decimal("1.02"),
+            as_of=datetime(2026, 4, 18, 12, tzinfo=UTC),
+            raw_payload_hash="b" * 64,
+        )
+
+    analysis = _analysis(market=_market(liquidity_dollars=Decimal("0")))
+    task = BlendTask(
+        trading_queue=asyncio.Queue(),
+        store=FakeStore(),
+        logger=SpyLogger(),
+        readiness_evaluator=capture_and_evaluate,
+        execution_liquidity_provider=execution_liquidity_provider,
+        is_paper_mode=True,
+    )
+
+    result = await task.process_fast_lane_result(analysis)
+
+    assert result.ready is True
+    assert provider_calls == [analysis]
+    assert [item["market_liquidity_dollars"] for item in observed_inputs] == [None, 1.02]
+    assert result.candidate is not None
+    assert result.candidate.signal_meta["g7_execution_liquidity"] == {
+        "source": "kalshi_orderbook",
+        "side": "yes",
+        "limit_price": 0.50,
+        "best_price": 0.50,
+        "executable_quantity": 2.0,
+        "executable_notional": 1.02,
+        "as_of": "2026-04-18T12:00:00+00:00",
+        "raw_payload_hash": "b" * 64,
+    }
+
+
+@pytest.mark.asyncio
+async def test_execution_orderbook_failure_fails_closed_at_g7():
+    async def execution_liquidity_provider(_analysis: SignalAnalysis) -> ExecutableLiquidity:
+        raise RuntimeError("orderbook unavailable")
+
+    logger = SpyLogger()
+    task = BlendTask(
+        trading_queue=asyncio.Queue(),
+        store=FakeStore(),
+        logger=logger,
+        execution_liquidity_provider=execution_liquidity_provider,
+        is_paper_mode=True,
+    )
+
+    result = await task.process_fast_lane_result(
+        _analysis(market=_market(liquidity_dollars=Decimal("0")))
+    )
+
+    assert result.ready is False
+    assert result.trade_blocked_reason == "G7_zero_liquidity"
+    assert logger.skipped_records[0]["signal_meta"]["g7_execution_liquidity"] == {
+        "source": "kalshi_orderbook",
+        "status": "unavailable",
+        "reason": "RuntimeError",
+    }
+
+
+@pytest.mark.asyncio
+async def test_execution_orderbook_provider_is_not_called_after_preliminary_rejection():
+    provider_calls: list[SignalAnalysis] = []
+
+    async def execution_liquidity_provider(analysis: SignalAnalysis) -> ExecutableLiquidity:
+        provider_calls.append(analysis)
+        raise AssertionError("provider must not run after an upstream gate rejects")
+
+    task = BlendTask(
+        trading_queue=asyncio.Queue(),
+        store=FakeStore(),
+        logger=SpyLogger(),
+        execution_liquidity_provider=execution_liquidity_provider,
+        is_paper_mode=True,
+    )
+
+    result = await task.process_fast_lane_result(
+        _analysis(
+            market=_market(liquidity_dollars=Decimal("0")),
+            confidence=0.01,
+        )
+    )
+
+    assert result.ready is False
+    assert result.trade_blocked_reason == "G1_blended_confidence"
+    assert provider_calls == []
+
+
+@pytest.mark.asyncio
+async def test_execution_orderbook_snapshot_for_another_market_fails_closed():
+    async def execution_liquidity_provider(analysis: SignalAnalysis) -> ExecutableLiquidity:
+        return ExecutableLiquidity(
+            market_ticker="KXOTHER-1",
+            side="yes",
+            limit_price=Decimal("0.50"),
+            best_price=Decimal("0.50"),
+            executable_quantity=Decimal("2"),
+            executable_notional=Decimal("1.00"),
+            as_of=datetime(2026, 4, 18, 12, tzinfo=UTC),
+            raw_payload_hash="d" * 64,
+        )
+
+    logger = SpyLogger()
+    task = BlendTask(
+        trading_queue=asyncio.Queue(),
+        store=FakeStore(),
+        logger=logger,
+        execution_liquidity_provider=execution_liquidity_provider,
+        is_paper_mode=True,
+    )
+
+    result = await task.process_fast_lane_result(
+        _analysis(market=_market(liquidity_dollars=Decimal("0")))
+    )
+
+    assert result.ready is False
+    assert result.trade_blocked_reason == "G7_zero_liquidity"
+    assert logger.skipped_records[0]["signal_meta"]["g7_execution_liquidity"] == {
+        "source": "kalshi_orderbook",
+        "status": "unavailable",
+        "reason": "ValueError",
+    }
 
 
 @pytest.mark.asyncio

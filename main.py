@@ -125,9 +125,11 @@ from tasks.blend_task import (
     TradeCandidate,
 )
 from tasks.calibration_task import CalibrationTask
+from tasks.kalshi_execution_liquidity import fetch_kalshi_execution_liquidity
 from tasks.structural_task import StructuralTask
 from trading.executor import TradeExecutor
 from trading.fees import DIRECT_ACCOUNT_PRECISION, INITIAL_ORDER_FEE_ACCUMULATOR
+from trading.orderbook import ExecutableLiquidity
 from trading.paper_cohorts import (
     LEGACY_PAPER_COHORT_ID,
     PaperCohort,
@@ -1115,6 +1117,7 @@ class TradingBot:
         self._blend_task = BlendTask(
             trading_queue=self._trading_queue,
             calibration=self._calibration_task,
+            execution_liquidity_provider=self._execution_liquidity_provider,
             open_exposure_drawdown_provider=lambda: _paper_open_exposure_drawdown_snapshot(
                 self.paper
             ),
@@ -3135,6 +3138,12 @@ class TradingBot:
             self.ws.watch([analysis.market.ticker])
         return blend_result
 
+    async def _execution_liquidity_provider(
+        self,
+        analysis: SignalAnalysis,
+    ) -> ExecutableLiquidity:
+        return await fetch_kalshi_execution_liquidity(self.rest, analysis)
+
     async def _route_research_analysis_through_blend(
         self,
         analysis: SignalAnalysis,
@@ -3147,6 +3156,7 @@ class TradingBot:
             calibration=self._calibration_task,
             logger=trade_log,
             is_paper_mode=True,
+            execution_liquidity_provider=self._execution_liquidity_provider,
             open_exposure_drawdown_provider=lambda: _paper_open_exposure_drawdown_snapshot(
                 self.paper
             ),
