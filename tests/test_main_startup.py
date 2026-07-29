@@ -168,7 +168,8 @@ def test_active_runtime_cohort_requires_manifest_before_paper_trader_bootstrap(
     assert block_reason == "active paper cohort remains isolated from live trading"
 
 
-def test_legacy_pending_runtime_binds_distinct_manifest_and_remains_paper_only(
+@pytest.fixture()
+def legacy_pending_runtime(
     monkeypatch,
     tmp_path: Path,
 ):
@@ -213,6 +214,13 @@ def test_legacy_pending_runtime_binds_distinct_manifest_and_remains_paper_only(
     runtime, risk_cohorts, block_reason = main._runtime_paper_cohort_from_config(
         db_root=tmp_path
     )
+    return cohort, runtime, risk_cohorts, block_reason
+
+
+def test_legacy_pending_runtime_binds_distinct_manifest_and_remains_paper_only(
+    legacy_pending_runtime,
+):
+    cohort, runtime, risk_cohorts, block_reason = legacy_pending_runtime
 
     assert runtime == cohort
     assert [item.cohort_id for item in risk_cohorts] == [
@@ -222,6 +230,79 @@ def test_legacy_pending_runtime_binds_distinct_manifest_and_remains_paper_only(
     assert block_reason == (
         "legacy-pending paper cohort remains permanently isolated from live trading"
     )
+
+
+def test_trading_bot_binds_global_trade_log_to_resolved_paper_cohort(
+    monkeypatch,
+    legacy_pending_runtime,
+):
+    cohort, _, _, _ = legacy_pending_runtime
+
+    class StopAfterPaperTrader(RuntimeError):
+        pass
+
+    bound_trade_log = MagicMock()
+    monkeypatch.setattr(main, "trade_log", bound_trade_log)
+    monkeypatch.setattr(
+        main,
+        "_runtime_paper_cohort_from_config",
+        lambda: (cohort, [], "legacy-pending paper cohort remains permanently isolated from live trading"),
+    )
+    monkeypatch.setattr(main, "_configured_paper_cohort_kind", lambda: "legacy_pending")
+    for dependency in (
+        "KalshiRestClient",
+        "KalshiWebSocketClient",
+        "MarketMatcher",
+        "CalibrationTask",
+    ):
+        monkeypatch.setattr(main, dependency, MagicMock())
+    monkeypatch.setattr(
+        main,
+        "PaperTrader",
+        MagicMock(side_effect=StopAfterPaperTrader),
+    )
+
+    with pytest.raises(StopAfterPaperTrader):
+        main.TradingBot()
+
+    bound_trade_log.bind_runtime_context.assert_called_once_with(
+        cohort_id=cohort.cohort_id,
+        cohort_kind="legacy_pending",
+    )
+
+
+def test_pending_g7_snapshot_is_scoped_to_pending_runtime_db_not_legacy_baseline(
+    legacy_pending_runtime,
+):
+    _, runtime, risk_cohorts, _ = legacy_pending_runtime
+
+    assert [item.cohort_id for item in risk_cohorts] == [
+        "legacy-pending-baseline",
+        "pending-20260728",
+    ]
+    assert runtime.db_path == risk_cohorts[1].db_path
+    assert runtime.db_path != risk_cohorts[0].db_path
+
+    paper = SimpleNamespace(
+        db_path=runtime.db_path,
+        starting_bankroll=runtime.starting_bankroll,
+        get_notional_bankroll=lambda: runtime.starting_bankroll,
+    )
+
+    def only_pending_runtime_db(db_path: Path) -> dict[str, float]:
+        assert db_path == runtime.db_path
+        return {"marked_value": 0.0}
+
+    with patch(
+        "scripts.mark_open_positions.compute_open_position_marks",
+        side_effect=only_pending_runtime_db,
+    ) as compute_marks:
+        snapshot = _paper_open_exposure_drawdown_snapshot(paper)
+
+    compute_marks.assert_called_once_with(runtime.db_path)
+    assert snapshot.notional_bankroll == pytest.approx(runtime.starting_bankroll)
+    assert snapshot.marked_value == pytest.approx(0.0)
+    assert snapshot.drawdown_pct == pytest.approx(0.0)
 
 
 def test_legacy_runtime_config_is_refused_after_active_cohort_provisioning(

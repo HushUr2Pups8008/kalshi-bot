@@ -65,6 +65,66 @@ async def test_write_trade_log_async_offloads_blocking_writer_from_event_loop():
     assert marker_times[0] - start < 0.04
 
 
+@pytest.mark.asyncio
+async def test_trade_log_store_serializes_concurrent_async_rollover(monkeypatch):
+    root = _tmp_root()
+    try:
+        store = TradeLogStore(
+            root=root,
+            live_path=root / "live" / "trades.jsonl",
+            legacy_path=root / "trades.jsonl",
+        )
+        day_one = {"type": "SIGNAL", "ts": "2026-04-15T23:59:00+00:00", "ticker": "DAY1"}
+        day_two_first = {"type": "SIGNAL", "ts": "2026-04-16T00:01:00+00:00", "ticker": "DAY2_FIRST"}
+        day_two_second = {"type": "SIGNAL", "ts": "2026-04-16T00:02:00+00:00", "ticker": "DAY2_SECOND"}
+        store.append(day_one)
+
+        first_rotation_entered = threading.Event()
+        release_first_rotation = threading.Event()
+        second_worker_started = threading.Event()
+        second_rotation_entered = threading.Event()
+        rotation_count = 0
+        rotation_count_lock = threading.Lock()
+        original_rotate = store._rotate_live_to_archive
+
+        def block_first_rotation(current_day):
+            nonlocal rotation_count
+            with rotation_count_lock:
+                rotation_count += 1
+                is_first_rotation = rotation_count == 1
+            if is_first_rotation:
+                first_rotation_entered.set()
+                assert release_first_rotation.wait(timeout=2)
+            else:
+                second_rotation_entered.set()
+            original_rotate(current_day)
+
+        def write_second_record() -> None:
+            second_worker_started.set()
+            store.append(day_two_second)
+
+        monkeypatch.setattr(store, "_rotate_live_to_archive", block_first_rotation)
+        writes = [asyncio.create_task(write_trade_log_async(store.append, day_two_first))]
+        results: list[object] = []
+        try:
+            assert await asyncio.to_thread(first_rotation_entered.wait, 1)
+            writes.append(asyncio.create_task(write_trade_log_async(write_second_record)))
+            assert await asyncio.to_thread(second_worker_started.wait, 1)
+            assert not await asyncio.to_thread(second_rotation_entered.wait, 0.1)
+        finally:
+            release_first_rotation.set()
+            results = await asyncio.gather(*writes, return_exceptions=True)
+
+        assert results == [None, None]
+        assert rotation_count == 1
+        archive_path = root / "archive" / "2026" / "04" / "2026-04-15.jsonl"
+        live_path = root / "live" / "trades.jsonl"
+        assert _read_jsonl(archive_path) == [day_one]
+        assert _read_jsonl(live_path) == [day_two_first, day_two_second]
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def test_trade_log_store_rotates_across_day_boundary():
     root = _tmp_root()
     try:

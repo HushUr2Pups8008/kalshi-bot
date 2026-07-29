@@ -1,13 +1,16 @@
 from collections import Counter
 from datetime import datetime, timezone
 import shutil
+import sys
 import uuid
 from pathlib import Path
 
 import pytest
 
+from scripts import decision_funnel_summary
 from scripts.decision_funnel_summary import (
     infer_signal_type,
+    parse_args,
     parse_date_end,
     parse_date_start,
     print_summary,
@@ -1552,3 +1555,228 @@ def test_summarize_lifecycle_attribution_quarantines_timestamp_distinct_opportun
     assert attribution["opportunity_lifecycle_count"] == 0
     assert attribution["reused_opportunity_lifecycle_count"] == 1
     assert attribution["quarantined_lifecycle_count"] == 1
+
+
+def test_main_uses_exact_utc_bounds(monkeypatch, local_tmp_dir):
+    path = local_tmp_dir / "trades.jsonl"
+    captured: dict[str, object] = {}
+
+    def fake_summarize(path_arg, since, until, *, exclude_test=False):
+        captured["path"] = path_arg
+        captured["since"] = since
+        captured["until"] = until
+        captured["exclude_test"] = exclude_test
+        return {}
+
+    monkeypatch.setattr(decision_funnel_summary, "summarize", fake_summarize)
+    monkeypatch.setattr(decision_funnel_summary, "print_summary", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "decision_funnel_summary.py",
+            "--path",
+            str(path),
+            "--since-utc",
+            "2026-07-29T00:32:03.836Z",
+            "--until-utc",
+            "2026-07-29T02:03:54.472Z",
+        ],
+    )
+
+    assert decision_funnel_summary.main() == 0
+    assert captured == {
+        "path": path,
+        "since": datetime(2026, 7, 29, 0, 32, 3, 836000, tzinfo=timezone.utc),
+        "until": datetime(2026, 7, 29, 2, 3, 54, 472000, tzinfo=timezone.utc),
+        "exclude_test": False,
+    }
+
+
+def test_parse_args_rejects_mixed_calendar_and_utc_bounds(monkeypatch, capsys):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "decision_funnel_summary.py",
+            "--since",
+            "2026-07-29",
+            "--until-utc",
+            "2026-07-29T02:03:54Z",
+        ],
+    )
+
+    with pytest.raises(SystemExit):
+        parse_args()
+
+    assert "cannot be combined" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("timestamp", ["not-a-timestamp", "2026-07-29T00:32:03"])
+def test_main_rejects_invalid_utc_bound(monkeypatch, timestamp):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "decision_funnel_summary.py",
+            "--since-utc",
+            timestamp,
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="Invalid time bound"):
+        decision_funnel_summary.main()
+
+
+def test_summarize_boot_window_separates_synthetic_details_and_compound_suppression_reasons(
+    local_tmp_dir,
+):
+    path = local_tmp_dir / "trades.jsonl"
+    write_jsonl(
+        path,
+        [
+            {
+                "type": "EARLY_FRESH_PASS",
+                "ts": "2026-07-29T00:31:59+00:00",
+            },
+            {
+                "type": "EARLY_FRESH_PASS",
+                "ts": "2026-07-29T00:32:03.836000+00:00",
+            },
+            {
+                "type": "MATCH_WEIGHT_APPLIED",
+                "market_prefix": "KXBOOT",
+                "source": "Reuters",
+                "pre_weight_score": 0.08,
+                "post_weight_score": 0.06,
+                "ts": "2026-07-29T00:33:00+00:00",
+            },
+            {
+                "type": "MATCH_DIAGNOSTIC",
+                "ticker": "KXBOOT-1",
+                "source": "Reuters",
+                "would_fail_pre_llm_gate": True,
+                "ts": "2026-07-29T00:34:00+00:00",
+            },
+            {
+                "type": "MATCH_SUPPRESSED",
+                "ticker": "KXBOOT-1",
+                "source": "Reuters",
+                "reason": "low_token_overlap+minimal_overlap+single_named_entity_only",
+                "matched_tokens": ["trump"],
+                "ts": "2026-07-29T00:35:00+00:00",
+            },
+            {
+                "type": "MATCH_DIAGNOSTIC",
+                "ticker": "KXBOOT-2",
+                "source": "Reuters",
+                "would_fail_pre_llm_gate": False,
+                "ts": "2026-07-29T00:36:00+00:00",
+            },
+            {
+                "type": "SIGNAL_ANALYSIS_DETAIL",
+                "ticker": "KXSTARTUP-PROBE",
+                "source": "startup_probe",
+                "is_startup_probe": True,
+                "is_synthetic_probe": True,
+                "ts": "2026-07-29T00:37:00+00:00",
+            },
+            {
+                "type": "SIGNAL_ANALYSIS_DETAIL",
+                "ticker": "KXBOOT-2",
+                "source": "Reuters",
+                "ts": "2026-07-29T00:38:00+00:00",
+            },
+            {
+                "type": "MATCH_LLM_REVIEW",
+                "ticker": "KXBOOT-2",
+                "verdict": "false_positive_neutral",
+                "ts": "2026-07-29T00:39:00+00:00",
+            },
+            {
+                "type": "MATCH_WEIGHT_APPLIED",
+                "market_prefix": "KXBOOT",
+                "source": "Reuters",
+                "pre_weight_score": 0.07,
+                "post_weight_score": 0.06,
+                "ts": "2026-07-29T00:40:00+00:00",
+            },
+            {
+                "type": "OPPORTUNITY",
+                "ts": "2026-07-29T00:40:00+00:00",
+            },
+            {
+                "type": "SIGNAL",
+                "ts": "2026-07-29T00:40:01+00:00",
+            },
+        ],
+    )
+
+    stats = summarize(
+        path,
+        since=datetime(2026, 7, 29, 0, 32, 3, 836000, tzinfo=timezone.utc),
+        until=datetime(2026, 7, 29, 0, 40, tzinfo=timezone.utc),
+    )
+
+    assert stats["event_counts"]["EARLY_FRESH_PASS"] == 1
+    assert stats["match_weight_applied_total"] == 2
+    assert stats["match_diagnostics_total"] == 2
+    assert stats["event_counts"]["MATCH_SUPPRESSED"] == 1
+    assert stats["signal_analysis_detail_total"] == 2
+    assert stats["signal_analysis_detail_organic_total"] == 1
+    assert stats["signal_analysis_detail_synthetic_total"] == 1
+    assert stats["event_counts"]["SIGNAL"] == 0
+    assert stats["event_counts"]["OPPORTUNITY"] == 1
+    assert stats["event_counts"]["PAPER_TRADE"] == 0
+    assert stats["match_diagnostic_pre_llm_gate"] == Counter({"would_fail": 1, "would_pass": 1})
+    assert stats["match_suppressed_reasons"] == Counter(
+        {
+            "low_token_overlap": 1,
+            "minimal_overlap": 1,
+            "single_named_entity_only": 1,
+        }
+    )
+    assert stats["match_llm_review_verdicts"] == Counter({"false_positive_neutral": 1})
+
+
+def test_print_summary_includes_raw_funnel_and_synthetic_breakdown(capsys, local_tmp_dir):
+    path = local_tmp_dir / "trades.jsonl"
+    write_jsonl(
+        path,
+        [
+            {"type": "EARLY_FRESH_PASS", "ts": "2026-07-29T00:32:00+00:00"},
+            {
+                "type": "MATCH_WEIGHT_APPLIED",
+                "pre_weight_score": 0.08,
+                "post_weight_score": 0.06,
+                "ts": "2026-07-29T00:33:00+00:00",
+            },
+            {"type": "MATCH_DIAGNOSTIC", "ts": "2026-07-29T00:34:00+00:00"},
+            {
+                "type": "MATCH_SUPPRESSED",
+                "reason": "minimal_overlap+single_named_entity_only",
+                "ts": "2026-07-29T00:35:00+00:00",
+            },
+            {
+                "type": "SIGNAL_ANALYSIS_DETAIL",
+                "is_synthetic_probe": True,
+                "ts": "2026-07-29T00:36:00+00:00",
+            },
+            {"type": "SIGNAL_ANALYSIS_DETAIL", "ts": "2026-07-29T00:37:00+00:00"},
+        ],
+    )
+    stats = summarize(path, since=None, until=None)
+
+    print_summary(stats, top=5, since=None, until=None)
+
+    output = capsys.readouterr().out
+    assert "Raw Funnel (report-window event rows; not lifecycle conversion)" in output
+    assert "EARLY_FRESH_PASS            : 1" in output
+    assert "MATCH_WEIGHT_APPLIED        : 1" in output
+    assert "MATCH_DIAGNOSTIC            : 1" in output
+    assert "MATCH_SUPPRESSED            : 1" in output
+    assert "SIGNAL_ANALYSIS_DETAIL      : 2 (organic=1, synthetic=1)" in output
+    assert "SIGNAL                      : 0" in output
+    assert "OPPORTUNITY                 : 0" in output
+    assert "PAPER_TRADE                 : 0" in output
+    assert "Same-window lifecycle attribution" in output

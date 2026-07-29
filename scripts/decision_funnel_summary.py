@@ -21,7 +21,7 @@ import argparse
 import json
 import sys
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -88,12 +88,37 @@ def parse_args() -> argparse.Namespace:
         parser,
         help_text=f"Inclusive end date in YYYY-MM-DD (default: now when both dates omitted; last {DEFAULT_CURRENT_STATE_WINDOW_HOURS} hours)",
     )
+    parser.add_argument(
+        "--since-utc",
+        help="Inclusive exact ISO-8601 UTC start timestamp; cannot be combined with --since/--until",
+    )
+    parser.add_argument(
+        "--until-utc",
+        help="Inclusive exact ISO-8601 UTC end timestamp; cannot be combined with --since/--until",
+    )
     add_top_arg(parser, default=5, help_text="Max rows to show in top breakdowns (default: 5)")
     add_exclude_test_arg(
         parser,
         help_text="Exclude synthetic/test records (source contains 'r/test' or ticker contains 'KXTEST')",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if (args.since_utc or args.until_utc) and (args.since or args.until):
+        parser.error("--since-utc/--until-utc cannot be combined with --since/--until")
+    return args
+
+
+def parse_utc_timestamp(value: str) -> datetime:
+    """Parse an explicit ISO-8601 timestamp into UTC for an exact report window."""
+    normalized = value.strip()
+    if normalized.endswith("Z"):
+        normalized = f"{normalized[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ValueError(f"invalid ISO-8601 timestamp {value!r}") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"timestamp must include a UTC offset: {value!r}")
+    return parsed.astimezone(timezone.utc)
 
 
 def infer_signal_type(record: dict[str, Any]) -> str:
@@ -553,6 +578,8 @@ def summarize(
         "execution_paths": Counter(),
         "match_diagnostics_total": 0,
         "signal_analysis_detail_total": 0,
+        "signal_analysis_detail_organic_total": 0,
+        "signal_analysis_detail_synthetic_total": 0,
         "match_to_signal_detail_gap": 0,
         "match_diagnostic_pre_llm_gate": Counter(),
         "match_diagnostic_sources": Counter(),
@@ -617,6 +644,10 @@ def summarize(
             stats["match_diagnostic_tickers"][_text(record.get("ticker"))] += 1
         elif event_type == "SIGNAL_ANALYSIS_DETAIL":
             stats["signal_analysis_detail_total"] += 1
+            if record.get("is_startup_probe") or record.get("is_synthetic_probe"):
+                stats["signal_analysis_detail_synthetic_total"] += 1
+            else:
+                stats["signal_analysis_detail_organic_total"] += 1
         elif event_type == "MATCH_LLM_REVIEW":
             stats["match_llm_reviews_total"] += 1
             verdict = _text(record.get("verdict"))
@@ -801,6 +832,29 @@ def print_summary(stats: dict[str, Any], top: int, since: datetime | None, until
     print(f"  Paper-trade records          : {paper_trades}")
     print(f"  Live submission intents      : {live_submission_intents}")
     print(f"  Live order submissions       : {live_orders}")
+
+    signal_detail_total = int(stats.get("signal_analysis_detail_total", 0) or 0)
+    signal_detail_organic = int(
+        stats.get("signal_analysis_detail_organic_total", signal_detail_total) or 0
+    )
+    signal_detail_synthetic = int(stats.get("signal_analysis_detail_synthetic_total", 0) or 0)
+    print()
+    print("Raw Funnel (report-window event rows; not lifecycle conversion)")
+    print(f"  EARLY_FRESH_PASS            : {stats['event_counts'].get('EARLY_FRESH_PASS', 0)}")
+    print(f"  MATCH_WEIGHT_APPLIED        : {stats['match_weight_applied_total']}")
+    print(f"  MATCH_DIAGNOSTIC            : {stats['match_diagnostics_total']}")
+    print(f"  MATCH_SUPPRESSED            : {stats['event_counts'].get('MATCH_SUPPRESSED', 0)}")
+    print(
+        "  SIGNAL_ANALYSIS_DETAIL      : "
+        f"{signal_detail_total} (organic={signal_detail_organic}, synthetic={signal_detail_synthetic})"
+    )
+    print(f"  ANALYSIS_REJECTED           : {analysis_rejected}")
+    print(f"  SIGNAL                      : {signals}")
+    print(f"  OPPORTUNITY                 : {opportunities}")
+    print(f"  PAPER_TRADE                 : {paper_trades}")
+
+    print()
+    print("Same-window lifecycle attribution")
     print(f"  Linkable opportunities        : {attribution['opportunity_lifecycle_count']}")
     print(
         "  Linked outcomes               : "
@@ -1069,10 +1123,10 @@ def main() -> int:
     args = parse_args()
 
     try:
-        since_input = parse_date_start(args.since)
-        until_input = parse_date_end(args.until)
+        since_input = parse_utc_timestamp(args.since_utc) if args.since_utc else parse_date_start(args.since)
+        until_input = parse_utc_timestamp(args.until_utc) if args.until_utc else parse_date_end(args.until)
     except ValueError as exc:
-        raise SystemExit(f"Invalid date: {exc}") from exc
+        raise SystemExit(f"Invalid time bound: {exc}") from exc
 
     since, until, _ = resolve_recent_window(since_input, until_input)
 

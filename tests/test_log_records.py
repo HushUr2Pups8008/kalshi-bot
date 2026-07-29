@@ -247,6 +247,145 @@ def _cleanup(tmp: Path) -> None:
     tmp.rmdir()
 
 
+def test_trade_logger_binds_explicit_runtime_paper_cohort_fields(tmp_path: Path):
+    log_file = tmp_path / "trades.jsonl"
+    logger = TradeLogger(log_file)
+
+    logger.bind_runtime_context(
+        cohort_id="legacy-pending-20260729",
+        cohort_kind="legacy_pending",
+    )
+    logger.log_signal(
+        source="Reuters",
+        headline="Example",
+        url="https://example.test",
+        signal_strength=0.5,
+        keywords_matched=["example"],
+    )
+
+    record = json.loads(log_file.read_text(encoding="utf-8"))
+    assert record["runtime_paper_cohort_id"] == "legacy-pending-20260729"
+    assert record["runtime_paper_cohort_kind"] == "legacy_pending"
+    assert "cohort_id" not in record
+    assert "cohort_kind" not in record
+
+
+def test_trade_logger_allows_idempotent_runtime_paper_cohort_rebind(tmp_path: Path):
+    log_file = tmp_path / "trades.jsonl"
+    logger = TradeLogger(log_file)
+
+    logger.bind_runtime_context(
+        cohort_id="legacy-pending-20260729",
+        cohort_kind="legacy_pending",
+    )
+    logger.bind_runtime_context(
+        cohort_id="legacy-pending-20260729",
+        cohort_kind="legacy_pending",
+    )
+    logger.log_signal(
+        source="Reuters",
+        headline="Example",
+        url="https://example.test",
+        signal_strength=0.5,
+        keywords_matched=["example"],
+    )
+
+    record = json.loads(log_file.read_text(encoding="utf-8"))
+    assert record["runtime_paper_cohort_id"] == "legacy-pending-20260729"
+    assert record["runtime_paper_cohort_kind"] == "legacy_pending"
+
+
+def test_trade_logger_rejects_conflicting_runtime_paper_cohort_rebind(tmp_path: Path):
+    log_file = tmp_path / "trades.jsonl"
+    logger = TradeLogger(log_file)
+    logger.bind_runtime_context(
+        cohort_id="legacy-pending-20260729",
+        cohort_kind="legacy_pending",
+    )
+
+    with pytest.raises(RuntimeError, match="runtime paper cohort is already bound"):
+        logger.bind_runtime_context(
+            cohort_id="new-cohort-20260730",
+            cohort_kind="new_pending",
+        )
+
+    logger.log_signal(
+        source="Reuters",
+        headline="Example",
+        url="https://example.test",
+        signal_strength=0.5,
+        keywords_matched=["example"],
+    )
+    record = json.loads(log_file.read_text(encoding="utf-8"))
+    assert record["runtime_paper_cohort_id"] == "legacy-pending-20260729"
+    assert record["runtime_paper_cohort_kind"] == "legacy_pending"
+
+
+def test_trade_logger_runtime_paper_context_wins_over_record_values(tmp_path: Path):
+    log_file = tmp_path / "trades.jsonl"
+    logger = TradeLogger(log_file)
+    logger.bind_runtime_context(
+        cohort_id="legacy-pending-20260729",
+        cohort_kind="legacy_pending",
+    )
+
+    logger._write(
+        {
+            "type": "TEST_RECORD",
+            "runtime_paper_cohort_id": "caller-provided-id",
+            "runtime_paper_cohort_kind": "caller-provided-kind",
+        }
+    )
+
+    record = json.loads(log_file.read_text(encoding="utf-8"))
+    assert record["runtime_paper_cohort_id"] == "legacy-pending-20260729"
+    assert record["runtime_paper_cohort_kind"] == "legacy_pending"
+
+
+def test_live_order_uses_explicit_runtime_paper_cohort_provenance(tmp_path: Path):
+    log_file = tmp_path / "trades.jsonl"
+    logger = TradeLogger(log_file)
+    logger.bind_runtime_context(
+        cohort_id="legacy-pending-20260729",
+        cohort_kind="legacy_pending",
+    )
+
+    logger.log_live_order(
+        order_id="order-123",
+        ticker="KXTEST-25DEC31",
+        side="yes",
+        contracts=1,
+        price_cents=50,
+        cost_dollars=0.5,
+        status="resting",
+    )
+
+    record = json.loads(log_file.read_text(encoding="utf-8"))
+    assert record["type"] == "LIVE_ORDER"
+    assert record["runtime_paper_cohort_id"] == "legacy-pending-20260729"
+    assert record["runtime_paper_cohort_kind"] == "legacy_pending"
+    assert "cohort_id" not in record
+    assert "cohort_kind" not in record
+
+
+def test_trade_logger_omits_runtime_cohort_context_when_unbound(tmp_path: Path):
+    log_file = tmp_path / "trades.jsonl"
+
+    TradeLogger(log_file).log_signal(
+        source="Reuters",
+        headline="Example",
+        url="https://example.test",
+        signal_strength=0.5,
+        keywords_matched=["example"],
+    )
+
+    record = json.loads(log_file.read_text(encoding="utf-8"))
+    assert "runtime_paper_cohort_id" not in record
+    assert "runtime_paper_cohort_kind" not in record
+    assert "cohort_id" not in record
+    assert "cohort_kind" not in record
+
+
 def test_logger_emits_required_only_record():
     """Required-only detail emits required fields plus implicit 'type' marker.
     Optional None fields are omitted (preserves prior emission contract).
@@ -529,5 +668,54 @@ def test_logger_rounds_optional_floats_to_four_decimals():
         assert record["pre_llm_keyword_signal_strength"] == 0.1111
         assert record["llm_probability_movement"] == 0.2222
         assert record["age_at_analysis_seconds"] == 123.4568
+    finally:
+        _cleanup(tmp)
+
+
+def test_trade_logger_records_polymarket_funnel_event_schemas():
+    tmp = make_tmp_dir("polymarket_funnel_events")
+    try:
+        log_file = tmp / "trades.jsonl"
+        logger = TradeLogger(log_file)
+
+        logger.log_match_no_candidate(
+            source="Example Wire",
+            headline="Example event gets more likely",
+            venue="polymarket_us",
+            eligible_market_count=2,
+            reason="market_fetch_failed",
+        )
+        logger.log_polymarket_market_cache(
+            raw_fetched=3,
+            cursor_present=True,
+            eligible_30d=2,
+            candidate_within_admission_horizon=1,
+            admission_horizon_days=14.0,
+            market_limit=10,
+        )
+
+        no_candidate, cache = [
+            json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()
+        ]
+
+        assert no_candidate == {
+            "type": "MATCH_NO_CANDIDATE",
+            "ts": no_candidate["ts"],
+            "source": "Example Wire",
+            "headline": "Example event gets more likely",
+            "venue": "polymarket_us",
+            "eligible_market_count": 2,
+            "reason": "market_fetch_failed",
+        }
+        assert cache == {
+            "type": "POLYMARKET_MARKET_CACHE",
+            "ts": cache["ts"],
+            "raw_fetched": 3,
+            "cursor_present": True,
+            "eligible_30d": 2,
+            "candidate_within_admission_horizon": 1,
+            "admission_horizon_days": 14.0,
+            "market_limit": 10,
+        }
     finally:
         _cleanup(tmp)

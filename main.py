@@ -986,6 +986,10 @@ class TradingBot:
             self._paper_risk_cohorts,
             _live_transition_block_reason,
         ) = _runtime_paper_cohort_from_config()
+        trade_log.bind_runtime_context(
+            cohort_id=self.paper_cohort.cohort_id,
+            cohort_kind=_configured_paper_cohort_kind(),
+        )
         self.paper         = PaperTrader(
             db_path=self.paper_cohort.db_path,
             startup_context="runtime",

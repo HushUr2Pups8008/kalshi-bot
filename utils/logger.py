@@ -35,10 +35,11 @@ import logging.handlers
 import os
 import shutil
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Optional, TypeVar
+from typing import Any, Callable, Literal, Optional, TypeVar
 
 import colorlog
 
@@ -454,32 +455,34 @@ class TradeLogStore:
         self._legacy_path = legacy_path
         self._archive_root = root / "archive"
         self._log = get_logger("trade_log_store")
+        self._lock = threading.Lock()
         self._live_path.parent.mkdir(parents=True, exist_ok=True)
         self._archive_root.mkdir(parents=True, exist_ok=True)
 
     def append(self, record: dict[str, Any]) -> None:
-        ts = _parse_trade_ts(record.get("ts"))
-        if ts is None:
-            ts = datetime.now(timezone.utc)
-            record["ts"] = ts.isoformat()
-        current_day = self._current_live_day()
-        record_day = ts.date()
+        with self._lock:
+            ts = _parse_trade_ts(record.get("ts"))
+            if ts is None:
+                ts = datetime.now(timezone.utc)
+                record["ts"] = ts.isoformat()
+            current_day = self._current_live_day()
+            record_day = ts.date()
 
-        if current_day is None or current_day == record_day:
+            if current_day is None or current_day == record_day:
+                self._append_line(self._live_path, json.dumps(record) + "\n")
+                return
+
+            if record_day < current_day:
+                self._log.warning(
+                    "[TRADE_LOG] Out-of-order record for %s arrived while live file is %s; appending to archive",
+                    record_day.isoformat(),
+                    current_day.isoformat(),
+                )
+                self._append_line(self._archive_path_for_day(record_day), json.dumps(record) + "\n")
+                return
+
+            self._rotate_live_to_archive(current_day)
             self._append_line(self._live_path, json.dumps(record) + "\n")
-            return
-
-        if record_day < current_day:
-            self._log.warning(
-                "[TRADE_LOG] Out-of-order record for %s arrived while live file is %s; appending to archive",
-                record_day.isoformat(),
-                current_day.isoformat(),
-            )
-            self._append_line(self._archive_path_for_day(record_day), json.dumps(record) + "\n")
-            return
-
-        self._rotate_live_to_archive(current_day)
-        self._append_line(self._live_path, json.dumps(record) + "\n")
 
     def _append_line(self, path: Path, line: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -556,8 +559,28 @@ class TradeLogger:
         self._path = path
         self._store = TradeLogStore(live_path=path)
         self._log = get_logger("trade_logger")
+        self._runtime_paper_context: dict[str, str] = {}
+
+    def bind_runtime_context(self, *, cohort_id: str, cohort_kind: str) -> None:
+        """Attach immutable runtime lineage to future primary durable records."""
+        runtime_paper_context = {
+            "runtime_paper_cohort_id": cohort_id,
+            "runtime_paper_cohort_kind": cohort_kind,
+        }
+        if not self._runtime_paper_context:
+            self._runtime_paper_context = runtime_paper_context
+            return
+        if self._runtime_paper_context != runtime_paper_context:
+            existing_id = self._runtime_paper_context["runtime_paper_cohort_id"]
+            existing_kind = self._runtime_paper_context["runtime_paper_cohort_kind"]
+            raise RuntimeError(
+                "runtime paper cohort is already bound to "
+                f"({existing_id!r}, {existing_kind!r}); refusing to rebind to "
+                f"({cohort_id!r}, {cohort_kind!r})"
+            )
 
     def _write(self, record: dict[str, Any]) -> None:
+        record = {**record, **getattr(self, "_runtime_paper_context", {})}
         record.setdefault("ts", datetime.now(timezone.utc).isoformat())
         self._store.append(record)
 
@@ -1293,6 +1316,48 @@ class TradeLogger:
                 "headline": headline,
                 "reason": reason,
                 "market_price": round(market_price, 4),
+            }
+        )
+
+    def log_match_no_candidate(
+        self,
+        *,
+        source: str,
+        headline: str,
+        venue: str,
+        eligible_market_count: int,
+        reason: Literal["no_eligible_markets", "no_match", "market_fetch_failed"],
+    ) -> None:
+        self._write(
+            {
+                "type": "MATCH_NO_CANDIDATE",
+                "source": source,
+                "headline": headline,
+                "venue": venue,
+                "eligible_market_count": eligible_market_count,
+                "reason": reason,
+            }
+        )
+
+    def log_polymarket_market_cache(
+        self,
+        *,
+        raw_fetched: int,
+        cursor_present: bool,
+        eligible_30d: int,
+        candidate_within_admission_horizon: int,
+        admission_horizon_days: float,
+        market_limit: int,
+    ) -> None:
+        self._write(
+            {
+                "type": "POLYMARKET_MARKET_CACHE",
+                "raw_fetched": raw_fetched,
+                "cursor_present": cursor_present,
+                "eligible_30d": eligible_30d,
+                "candidate_within_admission_horizon": candidate_within_admission_horizon,
+                "admission_horizon_days": admission_horizon_days,
+                "market_limit": market_limit,
             }
         )
 
