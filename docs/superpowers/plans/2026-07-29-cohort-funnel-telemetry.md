@@ -33,8 +33,8 @@
         assert record["cohort_id"] == "legacy-pending-20260729"
         assert record["cohort_kind"] == "legacy_pending"
 - [ ] Add an unbound logger test asserting both fields are absent.
-- [ ] Run `pytest tests/test_log_records.py -k runtime_cohort_context -q`; it must fail before the method exists.
-- [ ] Implement `_runtime_context`, `bind_runtime_context`, and `{**self._runtime_context, **record}` before timestamping. Bind `trade_log` immediately after `TradingBot` resolves `self.paper_cohort`.
+- [ ] Run `pytest tests/test_log_records.py -k runtime_paper_cohort -q`; it must fail before the method exists.
+- [ ] Implement `_runtime_paper_context`, `bind_runtime_context`, and context-owned `runtime_paper_cohort_*` fields before timestamping. Bind `trade_log` immediately after `TradingBot` resolves `self.paper_cohort`.
 - [ ] Run `pytest tests/test_log_records.py tests/test_main_startup.py -q`.
 - [ ] Commit: `git commit -m "feat(logging): bind runtime paper cohort context"`.
 
