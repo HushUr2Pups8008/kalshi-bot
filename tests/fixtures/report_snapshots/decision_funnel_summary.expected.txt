@@ -15,6 +15,19 @@ Funnel
   Paper-trade records          : 1
   Live submission intents      : 0
   Live order submissions       : 1
+
+Raw Funnel (report-window event rows; not lifecycle conversion)
+  EARLY_FRESH_PASS            : 0
+  MATCH_WEIGHT_APPLIED        : 0
+  MATCH_DIAGNOSTIC            : 0
+  MATCH_SUPPRESSED            : 0
+  SIGNAL_ANALYSIS_DETAIL      : 0 (organic=0, synthetic=0)
+  ANALYSIS_REJECTED           : 2
+  SIGNAL                      : 2
+  OPPORTUNITY                 : 1
+  PAPER_TRADE                 : 1
+
+Same-window lifecycle attribution
   Linkable opportunities        : 0
   Linked outcomes               : G7=0 zero_cap=0 other=0 paper_trades=0 live_submissions=0 unknown_live_submissions=0 intents_without_matching_terminal_journal=0 conflicts=0 receipt_conflicts=0 pending=0
   Paper-trade lifecycle coverage : unavailable (0/1 linked)
