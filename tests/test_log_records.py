@@ -1401,8 +1401,34 @@ def test_trade_logger_records_polymarket_funnel_event_schemas():
             admission_horizon_days=14.0,
             market_limit=10,
         )
+        logger.log_polymarket_horizon_shadow(
+            source="Example Wire",
+            headline="Example event gets more likely",
+            venue="polymarket_us",
+            production_horizon_days=14.0,
+            shadow_horizon_start_days=14.0,
+            shadow_horizon_end_days=30.0,
+            production_candidate_count=2,
+            shadow_candidate_count=3,
+            production_qualifying_match_count=0,
+            shadow_qualifying_match_count=1,
+            production_no_token_overlap_count=2,
+            production_below_min_post_weight_score_count=0,
+            production_weight_demoted_below_min_score_count=0,
+            production_min_match_score=0.08,
+            shadow_no_token_overlap_count=2,
+            shadow_below_min_post_weight_score_count=1,
+            shadow_weight_demoted_below_min_score_count=0,
+            shadow_min_match_score=0.08,
+            shadow_analysis_status="not_evaluated_shadow_only",
+            production_best_rejected_pre_weight_score=0.12,
+            production_best_rejected_post_weight_score=0.012,
+            shadow_best_rejected_pre_weight_score=0.09,
+            shadow_best_rejected_post_weight_score=0.07,
+            production_counterfactual_shadow=_post_admission_counterfactual_shadow(),
+        )
 
-        no_candidate, cache = [
+        no_candidate, cache, horizon_shadow = [
             json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()
         ]
 
@@ -1428,6 +1454,51 @@ def test_trade_logger_records_polymarket_funnel_event_schemas():
             "candidate_within_admission_horizon": 1,
             "admission_horizon_days": 14.0,
             "market_limit": 10,
+        }
+        assert horizon_shadow == {
+            "type": "POLYMARKET_HORIZON_SHADOW",
+            "ts": horizon_shadow["ts"],
+            "source": "Example Wire",
+            "headline": "Example event gets more likely",
+            "venue": "polymarket_us",
+            "production_horizon_days": 14.0,
+            "shadow_horizon_start_days": 14.0,
+            "shadow_horizon_end_days": 30.0,
+            "production_candidate_count": 2,
+            "shadow_candidate_count": 3,
+            "production_qualifying_match_count": 0,
+            "shadow_qualifying_match_count": 1,
+            "production_no_token_overlap_count": 2,
+            "production_below_min_post_weight_score_count": 0,
+            "production_weight_demoted_below_min_score_count": 0,
+            "production_min_match_score": 0.08,
+            "shadow_no_token_overlap_count": 2,
+            "shadow_below_min_post_weight_score_count": 1,
+            "shadow_weight_demoted_below_min_score_count": 0,
+            "shadow_min_match_score": 0.08,
+            "shadow_analysis_status": "not_evaluated_shadow_only",
+            "production_best_rejected_pre_weight_score": 0.12,
+            "production_best_rejected_post_weight_score": 0.012,
+            "shadow_best_rejected_pre_weight_score": 0.09,
+            "shadow_best_rejected_post_weight_score": 0.07,
+            "production_counterfactual_shadow": {
+                **_post_admission_counterfactual_shadow(),
+                "candidates": [
+                    {
+                        "ticker": "0xdef456",
+                        "rejection_reason": "market_without_match_tokens",
+                        "market_token_count": 0,
+                        "matched_token_count": 0,
+                    },
+                    {
+                        "ticker": "0xabc123",
+                        "market_title": "Will Example pass?",
+                        "rejection_reason": "no_token_overlap",
+                        "market_token_count": 11,
+                        "matched_token_count": 0,
+                    },
+                ],
+            },
         }
     finally:
         _cleanup(tmp)

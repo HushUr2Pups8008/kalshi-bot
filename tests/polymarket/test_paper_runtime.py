@@ -310,6 +310,308 @@ async def test_legacy_process_news_logs_30_day_post_admission_stage(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_process_news_records_15_to_30_day_horizon_shadow_without_routing(
+    monkeypatch,
+):
+    monkeypatch.setattr(cfg, "is_paper_trading", True)
+    monkeypatch.setattr(cfg, "paper_cohort_id", "pending-test")
+    monkeypatch.setattr(cfg, "paper_cohort_kind", "legacy_pending")
+    monkeypatch.setattr(cfg, "paper_active_cohort_max_days_to_close", 14.0)
+    now = datetime(2026, 7, 29, tzinfo=timezone.utc)
+    production_market = _market(
+        market_id="production-unrelated",
+        title="Will unrelated bill pass?",
+        question="Will unrelated bill pass?",
+        close_time=(now + timedelta(days=7)).isoformat(),
+    )
+    shadow_market = _market(
+        market_id="shadow-example-event",
+        title="Will example event get more likely?",
+        question="Will example event get more likely?",
+        close_time=(now + timedelta(days=20)).isoformat(),
+    )
+    route_analysis = AsyncMock()
+    runtime = PolymarketPaperRuntime(
+        client=_FakeClient([production_market, shadow_market]),
+        route_analysis=route_analysis,
+        keyword_stats=None,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+        now_provider=lambda: now,
+    )
+
+    with (
+        patch("polymarket.paper_runtime.trade_log") as trade_log_mock,
+        patch(
+            "polymarket.paper_runtime.write_trade_log_async",
+            new_callable=AsyncMock,
+        ) as write_log_mock,
+    ):
+        routed_count = await runtime.process_news(_news())
+
+    assert routed_count == 0
+    route_analysis.assert_not_awaited()
+    horizon_calls = [
+        call
+        for call in write_log_mock.await_args_list
+        if call.args[0] is trade_log_mock.log_polymarket_horizon_shadow
+    ]
+    assert len(horizon_calls) == 1
+    horizon_fields = horizon_calls[0].kwargs
+    assert horizon_fields == {
+        "source": "Example Wire",
+        "headline": "Example event gets more likely",
+        "venue": Venue.POLYMARKET_US.value,
+        "production_horizon_days": 14.0,
+        "shadow_horizon_start_days": 14.0,
+        "shadow_horizon_end_days": 30.0,
+        "production_candidate_count": 1,
+        "shadow_candidate_count": 1,
+        "production_qualifying_match_count": 0,
+        "shadow_qualifying_match_count": 1,
+        "production_no_token_overlap_count": 1,
+        "production_below_min_post_weight_score_count": 0,
+        "production_weight_demoted_below_min_score_count": 0,
+        "production_min_match_score": 0.08,
+        "shadow_no_token_overlap_count": 0,
+        "shadow_below_min_post_weight_score_count": 0,
+        "shadow_weight_demoted_below_min_score_count": 0,
+        "shadow_min_match_score": 0.08,
+        "shadow_analysis_status": "not_evaluated_shadow_only",
+        "production_counterfactual_shadow": horizon_fields[
+            "production_counterfactual_shadow"
+        ],
+    }
+    assert horizon_fields["production_counterfactual_shadow"] == {
+        "schema_version": 1,
+        "match_clock_utc": now.isoformat(),
+        "news_headline_token_count": 3,
+        "news_match_token_count": 3,
+        "candidate_count_total": 1,
+        "captured_market_count": 1,
+        "omitted_market_count": 0,
+        "truncated": False,
+        "candidates": [
+            {
+                "ticker": "production-unrelated",
+                "rejection_reason": "no_token_overlap",
+                "market_token_count": 4,
+                "matched_token_count": 0,
+                "market_title": "Will unrelated bill pass?",
+            }
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_process_news_skips_horizon_shadow_for_tokenless_input(monkeypatch):
+    monkeypatch.setattr(cfg, "is_paper_trading", True)
+    monkeypatch.setattr(cfg, "paper_cohort_id", "pending-test")
+    monkeypatch.setattr(cfg, "paper_cohort_kind", "legacy_pending")
+    monkeypatch.setattr(cfg, "paper_active_cohort_max_days_to_close", 14.0)
+    now = datetime(2026, 7, 29, tzinfo=timezone.utc)
+    runtime = PolymarketPaperRuntime(
+        client=_FakeClient(
+            [
+                _market(close_time=(now + timedelta(days=7)).isoformat()),
+                _market(
+                    market_id="shadow-market",
+                    close_time=(now + timedelta(days=20)).isoformat(),
+                ),
+            ]
+        ),
+        route_analysis=AsyncMock(),
+        keyword_stats=None,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+        now_provider=lambda: now,
+    )
+
+    with (
+        patch("polymarket.paper_runtime.trade_log") as trade_log_mock,
+        patch(
+            "polymarket.paper_runtime.write_trade_log_async",
+            new_callable=AsyncMock,
+        ) as write_log_mock,
+    ):
+        routed_count = await runtime.process_news(_news("and the or"))
+
+    assert routed_count == 0
+    assert [
+        call
+        for call in write_log_mock.await_args_list
+        if call.args[0] is trade_log_mock.log_polymarket_horizon_shadow
+    ] == []
+
+
+@pytest.mark.asyncio
+async def test_process_news_reuses_one_match_weight_snapshot_for_horizon_shadow(
+    monkeypatch,
+):
+    monkeypatch.setattr(cfg, "is_paper_trading", True)
+    monkeypatch.setattr(cfg, "paper_cohort_id", "pending-test")
+    monkeypatch.setattr(cfg, "paper_cohort_kind", "legacy_pending")
+    monkeypatch.setattr(cfg, "paper_active_cohort_max_days_to_close", 14.0)
+    now = datetime(2026, 7, 29, tzinfo=timezone.utc)
+    production_market = _market(
+        market_id="production-unrelated",
+        title="Will unrelated bill pass?",
+        question="Will unrelated bill pass?",
+        close_time=(now + timedelta(days=7)).isoformat(),
+    )
+    shadow_market = _market(
+        market_id="shadow-example-event",
+        title="Will example event get more likely?",
+        question="Will example event get more likely?",
+        close_time=(now + timedelta(days=20)).isoformat(),
+    )
+    runtime = PolymarketPaperRuntime(
+        client=_FakeClient([production_market, shadow_market]),
+        route_analysis=AsyncMock(),
+        keyword_stats=None,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+        now_provider=lambda: now,
+    )
+    weights: dict[str, dict[str, float]] = {}
+
+    with (
+        patch(
+            "polymarket.paper_runtime._load_match_weights",
+            return_value=weights,
+        ) as load_weights_mock,
+        patch(
+            "polymarket.paper_runtime._match_polymarket_markets_with_rejection_telemetry",
+            wraps=paper_runtime._match_polymarket_markets_with_rejection_telemetry,
+        ) as match_mock,
+        patch("polymarket.paper_runtime.trade_log"),
+        patch(
+            "polymarket.paper_runtime.write_trade_log_async",
+            new_callable=AsyncMock,
+        ),
+    ):
+        routed_count = await runtime.process_news(_news())
+
+    assert routed_count == 0
+    load_weights_mock.assert_called_once_with()
+    assert match_mock.call_count == 2
+    assert all(
+        call.kwargs["token_weights"] is weights
+        for call in match_mock.call_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_matched_process_news_reuses_weight_snapshot_after_routing(
+    monkeypatch,
+):
+    monkeypatch.setattr(cfg, "is_paper_trading", True)
+    monkeypatch.setattr(cfg, "paper_cohort_id", "pending-test")
+    monkeypatch.setattr(cfg, "paper_cohort_kind", "legacy_pending")
+    monkeypatch.setattr(cfg, "paper_active_cohort_max_days_to_close", 14.0)
+    now = datetime(2026, 7, 29, tzinfo=timezone.utc)
+
+    async def estimate_probability(*_args, **_kwargs):
+        return 0.65, 0.8, ["example"], "reason", "yes", "moderate", 0.8
+
+    route_analysis = AsyncMock(return_value=SimpleNamespace(enqueued=True))
+    runtime = PolymarketPaperRuntime(
+        client=_FakeClient(
+            [
+                _market(close_time=(now + timedelta(days=7)).isoformat()),
+                _market(
+                    market_id="shadow-unrelated",
+                    title="Will unrelated bill pass?",
+                    question="Will unrelated bill pass?",
+                    close_time=(now + timedelta(days=20)).isoformat(),
+                ),
+            ]
+        ),
+        route_analysis=route_analysis,
+        keyword_stats=None,
+        estimate_probability_fn=estimate_probability,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+        now_provider=lambda: now,
+    )
+    initial_weights: dict[str, dict[str, float]] = {}
+    rewritten_weights: dict[str, dict[str, float]] = {
+        "polymarket_us:shadow-unrelated:unrelated": {"weight": 0.1}
+    }
+
+    with (
+        patch(
+            "polymarket.paper_runtime._load_match_weights",
+            side_effect=[initial_weights, rewritten_weights],
+        ) as load_weights_mock,
+        patch(
+            "polymarket.paper_runtime._match_polymarket_markets_with_rejection_telemetry",
+            wraps=paper_runtime._match_polymarket_markets_with_rejection_telemetry,
+        ) as match_mock,
+        patch("polymarket.paper_runtime.trade_log"),
+        patch(
+            "polymarket.paper_runtime.write_trade_log_async",
+            new_callable=AsyncMock,
+        ),
+    ):
+        routed_count = await runtime.process_news(_news())
+
+    assert routed_count == 1
+    route_analysis.assert_awaited_once()
+    load_weights_mock.assert_called_once_with()
+    assert match_mock.call_count == 2
+    assert all(
+        call.kwargs["token_weights"] is initial_weights
+        for call in match_mock.call_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_horizon_shadow_compute_failure_does_not_replay_routed_analysis(
+    monkeypatch,
+):
+    monkeypatch.setattr(cfg, "is_paper_trading", True)
+    monkeypatch.setattr(cfg, "paper_cohort_id", "pending-test")
+    monkeypatch.setattr(cfg, "paper_cohort_kind", "legacy_pending")
+    monkeypatch.setattr(cfg, "paper_active_cohort_max_days_to_close", 14.0)
+    now = datetime(2026, 7, 29, tzinfo=timezone.utc)
+
+    async def estimate_probability(*_args, **_kwargs):
+        return 0.65, 0.8, ["example"], "reason", "yes", "moderate", 0.8
+
+    route_analysis = AsyncMock(return_value=SimpleNamespace(enqueued=True))
+    runtime = PolymarketPaperRuntime(
+        client=_FakeClient(
+            [_market(close_time=(now + timedelta(days=7)).isoformat())]
+        ),
+        route_analysis=route_analysis,
+        keyword_stats=None,
+        estimate_probability_fn=estimate_probability,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+        now_provider=lambda: now,
+    )
+
+    with (
+        patch(
+            "polymarket.paper_runtime._horizon_shadow_market_sets",
+            side_effect=RuntimeError("shadow telemetry failure"),
+        ) as market_sets_mock,
+        patch("polymarket.paper_runtime.trade_log"),
+        patch(
+            "polymarket.paper_runtime.write_trade_log_async",
+            new_callable=AsyncMock,
+        ),
+    ):
+        routed_count = await runtime.process_news(_news())
+
+    assert routed_count == 1
+    route_analysis.assert_awaited_once()
+    market_sets_mock.assert_called_once()
+    assert runtime.stats().routed_count == 1
+
+
+@pytest.mark.asyncio
 async def test_process_news_logs_no_candidate_for_empty_eligible_cache(monkeypatch):
     _configure_legacy_paper_horizon(monkeypatch)
     runtime = PolymarketPaperRuntime(
@@ -960,7 +1262,13 @@ async def test_process_news_empty_cache_ignores_funnel_telemetry_write_failures(
 
 
 @pytest.mark.asyncio
-async def test_process_news_no_match_ignores_funnel_telemetry_write_failures():
+async def test_process_news_no_match_ignores_funnel_telemetry_write_failures(
+    monkeypatch,
+):
+    monkeypatch.setattr(cfg, "is_paper_trading", True)
+    monkeypatch.setattr(cfg, "paper_cohort_id", "pending-test")
+    monkeypatch.setattr(cfg, "paper_cohort_kind", "legacy_pending")
+    monkeypatch.setattr(cfg, "paper_active_cohort_max_days_to_close", 14.0)
     route_analysis = AsyncMock()
     runtime = PolymarketPaperRuntime(
         client=_FakeClient(
@@ -990,7 +1298,7 @@ async def test_process_news_no_match_ignores_funnel_telemetry_write_failures():
 
     assert routed_count == 0
     assert runtime.stats().no_match_count == 1
-    assert write_log_mock.await_count == 2
+    assert write_log_mock.await_count == 3
     route_analysis.assert_not_awaited()
 
 
@@ -1678,6 +1986,36 @@ def test_match_polymarket_markets_applies_shared_token_weights():
     assert log_mock.call_args.kwargs["market_prefix"] == "polymarket_us:ewc-usgub-ks"
     assert log_mock.call_args.kwargs["final_multiplier"] == pytest.approx(0.1)
     assert log_mock.call_args.kwargs["post_weight_score"] < 0.08
+
+
+def test_horizon_shadow_matching_does_not_emit_normal_weight_events():
+    news = _news("Kansas governor election tightens after new polling")
+    market = _market(
+        market_id="ewc-usgub-ks-2026-11-03-dem",
+        title="Democratic Party",
+        question="Kansas Governor Election Winner",
+        subtitle="2026 race",
+        category="politics",
+    )
+    token_weights = {
+        "polymarket_us:ewc-usgub-ks:election": {"weight": 0.1},
+        "polymarket_us:ewc-usgub-ks:governor": {"weight": 0.1},
+        "polymarket_us:ewc-usgub-ks:kansas": {"weight": 0.1},
+    }
+
+    with patch("polymarket.paper_runtime.trade_log.log_match_weight_applied") as log_mock:
+        matches, rejection = paper_runtime._match_polymarket_markets_with_rejection_telemetry(
+            news,
+            [market],
+            max_results=5,
+            min_score=0.08,
+            token_weights=token_weights,
+            emit_match_weight_telemetry=False,
+        )
+
+    assert matches == []
+    assert rejection.weight_demoted_below_min_score_count == 1
+    log_mock.assert_not_called()
 
 
 def test_match_polymarket_markets_suppresses_sports_false_positives():

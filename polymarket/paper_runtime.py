@@ -46,6 +46,7 @@ _DEFAULT_MARKET_LIMIT = 500
 _DEFAULT_MARKET_CACHE_TTL_SECONDS = 300.0
 _DEFAULT_MAX_CANDIDATES = PAPER_MAX_CANDIDATES
 _DEFAULT_MIN_MATCH_SCORE = 0.08
+_HORIZON_SHADOW_END_DAYS = float(MAX_MARKET_DAYS_TO_EXPIRY)
 _COUNTERFACTUAL_SNAPSHOT_SCHEMA_VERSION = 1
 _COUNTERFACTUAL_SNAPSHOT_MAX_CANDIDATES = 4
 _COUNTERFACTUAL_SNAPSHOT_MAX_TITLE_CHARS = 160
@@ -468,11 +469,15 @@ class PolymarketPaperRuntime:
 
         match_now = self._horizon_now()
         admission_horizon_days = cfg.paper_admission_max_days_to_close
+        news_tokens, headline_tokens = _news_match_tokens(news)
+        has_match_tokens = bool(news_tokens or headline_tokens)
+        token_weights = _load_match_weights() if has_match_tokens else None
         matches, post_admission_rejection = _match_polymarket_markets_with_rejection_telemetry(
             news,
             markets,
             max_results=self._max_candidates,
             min_score=self._min_match_score,
+            token_weights=token_weights,
             now=match_now,
             admission_horizon_days=admission_horizon_days,
         )
@@ -512,6 +517,15 @@ class PolymarketPaperRuntime:
                 ),
                 admission_horizon_days=no_candidate_pool.admission_horizon_days,
                 **rejection_fields,
+            )
+            await self._write_horizon_shadow_telemetry(
+                news,
+                markets,
+                now=match_now,
+                production_horizon_days=admission_horizon_days,
+                production_rejection=post_admission_rejection,
+                token_weights=token_weights,
+                has_match_tokens=has_match_tokens,
             )
             self._log_heartbeat()
             return 0
@@ -647,8 +661,118 @@ class PolymarketPaperRuntime:
                 getattr(result, "enqueued", None),
                 match_score,
             )
+        await self._write_horizon_shadow_telemetry(
+            news,
+            markets,
+            now=match_now,
+            production_horizon_days=admission_horizon_days,
+            production_rejection=post_admission_rejection,
+            token_weights=token_weights,
+            has_match_tokens=has_match_tokens,
+        )
         self._log_heartbeat()
         return routed
+
+    async def _write_horizon_shadow_telemetry(
+        self,
+        news: NewsItem,
+        markets: Sequence[PolymarketMarket],
+        *,
+        now: datetime,
+        production_horizon_days: float,
+        production_rejection: _PostAdmissionRejectionTelemetry,
+        token_weights: dict[str, dict[str, Any]] | None,
+        has_match_tokens: bool,
+    ) -> None:
+        """Compare the next horizon band without creating a candidate or order path."""
+        try:
+            if not has_match_tokens or production_horizon_days >= _HORIZON_SHADOW_END_DAYS:
+                return
+            production_markets, shadow_markets = _horizon_shadow_market_sets(
+                markets,
+                now=now,
+                production_horizon_days=production_horizon_days,
+                shadow_horizon_end_days=_HORIZON_SHADOW_END_DAYS,
+            )
+            _shadow_matches, shadow_rejection = (
+                _match_polymarket_markets_with_rejection_telemetry(
+                    news,
+                    shadow_markets,
+                    max_results=self._max_candidates,
+                    min_score=self._min_match_score,
+                    token_weights=token_weights,
+                    now=now,
+                    admission_horizon_days=_HORIZON_SHADOW_END_DAYS,
+                    emit_match_weight_telemetry=False,
+                )
+            )
+            fields: dict[str, Any] = {
+                "source": news.source,
+                "headline": news.headline,
+                "venue": Venue.POLYMARKET_US.value,
+                "production_horizon_days": production_horizon_days,
+                "shadow_horizon_start_days": production_horizon_days,
+                "shadow_horizon_end_days": _HORIZON_SHADOW_END_DAYS,
+                "production_candidate_count": len(production_markets),
+                "shadow_candidate_count": len(shadow_markets),
+                "production_qualifying_match_count": (
+                    production_rejection.qualifying_match_count
+                ),
+                "shadow_qualifying_match_count": shadow_rejection.qualifying_match_count,
+                "production_no_token_overlap_count": (
+                    production_rejection.no_token_overlap_count
+                ),
+                "production_below_min_post_weight_score_count": (
+                    production_rejection.below_min_post_weight_score_count
+                ),
+                "production_weight_demoted_below_min_score_count": (
+                    production_rejection.weight_demoted_below_min_score_count
+                ),
+                "production_min_match_score": production_rejection.min_match_score,
+                "shadow_no_token_overlap_count": shadow_rejection.no_token_overlap_count,
+                "shadow_below_min_post_weight_score_count": (
+                    shadow_rejection.below_min_post_weight_score_count
+                ),
+                "shadow_weight_demoted_below_min_score_count": (
+                    shadow_rejection.weight_demoted_below_min_score_count
+                ),
+                "shadow_min_match_score": shadow_rejection.min_match_score,
+                "shadow_analysis_status": "not_evaluated_shadow_only",
+            }
+            if production_rejection.counterfactual_shadow is not None:
+                fields["production_counterfactual_shadow"] = (
+                    production_rejection.counterfactual_shadow
+                )
+            if production_rejection.best_rejected_pre_weight_score is not None:
+                fields["production_best_rejected_pre_weight_score"] = (
+                    production_rejection.best_rejected_pre_weight_score
+                )
+            if production_rejection.best_rejected_post_weight_score is not None:
+                fields["production_best_rejected_post_weight_score"] = (
+                    production_rejection.best_rejected_post_weight_score
+                )
+            if shadow_rejection.counterfactual_shadow is not None:
+                fields["shadow_counterfactual_shadow"] = (
+                    shadow_rejection.counterfactual_shadow
+                )
+            if shadow_rejection.best_rejected_pre_weight_score is not None:
+                fields["shadow_best_rejected_pre_weight_score"] = (
+                    shadow_rejection.best_rejected_pre_weight_score
+                )
+            if shadow_rejection.best_rejected_post_weight_score is not None:
+                fields["shadow_best_rejected_post_weight_score"] = (
+                    shadow_rejection.best_rejected_post_weight_score
+                )
+            await _write_funnel_telemetry(
+                "POLYMARKET_HORIZON_SHADOW",
+                trade_log.log_polymarket_horizon_shadow,
+                **fields,
+            )
+        except Exception:
+            log.warning(
+                "[POLYMARKET_PAPER] horizon_shadow_telemetry_failed",
+                exc_info=True,
+            )
 
     def stats(self) -> PolymarketPaperRuntimeStats:
         age = None
@@ -1018,6 +1142,7 @@ def _match_polymarket_markets_with_rejection_telemetry(
     token_weights: dict[str, dict[str, Any]] | None = None,
     now: datetime | None = None,
     admission_horizon_days: float | None = None,
+    emit_match_weight_telemetry: bool = True,
 ) -> tuple[
     list[tuple[PolymarketMarket, float, dict[str, Any]]],
     _PostAdmissionRejectionTelemetry,
@@ -1099,19 +1224,20 @@ def _match_polymarket_markets_with_rejection_telemetry(
                 token_weights,
             )
             score *= weight_details["final_multiplier"]
-            trade_log.log_match_weight_applied(
-                source=news.source,
-                headline=news.headline,
-                ticker=market.ticker,
-                market_title=_market_match_text(market),
-                market_prefix=market_prefix,
-                tokens=weight_details["tokens"],
-                token_weights=weight_details["token_weights"],
-                composition_rule=weight_details["composition_rule"],
-                final_multiplier=weight_details["final_multiplier"],
-                pre_weight_score=pre_weight_score,
-                post_weight_score=score,
-            )
+            if emit_match_weight_telemetry:
+                trade_log.log_match_weight_applied(
+                    source=news.source,
+                    headline=news.headline,
+                    ticker=market.ticker,
+                    market_title=_market_match_text(market),
+                    market_prefix=market_prefix,
+                    tokens=weight_details["tokens"],
+                    token_weights=weight_details["token_weights"],
+                    composition_rule=weight_details["composition_rule"],
+                    final_multiplier=weight_details["final_multiplier"],
+                    pre_weight_score=pre_weight_score,
+                    post_weight_score=score,
+                )
         if score < min_score:
             below_min_post_weight_score_count += 1
             weight_demoted = pre_weight_score >= min_score
@@ -1237,6 +1363,34 @@ def _classify_no_candidate_pool(
         within_admission_horizon_market_count=len(within_admission_horizon_markets),
         admission_horizon_days=admission_horizon_days,
     )
+
+
+def _horizon_shadow_market_sets(
+    markets: Sequence[PolymarketMarket],
+    *,
+    now: datetime,
+    production_horizon_days: float,
+    shadow_horizon_end_days: float,
+) -> tuple[list[PolymarketMarket], list[PolymarketMarket]]:
+    """Return current admission candidates and the disjoint next horizon band."""
+    production: list[PolymarketMarket] = []
+    shadow: list[PolymarketMarket] = []
+    for market in markets:
+        if not _is_pre_admission_matchable_market(market):
+            continue
+        if _is_within_admission_horizon(
+            market,
+            now=now,
+            admission_horizon_days=production_horizon_days,
+        ):
+            production.append(market)
+        elif _is_within_admission_horizon(
+            market,
+            now=now,
+            admission_horizon_days=shadow_horizon_end_days,
+        ):
+            shadow.append(market)
+    return production, shadow
 
 
 def _is_pre_admission_matchable_market(market: PolymarketMarket) -> bool:
