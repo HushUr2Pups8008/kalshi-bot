@@ -43,6 +43,7 @@ import sys
 import tempfile
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Optional
 from unittest.mock import MagicMock
@@ -62,7 +63,9 @@ from scripts.simulations._common import (  # noqa: E402
     synthetic_market,
 )
 from trading.executor import TradeExecutor  # noqa: E402
+from trading.orderbook import BinaryMarketBook, BookLevel  # noqa: E402
 from trading.paper_trader import PaperTrader  # noqa: E402
+from trading.venue import Venue  # noqa: E402
 
 
 _DEFAULT_BANKROLL = 1000.0
@@ -132,7 +135,31 @@ def _signal_analysis(event: LLMPositiveEvent, headline: str) -> SignalAnalysis:
     )
 
 
-def _make_real_paper_executor(db_path: Path, *, bankroll: float = _DEFAULT_BANKROLL) -> TradeExecutor:
+def _executable_book_for(analysis: SignalAnalysis) -> BinaryMarketBook:
+    """Build a deterministic, identity-valid book for this simulated order."""
+
+    assert analysis.executed_price_cents is not None
+    execution_price = Decimal(analysis.executed_price_cents) / Decimal("100")
+    opposing_bid = BookLevel(
+        price=Decimal("1") - execution_price,
+        quantity=Decimal("100"),
+    )
+    return BinaryMarketBook(
+        venue=Venue.KALSHI,
+        venue_market_id=analysis.market.ticker,
+        yes_bids=(opposing_bid,) if analysis.side == "no" else (),
+        no_bids=(opposing_bid,) if analysis.side == "yes" else (),
+        as_of=analysis.news_item.published,
+        raw_payload_hash="0" * 64,
+    )
+
+
+def _make_real_paper_executor(
+    db_path: Path,
+    analysis: SignalAnalysis,
+    *,
+    bankroll: float = _DEFAULT_BANKROLL,
+) -> TradeExecutor:
     """Build a paper-mode TradeExecutor over a real PaperTrader.
 
     The PaperTrader is constructed with ``startup_context="test"`` so the
@@ -143,7 +170,8 @@ def _make_real_paper_executor(db_path: Path, *, bankroll: float = _DEFAULT_BANKR
     """
     paper = PaperTrader(db_path=db_path, startup_context="test")
     paper._set_state("notional_bankroll", str(round(bankroll, 4)))
-    rest = MagicMock(name="rest_client_unused_in_paper")
+    rest = MagicMock(name="rest_client_with_simulated_executable_book")
+    rest.get_market_orderbook.return_value = _executable_book_for(analysis)
     return TradeExecutor(rest_client=rest, paper_trader=paper)
 
 
@@ -186,7 +214,7 @@ async def _run_event(
     # Slot index disambiguates events 3 + 5, which share KXTRUMPIRAN-26MAY01
     # and would otherwise reuse the same DB file across the loop.
     db_path = root_dir / f"paper_trades-{slot:02d}-{event.ticker}.db"
-    executor = _make_real_paper_executor(db_path)
+    executor = _make_real_paper_executor(db_path, analysis)
 
     bankroll_before = executor._paper.get_notional_bankroll()
     trade_id = await executor.execute(analysis)

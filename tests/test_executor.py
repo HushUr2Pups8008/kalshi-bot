@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import config as _cfg_module
 import trading.live_submission_hold as hold_module
 from trading.executor import TradeExecutor, classify_skip_category
+from trading.execution_terms import FinalExecutionTerms
 from trading.venue import Venue
 
 
@@ -1033,6 +1034,12 @@ class TestBlendedCandidateCompatibility:
     ):
         ex, _, _ = _make_paper_executor(monkeypatch)
         ex._execute_paper = AsyncMock(return_value="paper-trade-id")
+        ex._final_execution_plan = AsyncMock(
+            return_value=(
+                FinalExecutionTerms(price_cents=51, contracts=1, cost_dollars=0.51),
+                None,
+            )
+        )
         # P-5 CR-D: blended_p chosen so the post-refetch executed-side edge
         # (0.525 - 0.51 = 0.015) exceeds the override threshold (0.01).
         candidate = _make_blended_candidate(
@@ -1287,7 +1294,7 @@ class TestExecutorModeSafety:
 
         reason = ex._validate(_make_analysis(capped_dollars=0.49, yes_price=50.0))
 
-        assert reason == "paper contract cost $0.50 exceeds capped dollars $0.49"
+        assert reason == "G8_execution_depth_invalid_terms"
 
     def test_paper_contract_cost_cannot_exceed_notional_bankroll(self, monkeypatch):
         ex, _, paper = _make_paper_executor(monkeypatch)
@@ -1319,16 +1326,22 @@ class TestExecutorModeSafety:
 
         recorded = []
 
-        async def fake_paper(analysis):
+        async def fake_paper(analysis, *, execution_plan):
             recorded.append("paper")
             return "paper-trade-id"
 
-        async def fake_live(analysis):
+        async def fake_live(analysis, *, execution_plan):
             recorded.append("live")
             return "live-order-id"
 
         ex._execute_paper = fake_paper
         ex._execute_live = fake_live
+        ex._final_execution_plan = AsyncMock(
+            return_value=(
+                FinalExecutionTerms(price_cents=50, contracts=1, cost_dollars=0.50),
+                None,
+            )
+        )
 
         analysis = _make_analysis(edge=0.05, estimated_prob=0.55, yes_price=50.0, capped_dollars=0.50)
         with patch("trading.executor.trade_log"):

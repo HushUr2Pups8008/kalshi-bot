@@ -14,6 +14,7 @@ import copy
 import time
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 from numbers import Real
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -24,6 +25,8 @@ from config import cfg, PAPER_MIN_EDGE, PAPER_BLOCK_SAME_SIDE_DUPLICATE
 from kalshi import OrderResult
 from kalshi.rest_client import KalshiRestClient
 from polymarket.domain_key import pm_domain_key
+from tasks.kalshi_execution_liquidity import fetch_kalshi_execution_liquidity
+from trading.execution_terms import FinalExecutionTerms, final_execution_terms
 from trading.live_submission_hold import LIVE_SUBMISSION_HOLD_PATH, LiveSubmissionHoldStore
 from trading.paper_trader import PaperTrader
 from trading.venue import Venue
@@ -54,7 +57,13 @@ def classify_skip_category(reason: str | None) -> str:
         return "duplicate"
     if "concentration" in text or "per-prefix cap" in text:
         return "concentration"
-    if "illiquid" in text or "near limit" in text or "price unavailable" in text or "not tradeable" in text:
+    if (
+        "illiquid" in text
+        or "near limit" in text
+        or "price unavailable" in text
+        or "not tradeable" in text
+        or "execution_depth" in text
+    ):
         return "liquidity"
     return "other"
 
@@ -241,6 +250,9 @@ class TradeExecutor:
             )
             return None
         skip_reason = self._validate(analysis)
+        execution_plan: FinalExecutionTerms | None = None
+        if skip_reason is None:
+            execution_plan, skip_reason = await self._final_execution_plan(analysis)
         if skip_reason:
             effective_min_edge = self._min_edge_threshold(analysis)
             method = (
@@ -276,10 +288,12 @@ class TradeExecutor:
                 "min_edge_threshold": effective_min_edge,
                 "venue": self._venue_value(analysis.market),
             }
-            if signal_meta:
-                skipped_kwargs["signal_meta"] = signal_meta
+            execution_signal_meta = self._signal_meta(analysis)
+            if execution_signal_meta:
+                skipped_kwargs["signal_meta"] = execution_signal_meta
             await write_trade_log_async(trade_log.log_skipped, **skipped_kwargs)
             return None
+        assert execution_plan is not None
 
         if self._is_paper:
             log.debug(
@@ -287,14 +301,14 @@ class TradeExecutor:
                 analysis.market.ticker,
                 analysis.side.upper(),
             )
-            trade_id = await self._execute_paper(analysis)
+            trade_id = await self._execute_paper(analysis, execution_plan=execution_plan)
         else:
             log.debug(
                 "[DECISION] route ticker=%s mode=live side=%s",
                 analysis.market.ticker,
                 analysis.side.upper(),
             )
-            trade_id = await self._execute_live(analysis)
+            trade_id = await self._execute_live(analysis, execution_plan=execution_plan)
 
         if trade_id:
             self._last_traded[analysis.market.ticker] = time.monotonic()
@@ -419,16 +433,28 @@ class TradeExecutor:
         assert analysis.executed_price_cents is not None, (  # noqa: S101
             "Site 1 F-08 gate failed: executed_price_cents is None at Site 2. This is a bug in _validate control flow."
         )
-        paper_unit_price = max(1, min(99, int(analysis.executed_price_cents)))
+        try:
+            final_terms = final_execution_terms(
+                capped_dollars=analysis.capped_dollars,
+                executed_price_cents=analysis.executed_price_cents,
+            )
+        except ValueError as exc:
+            self._set_final_execution_depth_meta(
+                analysis,
+                {
+                    "source": "execution_terms",
+                    "status": "invalid",
+                    "reason": str(exc),
+                },
+            )
+            return "G8_execution_depth_invalid_terms"
         if self._is_paper:
             # PROFIT-SIZING-001b: paper sizes by Kelly now (mirrors live, matches
             # paper_trader). Concentration pre-check uses the actual Kelly
             # contract cost rather than the retired flat-5 estimate.
-            trade_cost = contracts_from_dollars(analysis.capped_dollars, paper_unit_price) * paper_unit_price / 100.0
+            trade_cost = final_terms.cost_dollars
         else:
             trade_cost = analysis.capped_dollars
-        if self._is_paper and trade_cost > analysis.capped_dollars:
-            return f"paper contract cost ${trade_cost:.2f} exceeds capped dollars ${analysis.capped_dollars:.2f}"
         if self._is_paper and trade_cost > notional:
             return f"paper contract cost ${trade_cost:.2f} exceeds notional bankroll ${notional:.2f}"
         if not self._paper.portfolio.is_concentration_ok(
@@ -476,6 +502,88 @@ class TradeExecutor:
                 return f"insufficient live balance (${balance:.2f})"
 
         return None
+
+    async def _final_execution_plan(
+        self,
+        analysis: SignalAnalysis,
+    ) -> tuple[FinalExecutionTerms | None, str | None]:
+        """Fail closed unless the final Kalshi order has full fresh executable depth."""
+
+        try:
+            plan = final_execution_terms(
+                capped_dollars=analysis.capped_dollars,
+                executed_price_cents=analysis.executed_price_cents,
+            )
+        except ValueError as exc:
+            self._set_final_execution_depth_meta(
+                analysis,
+                {
+                    "source": "execution_terms",
+                    "status": "invalid",
+                    "reason": str(exc),
+                },
+            )
+            return None, "G8_execution_depth_invalid_terms"
+        if self._venue_value(analysis.market) != Venue.KALSHI.value:
+            return plan, None
+
+        try:
+            liquidity = await fetch_kalshi_execution_liquidity(self._rest, analysis)
+            available_contracts = Decimal(liquidity.executable_quantity)
+            record = {
+                "source": "kalshi_orderbook",
+                "status": "sufficient"
+                if available_contracts >= Decimal(plan.contracts)
+                else "insufficient",
+                "side": liquidity.side,
+                "limit_price": float(liquidity.limit_price),
+                "requested_contracts": plan.contracts,
+                "available_contracts": float(available_contracts),
+                "available_notional": float(liquidity.executable_notional),
+                "as_of": liquidity.as_of.isoformat(),
+                "raw_payload_hash": liquidity.raw_payload_hash,
+            }
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._set_final_execution_depth_meta(
+                analysis,
+                {
+                    "source": "kalshi_orderbook",
+                    "status": "unavailable",
+                    "reason": type(exc).__name__,
+                    "requested_contracts": plan.contracts,
+                },
+            )
+            log.warning(
+                "[EXECUTION_DEPTH] %s unavailable for %d contracts: %s",
+                analysis.market.ticker,
+                plan.contracts,
+                exc,
+            )
+            return None, "G8_execution_depth_unavailable"
+
+        self._set_final_execution_depth_meta(analysis, record)
+        if available_contracts < Decimal(plan.contracts):
+            log.warning(
+                "[EXECUTION_DEPTH] %s insufficient side=%s requested=%d available=%s",
+                analysis.market.ticker,
+                analysis.side,
+                plan.contracts,
+                available_contracts,
+            )
+            return None, "G8_execution_depth_insufficient"
+        return plan, None
+
+    def _set_final_execution_depth_meta(
+        self,
+        analysis: SignalAnalysis,
+        record: dict[str, object],
+    ) -> None:
+        analysis.signal_meta = {
+            **self._signal_meta(analysis),
+            "final_execution_depth": record,
+        }
 
     async def _analysis_from_candidate(self, candidate: Any) -> Optional[SignalAnalysis]:
         """Normalize legacy SignalAnalysis or S3.4 TradeCandidate inputs.
@@ -619,11 +727,22 @@ class TradeExecutor:
             raise ValueError("readiness_gate_min_edge_override must be non-negative")
         return float(override)
 
-    async def _execute_paper(self, analysis: SignalAnalysis) -> Optional[str]:
+    async def _execute_paper(
+        self,
+        analysis: SignalAnalysis,
+        *,
+        execution_plan: FinalExecutionTerms | None = None,
+    ) -> Optional[str]:
         # record_trade() and the bankroll read both hit SQLite synchronously.
         # Batch them in one to_thread call so neither blocks the event loop.
         def _record() -> tuple[str, float]:
-            trade_id = self._paper.record_trade(analysis)
+            if execution_plan is None:
+                trade_id = self._paper.record_trade(analysis)
+            else:
+                trade_id = self._paper.record_trade(
+                    analysis,
+                    execution_terms=execution_plan,
+                )
             bankroll = self._paper.get_notional_bankroll()
             return trade_id, bankroll
 
@@ -639,7 +758,12 @@ class TradeExecutor:
         )
         return trade_id
 
-    async def _execute_live(self, analysis: SignalAnalysis) -> Optional[str]:
+    async def _execute_live(
+        self,
+        analysis: SignalAnalysis,
+        *,
+        execution_plan: FinalExecutionTerms | None = None,
+    ) -> Optional[str]:
         """Place one legacy live order, preserving unknown outcomes for reconciliation."""
         # Hard safety gate: executor initialized in paper mode must never place live orders.
         # This fires only if the routing logic is wrong -- belt-and-suspenders.
@@ -661,21 +785,26 @@ class TradeExecutor:
         # P-5 LD-10: live order price comes from the executed-side ask
         # cents the side selector chose, not a yes_ask/yes_bid pair that
         # silently inverted on NO trades. Fail-closed when missing.
-        if analysis.executed_price_cents is None:
-            log.error(
-                "[LIVE_GUARD] BLOCKED live order for %s -- executed_price_cents is None. "
-                "P-5 contract violation: side selector must set executed_price_cents.",
-                analysis.market.ticker,
-            )
-            return None
-        price_cents = max(1, min(99, int(analysis.executed_price_cents)))
-        contracts = contracts_from_dollars(analysis.capped_dollars, float(price_cents))
+        if execution_plan is None:
+            if analysis.executed_price_cents is None:
+                log.error(
+                    "[LIVE_GUARD] BLOCKED live order for %s -- executed_price_cents is None. "
+                    "P-5 contract violation: side selector must set executed_price_cents.",
+                    analysis.market.ticker,
+                )
+                return None
+            price_cents = max(1, min(99, int(analysis.executed_price_cents)))
+            contracts = contracts_from_dollars(analysis.capped_dollars, float(price_cents))
+            cost_dollars = contracts * price_cents / 100.0
+        else:
+            price_cents = execution_plan.price_cents
+            contracts = execution_plan.contracts
+            cost_dollars = execution_plan.cost_dollars
 
         if contracts <= 0:
             log.warning("Live order aborted: contracts=0 for $%.2f @ %dc", analysis.capped_dollars, price_cents)
             return None
 
-        cost_dollars = contracts * price_cents / 100.0
         submission_summary = {
             "submission_id": uuid.uuid4().hex,
             "ticker": analysis.market.ticker,
