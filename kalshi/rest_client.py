@@ -11,6 +11,7 @@ import base64
 import json
 import math
 import re
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -18,12 +19,13 @@ from collections.abc import Awaitable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Any, Optional, Protocol
+from typing import Any, Callable, Optional, Protocol
 
 import requests
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
 from requests.adapters import HTTPAdapter
+from urllib3.exceptions import InvalidHeader
 from urllib3.util.retry import Retry
 
 from config import cfg
@@ -74,9 +76,14 @@ def _normalize_pem(raw: str | bytes) -> bytes:
     return raw.encode()
 
 
-# Rate-limit guard: max 10 requests/second
-_MIN_REQUEST_INTERVAL = 0.12   # seconds
+# Leave scheduler headroom below Kalshi's 10 request/second limit.
+_MIN_REQUEST_INTERVAL = 0.15   # seconds (at most 6.67 local dispatches/second)
 _TRANSIENT_HTTP_STATUSES = {429, 500, 502, 503, 504}
+_REQUEST_RETRY_TOTAL = 3
+_REQUEST_RETRY_BACKOFF_FACTOR = 0.5
+_REQUEST_RETRY_METHODS = frozenset(
+    {"DELETE", "GET", "HEAD", "OPTIONS", "PUT", "TRACE"}
+)
 _KALSHI_AUTHORITATIVE_HOSTS = frozenset(
     {
         "external-api.kalshi.com",
@@ -86,6 +93,57 @@ _KALSHI_AUTHORITATIVE_HOSTS = frozenset(
     }
 )
 _AUTHORITATIVE_MARKET_MAX_BYTES = 256 * 1024
+
+
+class RequestStartGate:
+    """Coordinate local dispatch permits across client sessions.
+
+    The permit is acquired immediately before a blocking HTTP call. It governs
+    process-local dispatch timing and shared server cooldowns, not socket-wire
+    timestamps after the operating system schedules the caller.
+    """
+
+    def __init__(
+        self,
+        interval_seconds: float = _MIN_REQUEST_INTERVAL,
+        *,
+        monotonic: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        if interval_seconds <= 0:
+            raise ValueError("request start interval must be positive")
+        self._interval_seconds = interval_seconds
+        self._monotonic = monotonic
+        self._sleep = sleep
+        self._next_slot = 0.0
+        self._defer_until = 0.0
+        self._lock = threading.Lock()
+
+    def defer_for(self, delay_seconds: float) -> None:
+        """Apply a server-requested cooldown to every session sharing this gate."""
+
+        if delay_seconds <= 0:
+            return
+        with self._lock:
+            self._defer_until = max(
+                self._defer_until,
+                self._monotonic() + delay_seconds,
+            )
+
+    def wait_for_slot(self) -> float:
+        """Block until this caller's shared local dispatch permit, then return it."""
+
+        while True:
+            with self._lock:
+                now = self._monotonic()
+                slot = max(now, self._next_slot, self._defer_until)
+                self._next_slot = slot + self._interval_seconds
+            delay = slot - now
+            if delay > 0:
+                self._sleep(delay)
+            with self._lock:
+                if self._monotonic() >= self._defer_until:
+                    return slot
 
 
 class BoundedHttpsFetcher(Protocol):
@@ -158,6 +216,25 @@ def _is_transient_http_status(status: int | None) -> bool:
     return int(status or 0) in _TRANSIENT_HTTP_STATUSES
 
 
+def _retry_after_seconds(response: requests.Response | None) -> float | None:
+    if response is None:
+        return None
+    try:
+        retry_after = Retry().get_retry_after(response)
+    except (AttributeError, InvalidHeader, TypeError, ValueError):
+        return None
+    return max(0.0, float(retry_after)) if retry_after is not None else None
+
+
+def _is_transient_http_response(
+    status: int | None,
+    response: requests.Response | None,
+) -> bool:
+    return _is_transient_http_status(status) or (
+        int(status or 0) == 413 and _retry_after_seconds(response) is not None
+    )
+
+
 def _request_exception_status(exc: requests.RequestException) -> int | None:
     response = getattr(exc, "response", None)
     status = getattr(response, "status_code", None)
@@ -174,10 +251,16 @@ def _request_exception_status(exc: requests.RequestException) -> int | None:
 def _is_transient_request_exception(exc: requests.RequestException) -> bool:
     if isinstance(exc, requests.Timeout):
         return True
+    response = getattr(exc, "response", None)
     status = _request_exception_status(exc)
-    if _is_transient_http_status(status):
+    if _is_transient_http_response(status, response):
         return True
     text = str(exc).lower()
+    if isinstance(exc, requests.ConnectionError):
+        return not isinstance(exc, requests.exceptions.SSLError) and not any(
+            marker in text
+            for marker in ("certificate", "ssl", "tls")
+        )
     return any(
         marker in text
         for marker in (
@@ -192,6 +275,13 @@ def _is_transient_request_exception(exc: requests.RequestException) -> bool:
             "temporary failure",
         )
     )
+
+
+def _retry_delay(attempt: int, response: requests.Response | None) -> float:
+    retry_after = _retry_after_seconds(response)
+    if retry_after is not None:
+        return retry_after
+    return _REQUEST_RETRY_BACKOFF_FACTOR * (2 ** attempt)
 
 
 def _require_execution_id(value: object, *, field: str) -> str:
@@ -236,6 +326,87 @@ class KalshiSigningError(RuntimeError):
     """Raised when RSA-PSS signing fails with credentials configured."""
 
 
+class KalshiSeriesDiscoveryError(RuntimeError):
+    """Raised when the authoritative Kalshi series inventory is incomplete."""
+
+
+def _normalize_market_page(data: dict[str, Any]) -> tuple[list[KalshiMarket], str | None]:
+    markets = []
+    for market in data.get("markets", []):
+        try:
+            markets.append(normalize_market_list_entry(market))
+        except UnsupportedPayloadContractError as exc:
+            log.warning(
+                "Skipping market with unsupported payload contract: "
+                "ticker=%s reason=%s",
+                getattr(exc, "ticker", "") or market.get("ticker", "<unknown>"),
+                exc,
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            log.debug("Skipping malformed market entry: %s", exc)
+    return markets, data.get("cursor") or None
+
+
+class KalshiPublicMarketReader:
+    """One warmup worker's isolated session for public ``/markets`` reads."""
+
+    _MAX_ATTEMPTS = _REQUEST_RETRY_TOTAL + 1
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        request_gate: RequestStartGate,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self._base = base_url
+        self._request_gate = request_gate
+        self._sleep = sleep
+        # A worker owns this session and retries explicitly so every retry reacquires
+        # the shared request-start gate.
+        self._session = requests.Session()
+
+    def _request_page(self, params: dict[str, Any]) -> dict[str, Any]:
+        for attempt in range(self._MAX_ATTEMPTS):
+            self._request_gate.wait_for_slot()
+            try:
+                response = self._session.request(
+                    "GET",
+                    self._base + "/markets",
+                    headers={
+                        "Content-Type": "application/json",
+                        "Accept": "application/json",
+                    },
+                    params=params,
+                    timeout=10,
+                )
+                if 300 <= response.status_code < 400:
+                    raise requests.HTTPError("unexpected redirect response", response=response)
+                response.raise_for_status()
+                return response.json() if response.text else {}
+            except requests.RequestException as exc:
+                is_transient = _is_transient_request_exception(exc)
+                if is_transient:
+                    self._request_gate.defer_for(
+                        _retry_delay(attempt, getattr(exc, "response", None))
+                    )
+                if not is_transient or attempt + 1 >= self._MAX_ATTEMPTS:
+                    raise
+        raise RuntimeError("unreachable public market request retry state")
+
+    def get_markets(
+        self,
+        *,
+        status: str = "open",
+        series_ticker: str | None = None,
+        limit: int = 200,
+    ) -> tuple[list[KalshiMarket], str | None]:
+        params: dict[str, Any] = {"status": status, "limit": limit}
+        if series_ticker:
+            params["series_ticker"] = series_ticker
+        return _normalize_market_page(self._request_page(params))
+
+
 class KalshiRestClient:
     """
     Thin wrapper around the Kalshi REST API.
@@ -252,7 +423,7 @@ class KalshiRestClient:
         self._key_id = cfg.api_key_id
         self._secret = cfg.api_key_secret  # raw string; may be PEM or hex
         self._token: Optional[str] = None
-        self._last_req_time = 0.0
+        self._request_gate = RequestStartGate()
         self._private_key = None
 
         # Parse PEM once at startup: fail fast on bad key rather than at first trade.
@@ -265,17 +436,16 @@ class KalshiRestClient:
                     f"Failed to load Kalshi private key at startup: {exc}"
                 ) from exc
 
-        # Session with retry logic
+        # Adapter retries stay disabled. _request applies this exact policy through
+        # RequestStartGate so retries share 429/Retry-After cooldowns with warmup.
         self._session = requests.Session()
-        retry = Retry(
-            total=3,
-            backoff_factor=0.5,
+        self._retry_policy = Retry(
+            total=_REQUEST_RETRY_TOTAL,
+            backoff_factor=_REQUEST_RETRY_BACKOFF_FACTOR,
             status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=frozenset(
-                {"DELETE", "GET", "HEAD", "OPTIONS", "PUT", "TRACE"}
-            ),
+            allowed_methods=_REQUEST_RETRY_METHODS,
         )
-        self._session.mount("https://", HTTPAdapter(max_retries=retry))
+        self._session.mount("https://", HTTPAdapter(max_retries=0))
 
     # ── Auth helpers ──────────────────────────────────────────────────────────
 
@@ -320,6 +490,14 @@ class KalshiRestClient:
             h.update(self._sign(method, path, body))
         return h
 
+    def fork_public_market_reader(self) -> KalshiPublicMarketReader:
+        """Create one isolated, paced public-market session for cache warmup."""
+
+        return KalshiPublicMarketReader(
+            base_url=self._base,
+            request_gate=self._request_gate,
+        )
+
     # ── Raw request ───────────────────────────────────────────────────────────
 
     def _request(
@@ -331,69 +509,82 @@ class KalshiRestClient:
         *,
         allow_redirects: bool | None = None,
     ) -> dict[str, Any]:
-        # Primitive rate-limit guard
-        elapsed = time.monotonic() - self._last_req_time
-        if elapsed < _MIN_REQUEST_INTERVAL:
-            time.sleep(_MIN_REQUEST_INTERVAL - elapsed)
-
         path        = "/trade-api/v2" + endpoint   # used for signing
         url         = self._base + endpoint
         body_str    = json.dumps(payload) if payload else ""
-        headers     = self._headers(method, path, body_str)
+        request_kwargs: dict[str, Any] = {
+            "params": params,
+            "data": body_str if body_str else None,
+            "timeout": 10,
+        }
+        if allow_redirects is not None:
+            request_kwargs["allow_redirects"] = allow_redirects
 
-        try:
-            request_kwargs: dict[str, Any] = {
-                "headers": headers,
-                "params": params,
-                "data": body_str if body_str else None,
-                "timeout": 10,
-            }
-            if allow_redirects is not None:
-                request_kwargs["allow_redirects"] = allow_redirects
-            resp = self._session.request(method, url, **request_kwargs)
-            self._last_req_time = time.monotonic()
-            if 300 <= resp.status_code < 400:
-                raise requests.HTTPError("unexpected redirect response", response=resp)
-            resp.raise_for_status()
-            return resp.json() if resp.text else {}
-        except requests.HTTPError as exc:
-            # Log status + sanitized body: strip any echoed auth/signature fields.
-            status = exc.response.status_code
-            if 300 <= status < 400:
-                body = "(redirect response body omitted)"
-            else:
-                body = exc.response.text[:300] if exc.response.text else ""
-                for sensitive in ("KALSHI-ACCESS-KEY", "KALSHI-ACCESS-SIGNATURE",
-                                  "Authorization", "signature", "api_key"):
-                    if sensitive.lower() in body.lower():
-                        body = "(response body redacted -- may contain credentials)"
-                        break
-            is_transient = _is_transient_http_status(status)
-            log_fn = log.warning if is_transient else log.error
-            log_fn(
-                "HTTP request failed method=%s endpoint=%s status=%s "
-                "transient=%s body=%s",
-                method,
-                endpoint,
-                status,
-                str(is_transient).lower(),
-                body,
-            )
-            raise
-        except requests.RequestException as exc:
-            status = _request_exception_status(exc)
-            is_transient = _is_transient_request_exception(exc)
-            log_fn = log.warning if is_transient else log.error
-            log_fn(
-                "Request failed method=%s endpoint=%s status=%s "
-                "transient=%s exception=%s",
-                method,
-                endpoint,
-                status if status is not None else "unknown",
-                str(is_transient).lower(),
-                exc,
-            )
-            raise
+        retry_budget = (
+            self._retry_policy.total
+            if method.upper() in self._retry_policy.allowed_methods
+            else 0
+        )
+        for attempt in range(retry_budget + 1):
+            self._request_gate.wait_for_slot()
+            request_kwargs["headers"] = self._headers(method, path, body_str)
+            try:
+                resp = self._session.request(method, url, **request_kwargs)
+                if 300 <= resp.status_code < 400:
+                    raise requests.HTTPError("unexpected redirect response", response=resp)
+                resp.raise_for_status()
+                return resp.json() if resp.text else {}
+            except requests.HTTPError as exc:
+                # Log status + sanitized body: strip any echoed auth/signature fields.
+                response = exc.response
+                status = response.status_code
+                is_transient = _is_transient_http_response(status, response)
+                if is_transient:
+                    self._request_gate.defer_for(_retry_delay(attempt, response))
+                    if attempt < retry_budget:
+                        continue
+                if 300 <= status < 400:
+                    body = "(redirect response body omitted)"
+                else:
+                    body = response.text[:300] if response.text else ""
+                    for sensitive in ("KALSHI-ACCESS-KEY", "KALSHI-ACCESS-SIGNATURE",
+                                      "Authorization", "signature", "api_key"):
+                        if sensitive.lower() in body.lower():
+                            body = "(response body redacted -- may contain credentials)"
+                            break
+                log_fn = log.warning if is_transient else log.error
+                log_fn(
+                    "HTTP request failed method=%s endpoint=%s status=%s "
+                    "transient=%s body=%s",
+                    method,
+                    endpoint,
+                    status,
+                    str(is_transient).lower(),
+                    body,
+                )
+                raise
+            except requests.RequestException as exc:
+                is_transient = _is_transient_request_exception(exc)
+                if is_transient:
+                    self._request_gate.defer_for(
+                        _retry_delay(attempt, getattr(exc, "response", None))
+                    )
+                    if attempt < retry_budget:
+                        continue
+                status = _request_exception_status(exc)
+                log_fn = log.warning if is_transient else log.error
+                log_fn(
+                    "Request failed method=%s endpoint=%s status=%s "
+                    "transient=%s exception=%s",
+                    method,
+                    endpoint,
+                    status if status is not None else "unknown",
+                    str(is_transient).lower(),
+                    exc,
+                )
+                raise
+
+        raise RuntimeError("unreachable Kalshi request retry state")
 
     # ── Public market data ────────────────────────────────────────────────────
 
@@ -609,23 +800,7 @@ class KalshiRestClient:
             data = self._request("GET", "/markets", params=params)
         except Exception:
             return [], None
-
-        markets = []
-        for m in data.get("markets", []):
-            try:
-                markets.append(normalize_market_list_entry(m))
-            except UnsupportedPayloadContractError as exc:
-                log.warning(
-                    "Skipping market with unsupported payload contract: "
-                    "ticker=%s reason=%s",
-                    getattr(exc, "ticker", "") or m.get("ticker", "<unknown>"),
-                    exc,
-                )
-            except (KeyError, TypeError, ValueError) as exc:
-                log.debug("Skipping malformed market entry: %s", exc)
-
-        next_cursor = data.get("cursor") or None
-        return markets, next_cursor
+        return _normalize_market_page(data)
 
     def get_market(self, ticker: str) -> Optional[KalshiMarket]:
         """Fetch a single market by ticker. Uses the P-2 normalizer so
@@ -751,14 +926,30 @@ class KalshiRestClient:
                 data = self._request("GET", "/series", params=params)
             except Exception as exc:
                 log.warning("get_all_series page fetch failed: %s", exc)
-                break
+                raise KalshiSeriesDiscoveryError(
+                    "Kalshi series discovery page fetch failed"
+                ) from exc
+            if not isinstance(data, dict):
+                raise KalshiSeriesDiscoveryError(
+                    "Kalshi series discovery returned a non-object page"
+                )
             batch = data.get("series", [])
+            if not isinstance(batch, list):
+                raise KalshiSeriesDiscoveryError(
+                    "Kalshi series discovery returned a non-list page"
+                )
             all_series.extend(batch)
             cursor = data.get("cursor") or None
-            if not cursor or not batch:
-                break
-        log.info("Fetched %d series from Kalshi", len(all_series))
-        return all_series
+            if not cursor:
+                log.info("Fetched %d series from Kalshi", len(all_series))
+                return all_series
+            if not batch:
+                raise KalshiSeriesDiscoveryError(
+                    "Kalshi series discovery returned an empty page with a cursor"
+                )
+        raise KalshiSeriesDiscoveryError(
+            f"Kalshi series discovery exceeded max_pages={max_pages}"
+        )
 
     # ── Account data ──────────────────────────────────────────────────────────
 

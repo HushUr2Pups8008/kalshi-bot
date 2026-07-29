@@ -163,6 +163,96 @@ def test_http_400_still_logs_error_with_request_context(caplog) -> None:
     assert "retry_exhausted" not in record.getMessage()
 
 
+def test_transient_post_is_not_retried_but_cools_down_shared_gate() -> None:
+    client = KalshiRestClient()
+    gate = MagicMock()
+    client._request_gate = gate  # noqa: SLF001
+    response = requests.Response()
+    response.status_code = 429
+    response.headers["Retry-After"] = "3"
+    client._session = MagicMock()  # noqa: SLF001
+    client._session.request.side_effect = requests.HTTPError(response=response)  # noqa: SLF001
+
+    with pytest.raises(requests.HTTPError):
+        client._request("POST", "/series/BAD")  # noqa: SLF001
+
+    assert client._session.request.call_count == 1  # noqa: SLF001
+    gate.defer_for.assert_called_once_with(3.0)
+
+
+def test_transient_get_retries_through_the_shared_gate() -> None:
+    client = KalshiRestClient()
+    gate = MagicMock()
+    client._request_gate = gate  # noqa: SLF001
+    retry_response = requests.Response()
+    retry_response.status_code = 429
+    retry_response.headers["Retry-After"] = "3"
+    success = MagicMock()
+    success.status_code = 200
+    success.text = "{}"
+    success.json.return_value = {}
+    client._session = MagicMock()  # noqa: SLF001
+    client._session.request.side_effect = [
+        requests.HTTPError(response=retry_response),
+        success,
+    ]
+
+    assert client._request("GET", "/markets") == {}  # noqa: SLF001
+
+    assert client._session.request.call_count == 2  # noqa: SLF001
+    assert gate.wait_for_slot.call_count == 2
+    gate.defer_for.assert_called_once_with(3.0)
+
+
+def test_retry_after_413_keeps_adapter_compatible_get_retry_behavior() -> None:
+    client = KalshiRestClient()
+    gate = MagicMock()
+    client._request_gate = gate  # noqa: SLF001
+    retry_response = requests.Response()
+    retry_response.status_code = 413
+    retry_response.headers["Retry-After"] = "3"
+    success = MagicMock()
+    success.status_code = 200
+    success.text = "{}"
+    success.json.return_value = {}
+    client._session = MagicMock()  # noqa: SLF001
+    client._session.request.side_effect = [
+        requests.HTTPError(response=retry_response),
+        success,
+    ]
+
+    assert client._request("GET", "/markets") == {}  # noqa: SLF001
+
+    assert client._session.request.call_count == 2  # noqa: SLF001
+    gate.defer_for.assert_called_once_with(3.0)
+
+
+def test_headers_are_built_after_the_shared_dispatch_gate_releases() -> None:
+    order: list[str] = []
+
+    class Gate:
+        def wait_for_slot(self) -> float:
+            order.append("gate")
+            return 0.0
+
+        def defer_for(self, _delay: float) -> None:
+            return None
+
+    client = KalshiRestClient()
+    client._request_gate = Gate()  # noqa: SLF001
+    client._headers = MagicMock(side_effect=lambda *_args: order.append("headers") or {})  # noqa: SLF001
+    response = MagicMock()
+    response.status_code = 200
+    response.text = "{}"
+    response.json.return_value = {}
+    client._session = MagicMock()  # noqa: SLF001
+    client._session.request.return_value = response
+
+    assert client._request("GET", "/markets") == {}  # noqa: SLF001
+
+    assert order == ["gate", "headers"]
+
+
 def test_transient_http_warning_redacts_sensitive_response_body(caplog) -> None:
     client = KalshiRestClient()
     client._session = _FailingSession(  # noqa: SLF001
@@ -180,6 +270,17 @@ def test_transient_http_warning_redacts_sensitive_response_body(caplog) -> None:
 
 def test_non_transient_request_exception_is_not_transient() -> None:
     assert _is_transient_request_exception(requests.ConnectionError("bad certificate")) is False
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "NewConnectionError: [Errno 111] Connection refused",
+        "Name or service not known",
+    ],
+)
+def test_connection_failures_retain_the_legacy_retry_eligibility(message: str) -> None:
+    assert _is_transient_request_exception(requests.ConnectionError(message)) is True
 
 
 @pytest.mark.parametrize(

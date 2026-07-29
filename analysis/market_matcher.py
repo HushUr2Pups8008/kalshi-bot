@@ -13,6 +13,8 @@ The market list is cached and refreshed every MARKET_CACHE_TTL_SECONDS.
 import asyncio
 import math
 import os
+from concurrent.futures import ThreadPoolExecutor
+from queue import Empty, SimpleQueue
 import re
 import time
 from datetime import datetime, timezone
@@ -476,7 +478,10 @@ def _is_geo_series(series: dict) -> bool:
 # ── Market cache ──────────────────────────────────────────────────────────────
 
 _REFRESH_DEBOUNCE_SECONDS = 60  # min seconds between back-to-back refreshes
+_REFRESH_FAILURE_BACKOFF_SECONDS = 60
+_REFRESH_FAILURE_MAX_BACKOFF_SECONDS = 300
 _TEST_MARKET_TICKER_PREFIX = "KXTEST"
+_GEO_MARKET_WARMUP_WORKERS = 3
 
 # Pagination safety caps for _fetch_all_markets. Kalshi's /markets response
 # can exceed 200k rows (predominantly sports MVE markets) and is not ordered
@@ -787,6 +792,8 @@ class MarketCache:
         self._now_provider = now_provider or (lambda: datetime.now(timezone.utc))
         self._lock            = asyncio.Lock()
         self._all_lock        = asyncio.Lock()
+        self._next_geo_refresh_after = 0.0
+        self._geo_refresh_failures = 0
 
     def _horizon_time(self) -> datetime:
         """Return the refresh clock used for market-horizon admission."""
@@ -812,8 +819,16 @@ class MarketCache:
         return list(self._markets)
 
     async def _refresh(self) -> None:
-        if time.monotonic() - self._last_fetch < _REFRESH_DEBOUNCE_SECONDS:
-            log.debug("Market cache refresh debounced (last refresh %.0fs ago)", time.monotonic() - self._last_fetch)
+        now = time.monotonic()
+        if now < self._next_geo_refresh_after:
+            log.debug(
+                "Market cache refresh backed off for %.0fs after %d failure(s)",
+                self._next_geo_refresh_after - now,
+                self._geo_refresh_failures,
+            )
+            return
+        if now - self._last_fetch < _REFRESH_DEBOUNCE_SECONDS:
+            log.debug("Market cache refresh debounced (last refresh %.0fs ago)", now - self._last_fetch)
             return
         loop = asyncio.get_running_loop()
         try:
@@ -823,12 +838,86 @@ class MarketCache:
             )
             self._markets    = markets
             self._last_fetch = time.monotonic()
+            self._next_geo_refresh_after = 0.0
+            self._geo_refresh_failures = 0
             log.info(
                 "Market cache refreshed: %d geo markets from %d series",
                 len(markets), n_series,
             )
         except Exception as exc:
-            log.error("Market cache refresh failed: %s", exc)
+            self._geo_refresh_failures += 1
+            backoff_seconds = min(
+                _REFRESH_FAILURE_BACKOFF_SECONDS * (2 ** (self._geo_refresh_failures - 1)),
+                _REFRESH_FAILURE_MAX_BACKOFF_SECONDS,
+            )
+            self._next_geo_refresh_after = time.monotonic() + backoff_seconds
+            log.error(
+                "Market cache refresh failed: %s; retry in %.0fs",
+                exc,
+                backoff_seconds,
+            )
+
+    def _fetch_geo_market_pages(
+        self,
+        geo_tickers: list[str],
+    ) -> list[tuple[list[KalshiMarket], Exception | None]]:
+        """Fetch one open-market page per series without sharing sessions."""
+
+        if not geo_tickers:
+            return []
+
+        reader_factory = getattr(type(self._client), "fork_public_market_reader", None)
+        if not callable(reader_factory):
+            # Lightweight test doubles and historical injected clients retain the
+            # exact serial contract. Production KalshiRestClient takes the worker
+            # path below and shares its request gate with normal REST calls.
+            fetched = []
+            for series_ticker in geo_tickers:
+                try:
+                    page, _ = self._client.get_markets(
+                        status="open",
+                        series_ticker=series_ticker,
+                        limit=200,
+                    )
+                except Exception as exc:
+                    fetched.append(([], exc))
+                else:
+                    fetched.append((page, None))
+            return fetched
+
+        jobs = SimpleQueue()
+        for index, series_ticker in enumerate(geo_tickers):
+            jobs.put((index, series_ticker))
+        fetched: list[tuple[list[KalshiMarket], Exception | None] | None] = [None] * len(geo_tickers)
+
+        def fetch_worker() -> None:
+            reader = self._client.fork_public_market_reader()
+            while True:
+                try:
+                    index, series_ticker = jobs.get_nowait()
+                except Empty:
+                    return
+                try:
+                    page, _ = reader.get_markets(
+                        status="open",
+                        series_ticker=series_ticker,
+                        limit=200,
+                    )
+                except Exception as exc:
+                    fetched[index] = ([], exc)
+                else:
+                    fetched[index] = (page, None)
+
+        worker_count = min(_GEO_MARKET_WARMUP_WORKERS, len(geo_tickers))
+        with ThreadPoolExecutor(
+            max_workers=worker_count,
+            thread_name_prefix="kalshi-market-warmup",
+        ) as executor:
+            futures = [executor.submit(fetch_worker) for _ in range(worker_count)]
+            for future in futures:
+                future.result()
+
+        return [entry if entry is not None else ([], RuntimeError("warmup job missing result")) for entry in fetched]
 
     def _fetch_geo_markets(
         self,
@@ -868,40 +957,42 @@ class MarketCache:
         filtered = []
         horizon_now = horizon_now or self._horizon_time()
         per_series_counts: dict[str, tuple[int, int]] = {}
-        for series_ticker in geo_tickers:
-            try:
-                # Kalshi /markets has TWO different `status` contracts:
-                #   - REQUEST query parameter accepts {"open", "closed", "settled", ...}
-                #     and rejects "active" with 400 "invalid status filter".
-                #   - RESPONSE field reports the live state name as "active".
-                # Send "open"; downstream readers (paper_trader, executor, this
-                # module's `_is_tradeable` checks) gate on response field == "active".
-                # See CLAUDE.md Critical Gotchas ("Market status field is `\"active\"`,
-                # not `\"open\"`") — that gotcha is about the *response field*, NOT
-                # the request parameter. Conflating the two ships a 400-error storm
-                # in production (see fix/p7-status-filter-regression).
-                page, _ = self._client.get_markets(
-                    status="open",
-                    series_ticker=series_ticker,
-                    limit=200,
-                )
-                raw_count = len(page)
-                eligible_count = 0
-                for m in page:
-                    if _is_excluded_test_market(m):
-                        continue
-                    horizon = evaluate_market_horizon(
-                        m.close_time,
-                        now=horizon_now,
-                        max_days_to_close=MAX_MARKET_DAYS_TO_EXPIRY,
-                    )
-                    if horizon.eligible:
-                        filtered.append(_attach_regime_weights(m))
-                        eligible_count += 1
-                per_series_counts[series_ticker] = (raw_count, eligible_count)
-            except Exception as exc:
-                log.debug("Skipping series %s: %s", series_ticker, exc)
+        fetch_failures: list[str] = []
+        for series_ticker, (page, fetch_error) in zip(
+            geo_tickers,
+            self._fetch_geo_market_pages(geo_tickers),
+        ):
+            if fetch_error is not None:
+                log.debug("Skipping series %s: %s", series_ticker, fetch_error)
                 per_series_counts[series_ticker] = (0, 0)
+                fetch_failures.append(series_ticker)
+                continue
+            raw_count = len(page)
+            eligible_count = 0
+            for m in page:
+                if _is_excluded_test_market(m):
+                    continue
+                horizon = evaluate_market_horizon(
+                    m.close_time,
+                    now=horizon_now,
+                    max_days_to_close=MAX_MARKET_DAYS_TO_EXPIRY,
+                )
+                if horizon.eligible:
+                    filtered.append(_attach_regime_weights(m))
+                    eligible_count += 1
+            per_series_counts[series_ticker] = (raw_count, eligible_count)
+
+        if fetch_failures:
+            sample = ",".join(fetch_failures[:5])
+            log.warning(
+                "Market cache warmup failed for %d/%d series; sample=%s",
+                len(fetch_failures),
+                len(geo_tickers),
+                sample,
+            )
+            raise RuntimeError(
+                f"market cache warmup failed for {len(fetch_failures)}/{len(geo_tickers)} series"
+            )
 
         geo_tickers_set = set(geo_tickers)
         _warn_on_missing_expected_families(
