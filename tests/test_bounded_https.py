@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 import aiohttp
+import dns.resolver
 import pytest
 
 from analysis import research_gate
@@ -72,6 +73,42 @@ class _Resolver:
         finally:
             if self.finalized is not None:
                 self.finalized.set()
+
+
+class _DualStackResolver:
+    def __init__(
+        self,
+        *,
+        ipv4_addresses: tuple[object, ...] = ("8.8.8.8",),
+        ipv6_addresses: tuple[object, ...] = ("2001:4860:4860::8888",),
+        unavailable_types: tuple[str, ...] = (),
+    ) -> None:
+        self._addresses = {
+            "A": ipv4_addresses,
+            "AAAA": ipv6_addresses,
+        }
+        self._unavailable_types = set(unavailable_types)
+        self.calls: list[dict[str, Any]] = []
+
+    async def resolve(
+        self,
+        host: str,
+        rdtype: str,
+        *,
+        lifetime: float,
+        search: bool,
+    ) -> list[_Address]:
+        self.calls.append(
+            {
+                "host": host,
+                "rdtype": rdtype,
+                "lifetime": lifetime,
+                "search": search,
+            }
+        )
+        if rdtype in self._unavailable_types:
+            raise dns.resolver.NoAnswer()
+        return [_Address(item) for item in self._addresses[rdtype]]
 
 
 class _Content:
@@ -1017,6 +1054,206 @@ async def test_pinned_resolver_requires_canonical_host_port_and_family() -> None
 
 
 @pytest.mark.asyncio
+async def test_dual_stack_transport_pins_validated_addresses_and_races_families() -> None:
+    transport = getattr(bounded_https, "fetch_bounded_https_dual_stack", None)
+    assert transport is not None
+    connectors, sessions, connector_factory, session_factory = _transport_factories()
+    resolver = _DualStackResolver(
+        ipv4_addresses=("8.8.8.8", "1.1.1.1"),
+        ipv6_addresses=("2001:4860:4860::8888",),
+    )
+
+    await transport(
+        _URL,
+        canonical_host=_HOST,
+        provider_name=_PROVIDER,
+        user_agent=_USER_AGENT,
+        timeout=0.5,
+        max_bytes=20,
+        resolver_factory=lambda: resolver,
+        connector_factory=connector_factory,
+        session_factory=session_factory,
+    )
+
+    assert {(call["host"], call["rdtype"], call["search"]) for call in resolver.calls} == {
+        (_HOST, "A", False),
+        (_HOST, "AAAA", False),
+    }
+    assert connectors[0].kwargs == {
+        "resolver": connectors[0].kwargs["resolver"],
+        "family": socket.AF_UNSPEC,
+        "use_dns_cache": False,
+        "force_close": True,
+        "limit": 1,
+        "limit_per_host": 1,
+        "happy_eyeballs_delay": 0.25,
+        "interleave": 1,
+    }
+    pinned = connectors[0].kwargs["resolver"]
+    expected = {
+        ("8.8.8.8", socket.AF_INET),
+        ("1.1.1.1", socket.AF_INET),
+        ("2001:4860:4860::8888", socket.AF_INET6),
+    }
+    for family, expected_family in (
+        (socket.AF_UNSPEC, expected),
+        (socket.AF_INET, {item for item in expected if item[1] == socket.AF_INET}),
+        (socket.AF_INET6, {item for item in expected if item[1] == socket.AF_INET6}),
+    ):
+        answers = await pinned.resolve(_HOST, 443, family)
+        assert {(item["host"], item["family"]) for item in answers} == expected_family
+    for host, port, family in (
+        ("attacker.example", 443, socket.AF_UNSPEC),
+        (_HOST, 80, socket.AF_UNSPEC),
+        (_HOST, 443, socket.AF_UNIX),
+    ):
+        with pytest.raises(socket.gaierror, match="canonical host"):
+            await pinned.resolve(host, port, family)
+    _assert_resources_closed(connectors, sessions)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("ipv4_addresses", "ipv6_addresses", "unavailable_types"),
+    (
+        (("8.8.8.8",), (), ("AAAA",)),
+        ((), ("2001:4860:4860::8888",), ("A",)),
+    ),
+)
+async def test_dual_stack_transport_accepts_one_unavailable_family(
+    ipv4_addresses: tuple[str, ...],
+    ipv6_addresses: tuple[str, ...],
+    unavailable_types: tuple[str, ...],
+) -> None:
+    transport = getattr(bounded_https, "fetch_bounded_https_dual_stack", None)
+    assert transport is not None
+    connectors, sessions, connector_factory, session_factory = _transport_factories()
+
+    await transport(
+        _URL,
+        canonical_host=_HOST,
+        provider_name=_PROVIDER,
+        user_agent=_USER_AGENT,
+        timeout=0.5,
+        max_bytes=20,
+        resolver_factory=lambda: _DualStackResolver(
+            ipv4_addresses=ipv4_addresses,
+            ipv6_addresses=ipv6_addresses,
+            unavailable_types=unavailable_types,
+        ),
+        connector_factory=connector_factory,
+        session_factory=session_factory,
+    )
+
+    _assert_resources_closed(connectors, sessions)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("ipv4_addresses", "ipv6_addresses"),
+    (
+        (("8.8.8.8",), ("::1",)),
+        (("8.8.8.8",), ("fc00::1",)),
+        (("8.8.8.8",), ("fe80::1",)),
+        (("8.8.8.8",), ("ff00::1",)),
+        (("8.8.8.8",), ("::",)),
+        (("8.8.8.8",), ("2001:db8::1",)),
+        (("127.0.0.1",), ("2001:4860:4860::8888",)),
+        (("8.8.8.8",), ("::ffff:127.0.0.1",)),
+        (("8.8.8.8",), ("not-an-ip",)),
+    ),
+)
+async def test_dual_stack_transport_rejects_any_untrusted_answer(
+    ipv4_addresses: tuple[str, ...],
+    ipv6_addresses: tuple[str, ...],
+) -> None:
+    transport = getattr(bounded_https, "fetch_bounded_https_dual_stack", None)
+    assert transport is not None
+    connector_calls: list[dict[str, Any]] = []
+
+    with pytest.raises(ValueError, match="DNS answer"):
+        await transport(
+            _URL,
+            canonical_host=_HOST,
+            provider_name=_PROVIDER,
+            user_agent=_USER_AGENT,
+            timeout=0.5,
+            max_bytes=20,
+            resolver_factory=lambda: _DualStackResolver(
+                ipv4_addresses=ipv4_addresses,
+                ipv6_addresses=ipv6_addresses,
+            ),
+            connector_factory=lambda **kwargs: connector_calls.append(kwargs),
+        )
+
+    assert connector_calls == []
+
+
+@pytest.mark.asyncio
+async def test_dual_stack_transport_rejects_ip_literal_canonical_host() -> None:
+    transport = getattr(bounded_https, "fetch_bounded_https_dual_stack", None)
+    assert transport is not None
+
+    with pytest.raises(ValueError, match="canonical HTTPS host"):
+        await transport(
+            "https://8.8.8.8/data",
+            canonical_host="8.8.8.8",
+            provider_name=_PROVIDER,
+            user_agent=_USER_AGENT,
+            timeout=0.5,
+            max_bytes=20,
+        )
+
+
+@pytest.mark.asyncio
+async def test_dual_stack_transport_cancels_sibling_dns_after_invalid_answer() -> None:
+    transport = getattr(bounded_https, "fetch_bounded_https_dual_stack", None)
+    assert transport is not None
+    ipv6_started = asyncio.Event()
+    ipv6_blocker = asyncio.Event()
+    ipv6_finalized = asyncio.Event()
+
+    class _FailingAAndBlockingAAAAResolver:
+        async def resolve(
+            self,
+            host: str,
+            rdtype: str,
+            *,
+            lifetime: float,
+            search: bool,
+        ) -> list[_Address]:
+            assert host == _HOST
+            assert search is False
+            assert lifetime > 0
+            if rdtype == "A":
+                await ipv6_started.wait()
+                return [_Address("127.0.0.1")]
+            assert rdtype == "AAAA"
+            ipv6_started.set()
+            try:
+                await ipv6_blocker.wait()
+            finally:
+                ipv6_finalized.set()
+            return [_Address("2001:4860:4860::8888")]
+
+    try:
+        with pytest.raises(ValueError, match="DNS answer"):
+            await transport(
+                _URL,
+                canonical_host=_HOST,
+                provider_name=_PROVIDER,
+                user_agent=_USER_AGENT,
+                timeout=0.5,
+                max_bytes=20,
+                resolver_factory=_FailingAAndBlockingAAAAResolver,
+            )
+        assert ipv6_finalized.is_set()
+    finally:
+        ipv6_blocker.set()
+        await asyncio.wait_for(ipv6_finalized.wait(), timeout=0.2)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "error",
     [
@@ -1096,11 +1333,11 @@ async def test_research_wrapper_keeps_shared_limiter_inside_total_deadline(
 
     async def shared_fetch(*args: Any, **kwargs: Any) -> bytes:
         shared_calls.append(kwargs["admission_factory"])
-        return await fetch_bounded_https_ipv4(*args, **kwargs)
+        return await bounded_https.fetch_bounded_https_dual_stack(*args, **kwargs)
 
     monkeypatch.setattr(
         research_gate,
-        "fetch_bounded_https_ipv4",
+        "fetch_bounded_https_dual_stack",
         shared_fetch,
         raising=False,
     )
@@ -1112,7 +1349,7 @@ async def test_research_wrapper_keeps_shared_limiter_inside_total_deadline(
 
     before = time.monotonic()
     with pytest.raises(TimeoutError):
-        await research_gate._fetch_bounded_https_ipv4(
+        await research_gate._fetch_bounded_https_dual_stack(
             _URL,
             canonical_host=_HOST,
             provider_name=_PROVIDER,

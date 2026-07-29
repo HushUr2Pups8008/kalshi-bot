@@ -211,6 +211,125 @@ async def _resolve_provider_ipv4(
     )
 
 
+@dataclass(frozen=True)
+class _PinnedProviderAddress:
+    address: str
+    family: socket.AddressFamily
+
+
+def _validated_global_ip_addresses(
+    values: Iterable[object],
+    *,
+    provider_name: str,
+    expected_family: socket.AddressFamily,
+) -> tuple[_PinnedProviderAddress, ...]:
+    expected_type: type[ipaddress.IPv4Address] | type[ipaddress.IPv6Address]
+    if expected_family == socket.AF_INET:
+        expected_type = ipaddress.IPv4Address
+    elif expected_family == socket.AF_INET6:
+        expected_type = ipaddress.IPv6Address
+    else:
+        raise ValueError("expected address family is invalid")
+
+    validated: list[_PinnedProviderAddress] = []
+    for address in values:
+        if not isinstance(address, str):
+            raise ValueError(f"{provider_name} DNS answer has an invalid IP address")
+        try:
+            resolved_ip = ipaddress.ip_address(address)
+        except ValueError as exc:
+            raise ValueError(
+                f"{provider_name} DNS answer has an invalid IP address"
+            ) from exc
+        if (
+            not isinstance(resolved_ip, expected_type)
+            or not resolved_ip.is_global
+            or resolved_ip.is_private
+            or resolved_ip.is_loopback
+            or resolved_ip.is_link_local
+            or resolved_ip.is_multicast
+            or resolved_ip.is_unspecified
+            or resolved_ip.is_reserved
+            or (
+                isinstance(resolved_ip, ipaddress.IPv6Address)
+                and resolved_ip.ipv4_mapped is not None
+            )
+        ):
+            raise ValueError(
+                f"{provider_name} DNS answer is not a global {expected_type.__name__} address"
+            )
+        candidate = _PinnedProviderAddress(
+            address=str(resolved_ip),
+            family=expected_family,
+        )
+        if candidate not in validated:
+            validated.append(candidate)
+    return tuple(validated)
+
+
+async def _resolve_provider_dual_stack(
+    *,
+    canonical_host: str,
+    provider_name: str,
+    deadline: float,
+    resolver_factory: Callable[[], Any] | None = None,
+) -> tuple[_PinnedProviderAddress, ...]:
+    resolver = (
+        resolver_factory()
+        if resolver_factory is not None
+        else dns.asyncresolver.Resolver()
+    )
+
+    async def resolve_family(
+        record_type: str,
+        family: socket.AddressFamily,
+    ) -> tuple[_PinnedProviderAddress, ...]:
+        try:
+            answer = await resolver.resolve(
+                canonical_host,
+                record_type,
+                lifetime=_remaining_https_budget(
+                    deadline,
+                    provider_name=provider_name,
+                ),
+                search=False,
+            )
+        except dns.exception.Timeout as exc:
+            raise TimeoutError(f"{provider_name} DNS resolution timed out") from exc
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+            return ()
+        except dns.resolver.NoNameservers as exc:
+            raise socket.gaierror(
+                socket.EAI_AGAIN,
+                f"{provider_name} DNS resolution was unavailable",
+            ) from exc
+        return _validated_global_ip_addresses(
+            (getattr(item, "address", None) for item in answer),
+            provider_name=provider_name,
+            expected_family=family,
+        )
+
+    resolver_tasks = (
+        asyncio.create_task(resolve_family("A", socket.AF_INET)),
+        asyncio.create_task(resolve_family("AAAA", socket.AF_INET6)),
+    )
+    try:
+        ipv4_addresses, ipv6_addresses = await asyncio.gather(*resolver_tasks)
+    finally:
+        pending = [task for task in resolver_tasks if not task.done()]
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+    addresses = (*ipv6_addresses, *ipv4_addresses)
+    if not addresses:
+        raise socket.gaierror(
+            socket.EAI_AGAIN,
+            f"{provider_name} DNS returned no global IP addresses",
+        )
+    return addresses
+
+
 class _PinnedProviderIPv4Resolver(aiohttp.abc.AbstractResolver):
     def __init__(
         self,
@@ -254,6 +373,50 @@ class _PinnedProviderIPv4Resolver(aiohttp.abc.AbstractResolver):
         return None
 
 
+class _PinnedProviderDualStackResolver(aiohttp.abc.AbstractResolver):
+    def __init__(
+        self,
+        *,
+        canonical_host: str,
+        provider_name: str,
+        addresses: tuple[_PinnedProviderAddress, ...],
+    ) -> None:
+        self._canonical_host = canonical_host
+        self._provider_name = provider_name
+        self._addresses = addresses
+
+    async def resolve(
+        self,
+        host: str,
+        port: int = 0,
+        family: socket.AddressFamily = socket.AF_UNSPEC,
+    ) -> list[dict[str, Any]]:
+        if (
+            host != self._canonical_host
+            or port != 443
+            or family not in {socket.AF_UNSPEC, socket.AF_INET, socket.AF_INET6}
+        ):
+            raise socket.gaierror(
+                socket.EAI_NONAME,
+                f"{self._provider_name} pinned resolver requires the canonical host",
+            )
+        return [
+            {
+                "hostname": self._canonical_host,
+                "host": address.address,
+                "port": 443,
+                "family": address.family,
+                "proto": socket.IPPROTO_TCP,
+                "flags": socket.AI_NUMERICHOST,
+            }
+            for address in self._addresses
+            if family == socket.AF_UNSPEC or address.family == family
+        ]
+
+    async def close(self) -> None:
+        return None
+
+
 @asynccontextmanager
 async def _noop_admission() -> AsyncIterator[None]:
     yield
@@ -276,7 +439,15 @@ def _validated_request_headers(headers: Mapping[str, str] | None) -> dict[str, s
     return validated
 
 
-async def fetch_bounded_https_ipv4(
+def _is_ip_literal(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
+
+
+async def _fetch_bounded_https(
     url: str,
     *,
     canonical_host: str,
@@ -290,8 +461,11 @@ async def fetch_bounded_https_ipv4(
     connector_factory: Callable[..., Any] = aiohttp.TCPConnector,
     session_factory: Callable[..., Any] = aiohttp.ClientSession,
     telemetry_sink: TelemetrySink | None = None,
+    address_resolver: Callable[..., Any],
+    pinned_resolver_factory: Callable[[Any], aiohttp.abc.AbstractResolver],
+    connector_options: Mapping[str, Any],
 ) -> bytes:
-    """Fetch a bounded HTTPS response pinned to verified IPv4 addresses.
+    """Fetch a bounded HTTPS response pinned to verified provider addresses.
 
     ``telemetry_sink`` is best-effort: it runs on a daemon worker thread, must
     be thread-safe, can be dropped when the bounded queue is full, and never
@@ -301,6 +475,7 @@ async def fetch_bounded_https_ipv4(
     if (
         parsed.scheme != "https"
         or parsed.hostname != canonical_host
+        or _is_ip_literal(canonical_host)
         or parsed.port not in {None, 443}
         or parsed.username is not None
         or parsed.password is not None
@@ -336,7 +511,7 @@ async def fetch_bounded_https_ipv4(
                 terminal_stage = "dns"
                 dns_started_at = loop.time()
                 try:
-                    addresses = await _resolve_provider_ipv4(
+                    addresses = await address_resolver(
                         canonical_host=canonical_host,
                         provider_name=provider_name,
                         deadline=deadline,
@@ -352,17 +527,8 @@ async def fetch_bounded_https_ipv4(
                 response_headers_started_at = loop.time()
                 try:
                     connector = connector_factory(
-                        resolver=_PinnedProviderIPv4Resolver(
-                            canonical_host=canonical_host,
-                            provider_name=provider_name,
-                            addresses=addresses,
-                        ),
-                        family=socket.AF_INET,
-                        use_dns_cache=False,
-                        force_close=True,
-                        limit=1,
-                        limit_per_host=1,
-                        happy_eyeballs_delay=None,
+                        resolver=pinned_resolver_factory(addresses),
+                        **connector_options,
                     )
                     client_timeout = aiohttp.ClientTimeout(
                         total=remaining,
@@ -457,3 +623,96 @@ async def fetch_bounded_https_ipv4(
                 error_class=error_class,
             ),
         )
+
+
+async def fetch_bounded_https_ipv4(
+    url: str,
+    *,
+    canonical_host: str,
+    provider_name: str,
+    user_agent: str,
+    request_headers: Mapping[str, str] | None = None,
+    timeout: float,
+    max_bytes: int,
+    admission_factory: AsyncAdmissionFactory | None = None,
+    resolver_factory: Callable[[], Any] | None = None,
+    connector_factory: Callable[..., Any] = aiohttp.TCPConnector,
+    session_factory: Callable[..., Any] = aiohttp.ClientSession,
+    telemetry_sink: TelemetrySink | None = None,
+) -> bytes:
+    """Fetch a bounded HTTPS response pinned to verified IPv4 addresses."""
+    return await _fetch_bounded_https(
+        url,
+        canonical_host=canonical_host,
+        provider_name=provider_name,
+        user_agent=user_agent,
+        request_headers=request_headers,
+        timeout=timeout,
+        max_bytes=max_bytes,
+        admission_factory=admission_factory,
+        resolver_factory=resolver_factory,
+        connector_factory=connector_factory,
+        session_factory=session_factory,
+        telemetry_sink=telemetry_sink,
+        address_resolver=_resolve_provider_ipv4,
+        pinned_resolver_factory=lambda addresses: _PinnedProviderIPv4Resolver(
+            canonical_host=canonical_host,
+            provider_name=provider_name,
+            addresses=addresses,
+        ),
+        connector_options={
+            "family": socket.AF_INET,
+            "use_dns_cache": False,
+            "force_close": True,
+            "limit": 1,
+            "limit_per_host": 1,
+            "happy_eyeballs_delay": None,
+        },
+    )
+
+
+async def fetch_bounded_https_dual_stack(
+    url: str,
+    *,
+    canonical_host: str,
+    provider_name: str,
+    user_agent: str,
+    request_headers: Mapping[str, str] | None = None,
+    timeout: float,
+    max_bytes: int,
+    admission_factory: AsyncAdmissionFactory | None = None,
+    resolver_factory: Callable[[], Any] | None = None,
+    connector_factory: Callable[..., Any] = aiohttp.TCPConnector,
+    session_factory: Callable[..., Any] = aiohttp.ClientSession,
+    telemetry_sink: TelemetrySink | None = None,
+) -> bytes:
+    """Fetch a bounded HTTPS response pinned to verified IPv4 and IPv6 addresses."""
+    return await _fetch_bounded_https(
+        url,
+        canonical_host=canonical_host,
+        provider_name=provider_name,
+        user_agent=user_agent,
+        request_headers=request_headers,
+        timeout=timeout,
+        max_bytes=max_bytes,
+        admission_factory=admission_factory,
+        resolver_factory=resolver_factory,
+        connector_factory=connector_factory,
+        session_factory=session_factory,
+        telemetry_sink=telemetry_sink,
+        address_resolver=_resolve_provider_dual_stack,
+        pinned_resolver_factory=lambda addresses: _PinnedProviderDualStackResolver(
+            canonical_host=canonical_host,
+            provider_name=provider_name,
+            addresses=addresses,
+        ),
+        connector_options={
+            "family": socket.AF_UNSPEC,
+            "use_dns_cache": False,
+            "force_close": True,
+            "limit": 1,
+            "limit_per_host": 1,
+            "happy_eyeballs_delay": 0.25,
+            "interleave": 1,
+        },
+    )
