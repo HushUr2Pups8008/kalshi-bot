@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import urllib.error
 from io import BytesIO
 from pathlib import Path
@@ -9,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from scripts import brave_search_shadow_probe
 from scripts.brave_search_shadow_probe import (
     BRAVE_ENDPOINT,
     MAX_BYTES,
@@ -104,9 +106,6 @@ async def test_successful_probe_writes_only_allowlisted_scalars(tmp_path: Path) 
         "evidence_persisted",
         "paper_review_enqueued",
         "input_index",
-        "probe_window_id",
-        "ticker",
-        "research_run_id",
         "provider",
         "outcome",
         "duration_ms",
@@ -123,9 +122,6 @@ async def test_successful_probe_writes_only_allowlisted_scalars(tmp_path: Path) 
         "evidence_persisted": False,
         "paper_review_enqueued": False,
         "input_index": 0,
-        "probe_window_id": "window-0",
-        "ticker": "TICKER-0",
-        "research_run_id": "run-0",
         "provider": "brave_search",
         "outcome": "success",
         "duration_ms": 0,
@@ -140,7 +136,7 @@ async def test_successful_probe_writes_only_allowlisted_scalars(tmp_path: Path) 
     assert records[1]["type"] == "BRAVE_SEARCH_SHADOW_SUMMARY"
     assert records[1]["attempts"] == 1
     assert records[1]["successes"] == 1
-    assert records[1]["probe_window_ids"] == ["window-0"]
+    assert "probe_window_ids" not in records[1]
     assert records[1]["p95_duration_ms"] == records[0]["duration_ms"]
     assert records[1]["p95_success_duration_ms"] == records[0]["duration_ms"]
     for forbidden in (
@@ -227,13 +223,115 @@ async def test_unusable_output_destination_prevents_transport_calls(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", (0o720, 0o702), ids=("group_writable", "world_writable"))
+async def test_untrusted_output_parent_prevents_transport_calls(
+    tmp_path: Path, mode: int
+) -> None:
+    output_parent = tmp_path / "untrusted-output"
+    output_parent.mkdir(mode=0o700)
+    output_parent.chmod(mode)
+    calls: list[object] = []
+
+    async def fetcher(*args: object, **kwargs: object) -> bytes:
+        calls.append((args, kwargs))
+        return b'{"web":{"results":[]}}'
+
+    try:
+        with pytest.raises(ProbeInputError, match="output destination"):
+            await run_probe(
+                _input_file(tmp_path),
+                output_parent / "probe.jsonl",
+                enabled=True,
+                api_key="brave-test-secret",
+                fetcher=fetcher,
+            )
+    finally:
+        output_parent.chmod(0o700)
+
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_malformed_output_path_prevents_transport_calls(tmp_path: Path) -> None:
+    calls: list[object] = []
+
+    async def fetcher(*args: object, **kwargs: object) -> bytes:
+        calls.append((args, kwargs))
+        return b'{"web":{"results":[]}}'
+
+    malformed_output_path = Path(f"{tmp_path}/probe\x00.jsonl")
+    with pytest.raises(ProbeInputError, match="output destination"):
+        await run_probe(
+            _input_file(tmp_path),
+            malformed_output_path,
+            enabled=True,
+            api_key="brave-test-secret",
+            fetcher=fetcher,
+        )
+
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_symlink_output_destination_prevents_transport_calls(tmp_path: Path) -> None:
+    target_path = tmp_path / "target.jsonl"
+    target_path.write_text("prior artifact\n", encoding="utf-8")
+    output_path = tmp_path / "probe.jsonl"
+    output_path.symlink_to(target_path)
+    calls: list[object] = []
+
+    async def fetcher(*args: object, **kwargs: object) -> bytes:
+        calls.append((args, kwargs))
+        return b'{"web":{"results":[]}}'
+
+    with pytest.raises(ProbeInputError, match="output destination"):
+        await run_probe(
+            _input_file(tmp_path),
+            output_path,
+            enabled=True,
+            api_key="brave-test-secret",
+            fetcher=fetcher,
+        )
+
+    assert calls == []
+    assert target_path.read_text(encoding="utf-8") == "prior artifact\n"
+
+
+@pytest.mark.asyncio
+async def test_resolved_output_parent_resists_parent_symlink_swap(tmp_path: Path) -> None:
+    trusted_parent = tmp_path / "trusted-output"
+    alternate_parent = tmp_path / "alternate-output"
+    trusted_parent.mkdir(mode=0o700)
+    alternate_parent.mkdir(mode=0o700)
+    alias_parent = tmp_path / "output-alias"
+    alias_parent.symlink_to(trusted_parent, target_is_directory=True)
+
+    async def fetcher(*args: object, **kwargs: object) -> bytes:
+        alias_parent.unlink()
+        alias_parent.symlink_to(alternate_parent, target_is_directory=True)
+        return b'{"web":{"results":[]}}'
+
+    result = await run_probe(
+        _input_file(tmp_path),
+        alias_parent / "probe.jsonl",
+        enabled=True,
+        api_key="brave-test-secret",
+        fetcher=fetcher,
+    )
+
+    assert result.exit_code == 0
+    assert (trusted_parent / "probe.jsonl").exists()
+    assert not (alternate_parent / "probe.jsonl").exists()
+
+
+@pytest.mark.asyncio
 async def test_probe_stages_output_then_atomically_replaces_destination(tmp_path: Path) -> None:
     output_path = tmp_path / "probe.jsonl"
     output_path.write_text("previous-artifact\n", encoding="utf-8")
     staged_paths: list[Path] = []
 
     async def fetcher(*args: object, **kwargs: object) -> bytes:
-        staged_paths.extend(tmp_path.glob(".probe.jsonl.*.tmp"))
+        staged_paths.extend(tmp_path.glob(".brave-search-shadow-*.tmp"))
         assert output_path.read_text(encoding="utf-8") == "previous-artifact\n"
         return b'{"web":{"results":[]}}'
 
@@ -253,28 +351,131 @@ async def test_probe_stages_output_then_atomically_replaces_destination(tmp_path
     assert staged_paths[0].parent == output_path.parent
     assert staged_paths[0] != output_path
     assert output_path.read_text(encoding="utf-8") != "previous-artifact\n"
-    assert list(tmp_path.glob(".probe.jsonl.*.tmp")) == []
+    assert list(tmp_path.glob(".brave-search-shadow-*.tmp")) == []
+
+
+@pytest.mark.asyncio
+async def test_staging_descriptor_lives_through_transport_and_closes_after_publish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reservations: list[object] = []
+    tracked_outputs: list[object] = []
+    original_reserve_output = brave_search_shadow_probe._reserve_output
+    original_fdopen = brave_search_shadow_probe.os.fdopen
+
+    def reserve_output(path: Path) -> object:
+        reservation = original_reserve_output(path)
+        reservations.append(reservation)
+        return reservation
+
+    class TrackingOutput:
+        def __init__(self, wrapped: Any) -> None:
+            self.wrapped = wrapped
+            self.closed = False
+
+        def __enter__(self) -> TrackingOutput:
+            self.wrapped.__enter__()
+            return self
+
+        def __exit__(self, *args: object) -> object:
+            self.closed = True
+            return self.wrapped.__exit__(*args)
+
+        def write(self, rendered: str) -> int:
+            return self.wrapped.write(rendered)
+
+        def flush(self) -> None:
+            self.wrapped.flush()
+
+        def fileno(self) -> int:
+            return self.wrapped.fileno()
+
+    def tracking_fdopen(*args: object, **kwargs: object) -> TrackingOutput:
+        tracked_output = TrackingOutput(original_fdopen(*args, **kwargs))
+        tracked_outputs.append(tracked_output)
+        return tracked_output
+
+    monkeypatch.setattr(brave_search_shadow_probe, "_reserve_output", reserve_output)
+    monkeypatch.setattr(brave_search_shadow_probe.os, "fdopen", tracking_fdopen)
+
+    async def fetcher(*args: object, **kwargs: object) -> bytes:
+        assert len(reservations) == 1
+        descriptor = reservations[0].descriptor
+        assert descriptor is not None
+        os.fstat(descriptor)
+        assert tracked_outputs == []
+        return b'{"web":{"results":[]}}'
+
+    result = await run_probe(
+        _input_file(tmp_path),
+        tmp_path / "probe.jsonl",
+        enabled=True,
+        api_key="brave-test-secret",
+        fetcher=fetcher,
+    )
+
+    assert result.exit_code == 0
+    assert reservations[0].descriptor is None
+    assert len(tracked_outputs) == 1
+    assert tracked_outputs[0].closed is True
+
+
+@pytest.mark.asyncio
+async def test_key_and_query_shaped_identifiers_never_persisted(tmp_path: Path) -> None:
+    identifier_values = {
+        "probe_window_id": "BRAVE_SEARCH_API_KEY=identifier-secret",
+        "ticker": "query-shaped identifier: market terms",
+        "research_run_id": "q=identifier-search&not=output",
+    }
+    input_path = _input_file(tmp_path, query="probe-query-distinct-from-identifiers")
+    rows = [
+        json.loads(line) for line in input_path.read_text(encoding="utf-8").splitlines()
+    ]
+    rows[0].update(identifier_values)
+    input_path.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+    )
+    calls: list[object] = []
+
+    async def fetcher(*args: object, **kwargs: object) -> bytes:
+        calls.append((args, kwargs))
+        return b'{"web":{"results":[]}}'
+
+    result = await run_probe(
+        input_path,
+        tmp_path / "probe.jsonl",
+        enabled=True,
+        api_key="brave-test-secret",
+        fetcher=fetcher,
+    )
+
+    rendered = (tmp_path / "probe.jsonl").read_text(encoding="utf-8")
+    assert result.exit_code == 0
+    assert len(calls) == 1
+    assert all(value not in calls[0][0][0] for value in identifier_values.values())
+    assert all(value not in rendered for value in identifier_values.values())
+    assert "probe_window_id" not in rendered
+    assert "research_run_id" not in rendered
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("field", "invalid_value"),
     (
-        ("probe_window_id", "window 1"),
-        ("ticker", "market-specific query"),
-        ("research_run_id", "q=market-specific-query"),
-        ("ticker", "T" * 129),
+        ("probe_window_id", "window\x00identifier"),
+        ("ticker", "\ud800"),
+        ("research_run_id", "R" * 10_000),
     ),
-    ids=("whitespace", "free_form", "query_like", "overlong"),
+    ids=("control", "lone_surrogate", "overlong"),
 )
-async def test_free_form_identifier_rejected_before_transport(
+async def test_invalid_identifier_is_rejected_before_transport(
     tmp_path: Path, field: str, invalid_value: str
 ) -> None:
-    input_path = _input_file(tmp_path, count=2)
+    input_path = _input_file(tmp_path, count=1)
     rows = [
         json.loads(line) for line in input_path.read_text(encoding="utf-8").splitlines()
     ]
-    rows[1][field] = invalid_value
+    rows[0][field] = invalid_value
     input_path.write_text(
         "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
     )
@@ -325,6 +526,48 @@ async def test_invalid_query_rejected_before_transport(
     with pytest.raises(ProbeInputError, match="invalid query"):
         await run_probe(
             input_path,
+            tmp_path / "probe.jsonl",
+            enabled=True,
+            api_key="brave-test-secret",
+            fetcher=fetcher,
+        )
+
+    assert calls == []
+    assert not (tmp_path / "probe.jsonl").exists()
+
+
+@pytest.mark.asyncio
+async def test_over_limit_printable_query_is_rejected_before_transport(tmp_path: Path) -> None:
+    calls: list[object] = []
+
+    async def fetcher(*args: object, **kwargs: object) -> bytes:
+        calls.append((args, kwargs))
+        return b'{"web":{"results":[]}}'
+
+    with pytest.raises(ProbeInputError, match="query"):
+        await run_probe(
+            _input_file(tmp_path, query="q" * 10_000),
+            tmp_path / "probe.jsonl",
+            enabled=True,
+            api_key="brave-test-secret",
+            fetcher=fetcher,
+        )
+
+    assert calls == []
+    assert not (tmp_path / "probe.jsonl").exists()
+
+
+@pytest.mark.asyncio
+async def test_over_limit_encoded_url_is_rejected_before_transport(tmp_path: Path) -> None:
+    calls: list[object] = []
+
+    async def fetcher(*args: object, **kwargs: object) -> bytes:
+        calls.append((args, kwargs))
+        return b'{"web":{"results":[]}}'
+
+    with pytest.raises(ProbeInputError, match="URL"):
+        await run_probe(
+            _input_file(tmp_path, query="\U0001f600" * 500),
             tmp_path / "probe.jsonl",
             enabled=True,
             api_key="brave-test-secret",

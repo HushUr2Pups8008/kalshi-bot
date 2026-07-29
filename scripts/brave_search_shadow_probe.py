@@ -7,7 +7,7 @@ import asyncio
 import json
 import math
 import os
-import re
+import stat
 import sys
 import tempfile
 import time
@@ -32,10 +32,12 @@ BRAVE_ENDPOINT = f"https://{BRAVE_HOST}/res/v1/web/search"
 MAX_QUERIES = 30
 TIMEOUT_SECONDS = 2.0
 MAX_BYTES = 256_000
+MAX_IDENTIFIER_UTF8_BYTES = 256
+MAX_QUERY_UTF8_BYTES = 2_048
+MAX_ENCODED_URL_BYTES = 4_096
 
 _INPUT_FIELDS = ("probe_window_id", "ticker", "research_run_id", "query")
 _IDENTIFIER_FIELDS = ("probe_window_id", "ticker", "research_run_id")
-_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 
 class ProbeInputError(ValueError):
@@ -44,18 +46,12 @@ class ProbeInputError(ValueError):
 
 @dataclass(frozen=True)
 class ProbeInput:
-    probe_window_id: str
-    ticker: str
-    research_run_id: str
-    query: str
+    request_url: str
 
 
 @dataclass(frozen=True)
 class ProbeRecord:
     input_index: int
-    probe_window_id: str
-    ticker: str
-    research_run_id: str
     provider: str
     outcome: str
     duration_ms: int
@@ -73,6 +69,13 @@ class ProbeRunResult:
     successes: int
 
 
+@dataclass
+class ReservedOutput:
+    destination: Path
+    staged_path: Path
+    descriptor: int | None
+
+
 Fetcher = Callable[..., Awaitable[bytes]]
 
 
@@ -85,24 +88,65 @@ def _object_with_unique_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return record
 
 
-def _validate_identifier(value: str, line_number: int) -> None:
-    if not _IDENTIFIER_PATTERN.fullmatch(value):
-        raise ProbeInputError(f"input line {line_number} has an invalid identifier")
-
-
-def _validate_query(value: str, line_number: int) -> None:
+def _validated_utf8_bytes(
+    value: str,
+    line_number: int,
+    *,
+    kind: str,
+    max_bytes: int,
+) -> bytes:
     try:
-        value.encode("utf-8")
+        encoded = value.encode("utf-8")
     except UnicodeEncodeError as exc:
+        raise ProbeInputError(f"input line {line_number} has an invalid {kind}") from exc
+    if (
+        not value.strip()
+        or any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in value)
+        or len(encoded) > max_bytes
+    ):
+        raise ProbeInputError(f"input line {line_number} has an invalid {kind}")
+    return encoded
+
+
+def _validate_identifier(value: str, line_number: int) -> None:
+    _validated_utf8_bytes(
+        value,
+        line_number,
+        kind="identifier",
+        max_bytes=MAX_IDENTIFIER_UTF8_BYTES,
+    )
+
+
+def _build_request_url(query: str, line_number: int) -> str:
+    _validated_utf8_bytes(
+        query,
+        line_number,
+        kind="query",
+        max_bytes=MAX_QUERY_UTF8_BYTES,
+    )
+    try:
+        query_string = urllib.parse.urlencode(
+            {
+                "q": query,
+                "count": 3,
+                "country": "US",
+                "search_lang": "en",
+            }
+        )
+        url = f"{BRAVE_ENDPOINT}?{query_string}"
+        if len(url.encode("ascii")) > MAX_ENCODED_URL_BYTES:
+            raise ProbeInputError(f"input line {line_number} has an over-limit URL")
+    except ProbeInputError:
+        raise
+    except (UnicodeError, ValueError) as exc:
         raise ProbeInputError(f"input line {line_number} has an invalid query") from exc
-    if any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in value):
-        raise ProbeInputError(f"input line {line_number} has an invalid query")
+    return url
 
 
 def _load_inputs(input_path: Path) -> list[ProbeInput]:
     try:
         lines = input_path.read_text(encoding="utf-8").splitlines()
-    except (OSError, UnicodeError) as exc:
+    except (OSError, UnicodeError, ValueError, RuntimeError) as exc:
         raise ProbeInputError("input file cannot be read") from exc
 
     if len(lines) > MAX_QUERIES:
@@ -125,6 +169,7 @@ def _load_inputs(input_path: Path) -> list[ProbeInput]:
             raise ProbeInputError(f"input line {line_number} has invalid fields")
 
         values: dict[str, str] = {}
+        request_url: str | None = None
         for field in _INPUT_FIELDS:
             value = parsed[field]
             if not isinstance(value, str) or not value.strip():
@@ -132,14 +177,16 @@ def _load_inputs(input_path: Path) -> list[ProbeInput]:
             if field in _IDENTIFIER_FIELDS:
                 _validate_identifier(value, line_number)
             elif field == "query":
-                _validate_query(value, line_number)
+                request_url = _build_request_url(value, line_number)
             values[field] = value
 
         research_run_id = values["research_run_id"]
         if research_run_id in research_run_ids:
             raise ProbeInputError("input contains a duplicate research run identifier")
         research_run_ids.add(research_run_id)
-        inputs.append(ProbeInput(**values))
+        if request_url is None:
+            raise ProbeInputError(f"input line {line_number} has an invalid query")
+        inputs.append(ProbeInput(request_url=request_url))
     return inputs
 
 
@@ -155,9 +202,6 @@ def _record_payload(record: ProbeRecord) -> dict[str, object]:
         "evidence_persisted": False,
         "paper_review_enqueued": False,
         "input_index": record.input_index,
-        "probe_window_id": record.probe_window_id,
-        "ticker": record.ticker,
-        "research_run_id": record.research_run_id,
         "provider": record.provider,
         "outcome": record.outcome,
         "duration_ms": record.duration_ms,
@@ -187,32 +231,87 @@ def _summary_payload(records: Sequence[ProbeRecord]) -> dict[str, object]:
         "paper_review_enqueued": False,
         "attempts": len(records),
         "successes": len(successful_durations),
-        "probe_window_ids": sorted({record.probe_window_id for record in records}),
         "p95_duration_ms": _p95(durations),
         "p95_success_duration_ms": _p95(successful_durations),
     }
 
 
-def _write_output(output_path: Path, records: Sequence[ProbeRecord]) -> None:
+def _write_output(reservation: ReservedOutput, records: Sequence[ProbeRecord]) -> None:
     payloads = [_record_payload(record) for record in records]
     payloads.append(_summary_payload(records))
     rendered = "".join(json.dumps(payload, separators=(",", ":")) + "\n" for payload in payloads)
-    output_path.write_text(rendered, encoding="utf-8")
-
-
-def _reserve_output(output_path: Path) -> Path:
-    if output_path.is_dir() or not output_path.parent.is_dir():
-        raise ProbeInputError("output destination cannot be reserved")
+    descriptor = reservation.descriptor
+    if descriptor is None:
+        raise ProbeInputError("output destination cannot be written")
     try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as staged_output:
+            reservation.descriptor = None
+            staged_output.write(rendered)
+            staged_output.flush()
+            os.fsync(staged_output.fileno())
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise ProbeInputError("output destination cannot be written") from exc
+
+
+def _reserve_output(output_path: Path) -> ReservedOutput:
+    try:
+        get_effective_uid = getattr(os, "geteuid", None)
+        if get_effective_uid is None:
+            raise RuntimeError("effective user ID is unavailable")
+        effective_uid = get_effective_uid()
+        resolved_parent = output_path.parent.resolve(strict=True)
+        parent_stat = resolved_parent.stat()
+        if not stat.S_ISDIR(parent_stat.st_mode):
+            raise RuntimeError("output parent is not a directory")
+        if parent_stat.st_uid != effective_uid:
+            raise RuntimeError("output parent has an unexpected owner")
+        if parent_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            raise RuntimeError("output parent is writable by another user")
+
+        destination_name = output_path.name
+        if not destination_name:
+            raise ValueError("output destination has no filename")
+        destination = resolved_parent / destination_name
+        try:
+            destination_mode = destination.lstat().st_mode
+        except FileNotFoundError:
+            pass
+        else:
+            if stat.S_ISLNK(destination_mode) or stat.S_ISDIR(destination_mode):
+                raise RuntimeError("output destination is not a regular path")
+
         descriptor, staged_path = tempfile.mkstemp(
-            dir=output_path.parent,
-            prefix=f".{output_path.name}.",
+            dir=resolved_parent,
+            prefix=".brave-search-shadow-",
             suffix=".tmp",
         )
-    except OSError as exc:
+    except (AttributeError, OSError, ValueError, RuntimeError) as exc:
         raise ProbeInputError("output destination cannot be reserved") from exc
-    os.close(descriptor)
-    return Path(staged_path)
+    return ReservedOutput(
+        destination=destination,
+        staged_path=Path(staged_path),
+        descriptor=descriptor,
+    )
+
+
+def _publish_output(reservation: ReservedOutput) -> None:
+    try:
+        os.replace(reservation.staged_path, reservation.destination)
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise ProbeInputError("output destination cannot be published") from exc
+
+
+def _cleanup_reserved_output(reservation: ReservedOutput) -> None:
+    if reservation.descriptor is not None:
+        try:
+            os.close(reservation.descriptor)
+        except (OSError, ValueError, RuntimeError):
+            pass
+        reservation.descriptor = None
+    try:
+        reservation.staged_path.unlink(missing_ok=True)
+    except (OSError, ValueError, RuntimeError):
+        pass
 
 
 async def run_probe(
@@ -228,23 +327,14 @@ async def run_probe(
         return ProbeRunResult(exit_code=2, attempts=0, successes=0)
 
     inputs = _load_inputs(input_path)
-    staged_output_path = _reserve_output(output_path)
+    reserved_output = _reserve_output(output_path)
     try:
         records: list[ProbeRecord] = []
         for input_index, probe_input in enumerate(inputs):
-            query_string = urllib.parse.urlencode(
-                {
-                    "q": probe_input.query,
-                    "count": 3,
-                    "country": "US",
-                    "search_lang": "en",
-                }
-            )
-            url = f"{BRAVE_ENDPOINT}?{query_string}"
             started_at = time.monotonic()
             try:
                 response = await fetcher(
-                    url,
+                    probe_input.request_url,
                     canonical_host=BRAVE_HOST,
                     provider_name="Brave Search API Shadow",
                     user_agent="kalshi-bot-brave-shadow/1.0",
@@ -259,9 +349,6 @@ async def run_probe(
                 records.append(
                     ProbeRecord(
                         input_index=input_index,
-                        probe_window_id=probe_input.probe_window_id,
-                        ticker=probe_input.ticker,
-                        research_run_id=probe_input.research_run_id,
                         provider="brave_search",
                         outcome="timeout",
                         duration_ms=_duration_ms(started_at),
@@ -278,9 +365,6 @@ async def run_probe(
                 records.append(
                     ProbeRecord(
                         input_index=input_index,
-                        probe_window_id=probe_input.probe_window_id,
-                        ticker=probe_input.ticker,
-                        research_run_id=probe_input.research_run_id,
                         provider="brave_search",
                         outcome="http_error",
                         duration_ms=_duration_ms(started_at),
@@ -296,9 +380,6 @@ async def run_probe(
                 records.append(
                     ProbeRecord(
                         input_index=input_index,
-                        probe_window_id=probe_input.probe_window_id,
-                        ticker=probe_input.ticker,
-                        research_run_id=probe_input.research_run_id,
                         provider="brave_search",
                         outcome="provider_exception",
                         duration_ms=_duration_ms(started_at),
@@ -316,9 +397,6 @@ async def run_probe(
                 records.append(
                     ProbeRecord(
                         input_index=input_index,
-                        probe_window_id=probe_input.probe_window_id,
-                        ticker=probe_input.ticker,
-                        research_run_id=probe_input.research_run_id,
                         provider="brave_search",
                         outcome="malformed_response",
                         duration_ms=duration_ms,
@@ -337,9 +415,6 @@ async def run_probe(
                 records.append(
                     ProbeRecord(
                         input_index=input_index,
-                        probe_window_id=probe_input.probe_window_id,
-                        ticker=probe_input.ticker,
-                        research_run_id=probe_input.research_run_id,
                         provider="brave_search",
                         outcome="malformed_response",
                         duration_ms=duration_ms,
@@ -358,9 +433,6 @@ async def run_probe(
                 records.append(
                     ProbeRecord(
                         input_index=input_index,
-                        probe_window_id=probe_input.probe_window_id,
-                        ticker=probe_input.ticker,
-                        research_run_id=probe_input.research_run_id,
                         provider="brave_search",
                         outcome="malformed_response",
                         duration_ms=duration_ms,
@@ -376,9 +448,6 @@ async def run_probe(
             records.append(
                 ProbeRecord(
                     input_index=input_index,
-                    probe_window_id=probe_input.probe_window_id,
-                    ticker=probe_input.ticker,
-                    research_run_id=probe_input.research_run_id,
                     provider="brave_search",
                     outcome="success",
                     duration_ms=duration_ms,
@@ -390,12 +459,12 @@ async def run_probe(
                 )
             )
 
-        _write_output(staged_output_path, records)
-        os.replace(staged_output_path, output_path)
+        _write_output(reserved_output, records)
+        _publish_output(reserved_output)
         successes = sum(record.outcome == "success" for record in records)
         return ProbeRunResult(exit_code=0, attempts=len(records), successes=successes)
     finally:
-        staged_output_path.unlink(missing_ok=True)
+        _cleanup_reserved_output(reserved_output)
 
 
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:

@@ -12,9 +12,10 @@
 
 - `ENABLE_BRAVE_SEARCH_SHADOW=true` and non-empty `BRAVE_SEARCH_API_KEY` are both required before any call; missing either produces no artifact and no network call.
 - The key remains only in ignored environment configuration. It is never committed, printed, included in the URL, included in exceptions, or persisted.
-- Use only canonical HTTPS host `api.search.brave.com`, pinned global IPv4 resolution, redirects disabled, serial calls, a 2.0-second timeout, 256,000-byte response cap, and at most 30 inputs.
+- Use only canonical HTTPS host `api.search.brave.com`, pinned global IPv4 resolution, redirects disabled, serial calls, a 2.0-second timeout, 256,000-byte response cap, at most 30 inputs, 2,048 UTF-8 query bytes, and a 4,096-byte encoded URL.
 - Do not modify `main.py`, `analysis/research_gate.py`, `tasks/research_prewarm_task.py`, `analysis/generic_search_circuit.py`, any dossier store, paper admission, execution, sizing, or `trades.jsonl`.
-- Output may contain only probe run ID, input index, provider, outcome, duration milliseconds, HTTP status, body byte count, JSON schema validity, result count, and safe exception class. It must never contain query text, URL, headers, API key, response body, title, snippet, publisher URL, exception message, or repr.
+- Output may contain only fixed safety fields, input index, provider, outcome, duration milliseconds, HTTP status, body byte count, JSON schema validity, result count, safe exception class, and safe aggregate counts or percentiles. It must never contain `probe_window_id`, `ticker`, `research_run_id`, query text, URL, headers, API key, response body, title, snippet, publisher URL, exception message, or repr.
+- Before any fetch, the output parent must resolve to an existing directory owned by the current effective UID and not group/world writable; the destination must not be a symlink or directory. Keep the staging descriptor open in that resolved parent and publish only with same-directory `os.replace`.
 - A successful probe is transport evidence only. It cannot create `ResearchEvidence`, alter a verdict, enqueue paper review, or establish relevance, edge, or profitability.
 - Before execution, the operator must record account-specific commercial-use, retention, caching, redistribution, and attribution terms. Do not retain result content before that review.
 
@@ -245,20 +246,17 @@ BRAVE_ENDPOINT = f"https://{BRAVE_HOST}/res/v1/web/search"
 MAX_QUERIES = 30
 TIMEOUT_SECONDS = 2.0
 MAX_BYTES = 256_000
+MAX_IDENTIFIER_UTF8_BYTES = 256
+MAX_QUERY_UTF8_BYTES = 2_048
+MAX_ENCODED_URL_BYTES = 4_096
 
 @dataclass(frozen=True)
 class ProbeInput:
-    probe_window_id: str
-    ticker: str
-    research_run_id: str
-    query: str
+    request_url: str
 
 @dataclass(frozen=True)
 class ProbeRecord:
     input_index: int
-    probe_window_id: str
-    ticker: str
-    research_run_id: str
     provider: str
     outcome: str
     duration_ms: int
@@ -269,7 +267,7 @@ class ProbeRecord:
     error_class: str | None
 ```
 
-`run_probe(...)` must parse and validate all input lines before its first call. Reject blank required fields, duplicate `research_run_id`, and more than 30 rows. For every validated row it builds a URL with `urllib.parse.urlencode({"q": row.query, "count": 3, "country": "US", "search_lang": "en"})` and calls:
+`run_probe(...)` must parse and validate all input lines before its first call. Reject blank required fields, duplicate `research_run_id`, and more than 30 rows. Required identifiers accept bounded nonblank UTF-8 without controls but are never used in the request URL or persisted. Validate the query as bounded nonblank UTF-8 without controls, build and retain its URL with `urllib.parse.urlencode({"q": query, "count": 3, "country": "US", "search_lang": "en"})`, and reject an over-limit encoded URL before transport. The retained URL is then passed to:
 
 ```python
 await fetcher(
@@ -288,9 +286,9 @@ await fetcher(
 
 Measure duration synchronously around the await. For success, parse only `web.results` as a list and retain its length. For `TimeoutError`, use `outcome="timeout"`; for `urllib.error.HTTPError`, use `outcome="http_error"` and `http_status=exc.code`; for malformed JSON use `outcome="malformed_response"`; all other exceptions use `outcome="provider_exception"`. `error_class` may only be the matching type name or `"ProviderError"`; never call `str(exc)` or `repr(exc)`.
 
-Serialize a `ProbeRecord` field-by-field, prepend `type="BRAVE_SEARCH_SHADOW_ATTEMPT"`, `shadow_only=true`, `admission_path="none"`, `evidence_persisted=false`, and `paper_review_enqueued=false`. Append one summary containing attempts, successes, distinct `probe_window_id` values, p95 duration, and p95 successful duration. Do not serialize `ProbeInput.query`.
+Serialize a `ProbeRecord` field-by-field, prepend `type="BRAVE_SEARCH_SHADOW_ATTEMPT"`, `shadow_only=true`, `admission_path="none"`, `evidence_persisted=false`, and `paper_review_enqueued=false`. Append one summary containing only attempts, successes, p95 duration, and p95 successful duration. Do not serialize raw input identifiers or query text.
 
-The CLI must accept `--input` and `--output` absolute paths only and require `--execute`. It reads both environment variables itself, emits no artifact on configuration failure, and prints only a safe run summary plus the output path.
+The CLI must accept `--input` and `--output` absolute paths only and require `--execute`. It reads both environment variables itself, emits no artifact on configuration failure, resolves and validates the output destination before the first fetch, and prints only a safe run summary plus the output path.
 
 - [ ] **Step 4: Add import-boundary and cap tests**
 
@@ -392,4 +390,3 @@ git commit -m "docs: document Brave shadow probe configuration"
 3. Independently review a blinded 25-item contract-relevance sample using only data retained under the subscribed account terms. Probe output itself contains no result content.
 4. Design a separate future runtime boundary and regression suite before any provider result is allowed near verdict or admission code.
 5. Preserve all matcher, research, price-edge, G6/G7, sizing, paper-only, and live-transition controls regardless of probe outcome.
-
