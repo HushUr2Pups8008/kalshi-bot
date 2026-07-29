@@ -35,6 +35,7 @@ import logging.handlers
 import os
 import shutil
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -454,32 +455,34 @@ class TradeLogStore:
         self._legacy_path = legacy_path
         self._archive_root = root / "archive"
         self._log = get_logger("trade_log_store")
+        self._lock = threading.Lock()
         self._live_path.parent.mkdir(parents=True, exist_ok=True)
         self._archive_root.mkdir(parents=True, exist_ok=True)
 
     def append(self, record: dict[str, Any]) -> None:
-        ts = _parse_trade_ts(record.get("ts"))
-        if ts is None:
-            ts = datetime.now(timezone.utc)
-            record["ts"] = ts.isoformat()
-        current_day = self._current_live_day()
-        record_day = ts.date()
+        with self._lock:
+            ts = _parse_trade_ts(record.get("ts"))
+            if ts is None:
+                ts = datetime.now(timezone.utc)
+                record["ts"] = ts.isoformat()
+            current_day = self._current_live_day()
+            record_day = ts.date()
 
-        if current_day is None or current_day == record_day:
+            if current_day is None or current_day == record_day:
+                self._append_line(self._live_path, json.dumps(record) + "\n")
+                return
+
+            if record_day < current_day:
+                self._log.warning(
+                    "[TRADE_LOG] Out-of-order record for %s arrived while live file is %s; appending to archive",
+                    record_day.isoformat(),
+                    current_day.isoformat(),
+                )
+                self._append_line(self._archive_path_for_day(record_day), json.dumps(record) + "\n")
+                return
+
+            self._rotate_live_to_archive(current_day)
             self._append_line(self._live_path, json.dumps(record) + "\n")
-            return
-
-        if record_day < current_day:
-            self._log.warning(
-                "[TRADE_LOG] Out-of-order record for %s arrived while live file is %s; appending to archive",
-                record_day.isoformat(),
-                current_day.isoformat(),
-            )
-            self._append_line(self._archive_path_for_day(record_day), json.dumps(record) + "\n")
-            return
-
-        self._rotate_live_to_archive(current_day)
-        self._append_line(self._live_path, json.dumps(record) + "\n")
 
     def _append_line(self, path: Path, line: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
