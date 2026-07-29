@@ -261,6 +261,29 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
             "match_diagnostics_total": 8,
             "signal_analysis_detail_total": 6,
             "match_to_signal_detail_gap": 2,
+            "fresh_pass_route_log_linkage": {
+                "fresh_pass_rows": 9,
+                "fresh_pass_distinct_keys": 8,
+                "fresh_pass_unique_keys": 8,
+                "fresh_pass_keys_with_candidate_diagnostic": 6,
+                "fresh_pass_keys_with_explicit_no_match": 2,
+                "fresh_pass_keys_with_market_availability_exit": 1,
+                "fresh_pass_keys_with_unknown_route_exit": 1,
+                "fresh_pass_keys_with_multiple_route_signals": 1,
+                "fresh_pass_keys_without_tracked_route_signal": 1,
+                "fresh_pass_ambiguous_duplicate_keys": 0,
+                "fresh_pass_missing_identity_rows": 1,
+                "match_diagnostic_missing_identity_rows": 2,
+                "match_no_candidate_missing_identity_rows": 0,
+                "candidate_diagnostic_keys_without_fresh_pass": 0,
+                "explicit_no_match_keys_without_fresh_pass": 0,
+                "market_availability_keys_without_fresh_pass": 0,
+                "unknown_route_exit_keys_without_fresh_pass": 0,
+            },
+            "fresh_pass_without_tracked_route_signal_sources": Counter({"Reuters": 1}),
+            "match_no_candidate_total": 2,
+            "match_no_candidate_reasons": Counter({"no_match": 2}),
+            "match_no_candidate_venues": Counter({"polymarket_us": 2}),
             "match_diagnostic_pre_llm_gate": Counter({"would_fail": 7, "would_pass": 1}),
             "match_diagnostic_sources": Counter({"Reuters": 5, "AP": 3}),
             "match_diagnostic_tickers": Counter({"KXIRAN": 5, "KXTRUMP": 3}),
@@ -657,6 +680,18 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
         "9 fresh; 8 match diagnostics; 6 signal rows; 1 LLM attempt; 3 opportunities; 2 raw paper-trade events"
         in rendered
     )
+    assert "Fresh-pass route linkage        : venue-agnostic, window-local log signals; not attempt, conversion, or per-venue coverage; signal rates overlap" in rendered
+    assert (
+        "candidate_diagnostic=6/8 (75.0%) explicit_no_match=2/8 (25.0%) "
+        "market_availability=1/8 (12.5%) unknown_or_other_exit=1/8 (12.5%)"
+    ) in rendered
+    assert "multiple=1 no_signal=1" in rendered
+    assert "ambiguous=0 missing_identity=fresh=1 diagnostic=2 no_candidate=0" in rendered
+    assert (
+        "signal_without_fresh=candidate_diagnostic=0 explicit_no_match=0 "
+        "market_availability=0 unknown_or_other_exit=0"
+    ) in rendered
+    assert "Explicit no-candidate rows      : 2" in rendered
     assert "Same-window linkable cohort      : 3 opportunities" in rendered
     assert "Paper-trade lineage            : unavailable (0/2 event rows linked)" in rendered
     assert "Live submission lineage        : 0/0 event rows linked; not fill or P&L evidence" in rendered

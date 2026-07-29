@@ -69,6 +69,9 @@ _PAPER_TRADE_EVENT_TYPES = frozenset({"PAPER_TRADE"})
 _LIVE_SUBMISSION_EVENT_TYPES = frozenset({"LIVE_ORDER"})
 _LIVE_SUBMISSION_INTENT_EVENT_TYPES = frozenset({"LIVE_SUBMISSION_INTENT"})
 _LIVE_SUBMISSION_UNKNOWN_EVENT_TYPES = frozenset({"LIVE_SUBMISSION_UNKNOWN"})
+_MARKET_AVAILABILITY_NO_CANDIDATE_REASONS = frozenset(
+    {"market_fetch_failed", "no_eligible_markets"}
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -228,6 +231,17 @@ def _record_text(record: dict[str, Any], field: str) -> str | None:
         return None
     value = value.strip()
     return value or None
+
+
+def _fresh_pass_match_key(record: dict[str, Any]) -> tuple[str, str] | None:
+    source = _record_text(record, "source")
+    headline = _record_text(record, "headline")
+    if source is None or headline is None:
+        return None
+    return (
+        " ".join(source.split()).casefold(),
+        " ".join(headline.split()).casefold(),
+    )
 
 
 def _terminal_receipt_ids(event_type: str, record: dict[str, Any]) -> tuple[str, ...]:
@@ -584,6 +598,12 @@ def summarize(
         "match_diagnostic_pre_llm_gate": Counter(),
         "match_diagnostic_sources": Counter(),
         "match_diagnostic_tickers": Counter(),
+        "fresh_pass_without_tracked_route_signal_sources": Counter(),
+        "match_no_candidate_total": 0,
+        "match_no_candidate_sources": Counter(),
+        "match_no_candidate_reasons": Counter(),
+        "match_no_candidate_venues": Counter(),
+        "match_no_candidate_eligible_market_counts": Counter(),
         "match_llm_reviews_total": 0,
         "match_llm_review_verdicts": Counter(),
         "false_positive_neutral_empty_keyword_sources": Counter(),
@@ -614,6 +634,16 @@ def summarize(
         "skip_settlement_source_matches": Counter(),
     }
     lifecycle_records: list[tuple[str, dict[str, Any]]] = []
+    fresh_pass_key_counts: Counter[tuple[str, str]] = Counter()
+    fresh_pass_key_sources: dict[tuple[str, str], str] = {}
+    match_diagnostic_keys: set[tuple[str, str]] = set()
+    match_no_candidate_key_counts: Counter[tuple[str, str]] = Counter()
+    explicit_no_match_key_counts: Counter[tuple[str, str]] = Counter()
+    market_availability_key_counts: Counter[tuple[str, str]] = Counter()
+    unknown_route_exit_key_counts: Counter[tuple[str, str]] = Counter()
+    fresh_pass_missing_identity_rows = 0
+    match_diagnostic_missing_identity_rows = 0
+    match_no_candidate_missing_identity_rows = 0
 
     read_stats = TradeLogReadStats()
     for record in iter_trade_records(path, since=since, until=until, stats=read_stats):
@@ -634,6 +664,11 @@ def summarize(
 
         if event_type == "MATCH_DIAGNOSTIC":
             stats["match_diagnostics_total"] += 1
+            match_key = _fresh_pass_match_key(record)
+            if match_key is None:
+                match_diagnostic_missing_identity_rows += 1
+            else:
+                match_diagnostic_keys.add(match_key)
             if record.get("would_fail_pre_llm_gate") is True:
                 stats["match_diagnostic_pre_llm_gate"]["would_fail"] += 1
             elif record.get("would_fail_pre_llm_gate") is False:
@@ -642,6 +677,37 @@ def summarize(
                 stats["match_diagnostic_pre_llm_gate"]["unknown"] += 1
             stats["match_diagnostic_sources"][_text(record.get("source"))] += 1
             stats["match_diagnostic_tickers"][_text(record.get("ticker"))] += 1
+        elif event_type == "EARLY_FRESH_PASS":
+            match_key = _fresh_pass_match_key(record)
+            if match_key is None:
+                fresh_pass_missing_identity_rows += 1
+            else:
+                fresh_pass_key_counts[match_key] += 1
+                fresh_pass_key_sources.setdefault(match_key, _text(record.get("source")))
+        elif event_type == "MATCH_NO_CANDIDATE":
+            stats["match_no_candidate_total"] += 1
+            reason = _text(record.get("reason"))
+            match_key = _fresh_pass_match_key(record)
+            if match_key is None:
+                match_no_candidate_missing_identity_rows += 1
+            else:
+                match_no_candidate_key_counts[match_key] += 1
+                if reason == "no_match":
+                    explicit_no_match_key_counts[match_key] += 1
+                elif reason in _MARKET_AVAILABILITY_NO_CANDIDATE_REASONS:
+                    market_availability_key_counts[match_key] += 1
+                else:
+                    unknown_route_exit_key_counts[match_key] += 1
+            stats["match_no_candidate_sources"][_text(record.get("source"))] += 1
+            stats["match_no_candidate_reasons"][reason] += 1
+            stats["match_no_candidate_venues"][_text(record.get("venue"))] += 1
+            eligible_market_count = record.get("eligible_market_count")
+            eligible_market_count_text = (
+                "unknown"
+                if eligible_market_count is None
+                else str(eligible_market_count).strip() or "unknown"
+            )
+            stats["match_no_candidate_eligible_market_counts"][eligible_market_count_text] += 1
         elif event_type == "SIGNAL_ANALYSIS_DETAIL":
             stats["signal_analysis_detail_total"] += 1
             if record.get("is_startup_probe") or record.get("is_synthetic_probe"):
@@ -775,6 +841,85 @@ def summarize(
         0,
         stats["match_diagnostics_total"] - stats["signal_analysis_detail_total"],
     )
+    unique_fresh_pass_keys = {
+        match_key for match_key, count in fresh_pass_key_counts.items() if count == 1
+    }
+    explicit_no_match_keys = set(explicit_no_match_key_counts)
+    market_availability_keys = set(market_availability_key_counts)
+    unknown_route_exit_keys = set(unknown_route_exit_key_counts)
+    fresh_pass_keys_with_candidate_diagnostic = unique_fresh_pass_keys & match_diagnostic_keys
+    fresh_pass_keys_with_explicit_no_match = unique_fresh_pass_keys & explicit_no_match_keys
+    fresh_pass_keys_with_market_availability_exit = (
+        unique_fresh_pass_keys & market_availability_keys
+    )
+    fresh_pass_keys_with_unknown_route_exit = unique_fresh_pass_keys & unknown_route_exit_keys
+    fresh_pass_keys_with_multiple_route_signals = {
+        match_key
+        for match_key in unique_fresh_pass_keys
+        if sum(
+            match_key in signal_keys
+            for signal_keys in (
+                match_diagnostic_keys,
+                explicit_no_match_keys,
+                market_availability_keys,
+                unknown_route_exit_keys,
+            )
+        ) > 1
+    }
+    fresh_pass_keys_without_tracked_route_signal = unique_fresh_pass_keys - (
+        match_diagnostic_keys
+        | explicit_no_match_keys
+        | market_availability_keys
+        | unknown_route_exit_keys
+    )
+    fresh_pass_keys = set(fresh_pass_key_counts)
+    stats["fresh_pass_route_log_linkage"] = {
+        "fresh_pass_rows": stats["event_counts"].get("EARLY_FRESH_PASS", 0),
+        "fresh_pass_distinct_keys": len(fresh_pass_key_counts),
+        "fresh_pass_unique_keys": len(unique_fresh_pass_keys),
+        "fresh_pass_keys_with_candidate_diagnostic": len(
+            fresh_pass_keys_with_candidate_diagnostic
+        ),
+        "fresh_pass_keys_with_explicit_no_match": len(
+            fresh_pass_keys_with_explicit_no_match
+        ),
+        "fresh_pass_keys_with_market_availability_exit": len(
+            fresh_pass_keys_with_market_availability_exit
+        ),
+        "fresh_pass_keys_with_unknown_route_exit": len(
+            fresh_pass_keys_with_unknown_route_exit
+        ),
+        "fresh_pass_keys_with_multiple_route_signals": len(
+            fresh_pass_keys_with_multiple_route_signals
+        ),
+        "fresh_pass_keys_without_tracked_route_signal": len(
+            fresh_pass_keys_without_tracked_route_signal
+        ),
+        "fresh_pass_ambiguous_duplicate_keys": len(fresh_pass_key_counts)
+        - len(unique_fresh_pass_keys),
+        "fresh_pass_missing_identity_rows": fresh_pass_missing_identity_rows,
+        "match_diagnostic_missing_identity_rows": match_diagnostic_missing_identity_rows,
+        "match_no_candidate_missing_identity_rows": match_no_candidate_missing_identity_rows,
+        "candidate_diagnostic_keys_without_fresh_pass": len(
+            match_diagnostic_keys - fresh_pass_keys
+        ),
+        "explicit_no_match_keys_without_fresh_pass": len(
+            explicit_no_match_keys - fresh_pass_keys
+        ),
+        "market_availability_keys_without_fresh_pass": len(
+            market_availability_keys - fresh_pass_keys
+        ),
+        "unknown_route_exit_keys_without_fresh_pass": len(
+            unknown_route_exit_keys - fresh_pass_keys
+        ),
+        "match_no_candidate_duplicate_keys": sum(
+            count > 1 for count in match_no_candidate_key_counts.values()
+        ),
+    }
+    stats["fresh_pass_without_tracked_route_signal_sources"] = Counter(
+        fresh_pass_key_sources[match_key]
+        for match_key in fresh_pass_keys_without_tracked_route_signal
+    )
     stats["same_window_lifecycle_attribution"] = _same_window_lifecycle_attribution(lifecycle_records)
 
     return stats
@@ -852,6 +997,80 @@ def print_summary(stats: dict[str, Any], top: int, since: datetime | None, until
     print(f"  SIGNAL                      : {signals}")
     print(f"  OPPORTUNITY                 : {opportunities}")
     print(f"  PAPER_TRADE                 : {paper_trades}")
+
+    fresh_pass_linkage = stats.get("fresh_pass_route_log_linkage", {})
+    if not isinstance(fresh_pass_linkage, dict):
+        fresh_pass_linkage = {}
+    fresh_pass_unique_keys = int(fresh_pass_linkage.get("fresh_pass_unique_keys", 0) or 0)
+    fresh_pass_keys_with_candidate_diagnostic = int(
+        fresh_pass_linkage.get("fresh_pass_keys_with_candidate_diagnostic", 0) or 0
+    )
+    fresh_pass_keys_with_explicit_no_match = int(
+        fresh_pass_linkage.get("fresh_pass_keys_with_explicit_no_match", 0) or 0
+    )
+    fresh_pass_keys_with_market_availability_exit = int(
+        fresh_pass_linkage.get("fresh_pass_keys_with_market_availability_exit", 0) or 0
+    )
+    fresh_pass_keys_with_unknown_route_exit = int(
+        fresh_pass_linkage.get("fresh_pass_keys_with_unknown_route_exit", 0) or 0
+    )
+    print()
+    print("Fresh-pass Route Log Linkage")
+    print(
+        "  Join basis                      : window-local, venue-agnostic normalized source + headline; "
+        "not lifecycle, attempt, conversion, or per-venue coverage; signal rates overlap"
+    )
+    print(f"  Fresh pass rows                 : {fresh_pass_linkage.get('fresh_pass_rows', 0)}")
+    print(f"  Linkable unique fresh keys      : {fresh_pass_unique_keys}")
+    print(
+        "  Candidate diagnostic observed   : "
+        f"{fresh_pass_keys_with_candidate_diagnostic} "
+        f"({pct(fresh_pass_keys_with_candidate_diagnostic, fresh_pass_unique_keys)})"
+    )
+    print(
+        "  Explicit no-match observed      : "
+        f"{fresh_pass_keys_with_explicit_no_match} "
+        f"({pct(fresh_pass_keys_with_explicit_no_match, fresh_pass_unique_keys)})"
+    )
+    print(
+        "  Market-unavailable exit observed: "
+        f"{fresh_pass_keys_with_market_availability_exit} "
+        f"({pct(fresh_pass_keys_with_market_availability_exit, fresh_pass_unique_keys)})"
+    )
+    print(
+        "  Unknown/other route exit observed: "
+        f"{fresh_pass_keys_with_unknown_route_exit} "
+        f"({pct(fresh_pass_keys_with_unknown_route_exit, fresh_pass_unique_keys)})"
+    )
+    print(
+        "  Multiple route signals observed : "
+        f"{fresh_pass_linkage.get('fresh_pass_keys_with_multiple_route_signals', 0)}"
+    )
+    print(
+        "  No tracked route signal observed: "
+        f"{fresh_pass_linkage.get('fresh_pass_keys_without_tracked_route_signal', 0)}"
+    )
+    print(
+        "  Ambiguous duplicate fresh keys  : "
+        f"{fresh_pass_linkage.get('fresh_pass_ambiguous_duplicate_keys', 0)}"
+    )
+    print(
+        "  Missing join fields             : "
+        f"fresh={fresh_pass_linkage.get('fresh_pass_missing_identity_rows', 0)} "
+        f"diagnostic={fresh_pass_linkage.get('match_diagnostic_missing_identity_rows', 0)} "
+        f"no_candidate={fresh_pass_linkage.get('match_no_candidate_missing_identity_rows', 0)}"
+    )
+    print(
+        "  Route signal keys without fresh pass: "
+        f"candidate_diagnostic={fresh_pass_linkage.get('candidate_diagnostic_keys_without_fresh_pass', 0)} "
+        f"explicit_no_match={fresh_pass_linkage.get('explicit_no_match_keys_without_fresh_pass', 0)} "
+        f"market_availability={fresh_pass_linkage.get('market_availability_keys_without_fresh_pass', 0)} "
+        f"unknown_or_other={fresh_pass_linkage.get('unknown_route_exit_keys_without_fresh_pass', 0)}"
+    )
+    print(
+        "  Explicit no-candidate rows      : "
+        f"{stats.get('match_no_candidate_total', 0)}"
+    )
 
     print()
     print("Same-window lifecycle attribution")
@@ -962,6 +1181,26 @@ def print_summary(stats: dict[str, Any], top: int, since: datetime | None, until
     print()
     print(f"Match Diagnostic Tickers (top {top})")
     for line in format_counter(stats["match_diagnostic_tickers"], top=top):
+        print(line)
+
+    print()
+    print(f"Fresh-pass Keys Without Tracked Route Signals (top {top})")
+    for line in format_counter(stats["fresh_pass_without_tracked_route_signal_sources"], top=top):
+        print(line)
+
+    print()
+    print("Explicit No-Candidate Reasons")
+    for line in format_counter(stats["match_no_candidate_reasons"], top=top):
+        print(line)
+
+    print()
+    print(f"Explicit No-Candidate Venues (top {top})")
+    for line in format_counter(stats["match_no_candidate_venues"], top=top):
+        print(line)
+
+    print()
+    print("Explicit No-Candidate Eligible Market Counts")
+    for line in format_counter(stats["match_no_candidate_eligible_market_counts"], top=top):
         print(line)
 
     print()

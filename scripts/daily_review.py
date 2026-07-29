@@ -372,10 +372,65 @@ def _format_match_attribution_lines(
     )
     weight_score_delta = float(funnel_stats.get("match_weight_score_delta_total", 0.0) or 0.0)
     suppression_coverage = Counter(funnel_stats.get("match_suppressed_column_coverage", {}))
+    fresh_pass_linkage = funnel_stats.get("fresh_pass_route_log_linkage", {})
+    if not isinstance(fresh_pass_linkage, dict):
+        fresh_pass_linkage = {}
+    fresh_pass_rows = int(fresh_pass_linkage.get("fresh_pass_rows", 0) or 0)
+    fresh_pass_unique_keys = int(fresh_pass_linkage.get("fresh_pass_unique_keys", 0) or 0)
+    fresh_pass_keys_with_candidate_diagnostic = int(
+        fresh_pass_linkage.get("fresh_pass_keys_with_candidate_diagnostic", 0) or 0
+    )
+    fresh_pass_keys_with_explicit_no_match = int(
+        fresh_pass_linkage.get("fresh_pass_keys_with_explicit_no_match", 0) or 0
+    )
+    fresh_pass_keys_with_market_availability_exit = int(
+        fresh_pass_linkage.get("fresh_pass_keys_with_market_availability_exit", 0) or 0
+    )
+    fresh_pass_keys_with_unknown_route_exit = int(
+        fresh_pass_linkage.get("fresh_pass_keys_with_unknown_route_exit", 0) or 0
+    )
+    fresh_pass_keys_with_multiple_route_signals = int(
+        fresh_pass_linkage.get("fresh_pass_keys_with_multiple_route_signals", 0) or 0
+    )
+    fresh_pass_keys_without_tracked_route_signal = int(
+        fresh_pass_linkage.get("fresh_pass_keys_without_tracked_route_signal", 0) or 0
+    )
+    fresh_pass_ambiguous_duplicate_keys = int(
+        fresh_pass_linkage.get("fresh_pass_ambiguous_duplicate_keys", 0) or 0
+    )
+    fresh_pass_missing_identity_rows = int(
+        fresh_pass_linkage.get("fresh_pass_missing_identity_rows", 0) or 0
+    )
+    match_diagnostic_missing_identity_rows = int(
+        fresh_pass_linkage.get("match_diagnostic_missing_identity_rows", 0) or 0
+    )
+    match_no_candidate_missing_identity_rows = int(
+        fresh_pass_linkage.get("match_no_candidate_missing_identity_rows", 0) or 0
+    )
+    candidate_diagnostic_keys_without_fresh_pass = int(
+        fresh_pass_linkage.get("candidate_diagnostic_keys_without_fresh_pass", 0) or 0
+    )
+    explicit_no_match_keys_without_fresh_pass = int(
+        fresh_pass_linkage.get("explicit_no_match_keys_without_fresh_pass", 0) or 0
+    )
+    market_availability_keys_without_fresh_pass = int(
+        fresh_pass_linkage.get("market_availability_keys_without_fresh_pass", 0) or 0
+    )
+    unknown_route_exit_keys_without_fresh_pass = int(
+        fresh_pass_linkage.get("unknown_route_exit_keys_without_fresh_pass", 0) or 0
+    )
+    match_no_candidate_total = int(funnel_stats.get("match_no_candidate_total", 0) or 0)
     drilldowns = [
         ("Drilldown: pre-LLM quality gate", Counter(funnel_stats.get("match_diagnostic_pre_llm_gate", {})), None),
         ("Drilldown: match diagnostic sources", Counter(funnel_stats.get("match_diagnostic_sources", {})), top),
         ("Drilldown: match diagnostic tickers", Counter(funnel_stats.get("match_diagnostic_tickers", {})), top),
+        (
+            "Drilldown: fresh-pass keys without tracked route signals",
+            Counter(funnel_stats.get("fresh_pass_without_tracked_route_signal_sources", {})),
+            top,
+        ),
+        ("Drilldown: explicit no-candidate reasons", Counter(funnel_stats.get("match_no_candidate_reasons", {})), None),
+        ("Drilldown: explicit no-candidate venues", Counter(funnel_stats.get("match_no_candidate_venues", {})), top),
         ("Drilldown: match suppression reasons", Counter(funnel_stats.get("match_suppressed_reasons", {})), top),
         ("Drilldown: match suppression tokens", Counter(funnel_stats.get("match_suppressed_tokens", {})), top),
         ("Drilldown: match suppression venues", Counter(funnel_stats.get("match_suppressed_venues", {})), top),
@@ -407,6 +462,13 @@ def _format_match_attribution_lines(
             match_detail_gap,
             suppressions,
             weight_applications,
+            fresh_pass_rows,
+            fresh_pass_unique_keys,
+            match_no_candidate_total,
+            candidate_diagnostic_keys_without_fresh_pass,
+            explicit_no_match_keys_without_fresh_pass,
+            market_availability_keys_without_fresh_pass,
+            unknown_route_exit_keys_without_fresh_pass,
             *[bool(counter) for _label, counter, _limit in drilldowns],
         ]
     ):
@@ -419,6 +481,53 @@ def _format_match_attribution_lines(
         f"  Match suppressions               : {suppressions}",
         f"  Match weight applications        : {weight_applications} (score_delta={weight_score_delta:.4f})",
     ]
+    if (
+        fresh_pass_rows
+        or fresh_pass_unique_keys
+        or candidate_diagnostic_keys_without_fresh_pass
+        or explicit_no_match_keys_without_fresh_pass
+        or market_availability_keys_without_fresh_pass
+        or unknown_route_exit_keys_without_fresh_pass
+    ):
+        lines.append(
+            "  Fresh-pass route linkage        : venue-agnostic, window-local log signals; "
+            "not attempt, conversion, or per-venue coverage; signal rates overlap"
+        )
+        lines.append(
+            "    candidate_diagnostic="
+            f"{fresh_pass_keys_with_candidate_diagnostic}/{fresh_pass_unique_keys} "
+            f"({fmt_pct(fresh_pass_keys_with_candidate_diagnostic, fresh_pass_unique_keys)}) "
+            "explicit_no_match="
+            f"{fresh_pass_keys_with_explicit_no_match}/{fresh_pass_unique_keys} "
+            f"({fmt_pct(fresh_pass_keys_with_explicit_no_match, fresh_pass_unique_keys)}) "
+            "market_availability="
+            f"{fresh_pass_keys_with_market_availability_exit}/{fresh_pass_unique_keys} "
+            f"({fmt_pct(fresh_pass_keys_with_market_availability_exit, fresh_pass_unique_keys)}) "
+            "unknown_or_other_exit="
+            f"{fresh_pass_keys_with_unknown_route_exit}/{fresh_pass_unique_keys} "
+            f"({fmt_pct(fresh_pass_keys_with_unknown_route_exit, fresh_pass_unique_keys)})"
+        )
+        lines.append(
+            "    "
+            f"multiple={fresh_pass_keys_with_multiple_route_signals} "
+            f"no_signal={fresh_pass_keys_without_tracked_route_signal}"
+        )
+        lines.append(
+            "    "
+            f"ambiguous={fresh_pass_ambiguous_duplicate_keys} "
+            f"missing_identity=fresh={fresh_pass_missing_identity_rows} "
+            f"diagnostic={match_diagnostic_missing_identity_rows} "
+            f"no_candidate={match_no_candidate_missing_identity_rows}"
+        )
+        lines.append(
+            "    signal_without_fresh="
+            f"candidate_diagnostic={candidate_diagnostic_keys_without_fresh_pass} "
+            f"explicit_no_match={explicit_no_match_keys_without_fresh_pass} "
+            f"market_availability={market_availability_keys_without_fresh_pass} "
+            f"unknown_or_other_exit={unknown_route_exit_keys_without_fresh_pass}"
+        )
+    if match_no_candidate_total:
+        lines.append(f"  Explicit no-candidate rows      : {match_no_candidate_total}")
     if suppressions:
         coverage_parts = [
             f"{column}={suppression_coverage.get(column, 0)}/{suppressions}"
