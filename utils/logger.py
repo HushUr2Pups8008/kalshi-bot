@@ -1634,6 +1634,40 @@ class TradeLogger:
             }
         )
 
+    def log_kalshi_cold_cache(
+        self,
+        *,
+        action: str,
+        cold_cache_id: str,
+        source: str,
+        headline: str,
+        queue_depth: int,
+        reason: str | None = None,
+        age_seconds: float | None = None,
+        threshold_seconds: float | None = None,
+        wait_seconds: float | None = None,
+        candidate_count: int | None = None,
+    ) -> None:
+        record: dict[str, Any] = {
+            "type": "KALSHI_COLD_CACHE",
+            "action": action,
+            "cold_cache_id": cold_cache_id,
+            "source": source,
+            "headline": headline,
+            "queue_depth": int(queue_depth),
+        }
+        if reason is not None:
+            record["reason"] = reason
+        if age_seconds is not None:
+            record["age_seconds"] = round(age_seconds, 2)
+        if threshold_seconds is not None:
+            record["threshold_seconds"] = round(threshold_seconds, 2)
+        if wait_seconds is not None:
+            record["wait_seconds"] = round(wait_seconds, 2)
+        if candidate_count is not None:
+            record["candidate_count"] = int(candidate_count)
+        self._write(record)
+
     # Fields whose value is rounded to 4 decimals when included in the record.
     # Required-float fields are always rounded; optional-float fields are
     # rounded only when not None.

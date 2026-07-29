@@ -1376,6 +1376,39 @@ def test_logger_rounds_optional_floats_to_four_decimals():
         _cleanup(tmp)
 
 
+def test_trade_logger_records_kalshi_cold_cache_event_schema():
+    tmp = make_tmp_dir("kalshi_cold_cache_event")
+    try:
+        log_file = tmp / "trades.jsonl"
+        TradeLogger(log_file).log_kalshi_cold_cache(
+            action="replayed",
+            cold_cache_id="kalshi-cold-cache-abc123",
+            source="Example Wire",
+            headline="Example event gets more likely",
+            queue_depth=2,
+            age_seconds=1.234,
+            threshold_seconds=1800.0,
+            wait_seconds=12.345,
+            candidate_count=3,
+        )
+        record = json.loads(log_file.read_text(encoding="utf-8").strip())
+        assert record == {
+            "type": "KALSHI_COLD_CACHE",
+            "ts": record["ts"],
+            "action": "replayed",
+            "cold_cache_id": "kalshi-cold-cache-abc123",
+            "source": "Example Wire",
+            "headline": "Example event gets more likely",
+            "queue_depth": 2,
+            "age_seconds": 1.23,
+            "threshold_seconds": 1800.0,
+            "wait_seconds": 12.35,
+            "candidate_count": 3,
+        }
+    finally:
+        _cleanup(tmp)
+
+
 def test_trade_logger_records_polymarket_funnel_event_schemas():
     tmp = make_tmp_dir("polymarket_funnel_events")
     try:

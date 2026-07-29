@@ -50,6 +50,7 @@ _ensure_supported_python()
 import argparse
 import asyncio
 import hashlib
+import heapq
 import itertools
 import json
 import logging
@@ -1132,6 +1133,15 @@ class TradingBot:
         # RSS/wire services (priority 1) are processed before Reddit (priority 2).
         # Tuple layout: (priority, seq, news) — seq prevents NewsItem comparison.
         self._news_queue: asyncio.PriorityQueue[tuple[int, int, NewsItem]] = asyncio.PriorityQueue(maxsize=2000)
+        # Fresh news can arrive before the first Kalshi market snapshot. Hold
+        # only the Kalshi leg in-process until matching is possible; source
+        # accounting and the independent Polymarket paper path still run once.
+        self._kalshi_cold_cache_lock = asyncio.Lock()
+        self._kalshi_candidate_processing_lock = asyncio.Lock()
+        self._kalshi_cold_cache_pending: list[tuple[int, int, float, str, NewsItem]] = []
+        self._kalshi_cold_cache_seen_ids: set[str] = set()
+        self._kalshi_cold_cache_sequence = itertools.count()
+        self._kalshi_cold_cache_replay_task: asyncio.Task[None] | None = None
         # Cross-source dedup: Reuters/AP/BBC often publish the same story within
         # minutes. Skip near-identical headlines seen in the last 15 minutes.
         self._dedup = HeadlineDedup()
@@ -1908,6 +1918,355 @@ class TradingBot:
         except Exception as exc:
             log.warning("[SHADOW_ASSIGNMENT] failed: %s", exc)
 
+    def _ensure_kalshi_cold_cache_state(self) -> None:
+        """Initialize cold-cache state for normal startup and lightweight tests."""
+        if not hasattr(self, "_kalshi_cold_cache_lock"):
+            self._kalshi_cold_cache_lock = asyncio.Lock()
+        if not hasattr(self, "_kalshi_candidate_processing_lock"):
+            self._kalshi_candidate_processing_lock = asyncio.Lock()
+        if not hasattr(self, "_kalshi_cold_cache_pending"):
+            self._kalshi_cold_cache_pending = []
+        if not hasattr(self, "_kalshi_cold_cache_seen_ids"):
+            self._kalshi_cold_cache_seen_ids = set()
+        if not hasattr(self, "_kalshi_cold_cache_sequence"):
+            self._kalshi_cold_cache_sequence = itertools.count()
+        if not hasattr(self, "_kalshi_cold_cache_replay_task"):
+            self._kalshi_cold_cache_replay_task = None
+
+    @staticmethod
+    def _kalshi_cold_cache_identity(news: NewsItem) -> str:
+        item_id = str(getattr(news, "item_id", "") or "").strip()
+        if item_id:
+            payload = {"source": news.source, "item_id": item_id}
+        else:
+            published = getattr(news, "published", None)
+            payload = {
+                "source": news.source,
+                "url": getattr(news, "url", ""),
+                "headline": news.headline,
+                "published": published.isoformat() if isinstance(published, datetime) else None,
+            }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return "kalshi-cold-cache-" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]
+
+    @staticmethod
+    def _kalshi_cold_cache_freshness(
+        news: NewsItem,
+    ) -> tuple[str | None, float | None, float | None]:
+        published = getattr(news, "published", None)
+        if not isinstance(published, datetime) or published.tzinfo is None:
+            if EARLY_DROP_IF_NO_TIMESTAMP:
+                return "missing_timestamp", None, None
+            return None, None, None
+        age_seconds = (datetime.now(timezone.utc) - published).total_seconds()
+        threshold_seconds = float(_early_max_news_age_seconds_for_source(news.source))
+        if age_seconds > threshold_seconds:
+            return "stale_by_source_policy", age_seconds, threshold_seconds
+        return None, age_seconds, threshold_seconds
+
+    async def _log_kalshi_cold_cache(
+        self,
+        *,
+        action: str,
+        cold_cache_id: str,
+        news: NewsItem,
+        queue_depth: int,
+        reason: str | None = None,
+        age_seconds: float | None = None,
+        threshold_seconds: float | None = None,
+        wait_seconds: float | None = None,
+        candidate_count: int | None = None,
+    ) -> None:
+        from utils.logger import trade_log
+
+        try:
+            await write_trade_log_async(
+                trade_log.log_kalshi_cold_cache,
+                action=action,
+                cold_cache_id=cold_cache_id,
+                source=news.source,
+                headline=news.headline,
+                queue_depth=queue_depth,
+                reason=reason,
+                age_seconds=age_seconds,
+                threshold_seconds=threshold_seconds,
+                wait_seconds=wait_seconds,
+                candidate_count=candidate_count,
+            )
+        except Exception:
+            log.exception(
+                "[KALSHI_COLD_CACHE] telemetry_write_failed action=%s source=%s",
+                action,
+                news.source,
+            )
+
+    async def _defer_kalshi_news_if_cache_cold(self, news: NewsItem) -> bool:
+        """Return true when the Kalshi leg was consumed by the cold-cache path."""
+        self._ensure_kalshi_cold_cache_state()
+        if self.matcher._cache.has_market_snapshot():
+            return False
+
+        reason, age_seconds, threshold_seconds = self._kalshi_cold_cache_freshness(news)
+        cold_cache_id = self._kalshi_cold_cache_identity(news)
+        action = "deferred"
+        queue_depth = 0
+        async with self._kalshi_cold_cache_lock:
+            if self.matcher._cache.has_market_snapshot():
+                return False
+            if reason is not None:
+                action = "dropped"
+            elif cold_cache_id in self._kalshi_cold_cache_seen_ids:
+                action = "deduplicated"
+            elif len(self._kalshi_cold_cache_pending) >= self._news_queue.maxsize:
+                action = "dropped"
+                reason = "pending_queue_full"
+            else:
+                priority = _source_priority(news.source)
+                heapq.heappush(
+                    self._kalshi_cold_cache_pending,
+                    (
+                        priority,
+                        next(self._kalshi_cold_cache_sequence),
+                        time.monotonic(),
+                        cold_cache_id,
+                        news,
+                    ),
+                )
+                self._kalshi_cold_cache_seen_ids.add(cold_cache_id)
+            queue_depth = len(self._kalshi_cold_cache_pending)
+
+        await self._log_kalshi_cold_cache(
+            action=action,
+            cold_cache_id=cold_cache_id,
+            news=news,
+            queue_depth=queue_depth,
+            reason=reason,
+            age_seconds=age_seconds,
+            threshold_seconds=threshold_seconds,
+        )
+        return True
+
+    async def _skip_seen_kalshi_cold_cache_identity(self, news: NewsItem) -> bool:
+        """Keep a replayed cold-cache item from re-entering the Kalshi leg."""
+        self._ensure_kalshi_cold_cache_state()
+        cold_cache_id = self._kalshi_cold_cache_identity(news)
+        async with self._kalshi_cold_cache_lock:
+            already_seen = cold_cache_id in self._kalshi_cold_cache_seen_ids
+            queue_depth = len(self._kalshi_cold_cache_pending)
+        if not already_seen:
+            return False
+        reason, age_seconds, threshold_seconds = self._kalshi_cold_cache_freshness(news)
+        await self._log_kalshi_cold_cache(
+            action="deduplicated",
+            cold_cache_id=cold_cache_id,
+            news=news,
+            queue_depth=queue_depth,
+            reason=reason,
+            age_seconds=age_seconds,
+            threshold_seconds=threshold_seconds,
+        )
+        return True
+
+    def _kalshi_cold_cache_replay_drop_reason(
+        self,
+        news: NewsItem,
+    ) -> tuple[str | None, float | None, float | None]:
+        if self._is_disabled_source_family(news.source):
+            return "disabled_source_family", None, None
+        if _is_disabled_news_source(news.source):
+            return "disabled_source", None, None
+        return self._kalshi_cold_cache_freshness(news)
+
+    async def _schedule_kalshi_cold_cache_replay_if_ready(self) -> None:
+        """Start one owned replay worker after a current non-empty snapshot."""
+        self._ensure_kalshi_cold_cache_state()
+        async with self._kalshi_cold_cache_lock:
+            if (
+                not self._kalshi_cold_cache_pending
+                or not self.matcher._cache.has_market_snapshot()
+            ):
+                return
+            task = self._kalshi_cold_cache_replay_task
+            if task is not None and not task.done():
+                return
+            task = asyncio.create_task(
+                self._drain_kalshi_cold_cache(),
+                name="kalshi-cold-cache-replay",
+            )
+            self._kalshi_cold_cache_replay_task = task
+
+            def _clear_task(completed: asyncio.Task[None]) -> None:
+                if self._kalshi_cold_cache_replay_task is completed:
+                    self._kalshi_cold_cache_replay_task = None
+
+            task.add_done_callback(_clear_task)
+
+    async def _requeue_kalshi_cold_cache_record(
+        self,
+        record: tuple[int, int, float, str, NewsItem],
+    ) -> None:
+        async with self._kalshi_cold_cache_lock:
+            heapq.heappush(self._kalshi_cold_cache_pending, record)
+
+    async def _drain_kalshi_cold_cache(self) -> None:
+        """Replay each claimed Kalshi news item at most once for this process."""
+        self._ensure_kalshi_cold_cache_state()
+        while True:
+            async with self._kalshi_cold_cache_lock:
+                if (
+                    not self._kalshi_cold_cache_pending
+                    or not self.matcher._cache.has_market_snapshot()
+                ):
+                    return
+                record = heapq.heappop(self._kalshi_cold_cache_pending)
+
+            _priority, _sequence, deferred_at, cold_cache_id, news = record
+            wait_seconds = max(0.0, time.monotonic() - deferred_at)
+            reason, age_seconds, threshold_seconds = self._kalshi_cold_cache_replay_drop_reason(news)
+            queue_depth = len(self._kalshi_cold_cache_pending)
+            if reason is not None:
+                await self._log_kalshi_cold_cache(
+                    action="dropped",
+                    cold_cache_id=cold_cache_id,
+                    news=news,
+                    queue_depth=queue_depth,
+                    reason=reason,
+                    age_seconds=age_seconds,
+                    threshold_seconds=threshold_seconds,
+                    wait_seconds=wait_seconds,
+                )
+                continue
+
+            await self._log_kalshi_cold_cache(
+                action="replay_started",
+                cold_cache_id=cold_cache_id,
+                news=news,
+                queue_depth=queue_depth,
+                age_seconds=age_seconds,
+                threshold_seconds=threshold_seconds,
+                wait_seconds=wait_seconds,
+            )
+            try:
+                outcome, candidate_count = await self._process_kalshi_news(
+                    news,
+                    defer_if_cache_cold=False,
+                )
+            except asyncio.CancelledError:
+                await self._log_kalshi_cold_cache(
+                    action="dropped",
+                    cold_cache_id=cold_cache_id,
+                    news=news,
+                    queue_depth=queue_depth,
+                    reason="shutdown_cancelled",
+                    age_seconds=age_seconds,
+                    threshold_seconds=threshold_seconds,
+                    wait_seconds=wait_seconds,
+                )
+                raise
+            except Exception:
+                log.exception("[KALSHI_COLD_CACHE] replay_error source=%s", news.source)
+                await self._log_kalshi_cold_cache(
+                    action="dropped",
+                    cold_cache_id=cold_cache_id,
+                    news=news,
+                    queue_depth=queue_depth,
+                    reason="replay_error",
+                    age_seconds=age_seconds,
+                    threshold_seconds=threshold_seconds,
+                    wait_seconds=wait_seconds,
+                )
+                continue
+
+            if outcome == "cache_cold":
+                await self._requeue_kalshi_cold_cache_record(record)
+                # A later refresh may already have restored a snapshot while
+                # this worker was claiming the record. Recheck before exiting
+                # so that transition cannot strand the requeued item.
+                continue
+            if outcome in {"exchange_not_open", "candidate_discovery_timeout"}:
+                await self._log_kalshi_cold_cache(
+                    action="dropped",
+                    cold_cache_id=cold_cache_id,
+                    news=news,
+                    queue_depth=queue_depth,
+                    reason=outcome,
+                    age_seconds=age_seconds,
+                    threshold_seconds=threshold_seconds,
+                    wait_seconds=wait_seconds,
+                )
+                continue
+            await self._log_kalshi_cold_cache(
+                action="replayed",
+                cold_cache_id=cold_cache_id,
+                news=news,
+                queue_depth=queue_depth,
+                age_seconds=age_seconds,
+                threshold_seconds=threshold_seconds,
+                wait_seconds=wait_seconds,
+                candidate_count=candidate_count,
+            )
+
+    async def _cancel_kalshi_cold_cache_replay_task(self) -> None:
+        self._ensure_kalshi_cold_cache_state()
+        task = self._kalshi_cold_cache_replay_task
+        if task is None:
+            return
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        if self._kalshi_cold_cache_replay_task is task:
+            self._kalshi_cold_cache_replay_task = None
+
+    async def _process_kalshi_news(
+        self,
+        news: NewsItem,
+        *,
+        defer_if_cache_cold: bool,
+        exchange_checked: bool = False,
+    ) -> tuple[str, int]:
+        """Run the Kalshi-only leg without repeating ingress side effects."""
+        self._ensure_kalshi_cold_cache_state()
+        if not exchange_checked and not self._exchange_open_or_skip("news"):
+            return "exchange_not_open", 0
+        if (
+            defer_if_cache_cold
+            and await self._skip_seen_kalshi_cold_cache_identity(news)
+        ):
+            return "deduplicated", 0
+        if defer_if_cache_cold and await self._defer_kalshi_news_if_cache_cold(news):
+            return "deferred", 0
+
+        while True:
+            if defer_if_cache_cold and await self._defer_kalshi_news_if_cache_cold(news):
+                return "deferred", 0
+            async with self._kalshi_candidate_processing_lock:
+                if not self.matcher._cache.has_market_snapshot():
+                    if not defer_if_cache_cold:
+                        return "cache_cold", 0
+                    # The cache can flip between the defer check and this
+                    # serialized candidate lane. Loop back: either it remains
+                    # cold and is queued, or it has warmed and is matched.
+                    continue
+                try:
+                    candidates = await asyncio.wait_for(
+                        self.matcher.find_candidates(news, refresh_cache=False),
+                        timeout=NEWS_CANDIDATE_DISCOVERY_TIMEOUT_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    log.warning(
+                        "News candidate discovery timed out after %.1fs; skipping Kalshi "
+                        "candidate path for source=%s headline=%s",
+                        NEWS_CANDIDATE_DISCOVERY_TIMEOUT_SECONDS,
+                        news.source,
+                        news.headline[:80],
+                    )
+                    return "candidate_discovery_timeout", 0
+                if not candidates:
+                    log.debug("No matching markets for: %s", news.headline[:60])
+                    return "no_match", 0
+                for market, match_score, match_meta in candidates:
+                    await self._process_candidate(news, market, match_score, match_meta)
+                return "matched", len(candidates)
+
     async def _news_consumer_task(self) -> None:
         """Drain the priority news queue, processing one item at a time."""
         processed = 0
@@ -1939,27 +2298,11 @@ class TradingBot:
         # P-7: one-fetch-per-cycle exchange-status fail-closed gate.
         if not self._exchange_open_or_skip("news"):
             return
-
-        try:
-            candidates = await asyncio.wait_for(
-                self.matcher.find_candidates(news, refresh_cache=False),
-                timeout=NEWS_CANDIDATE_DISCOVERY_TIMEOUT_SECONDS,
-            )
-        except asyncio.TimeoutError:
-            log.warning(
-                "News candidate discovery timed out after %.1fs; skipping Kalshi "
-                "candidate path for source=%s headline=%s",
-                NEWS_CANDIDATE_DISCOVERY_TIMEOUT_SECONDS,
-                news.source,
-                news.headline[:80],
-            )
-            return
-        if not candidates:
-            log.debug("No matching markets for: %s", news.headline[:60])
-            return
-
-        for market, match_score, match_meta in candidates:
-            await self._process_candidate(news, market, match_score, match_meta)
+        await self._process_kalshi_news(
+            news,
+            defer_if_cache_cold=True,
+            exchange_checked=True,
+        )
 
     async def _emit_market_source_hint_diagnostics(self, market) -> None:
         """Emit default-off, shadow-only MarketSourceHints diagnostics.
@@ -3439,6 +3782,9 @@ class TradingBot:
                         self._schedule_targeted_research_prewarm(m, "new_market")
             self._known_market_tickers = new_tickers
 
+        if markets:
+            await self._schedule_kalshi_cold_cache_replay_if_ready()
+
     async def _market_refresh_task(self) -> None:
         from config import MARKET_CACHE_TTL_SECONDS
         try:
@@ -4146,6 +4492,7 @@ class TradingBot:
             for task in tasks:
                 task.cancel()
             try:
+                await self._cancel_kalshi_cold_cache_replay_task()
                 if weather_shadow_task is not None:
                     await asyncio.gather(weather_shadow_task, return_exceptions=True)
             finally:
@@ -4155,6 +4502,9 @@ class TradingBot:
                     self.ws.stop()
 
     def stop(self) -> None:
+        task = getattr(self, "_kalshi_cold_cache_replay_task", None)
+        if task is not None:
+            task.cancel()
         self.ws.stop()
 
 
