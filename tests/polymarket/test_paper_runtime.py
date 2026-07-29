@@ -140,6 +140,8 @@ async def test_warm_cache_rejects_missing_and_beyond_universe_horizon_close_time
 
 @pytest.mark.asyncio
 async def test_cache_refresh_logs_real_source_cache_counts(monkeypatch):
+    monkeypatch.setattr(cfg, "is_paper_trading", True)
+    monkeypatch.setattr(cfg, "paper_cohort_id", "active-test")
     monkeypatch.setattr(cfg, "paper_active_cohort_max_days_to_close", 14.0)
     candidate = _market(market_id="candidate")
     eligible_only = _market(
