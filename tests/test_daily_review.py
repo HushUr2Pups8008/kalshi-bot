@@ -118,6 +118,10 @@ def test_format_match_attribution_lines_surfaces_suppression_drilldowns():
             "match_no_candidate_post_admission_no_token_overlap": 2,
             "match_no_candidate_post_admission_below_min": 1,
             "match_no_candidate_post_admission_weight_demoted": 1,
+            "match_no_candidate_post_admission_counterfactual_shadow_valid_rows": 2,
+            "match_no_candidate_post_admission_counterfactual_shadow_legacy_rows": 1,
+            "match_no_candidate_post_admission_counterfactual_shadow_invalid_rows": 1,
+            "match_no_candidate_post_admission_counterfactual_shadow_truncated_rows": 1,
         },
         top=2,
     )
@@ -137,6 +141,7 @@ def test_format_match_attribution_lines_surfaces_suppression_drilldowns():
     assert "  4  KXIRANCRUDE" in rendered
     assert "Post-admission rejection attribution: complete=2 unavailable=1 market_rows=3" in rendered
     assert "no_token_overlap=2 (66.7%) below_min_score=1 (33.3%) weight_demoted=1" in rendered
+    assert "Counterfactual snapshot coverage: valid=2 legacy=1 invalid=1 truncated=1" in rendered
 
 
 def test_summarize_fresh_pass_assignment_shadow_counts_assignment_outcomes(tmp_path):

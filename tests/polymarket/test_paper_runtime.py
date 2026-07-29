@@ -11,6 +11,7 @@ import pytest
 from analysis import SignalAnalysis
 from config import PAPER_MAX_CANDIDATES, cfg
 from feeds import NewsItem
+import polymarket.paper_runtime as paper_runtime
 from polymarket.models import PolymarketMarket
 from polymarket.paper_runtime import (
     PolymarketPaperRuntime,
@@ -50,6 +51,27 @@ def _market(**overrides) -> PolymarketMarket:
     }
     values.update(overrides)
     return PolymarketMarket(**values)
+
+
+def test_counterfactual_snapshot_identity_sanitizers_reject_untrusted_values():
+    class HostileTitle(str):
+        def __iter__(self):
+            raise AssertionError("counterfactual title must not iterate a string subclass")
+
+    class HostileTicker(str):
+        def __lt__(self, other):
+            raise AssertionError("counterfactual ticker must not reach sorting")
+
+    assert paper_runtime._counterfactual_title("Visible title") == "Visible title"
+    assert paper_runtime._counterfactual_title("Visible\u202etitle") == "Visibletitle"
+    assert paper_runtime._counterfactual_title("x" * 513) is None
+    assert paper_runtime._counterfactual_title(None) is None
+    assert paper_runtime._counterfactual_title(HostileTitle("hostile")) is None
+    assert paper_runtime._counterfactual_ticker("VALID-TICKER") == "VALID-TICKER"
+    assert paper_runtime._counterfactual_ticker("not valid") is None
+    assert paper_runtime._counterfactual_ticker("x" * 129) is None
+    assert paper_runtime._counterfactual_ticker(123) is None
+    assert paper_runtime._counterfactual_ticker(HostileTicker("hostile")) is None
 
 
 def test_market_match_text_includes_polymarket_public_context_fields():
@@ -277,34 +299,13 @@ async def test_legacy_process_news_logs_30_day_post_admission_stage(monkeypatch)
         routed_count = await runtime.process_news(news)
 
     assert routed_count == 0
-    write_log_mock.assert_has_awaits(
-        [
-            call(
-                trade_log_mock.log_polymarket_market_cache,
-                raw_fetched=1,
-                cursor_present=False,
-                eligible_30d=1,
-                candidate_within_admission_horizon=1,
-                admission_horizon_days=30.0,
-                market_limit=10,
-            ),
-            call(
-                trade_log_mock.log_match_no_candidate,
-                source=news.source,
-                headline=news.headline,
-                venue=Venue.POLYMARKET_US.value,
-                eligible_market_count=1,
-                reason="no_match",
-                candidate_pool_stage="post_admission_no_match",
-                pre_admission_matchable_market_count=1,
-                within_admission_horizon_market_count=1,
-                admission_horizon_days=30.0,
-                post_admission_no_token_overlap_count=1,
-                post_admission_below_min_post_weight_score_count=0,
-                post_admission_weight_demoted_below_min_score_count=0,
-                post_admission_min_match_score=0.08,
-            ),
-        ]
+    assert write_log_mock.await_count == 2
+    fields = write_log_mock.await_args_list[-1].kwargs
+    assert fields["candidate_pool_stage"] == "post_admission_no_match"
+    assert fields["post_admission_no_token_overlap_count"] == 1
+    assert fields["post_admission_below_min_post_weight_score_count"] == 0
+    assert fields["post_admission_counterfactual_shadow"]["match_clock_utc"] == (
+        now.isoformat()
     )
 
 
@@ -413,20 +414,24 @@ async def test_process_news_logs_eligible_cache_empty_after_universe_filter(monk
 @pytest.mark.asyncio
 async def test_process_news_logs_no_candidate_when_no_market_scores(monkeypatch):
     _configure_legacy_paper_horizon(monkeypatch)
+    fixed_now = datetime(2026, 7, 29, 9, 8, 36, tzinfo=timezone.utc)
+    market_title = "Will a volcano erupt this year? " + "x" * 200
+    market = _market(
+        title=market_title,
+        question=market_title,
+        close_time=(fixed_now + timedelta(days=7)).isoformat(),
+        description="Do not persist this market description.",
+        public_comments=("Do not persist this market comment.",),
+    )
+    route_analysis = AsyncMock()
     runtime = PolymarketPaperRuntime(
-        client=_FakeClient(
-            [
-                _market(
-                    title="Will a volcano erupt this year?",
-                    question="Will a volcano erupt this year?",
-                )
-            ]
-        ),
-        route_analysis=AsyncMock(),
+        client=_FakeClient([market]),
+        route_analysis=route_analysis,
         keyword_stats=None,
         market_limit=10,
         market_cache_ttl_seconds=300,
     )
+    monkeypatch.setattr(runtime, "_horizon_now", lambda: fixed_now)
     news = _news("Central bank releases an interest rate decision")
 
     with (
@@ -439,34 +444,150 @@ async def test_process_news_logs_no_candidate_when_no_market_scores(monkeypatch)
         routed_count = await runtime.process_news(news)
 
     assert routed_count == 0
-    write_log_mock.assert_has_awaits(
-        [
-            call(
-                trade_log_mock.log_polymarket_market_cache,
-                raw_fetched=1,
-                cursor_present=False,
-                eligible_30d=1,
-                candidate_within_admission_horizon=1,
-                admission_horizon_days=30.0,
-                market_limit=10,
-            ),
-            call(
-                trade_log_mock.log_match_no_candidate,
-                source=news.source,
-                headline=news.headline,
-                venue=Venue.POLYMARKET_US.value,
-                eligible_market_count=1,
-                reason="no_match",
-                candidate_pool_stage="post_admission_no_match",
-                pre_admission_matchable_market_count=1,
-                within_admission_horizon_market_count=1,
-                admission_horizon_days=30.0,
-                post_admission_no_token_overlap_count=1,
-                post_admission_below_min_post_weight_score_count=0,
-                post_admission_weight_demoted_below_min_score_count=0,
-                post_admission_min_match_score=0.08,
-            ),
-        ]
+    assert write_log_mock.await_count == 2
+    fields = write_log_mock.await_args_list[-1].kwargs
+    assert fields["candidate_pool_stage"] == "post_admission_no_match"
+    assert fields["post_admission_no_token_overlap_count"] == 1
+    assert fields["post_admission_below_min_post_weight_score_count"] == 0
+    snapshot = fields["post_admission_counterfactual_shadow"]
+    assert set(snapshot) == {
+        "schema_version",
+        "match_clock_utc",
+        "news_headline_token_count",
+        "news_match_token_count",
+        "candidate_count_total",
+        "captured_market_count",
+        "omitted_market_count",
+        "truncated",
+        "candidates",
+    }
+    assert snapshot["schema_version"] == 1
+    assert snapshot["match_clock_utc"] == fixed_now.isoformat()
+    assert snapshot["news_headline_token_count"] > 0
+    assert snapshot["news_match_token_count"] > 0
+    assert snapshot["candidate_count_total"] == 1
+    assert snapshot["captured_market_count"] == 1
+    assert snapshot["omitted_market_count"] == 0
+    assert snapshot["truncated"] is False
+    candidate = snapshot["candidates"][0]
+    assert set(candidate) == {
+        "ticker",
+        "market_title",
+        "rejection_reason",
+        "market_token_count",
+        "matched_token_count",
+    }
+    assert candidate["ticker"] == market.ticker
+    assert candidate["market_title"] == market_title[:160]
+    assert candidate["rejection_reason"] == "no_token_overlap"
+    assert candidate["market_token_count"] > 0
+    assert candidate["matched_token_count"] == 0
+    assert "matched_tokens" not in candidate
+    assert "Do not persist" not in str(snapshot)
+    route_analysis.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_process_news_omits_hostile_counterfactual_tickers_without_losing_base_event(
+    monkeypatch,
+):
+    class HostileTicker(str):
+        def __lt__(self, other):
+            raise AssertionError("counterfactual ticker must not reach sorting")
+
+    _configure_legacy_paper_horizon(monkeypatch)
+    fixed_now = datetime(2026, 7, 29, 9, 8, 36, tzinfo=timezone.utc)
+    markets = [
+        _market(
+            market_id=HostileTicker("hostile-a"),
+            title="Volcano eruption forecast",
+            question="Volcano eruption forecast",
+            close_time=(fixed_now + timedelta(days=7)).isoformat(),
+        ),
+        _market(
+            market_id=HostileTicker("hostile-b"),
+            title="Tropical storm forecast",
+            question="Tropical storm forecast",
+            close_time=(fixed_now + timedelta(days=7)).isoformat(),
+        ),
+    ]
+    route_analysis = AsyncMock()
+    runtime = PolymarketPaperRuntime(
+        client=_FakeClient(markets),
+        route_analysis=route_analysis,
+        keyword_stats=None,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+    )
+    monkeypatch.setattr(runtime, "_horizon_now", lambda: fixed_now)
+
+    with (
+        patch("polymarket.paper_runtime.trade_log"),
+        patch(
+            "polymarket.paper_runtime.write_trade_log_async",
+            new_callable=AsyncMock,
+        ) as write_log_mock,
+    ):
+        routed_count = await runtime.process_news(
+            _news("Central bank releases an interest rate decision")
+        )
+
+    assert routed_count == 0
+    assert write_log_mock.await_count == 2
+    fields = write_log_mock.await_args_list[-1].kwargs
+    assert fields["candidate_pool_stage"] == "post_admission_no_match"
+    assert fields["post_admission_no_token_overlap_count"] == 2
+    snapshot = fields["post_admission_counterfactual_shadow"]
+    assert snapshot["candidate_count_total"] == 2
+    assert snapshot["captured_market_count"] == 0
+    assert snapshot["omitted_market_count"] == 2
+    assert snapshot["truncated"] is True
+    assert snapshot["candidates"] == []
+    route_analysis.assert_not_awaited()
+
+
+def test_empty_market_tokens_count_as_no_overlap_for_counterfactual_shadow(
+    monkeypatch,
+):
+    fixed_now = datetime(2026, 7, 29, 9, 8, 36, tzinfo=timezone.utc)
+    market = _market(
+        title="",
+        question="",
+        subtitle="",
+        description="",
+        category="",
+        resolution_source="",
+        event_title="",
+        event_slug="",
+        series_title="",
+        series_slug="",
+        tags=(),
+        public_comments=(),
+        close_time=(fixed_now + timedelta(days=7)).isoformat(),
+    )
+    monkeypatch.setattr(
+        paper_runtime,
+        "_is_pre_admission_matchable_market",
+        lambda _market: True,
+    )
+
+    matches, rejection = paper_runtime._match_polymarket_markets_with_rejection_telemetry(
+        _news("Central bank releases an interest rate decision"),
+        [market],
+        token_weights={},
+        now=fixed_now,
+        admission_horizon_days=30,
+    )
+
+    assert matches == []
+    fields = rejection.as_log_fields()
+    assert fields["post_admission_no_token_overlap_count"] == 1
+    assert fields["post_admission_below_min_post_weight_score_count"] == 0
+    snapshot = fields["post_admission_counterfactual_shadow"]
+    assert snapshot["candidate_count_total"] == 1
+    assert snapshot["captured_market_count"] == 1
+    assert snapshot["candidates"][0]["rejection_reason"] == (
+        "market_without_match_tokens"
     )
 
 
@@ -580,14 +701,21 @@ async def test_process_news_prioritizes_input_stage_before_admission_horizon(mon
 @pytest.mark.asyncio
 async def test_process_news_logs_post_admission_no_match_after_low_score(monkeypatch):
     _configure_legacy_paper_horizon(monkeypatch)
+    fixed_now = datetime(2026, 7, 29, 9, 8, 36, tzinfo=timezone.utc)
     market_text = "Example amber birch cedar dogwood elm fir granite hazel ivy juniper"
+    market = _market(
+        title=market_text,
+        question=market_text,
+        close_time=(fixed_now + timedelta(days=7)).isoformat(),
+    )
     runtime = PolymarketPaperRuntime(
-        client=_FakeClient([_market(title=market_text, question=market_text)]),
+        client=_FakeClient([market]),
         route_analysis=AsyncMock(),
         keyword_stats=None,
         market_limit=10,
         market_cache_ttl_seconds=300,
     )
+    monkeypatch.setattr(runtime, "_horizon_now", lambda: fixed_now)
     news = _news("Example atlas beacon citadel delta ember frost glacier harbor island jade")
 
     with (
@@ -600,48 +728,34 @@ async def test_process_news_logs_post_admission_no_match_after_low_score(monkeyp
         routed_count = await runtime.process_news(news)
 
     assert routed_count == 0
-    write_log_mock.assert_has_awaits(
-        [
-            call(
-                trade_log_mock.log_polymarket_market_cache,
-                raw_fetched=1,
-                cursor_present=False,
-                eligible_30d=1,
-                candidate_within_admission_horizon=1,
-                admission_horizon_days=30.0,
-                market_limit=10,
-            ),
-            call(
-                trade_log_mock.log_match_no_candidate,
-                source=news.source,
-                headline=news.headline,
-                venue=Venue.POLYMARKET_US.value,
-                eligible_market_count=1,
-                reason="no_match",
-                candidate_pool_stage="post_admission_no_match",
-                pre_admission_matchable_market_count=1,
-                within_admission_horizon_market_count=1,
-                admission_horizon_days=30.0,
-                post_admission_no_token_overlap_count=0,
-                post_admission_below_min_post_weight_score_count=1,
-                post_admission_weight_demoted_below_min_score_count=0,
-                post_admission_min_match_score=0.08,
-                post_admission_best_rejected_pre_weight_score=1 / 22,
-                post_admission_best_rejected_post_weight_score=1 / 22,
-            ),
-        ]
-    )
+    assert write_log_mock.await_count == 2
+    fields = write_log_mock.await_args_list[-1].kwargs
+    assert fields["post_admission_below_min_post_weight_score_count"] == 1
+    snapshot = fields["post_admission_counterfactual_shadow"]
+    assert snapshot["candidate_count_total"] == 1
+    assert snapshot["captured_market_count"] == 1
+    assert snapshot["omitted_market_count"] == 0
+    candidate = snapshot["candidates"][0]
+    assert candidate["ticker"] == market.ticker
+    assert candidate["market_title"] == market_text
+    assert candidate["rejection_reason"] == "below_min_post_weight_score"
+    assert candidate["matched_token_count"] == 1
+    assert candidate["pre_weight_score"] == pytest.approx(1 / 22)
+    assert candidate["post_weight_score"] == pytest.approx(1 / 22)
+    assert "matched_tokens" not in candidate
 
 
 @pytest.mark.asyncio
 async def test_process_news_logs_weight_demoted_post_admission_rejection(monkeypatch):
     _configure_legacy_paper_horizon(monkeypatch)
+    fixed_now = datetime(2026, 7, 29, 9, 8, 36, tzinfo=timezone.utc)
     news = _news("Kansas governor election tightens after new polling")
     market = _market(
         market_id="ewc-usgub-ks-2026-11-03-dem",
         title="Democratic Party",
         question="Kansas Governor Election Winner",
         subtitle="2026 race",
+        close_time=(fixed_now + timedelta(days=7)).isoformat(),
     )
     token_weights = {
         "polymarket_us:ewc-usgub-ks:election": {"weight": 0.1},
@@ -658,6 +772,7 @@ async def test_process_news_logs_weight_demoted_post_admission_rejection(monkeyp
         market_limit=10,
         market_cache_ttl_seconds=300,
     )
+    monkeypatch.setattr(runtime, "_horizon_now", lambda: fixed_now)
 
     with (
         patch("polymarket.paper_runtime.trade_log") as trade_log_mock,
@@ -674,6 +789,13 @@ async def test_process_news_logs_weight_demoted_post_admission_rejection(monkeyp
     assert fields["post_admission_weight_demoted_below_min_score_count"] == 1
     assert fields["post_admission_best_rejected_pre_weight_score"] >= 0.08
     assert fields["post_admission_best_rejected_post_weight_score"] < 0.08
+    snapshot = fields["post_admission_counterfactual_shadow"]
+    candidate = snapshot["candidates"][0]
+    assert candidate["rejection_reason"] == "weight_demoted_below_min_score"
+    assert candidate["matched_token_count"] > 0
+    assert candidate["pre_weight_score"] >= 0.08
+    assert candidate["post_weight_score"] < 0.08
+    assert "matched_tokens" not in candidate
     assert trade_log_mock.log_match_weight_applied.call_count == 1
 
 
@@ -704,6 +826,7 @@ async def test_process_news_omits_rejection_breakdown_when_candidate_limit_trunc
     fields = write_log_mock.await_args_list[-1].kwargs
     assert fields["candidate_pool_stage"] == "post_admission_no_match"
     assert not any(key.startswith("post_admission_") for key in fields)
+    assert "post_admission_counterfactual_shadow" not in fields
 
 
 @pytest.mark.asyncio

@@ -23,6 +23,7 @@ from analysis.feedback_counterfactual import (
     FeedbackDecisionRecord,
     FeedbackMultiplierReceipt,
 )
+from utils import logger as logger_module
 from utils.log_records import SignalAnalysisDetail
 from utils.logger import TradeLogger
 
@@ -483,6 +484,602 @@ def test_trade_logger_records_post_admission_rejection_fields():
             "post_admission_best_rejected_pre_weight_score": 0.12,
             "post_admission_best_rejected_post_weight_score": 0.012,
         }
+    finally:
+        _cleanup(tmp)
+
+
+def _post_admission_counterfactual_shadow() -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "match_clock_utc": "2026-07-29T09:08:36+00:00",
+        "news_headline_token_count": 8,
+        "news_match_token_count": 14,
+        "candidate_count_total": 2,
+        "captured_market_count": 2,
+        "omitted_market_count": 0,
+        "truncated": False,
+        "candidates": [
+            {
+                "ticker": "0xabc123",
+                "market_title": "Will  Example   pass? ",
+                "rejection_reason": "no_token_overlap",
+                "market_token_count": 11,
+                "matched_token_count": 0,
+            },
+            {
+                "ticker": "0xdef456",
+                "rejection_reason": "market_without_match_tokens",
+                "market_token_count": 0,
+                "matched_token_count": 0,
+            },
+        ],
+    }
+
+
+def test_trade_logger_persists_canonical_bounded_counterfactual_shadow():
+    tmp = make_tmp_dir("polymarket_counterfactual_shadow_schema")
+    try:
+        log_file = tmp / "trades.jsonl"
+        TradeLogger(log_file).log_match_no_candidate(
+            source="Example Wire",
+            headline="Example event gets more likely",
+            venue="polymarket_us",
+            eligible_market_count=1,
+            reason="no_match",
+            candidate_pool_stage="post_admission_no_match",
+            within_admission_horizon_market_count=2,
+            post_admission_no_token_overlap_count=2,
+            post_admission_below_min_post_weight_score_count=0,
+            post_admission_weight_demoted_below_min_score_count=0,
+            post_admission_min_match_score=0.08,
+            post_admission_counterfactual_shadow=_post_admission_counterfactual_shadow(),
+        )
+
+        record = json.loads(log_file.read_text(encoding="utf-8").strip())
+
+        assert record["post_admission_counterfactual_shadow"] == {
+            **_post_admission_counterfactual_shadow(),
+            "candidates": [
+                {
+                    "ticker": "0xdef456",
+                    "rejection_reason": "market_without_match_tokens",
+                    "market_token_count": 0,
+                    "matched_token_count": 0,
+                },
+                {
+                    "ticker": "0xabc123",
+                    "market_title": "Will Example pass?",
+                    "rejection_reason": "no_token_overlap",
+                    "market_token_count": 11,
+                    "matched_token_count": 0,
+                }
+            ],
+        }
+        assert "post_admission_counterfactual_shadow_status" not in record
+    finally:
+        _cleanup(tmp)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expect_invalid", "expected_title", "forbidden_text"),
+    [
+        (
+            lambda snapshot: snapshot["candidates"][0].update(
+                {"matched_tokens": ["body_only_secret"]}
+            ),
+            True,
+            None,
+            "body_only_secret",
+        ),
+        (
+            lambda snapshot: snapshot["candidates"][0].update({"market_title": "bad\x1btitle"}),
+            False,
+            "badtitle",
+            "",
+        ),
+        (
+            lambda snapshot: snapshot["candidates"][0].update(
+                {"market_title": "title_redaction_sentinel" + "x" * 512}
+            ),
+            False,
+            None,
+            "title_redaction_sentinel",
+        ),
+        (
+            lambda snapshot: snapshot["candidates"][0].update(
+                {
+                    "rejection_reason": "below_min_post_weight_score",
+                    "matched_token_count": 1,
+                    "pre_weight_score": float("nan"),
+                    "post_weight_score": 0.01,
+                }
+            ),
+            True,
+            None,
+            "",
+        ),
+    ],
+    ids=["raw_tokens", "control_characters", "oversized_raw_title", "non_finite_score"],
+)
+def test_trade_logger_handles_unsafe_counterfactual_shadow_without_losing_base_event(
+    mutate,
+    expect_invalid,
+    expected_title,
+    forbidden_text,
+):
+    tmp = make_tmp_dir("polymarket_counterfactual_shadow_invalid")
+    try:
+        log_file = tmp / "trades.jsonl"
+        shadow = _post_admission_counterfactual_shadow()
+        mutate(shadow)
+
+        TradeLogger(log_file).log_match_no_candidate(
+            source="Example Wire",
+            headline="Example event gets more likely",
+            venue="polymarket_us",
+            eligible_market_count=1,
+            reason="no_match",
+            candidate_pool_stage="post_admission_no_match",
+            within_admission_horizon_market_count=2,
+            post_admission_no_token_overlap_count=2,
+            post_admission_below_min_post_weight_score_count=0,
+            post_admission_weight_demoted_below_min_score_count=0,
+            post_admission_min_match_score=0.08,
+            post_admission_counterfactual_shadow=shadow,
+        )
+
+        line = log_file.read_text(encoding="utf-8").strip()
+        record = json.loads(line)
+        assert record["type"] == "MATCH_NO_CANDIDATE"
+        if expect_invalid:
+            assert record["post_admission_counterfactual_shadow_status"] == "invalid"
+            assert "post_admission_counterfactual_shadow" not in record
+        else:
+            assert "post_admission_counterfactual_shadow_status" not in record
+            candidate = next(
+                candidate
+                for candidate in record["post_admission_counterfactual_shadow"]["candidates"]
+                if candidate["ticker"] == "0xabc123"
+            )
+            if expected_title is None:
+                assert "market_title" not in candidate
+            else:
+                assert candidate["market_title"] == expected_title
+        if forbidden_text:
+            assert forbidden_text not in line
+    finally:
+        _cleanup(tmp)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "forbidden_text"),
+    [
+        (
+            lambda snapshot: snapshot.update({"unexpected_payload": "snapshot_secret_payload"}),
+            "snapshot_secret_payload",
+        ),
+        (
+            lambda snapshot: snapshot["candidates"][0].update(
+                {"raw_payload": "candidate_secret_payload"}
+            ),
+            "candidate_secret_payload",
+        ),
+        (
+            lambda snapshot: snapshot["candidates"].__setitem__(
+                1,
+                {**snapshot["candidates"][1], "ticker": "0xabc123"},
+            ),
+            "",
+        ),
+        (lambda snapshot: snapshot.update({"candidate_count_total": True}), ""),
+        (lambda snapshot: snapshot.update({"candidates": "untrusted_candidate_list"}), "untrusted_candidate_list"),
+        (
+            lambda snapshot: snapshot.update(
+                {
+                    "candidate_count_total": 1,
+                    "captured_market_count": 1,
+                    "omitted_market_count": 0,
+                    "candidates": [{"ticker": "0xmalformed", "raw_payload": "malformed_candidate_payload"}],
+                }
+            ),
+            "malformed_candidate_payload",
+        ),
+        (
+            lambda snapshot: snapshot["candidates"][0].update({"ticker": "bad\x1bticker"}),
+            "bad",
+        ),
+    ],
+    ids=[
+        "unknown_snapshot_key",
+        "unknown_candidate_key",
+        "duplicate_ticker",
+        "boolean_count",
+        "candidates_nonlist",
+        "malformed_candidate",
+        "unsafe_ticker",
+    ],
+)
+def test_trade_logger_rejects_malformed_counterfactual_shadow_without_payload_leak(
+    mutate,
+    forbidden_text,
+):
+    tmp = make_tmp_dir("polymarket_counterfactual_shadow_malformed")
+    try:
+        log_file = tmp / "trades.jsonl"
+        shadow = _post_admission_counterfactual_shadow()
+        mutate(shadow)
+
+        TradeLogger(log_file).log_match_no_candidate(
+            source="Example Wire",
+            headline="Example event gets more likely",
+            venue="polymarket_us",
+            eligible_market_count=1,
+            reason="no_match",
+            candidate_pool_stage="post_admission_no_match",
+            within_admission_horizon_market_count=2,
+            post_admission_no_token_overlap_count=2,
+            post_admission_below_min_post_weight_score_count=0,
+            post_admission_weight_demoted_below_min_score_count=0,
+            post_admission_min_match_score=0.08,
+            post_admission_counterfactual_shadow=shadow,
+        )
+
+        line = log_file.read_text(encoding="utf-8").strip()
+        record = json.loads(line)
+        assert record["type"] == "MATCH_NO_CANDIDATE"
+        assert record["post_admission_counterfactual_shadow_status"] == "invalid"
+        assert "post_admission_counterfactual_shadow" not in record
+        if forbidden_text:
+            assert forbidden_text not in line
+    finally:
+        _cleanup(tmp)
+
+
+def test_trade_logger_rejects_counterfactual_shadow_over_serialized_byte_budget(monkeypatch):
+    tmp = make_tmp_dir("polymarket_counterfactual_shadow_byte_budget")
+    try:
+        log_file = tmp / "trades.jsonl"
+        monkeypatch.setattr(
+            logger_module,
+            "_POST_ADMISSION_COUNTERFACTUAL_SHADOW_MAX_BYTES",
+            1,
+        )
+
+        TradeLogger(log_file).log_match_no_candidate(
+            source="Example Wire",
+            headline="Example event gets more likely",
+            venue="polymarket_us",
+            eligible_market_count=1,
+            reason="no_match",
+            candidate_pool_stage="post_admission_no_match",
+            within_admission_horizon_market_count=2,
+            post_admission_no_token_overlap_count=2,
+            post_admission_below_min_post_weight_score_count=0,
+            post_admission_weight_demoted_below_min_score_count=0,
+            post_admission_min_match_score=0.08,
+            post_admission_counterfactual_shadow=_post_admission_counterfactual_shadow(),
+        )
+
+        record = json.loads(log_file.read_text(encoding="utf-8").strip())
+        assert record["type"] == "MATCH_NO_CANDIDATE"
+        assert record["post_admission_counterfactual_shadow_status"] == "invalid"
+        assert "post_admission_counterfactual_shadow" not in record
+    finally:
+        _cleanup(tmp)
+
+
+def test_trade_logger_rejects_counterfactual_shadow_with_mismatched_within_horizon_total():
+    tmp = make_tmp_dir("polymarket_counterfactual_shadow_total_mismatch")
+    try:
+        log_file = tmp / "trades.jsonl"
+        TradeLogger(log_file).log_match_no_candidate(
+            source="Example Wire",
+            headline="Example event gets more likely",
+            venue="polymarket_us",
+            eligible_market_count=1,
+            reason="no_match",
+            candidate_pool_stage="post_admission_no_match",
+            within_admission_horizon_market_count=1,
+            post_admission_no_token_overlap_count=1,
+            post_admission_below_min_post_weight_score_count=0,
+            post_admission_weight_demoted_below_min_score_count=0,
+            post_admission_min_match_score=0.08,
+            post_admission_counterfactual_shadow=_post_admission_counterfactual_shadow(),
+        )
+
+        record = json.loads(log_file.read_text(encoding="utf-8").strip())
+        assert record["type"] == "MATCH_NO_CANDIDATE"
+        assert record["within_admission_horizon_market_count"] == 1
+        assert record["post_admission_counterfactual_shadow_status"] == "invalid"
+        assert "post_admission_counterfactual_shadow" not in record
+    finally:
+        _cleanup(tmp)
+
+
+def test_trade_logger_rejects_counterfactual_shadow_for_non_polymarket_venue():
+    tmp = make_tmp_dir("counterfactual_shadow_non_polymarket_venue")
+    try:
+        log_file = tmp / "trades.jsonl"
+        TradeLogger(log_file).log_match_no_candidate(
+            source="Example Wire",
+            headline="Example event gets more likely",
+            venue="kalshi",
+            eligible_market_count=2,
+            reason="no_match",
+            candidate_pool_stage="post_admission_no_match",
+            within_admission_horizon_market_count=2,
+            post_admission_no_token_overlap_count=2,
+            post_admission_below_min_post_weight_score_count=0,
+            post_admission_weight_demoted_below_min_score_count=0,
+            post_admission_min_match_score=0.08,
+            post_admission_counterfactual_shadow=_post_admission_counterfactual_shadow(),
+        )
+
+        record = json.loads(log_file.read_text(encoding="utf-8").strip())
+        assert record["type"] == "MATCH_NO_CANDIDATE"
+        assert record["venue"] == "kalshi"
+        assert record["post_admission_counterfactual_shadow_status"] == "invalid"
+        assert "post_admission_counterfactual_shadow" not in record
+    finally:
+        _cleanup(tmp)
+
+
+def test_trade_logger_rejects_counterfactual_candidate_inconsistent_with_flat_counts():
+    tmp = make_tmp_dir("counterfactual_shadow_flat_count_inconsistent")
+    try:
+        log_file = tmp / "trades.jsonl"
+        shadow = _post_admission_counterfactual_shadow()
+        shadow["candidates"][0].update(
+            {
+                "rejection_reason": "below_min_post_weight_score",
+                "matched_token_count": 1,
+                "pre_weight_score": 0.04,
+                "post_weight_score": 0.01,
+            }
+        )
+        TradeLogger(log_file).log_match_no_candidate(
+            source="Example Wire",
+            headline="Example event gets more likely",
+            venue="polymarket_us",
+            eligible_market_count=2,
+            reason="no_match",
+            candidate_pool_stage="post_admission_no_match",
+            within_admission_horizon_market_count=2,
+            post_admission_no_token_overlap_count=2,
+            post_admission_below_min_post_weight_score_count=0,
+            post_admission_weight_demoted_below_min_score_count=0,
+            post_admission_min_match_score=0.08,
+            post_admission_counterfactual_shadow=shadow,
+        )
+
+        record = json.loads(log_file.read_text(encoding="utf-8").strip())
+        assert record["type"] == "MATCH_NO_CANDIDATE"
+        assert record["post_admission_counterfactual_shadow_status"] == "invalid"
+        assert "post_admission_counterfactual_shadow" not in record
+    finally:
+        _cleanup(tmp)
+
+
+def test_trade_logger_rejects_counterfactual_candidate_at_or_above_flat_threshold():
+    tmp = make_tmp_dir("counterfactual_shadow_threshold_inconsistent")
+    try:
+        log_file = tmp / "trades.jsonl"
+        shadow = _post_admission_counterfactual_shadow()
+        shadow["candidates"][0].update(
+            {
+                "rejection_reason": "below_min_post_weight_score",
+                "matched_token_count": 1,
+                "pre_weight_score": 0.04,
+                "post_weight_score": 0.08,
+            }
+        )
+        TradeLogger(log_file).log_match_no_candidate(
+            source="Example Wire",
+            headline="Example event gets more likely",
+            venue="polymarket_us",
+            eligible_market_count=2,
+            reason="no_match",
+            candidate_pool_stage="post_admission_no_match",
+            within_admission_horizon_market_count=2,
+            post_admission_no_token_overlap_count=1,
+            post_admission_below_min_post_weight_score_count=1,
+            post_admission_weight_demoted_below_min_score_count=0,
+            post_admission_min_match_score=0.08,
+            post_admission_counterfactual_shadow=shadow,
+        )
+
+        record = json.loads(log_file.read_text(encoding="utf-8").strip())
+        assert record["type"] == "MATCH_NO_CANDIDATE"
+        assert record["post_admission_counterfactual_shadow_status"] == "invalid"
+        assert "post_admission_counterfactual_shadow" not in record
+    finally:
+        _cleanup(tmp)
+
+
+@pytest.mark.parametrize(
+    "malformation",
+    (
+        "integer_subclass",
+        "reason_subclass",
+        "snapshot_dict_subclass",
+        "candidate_dict_subclass",
+        "score_subclass",
+        "schema_version_subclass",
+        "zero_totals",
+    ),
+)
+def test_trade_logger_rejects_noncanonical_counterfactual_shadow_schema_values(malformation):
+    tmp = make_tmp_dir(f"counterfactual_shadow_{malformation}")
+    try:
+        log_file = tmp / "trades.jsonl"
+        shadow = _post_admission_counterfactual_shadow()
+        within_horizon_market_count = 2
+        no_token_overlap_count = 2
+        below_min_count = 0
+        if malformation == "integer_subclass":
+            class IntegerSubclass(int):
+                pass
+
+            shadow["candidate_count_total"] = IntegerSubclass(2)
+        elif malformation == "reason_subclass":
+            class ReasonSubclass(str):
+                pass
+
+            shadow["candidates"][0]["rejection_reason"] = ReasonSubclass("no_token_overlap")
+        elif malformation == "snapshot_dict_subclass":
+            class SnapshotDictSubclass(dict):
+                pass
+
+            shadow = SnapshotDictSubclass(shadow)
+        elif malformation == "candidate_dict_subclass":
+            class CandidateDictSubclass(dict):
+                pass
+
+            shadow["candidates"][0] = CandidateDictSubclass(shadow["candidates"][0])
+        elif malformation == "score_subclass":
+            class ScoreSubclass(float):
+                pass
+
+            shadow["candidates"][0].update(
+                {
+                    "rejection_reason": "below_min_post_weight_score",
+                    "matched_token_count": 1,
+                    "pre_weight_score": ScoreSubclass(0.04),
+                    "post_weight_score": 0.01,
+                }
+            )
+            no_token_overlap_count = 1
+            below_min_count = 1
+        elif malformation == "schema_version_subclass":
+            class SchemaVersionSubclass(int):
+                pass
+
+            shadow["schema_version"] = SchemaVersionSubclass(1)
+        else:
+            shadow.update(
+                {
+                    "candidate_count_total": 0,
+                    "captured_market_count": 0,
+                    "omitted_market_count": 0,
+                    "candidates": [],
+                }
+            )
+            within_horizon_market_count = 0
+            no_token_overlap_count = 0
+
+        TradeLogger(log_file).log_match_no_candidate(
+            source="Example Wire",
+            headline="Example event gets more likely",
+            venue="polymarket_us",
+            eligible_market_count=2,
+            reason="no_match",
+            candidate_pool_stage="post_admission_no_match",
+            within_admission_horizon_market_count=within_horizon_market_count,
+            post_admission_no_token_overlap_count=no_token_overlap_count,
+            post_admission_below_min_post_weight_score_count=below_min_count,
+            post_admission_weight_demoted_below_min_score_count=0,
+            post_admission_min_match_score=0.08,
+            post_admission_counterfactual_shadow=shadow,
+        )
+
+        record = json.loads(log_file.read_text(encoding="utf-8").strip())
+        assert record["type"] == "MATCH_NO_CANDIDATE"
+        assert record["post_admission_counterfactual_shadow_status"] == "invalid"
+        assert "post_admission_counterfactual_shadow" not in record
+    finally:
+        _cleanup(tmp)
+
+
+def test_trade_logger_rejects_counterfactual_candidate_list_len_cap_bypass():
+    class LenSpoofingCandidateList(list):
+        def __init__(self, values):
+            super().__init__(values)
+            self._length_calls = 0
+
+        def __len__(self):
+            self._length_calls += 1
+            return 4 if self._length_calls == 1 else 5
+
+    tmp = make_tmp_dir("counterfactual_shadow_len_cap_bypass")
+    try:
+        log_file = tmp / "trades.jsonl"
+        shadow = _post_admission_counterfactual_shadow()
+        shadow.update(
+            {
+                "candidate_count_total": 5,
+                "captured_market_count": 5,
+                "omitted_market_count": 0,
+                "candidates": LenSpoofingCandidateList(
+                    [
+                        {
+                            "ticker": f"0xspoof{index}",
+                            "rejection_reason": "no_token_overlap",
+                            "market_token_count": 1,
+                            "matched_token_count": 0,
+                        }
+                        for index in range(5)
+                    ]
+                ),
+            }
+        )
+
+        TradeLogger(log_file).log_match_no_candidate(
+            source="Example Wire",
+            headline="Example event gets more likely",
+            venue="polymarket_us",
+            eligible_market_count=5,
+            reason="no_match",
+            candidate_pool_stage="post_admission_no_match",
+            within_admission_horizon_market_count=5,
+            post_admission_no_token_overlap_count=5,
+            post_admission_below_min_post_weight_score_count=0,
+            post_admission_weight_demoted_below_min_score_count=0,
+            post_admission_min_match_score=0.08,
+            post_admission_counterfactual_shadow=shadow,
+        )
+
+        record = json.loads(log_file.read_text(encoding="utf-8").strip())
+        assert record["type"] == "MATCH_NO_CANDIDATE"
+        assert record["post_admission_counterfactual_shadow_status"] == "invalid"
+        assert "post_admission_counterfactual_shadow" not in record
+    finally:
+        _cleanup(tmp)
+
+
+@pytest.mark.parametrize("scope_field", ("venue", "candidate_pool_stage", "reason"))
+def test_trade_logger_rejects_counterfactual_shadow_with_spoofed_scope_input(scope_field):
+    class ScopeStringSubclass(str):
+        pass
+
+    tmp = make_tmp_dir(f"counterfactual_shadow_spoofed_{scope_field}")
+    try:
+        log_file = tmp / "trades.jsonl"
+        values = {
+            "venue": "polymarket_us",
+            "reason": "no_match",
+            "candidate_pool_stage": "post_admission_no_match",
+        }
+        values[scope_field] = ScopeStringSubclass(values[scope_field])
+
+        TradeLogger(log_file).log_match_no_candidate(
+            source="Example Wire",
+            headline="Example event gets more likely",
+            venue=values["venue"],
+            eligible_market_count=2,
+            reason=values["reason"],
+            candidate_pool_stage=values["candidate_pool_stage"],
+            within_admission_horizon_market_count=2,
+            post_admission_no_token_overlap_count=2,
+            post_admission_below_min_post_weight_score_count=0,
+            post_admission_weight_demoted_below_min_score_count=0,
+            post_admission_min_match_score=0.08,
+            post_admission_counterfactual_shadow=_post_admission_counterfactual_shadow(),
+        )
+
+        record = json.loads(log_file.read_text(encoding="utf-8").strip())
+        assert record["type"] == "MATCH_NO_CANDIDATE"
+        assert record["post_admission_counterfactual_shadow_status"] == "invalid"
+        assert "post_admission_counterfactual_shadow" not in record
     finally:
         _cleanup(tmp)
 
