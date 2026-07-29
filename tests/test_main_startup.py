@@ -232,6 +232,45 @@ def test_legacy_pending_runtime_binds_distinct_manifest_and_remains_paper_only(
     )
 
 
+def test_trading_bot_binds_global_trade_log_to_resolved_paper_cohort(
+    monkeypatch,
+    legacy_pending_runtime,
+):
+    cohort, _, _, _ = legacy_pending_runtime
+
+    class StopAfterPaperTrader(RuntimeError):
+        pass
+
+    bound_trade_log = MagicMock()
+    monkeypatch.setattr(main, "trade_log", bound_trade_log)
+    monkeypatch.setattr(
+        main,
+        "_runtime_paper_cohort_from_config",
+        lambda: (cohort, [], "legacy-pending paper cohort remains permanently isolated from live trading"),
+    )
+    monkeypatch.setattr(main, "_configured_paper_cohort_kind", lambda: "legacy_pending")
+    for dependency in (
+        "KalshiRestClient",
+        "KalshiWebSocketClient",
+        "MarketMatcher",
+        "CalibrationTask",
+    ):
+        monkeypatch.setattr(main, dependency, MagicMock())
+    monkeypatch.setattr(
+        main,
+        "PaperTrader",
+        MagicMock(side_effect=StopAfterPaperTrader),
+    )
+
+    with pytest.raises(StopAfterPaperTrader):
+        main.TradingBot()
+
+    bound_trade_log.bind_runtime_context.assert_called_once_with(
+        cohort_id=cohort.cohort_id,
+        cohort_kind="legacy_pending",
+    )
+
+
 def test_pending_g7_snapshot_is_scoped_to_pending_runtime_db_not_legacy_baseline(
     legacy_pending_runtime,
 ):
