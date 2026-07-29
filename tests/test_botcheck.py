@@ -8,6 +8,7 @@ the ~/.zshrc shell helpers:
     print_caffeinate_section() → botcaff()
 """
 
+import json
 import sqlite3
 import subprocess
 import sys
@@ -207,6 +208,104 @@ def test_signal_flow_warns_on_recent_unknown_live_submission(capsys, tmp_path):
     assert "LIVE_SUBMISSION_UNKNOWN=1" in out
     assert "reconciliation required" in out
     assert "no signal-flow records found" not in out
+
+
+def test_pending_cohort_reports_absent_root_without_creating(tmp_path):
+    data_dir = tmp_path / "data"
+
+    summary = botcheck.summarize_pending_paper_cohorts(data_dir)
+
+    assert summary["status"] == "absent"
+    assert not data_dir.exists()
+
+
+def test_pending_cohort_manifest_reports_cohort_id_and_database_path(capsys, tmp_path):
+    data_dir = tmp_path / "data"
+    cohort_id = "legacy-pending-20260729"
+    cohort_dir = data_dir / "legacy_pending_paper_cohorts" / cohort_id
+    database_path = cohort_dir / "paper_trades.db"
+    manifest_path = cohort_dir / "cohort.json"
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "cohort_type": "legacy_pending",
+                "cohort_id": cohort_id,
+                "db_path_relative_to_storage_root": str(database_path.relative_to(data_dir)),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = botcheck.summarize_pending_paper_cohorts(data_dir)
+
+    assert summary["status"] == "present"
+    assert summary["cohorts"] == (
+        {"cohort_id": cohort_id, "database_path": database_path},
+    )
+    botcheck.print_pending_paper_cohort_section(summary)
+    out = capsys.readouterr().out
+    assert cohort_id in out
+    assert str(database_path) in out
+
+
+def test_pending_cohort_manifest_reports_invalid_malformed_manifest(tmp_path):
+    manifest_path = (
+        tmp_path
+        / "data"
+        / "legacy_pending_paper_cohorts"
+        / "legacy-pending-20260729"
+        / "cohort.json"
+    )
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text("{malformed", encoding="utf-8")
+
+    summary = botcheck.summarize_pending_paper_cohorts(tmp_path / "data")
+
+    assert summary["status"] == "invalid"
+    assert "manifest" in str(summary["detail"])
+
+
+def test_pending_cohort_manifest_reports_invalid_symlink_root(tmp_path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    root = data_dir / "legacy_pending_paper_cohorts"
+    target = tmp_path / "outside"
+    target.mkdir()
+    try:
+        root.symlink_to(target, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"cannot create symlink in test environment: {exc}")
+
+    summary = botcheck.summarize_pending_paper_cohorts(data_dir)
+
+    assert summary["status"] == "invalid"
+    assert "symlink" in str(summary["detail"])
+
+
+def test_signal_flow_counts_polymarket_terminal_events(tmp_path):
+    trades = tmp_path / "trades.jsonl"
+    write_jsonl(
+        trades,
+        [
+            {"type": "MATCH_NO_CANDIDATE", "ts": "2026-05-10T22:00:00+00:00"},
+            {
+                "type": "POLYMARKET_MARKET_CACHE",
+                "ts": "2026-05-10T22:05:00+00:00",
+            },
+        ],
+    )
+
+    stats = summarize_signal_flow(
+        trades,
+        now=datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc),
+        window_hours=24,
+    )
+
+    assert stats.records_kept == 2
+    assert stats.counts["MATCH_NO_CANDIDATE"] == 1
+    assert stats.counts["POLYMARKET_MARKET_CACHE"] == 1
 
 
 def test_live_submission_hold_warns_without_unknown_jsonl(capsys, tmp_path):

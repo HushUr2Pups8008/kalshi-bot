@@ -22,6 +22,7 @@ import os
 import re
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
@@ -69,6 +70,8 @@ SHUTDOWN_MARKERS = (
 SIGNAL_FLOW_EVENTS = (
     "EARLY_FRESH_PASS",
     "MATCH_DIAGNOSTIC",
+    "MATCH_NO_CANDIDATE",
+    "POLYMARKET_MARKET_CACHE",
     "ANALYSIS_REJECTED",
     "OPPORTUNITY",
     "BLEND_DECISION",
@@ -80,6 +83,10 @@ SIGNAL_FLOW_EVENTS = (
 LIVE_SUBMISSION_UNKNOWN_EVENT = "LIVE_SUBMISSION_UNKNOWN"
 LIVE_SUBMISSION_HOLD_FILENAME = "unknown_submission_holds.json"
 LIVE_SUBMISSION_HOLD_SCHEMA_VERSION = 1
+PENDING_PAPER_COHORTS_DIRNAME = "legacy_pending_paper_cohorts"
+PENDING_PAPER_COHORT_MANIFEST_FILENAME = "cohort.json"
+PENDING_PAPER_COHORT_MANIFEST_SCHEMA_VERSION = 1
+PENDING_PAPER_COHORT_TYPE = "legacy_pending"
 RESEARCH_DOSSIER_MAX_AGE_SECONDS = 6 * 60 * 60
 RESEARCH_REQUIRED_SOURCE_CLASSES = {"resolution_source", "official_primary"}
 WEATHER_SHADOW_ROW_COUNT_LIMIT = 10_000
@@ -325,6 +332,116 @@ def summarize_signal_flow(
         live_submission_unknown_count=live_submission_unknown_count,
         latest_live_submission_unknown_ts=latest_live_submission_unknown_ts,
     )
+
+
+def _invalid_pending_paper_cohort_summary(root: Path, detail: str) -> dict[str, object]:
+    return {"root": root, "status": "invalid", "detail": detail, "cohorts": ()}
+
+
+def summarize_pending_paper_cohorts(data_dir: Path) -> dict[str, object]:
+    """Inspect pending-cohort manifests without opening their databases."""
+    root = data_dir / PENDING_PAPER_COHORTS_DIRNAME
+    try:
+        root_mode = root.lstat().st_mode
+    except FileNotFoundError:
+        return {"root": root, "status": "absent", "cohorts": ()}
+    except OSError:
+        return _invalid_pending_paper_cohort_summary(
+            root, "legacy pending cohort root is unavailable"
+        )
+
+    if stat.S_ISLNK(root_mode):
+        return _invalid_pending_paper_cohort_summary(
+            root, "legacy pending cohort root is a symlink"
+        )
+    if not stat.S_ISDIR(root_mode):
+        return _invalid_pending_paper_cohort_summary(
+            root, "legacy pending cohort root is not a directory"
+        )
+
+    try:
+        entries = sorted(root.iterdir(), key=lambda item: item.name)
+    except OSError:
+        return _invalid_pending_paper_cohort_summary(
+            root, "legacy pending cohort root cannot be listed"
+        )
+
+    cohorts: list[dict[str, object]] = []
+    for entry in entries:
+        try:
+            entry_mode = entry.lstat().st_mode
+        except OSError:
+            return _invalid_pending_paper_cohort_summary(
+                root, f"legacy pending cohort entry is unavailable: {entry}"
+            )
+        if stat.S_ISLNK(entry_mode):
+            return _invalid_pending_paper_cohort_summary(
+                root, f"legacy pending cohort entry is a symlink: {entry}"
+            )
+        if not stat.S_ISDIR(entry_mode):
+            return _invalid_pending_paper_cohort_summary(
+                root, f"legacy pending cohort entry is not a directory: {entry}"
+            )
+
+        manifest_path = entry / PENDING_PAPER_COHORT_MANIFEST_FILENAME
+        try:
+            manifest_mode = manifest_path.lstat().st_mode
+        except OSError:
+            return _invalid_pending_paper_cohort_summary(
+                root, f"legacy pending cohort manifest is missing: {manifest_path}"
+            )
+        if stat.S_ISLNK(manifest_mode) or not stat.S_ISREG(manifest_mode):
+            return _invalid_pending_paper_cohort_summary(
+                root, f"legacy pending cohort manifest is not a regular file: {manifest_path}"
+            )
+
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return _invalid_pending_paper_cohort_summary(
+                root, f"legacy pending cohort manifest is malformed: {manifest_path}"
+            )
+        if not isinstance(payload, dict):
+            return _invalid_pending_paper_cohort_summary(
+                root, f"legacy pending cohort manifest is malformed: {manifest_path}"
+            )
+
+        cohort_id = payload.get("cohort_id")
+        db_path_relative_to_storage_root = payload.get(
+            "db_path_relative_to_storage_root"
+        )
+        if (
+            type(payload.get("schema_version")) is not int
+            or payload["schema_version"] != PENDING_PAPER_COHORT_MANIFEST_SCHEMA_VERSION
+            or payload.get("cohort_type") != PENDING_PAPER_COHORT_TYPE
+            or not isinstance(cohort_id, str)
+            or not cohort_id
+            or cohort_id != entry.name
+            or not isinstance(db_path_relative_to_storage_root, str)
+            or not db_path_relative_to_storage_root
+        ):
+            return _invalid_pending_paper_cohort_summary(
+                root, f"legacy pending cohort manifest is invalid: {manifest_path}"
+            )
+
+        relative_db_path = Path(db_path_relative_to_storage_root)
+        database_path = data_dir / relative_db_path
+        if (
+            relative_db_path.is_absolute()
+            or ".." in relative_db_path.parts
+            or database_path.name != "paper_trades.db"
+            or database_path.parent != entry
+        ):
+            return _invalid_pending_paper_cohort_summary(
+                root, f"legacy pending cohort database path is invalid: {manifest_path}"
+            )
+        cohorts.append({"cohort_id": cohort_id, "database_path": database_path})
+
+    return {
+        "root": root,
+        "status": "present" if cohorts else "empty",
+        "cohorts": tuple(cohorts),
+    }
 
 
 def summarize_live_submission_holds(path: Path) -> LiveSubmissionHoldStats:
@@ -1821,6 +1938,25 @@ def print_signal_flow_section(stats: SignalFlowStats, *, now: datetime) -> None:
     print()
 
 
+def print_pending_paper_cohort_section(summary: dict[str, object]) -> None:
+    print("=== Pending paper cohorts (read-only manifest status) ===")
+    print(f"Root       : {summary.get('root', 'n/a')}")
+    status = summary.get("status")
+    if status == "absent":
+        print("Result     : legacy pending cohort root absent")
+    elif status == "invalid":
+        print(f"WARNING    : {summary.get('detail', 'manifest status unavailable')}")
+    elif status == "empty":
+        print("Result     : no pending paper cohort manifests found")
+    else:
+        for cohort in summary.get("cohorts", ()):
+            if not isinstance(cohort, dict):
+                continue
+            print(f"Cohort     : {cohort.get('cohort_id', 'n/a')}")
+            print(f"Database   : {cohort.get('database_path', 'n/a')}")
+    print()
+
+
 def print_live_submission_hold_section(stats: LiveSubmissionHoldStats) -> None:
     print("=== Live submission reservations ===")
     print(f"State file : {stats.path}")
@@ -2104,6 +2240,7 @@ def main() -> int:
         now=now,
         window_hours=args.signal_window_hours,
     )
+    pending_paper_cohorts = summarize_pending_paper_cohorts(args.home / "data")
     live_submission_holds = summarize_live_submission_holds(args.live_submission_hold)
     research_dossiers = summarize_research_dossiers(default_home, now=now)
 
@@ -2112,6 +2249,7 @@ def main() -> int:
     print_caffeinate_section(caffeinates, now_epoch=now_epoch)
     print_last_boot(args.log, sessions, now, current_proc=current_proc, now_epoch=now_epoch)
     print_signal_flow_section(signal_flow, now=now)
+    print_pending_paper_cohort_section(pending_paper_cohorts)
     print_live_submission_hold_section(live_submission_holds)
     print_research_gate_section(
         default_home,
