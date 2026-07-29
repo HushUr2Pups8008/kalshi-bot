@@ -117,6 +117,14 @@ class _MarketCacheTelemetry:
     market_limit: int
 
 
+@dataclass(frozen=True)
+class _NoCandidatePoolTelemetry:
+    candidate_pool_stage: str
+    pre_admission_matchable_market_count: int
+    within_admission_horizon_market_count: int
+    admission_horizon_days: float
+
+
 class _PublicMarketClient(Protocol):
     def get_markets(self, *, limit: int) -> tuple[list[PolymarketMarket], str | None]:
         ...
@@ -306,6 +314,16 @@ class PolymarketPaperRuntime:
         markets, market_fetch_failed = await self._get_markets()
         if not markets:
             self._last_match_count = 0
+            no_candidate_pool = _NoCandidatePoolTelemetry(
+                candidate_pool_stage=(
+                    "provider_fetch_failed"
+                    if market_fetch_failed
+                    else "eligible_cache_empty"
+                ),
+                pre_admission_matchable_market_count=0,
+                within_admission_horizon_market_count=0,
+                admission_horizon_days=cfg.paper_admission_max_days_to_close,
+            )
             await _write_funnel_telemetry(
                 "MATCH_NO_CANDIDATE",
                 trade_log.log_match_no_candidate,
@@ -316,20 +334,37 @@ class PolymarketPaperRuntime:
                 reason=(
                     "market_fetch_failed" if market_fetch_failed else "no_eligible_markets"
                 ),
+                candidate_pool_stage=no_candidate_pool.candidate_pool_stage,
+                pre_admission_matchable_market_count=(
+                    no_candidate_pool.pre_admission_matchable_market_count
+                ),
+                within_admission_horizon_market_count=(
+                    no_candidate_pool.within_admission_horizon_market_count
+                ),
+                admission_horizon_days=no_candidate_pool.admission_horizon_days,
             )
             self._log_heartbeat()
             return 0
 
+        match_now = self._horizon_now()
+        admission_horizon_days = cfg.paper_admission_max_days_to_close
         matches = match_polymarket_markets(
             news,
             markets,
             max_results=self._max_candidates,
             min_score=self._min_match_score,
-            now=self._horizon_now(),
+            now=match_now,
+            admission_horizon_days=admission_horizon_days,
         )
         self._last_match_count = len(matches)
         if not matches:
             self._no_match_count += 1
+            no_candidate_pool = _classify_no_candidate_pool(
+                news,
+                markets,
+                now=match_now,
+                admission_horizon_days=admission_horizon_days,
+            )
             log.info(
                 "[POLYMARKET_MATCH] no_match markets=%d headline=%s",
                 len(markets),
@@ -343,6 +378,14 @@ class PolymarketPaperRuntime:
                 venue=Venue.POLYMARKET_US.value,
                 eligible_market_count=len(markets),
                 reason="no_match",
+                candidate_pool_stage=no_candidate_pool.candidate_pool_stage,
+                pre_admission_matchable_market_count=(
+                    no_candidate_pool.pre_admission_matchable_market_count
+                ),
+                within_admission_horizon_market_count=(
+                    no_candidate_pool.within_admission_horizon_market_count
+                ),
+                admission_horizon_days=no_candidate_pool.admission_horizon_days,
             )
             self._log_heartbeat()
             return 0
@@ -500,18 +543,17 @@ class PolymarketPaperRuntime:
 
     def cached_candidate_markets(self) -> list[PolymarketMarket]:
         now = self._horizon_now()
+        admission_horizon_days = cfg.paper_admission_max_days_to_close
         return [
             market
             for market in self._markets
             if (
-                market.venue == Venue.POLYMARKET_US
-                and market.is_tradeable()
-                and not _is_suppressed_market(market)
-                and evaluate_market_horizon(
-                    market.close_time,
+                _is_pre_admission_matchable_market(market)
+                and _is_within_admission_horizon(
+                    market,
                     now=now,
-                    max_days_to_close=cfg.paper_admission_max_days_to_close,
-                ).eligible
+                    admission_horizon_days=admission_horizon_days,
+                )
             )
         ]
 
@@ -827,9 +869,9 @@ def match_polymarket_markets(
     min_score: float = _DEFAULT_MIN_MATCH_SCORE,
     token_weights: dict[str, dict[str, Any]] | None = None,
     now: datetime | None = None,
+    admission_horizon_days: float | None = None,
 ) -> list[tuple[PolymarketMarket, float, dict[str, Any]]]:
-    news_tokens = _meaningful_tokens(f"{news.headline} {news.body}")
-    headline_tokens = _meaningful_tokens(news.headline)
+    news_tokens, headline_tokens = _news_match_tokens(news)
     if not news_tokens and not headline_tokens:
         return []
     if token_weights is None:
@@ -840,19 +882,16 @@ def match_polymarket_markets(
     if match_time.tzinfo is None or match_time.utcoffset() is None:
         raise ValueError("Polymarket market matching clock must be timezone-aware")
     match_time = match_time.astimezone(timezone.utc)
+    if admission_horizon_days is None:
+        admission_horizon_days = cfg.paper_admission_max_days_to_close
     for market in markets:
-        if (
-            market.venue != Venue.POLYMARKET_US
-            or not market.is_tradeable()
-            or _is_suppressed_market(market)
-        ):
+        if not _is_pre_admission_matchable_market(market):
             continue
-        horizon = evaluate_market_horizon(
-            market.close_time,
+        if not _is_within_admission_horizon(
+            market,
             now=match_time,
-            max_days_to_close=cfg.paper_admission_max_days_to_close,
-        )
-        if not horizon.eligible:
+            admission_horizon_days=admission_horizon_days,
+        ):
             continue
         market_tokens = _meaningful_tokens(_market_match_text(market))
         if not market_tokens:
@@ -923,6 +962,69 @@ def match_polymarket_markets(
 
     scored.sort(key=lambda item: item[1], reverse=True)
     return scored[:max_results]
+
+
+def _classify_no_candidate_pool(
+    news: NewsItem,
+    markets: Sequence[PolymarketMarket],
+    *,
+    now: datetime,
+    admission_horizon_days: float,
+) -> _NoCandidatePoolTelemetry:
+    pre_admission_markets = [
+        market for market in markets if _is_pre_admission_matchable_market(market)
+    ]
+    within_admission_horizon_markets = [
+        market
+        for market in pre_admission_markets
+        if _is_within_admission_horizon(
+            market,
+            now=now,
+            admission_horizon_days=admission_horizon_days,
+        )
+    ]
+    if not any(_news_match_tokens(news)):
+        candidate_pool_stage = "input_without_match_tokens"
+    elif not pre_admission_markets:
+        candidate_pool_stage = "pre_admission_filter_empty"
+    elif not within_admission_horizon_markets:
+        candidate_pool_stage = "admission_horizon_pruned"
+    else:
+        candidate_pool_stage = "post_admission_no_match"
+    return _NoCandidatePoolTelemetry(
+        candidate_pool_stage=candidate_pool_stage,
+        pre_admission_matchable_market_count=len(pre_admission_markets),
+        within_admission_horizon_market_count=len(within_admission_horizon_markets),
+        admission_horizon_days=admission_horizon_days,
+    )
+
+
+def _is_pre_admission_matchable_market(market: PolymarketMarket) -> bool:
+    return (
+        market.venue == Venue.POLYMARKET_US
+        and market.is_tradeable()
+        and not _is_suppressed_market(market)
+    )
+
+
+def _news_match_tokens(news: NewsItem) -> tuple[set[str], set[str]]:
+    return (
+        _meaningful_tokens(f"{news.headline} {news.body}"),
+        _meaningful_tokens(news.headline),
+    )
+
+
+def _is_within_admission_horizon(
+    market: PolymarketMarket,
+    *,
+    now: datetime,
+    admission_horizon_days: float,
+) -> bool:
+    return evaluate_market_horizon(
+        market.close_time,
+        now=now,
+        max_days_to_close=admission_horizon_days,
+    ).eligible
 
 
 def _is_suppressed_market(market: PolymarketMarket) -> bool:

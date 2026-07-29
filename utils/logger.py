@@ -1408,17 +1408,40 @@ class TradeLogger:
         venue: str,
         eligible_market_count: int,
         reason: Literal["no_eligible_markets", "no_match", "market_fetch_failed"],
+        candidate_pool_stage: Literal[
+            "provider_fetch_failed",
+            "eligible_cache_empty",
+            "pre_admission_filter_empty",
+            "admission_horizon_pruned",
+            "input_without_match_tokens",
+            "post_admission_no_match",
+        ]
+        | None = None,
+        pre_admission_matchable_market_count: int | None = None,
+        within_admission_horizon_market_count: int | None = None,
+        admission_horizon_days: float | None = None,
     ) -> None:
-        self._write(
-            {
-                "type": "MATCH_NO_CANDIDATE",
-                "source": source,
-                "headline": headline,
-                "venue": venue,
-                "eligible_market_count": eligible_market_count,
-                "reason": reason,
-            }
-        )
+        record: dict[str, Any] = {
+            "type": "MATCH_NO_CANDIDATE",
+            "source": source,
+            "headline": headline,
+            "venue": venue,
+            "eligible_market_count": eligible_market_count,
+            "reason": reason,
+        }
+        if candidate_pool_stage is not None:
+            record["candidate_pool_stage"] = candidate_pool_stage
+        if pre_admission_matchable_market_count is not None:
+            record["pre_admission_matchable_market_count"] = (
+                pre_admission_matchable_market_count
+            )
+        if within_admission_horizon_market_count is not None:
+            record["within_admission_horizon_market_count"] = (
+                within_admission_horizon_market_count
+            )
+        if admission_horizon_days is not None:
+            record["admission_horizon_days"] = admission_horizon_days
+        self._write(record)
 
     def log_polymarket_market_cache(
         self,

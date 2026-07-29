@@ -411,6 +411,29 @@ def test_logger_emits_required_only_record():
         _cleanup(tmp)
 
 
+def test_trade_logger_omits_optional_no_candidate_pool_fields():
+    tmp = make_tmp_dir("polymarket_no_candidate_legacy_schema")
+    try:
+        log_file = tmp / "trades.jsonl"
+        TradeLogger(log_file).log_match_no_candidate(
+            source="Example Wire",
+            headline="Example event gets more likely",
+            venue="polymarket_us",
+            eligible_market_count=2,
+            reason="no_match",
+        )
+
+        record = json.loads(log_file.read_text(encoding="utf-8").strip())
+
+        assert record["reason"] == "no_match"
+        assert "candidate_pool_stage" not in record
+        assert "pre_admission_matchable_market_count" not in record
+        assert "within_admission_horizon_market_count" not in record
+        assert "admission_horizon_days" not in record
+    finally:
+        _cleanup(tmp)
+
+
 def test_live_submission_records_are_linked_and_sanitized():
     tmp = make_tmp_dir("live_submission_records")
     try:
@@ -684,6 +707,10 @@ def test_trade_logger_records_polymarket_funnel_event_schemas():
             venue="polymarket_us",
             eligible_market_count=2,
             reason="market_fetch_failed",
+            candidate_pool_stage="provider_fetch_failed",
+            pre_admission_matchable_market_count=0,
+            within_admission_horizon_market_count=0,
+            admission_horizon_days=14.0,
         )
         logger.log_polymarket_market_cache(
             raw_fetched=3,
@@ -706,6 +733,10 @@ def test_trade_logger_records_polymarket_funnel_event_schemas():
             "venue": "polymarket_us",
             "eligible_market_count": 2,
             "reason": "market_fetch_failed",
+            "candidate_pool_stage": "provider_fetch_failed",
+            "pre_admission_matchable_market_count": 0,
+            "within_admission_horizon_market_count": 0,
+            "admission_horizon_days": 14.0,
         }
         assert cache == {
             "type": "POLYMARKET_MARKET_CACHE",

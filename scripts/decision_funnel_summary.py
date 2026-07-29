@@ -602,6 +602,8 @@ def summarize(
         "match_no_candidate_total": 0,
         "match_no_candidate_sources": Counter(),
         "match_no_candidate_reasons": Counter(),
+        "match_no_candidate_candidate_pool_stages": Counter(),
+        "match_no_candidate_missing_candidate_pool_stage": 0,
         "match_no_candidate_venues": Counter(),
         "match_no_candidate_eligible_market_counts": Counter(),
         "match_llm_reviews_total": 0,
@@ -700,6 +702,13 @@ def summarize(
                     unknown_route_exit_key_counts[match_key] += 1
             stats["match_no_candidate_sources"][_text(record.get("source"))] += 1
             stats["match_no_candidate_reasons"][reason] += 1
+            candidate_pool_stage = record.get("candidate_pool_stage")
+            if isinstance(candidate_pool_stage, str) and candidate_pool_stage.strip():
+                stats["match_no_candidate_candidate_pool_stages"][
+                    candidate_pool_stage.strip()
+                ] += 1
+            else:
+                stats["match_no_candidate_missing_candidate_pool_stage"] += 1
             stats["match_no_candidate_venues"][_text(record.get("venue"))] += 1
             eligible_market_count = record.get("eligible_market_count")
             eligible_market_count_text = (
@@ -1028,7 +1037,7 @@ def print_summary(stats: dict[str, Any], top: int, since: datetime | None, until
         f"({pct(fresh_pass_keys_with_candidate_diagnostic, fresh_pass_unique_keys)})"
     )
     print(
-        "  Explicit no-match observed      : "
+        "  Logged no_match event observed : "
         f"{fresh_pass_keys_with_explicit_no_match} "
         f"({pct(fresh_pass_keys_with_explicit_no_match, fresh_pass_unique_keys)})"
     )
@@ -1063,7 +1072,7 @@ def print_summary(stats: dict[str, Any], top: int, since: datetime | None, until
     print(
         "  Route signal keys without fresh pass: "
         f"candidate_diagnostic={fresh_pass_linkage.get('candidate_diagnostic_keys_without_fresh_pass', 0)} "
-        f"explicit_no_match={fresh_pass_linkage.get('explicit_no_match_keys_without_fresh_pass', 0)} "
+        f"logged_no_match={fresh_pass_linkage.get('explicit_no_match_keys_without_fresh_pass', 0)} "
         f"market_availability={fresh_pass_linkage.get('market_availability_keys_without_fresh_pass', 0)} "
         f"unknown_or_other={fresh_pass_linkage.get('unknown_route_exit_keys_without_fresh_pass', 0)}"
     )
@@ -1192,6 +1201,15 @@ def print_summary(stats: dict[str, Any], top: int, since: datetime | None, until
     print("Explicit No-Candidate Reasons")
     for line in format_counter(stats["match_no_candidate_reasons"], top=top):
         print(line)
+
+    print()
+    print("No-Candidate Candidate Pool Stages")
+    for line in format_counter(stats["match_no_candidate_candidate_pool_stages"], top=top):
+        print(line)
+    print(
+        "  No-candidate records missing candidate-pool stage: "
+        f"{stats['match_no_candidate_missing_candidate_pool_stage']}"
+    )
 
     print()
     print(f"Explicit No-Candidate Venues (top {top})")
