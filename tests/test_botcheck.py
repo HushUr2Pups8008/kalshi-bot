@@ -358,6 +358,17 @@ def test_pending_cohort_manifest_reports_invalid_malformed_manifest(tmp_path):
     assert "manifest" in str(summary["detail"])
 
 
+def test_pending_cohort_manifest_reports_invalid_utf8_manifest(tmp_path):
+    data_dir = tmp_path / "data"
+    _, _, _, _, manifest_path = _write_pending_paper_cohort_topology(data_dir)
+    manifest_path.write_bytes(b'{"cohort_id": "\xff"}')
+
+    summary = botcheck.summarize_pending_paper_cohorts(data_dir)
+
+    assert summary["status"] == "invalid"
+    assert "manifest" in str(summary["detail"])
+
+
 def test_pending_cohort_manifest_reports_invalid_symlink_root(tmp_path):
     data_dir = tmp_path / "data"
     data_dir.mkdir()

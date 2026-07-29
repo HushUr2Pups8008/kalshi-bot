@@ -411,7 +411,7 @@ def summarize_pending_paper_cohorts(data_dir: Path) -> dict[str, object]:
 
         try:
             payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             return _invalid_pending_paper_cohort_summary(
                 root, f"legacy pending cohort manifest is malformed: {manifest_path}"
             )
