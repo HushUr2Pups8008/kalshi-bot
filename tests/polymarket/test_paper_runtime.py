@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from decimal import Decimal
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, call, patch
 
 import pytest
 
@@ -139,9 +140,18 @@ async def test_warm_cache_rejects_missing_and_beyond_universe_horizon_close_time
 
 
 @pytest.mark.asyncio
-async def test_cache_refresh_logs_real_source_cache_counts(monkeypatch):
+@pytest.mark.parametrize(
+    ("cohort_id", "cohort_kind"),
+    (("active-test", "active"), ("pending-test", "legacy_pending")),
+)
+async def test_nonlegacy_cache_refresh_reports_14_day_admission_horizon(
+    monkeypatch,
+    cohort_id,
+    cohort_kind,
+):
     monkeypatch.setattr(cfg, "is_paper_trading", True)
-    monkeypatch.setattr(cfg, "paper_cohort_id", "active-test")
+    monkeypatch.setattr(cfg, "paper_cohort_id", cohort_id)
+    monkeypatch.setattr(cfg, "paper_cohort_kind", cohort_kind)
     monkeypatch.setattr(cfg, "paper_active_cohort_max_days_to_close", 14.0)
     candidate = _market(market_id="candidate")
     eligible_only = _market(
@@ -161,17 +171,69 @@ async def test_cache_refresh_logs_real_source_cache_counts(monkeypatch):
         market_cache_ttl_seconds=300,
     )
 
-    with patch("polymarket.paper_runtime.trade_log") as trade_log_mock:
+    with (
+        patch("polymarket.paper_runtime.trade_log") as trade_log_mock,
+        patch(
+            "polymarket.paper_runtime.write_trade_log_async",
+            new_callable=AsyncMock,
+        ) as write_log_mock,
+    ):
         warmed = await runtime.warm_cache()
 
     assert warmed == 2
     assert runtime.cached_markets() == [candidate, eligible_only]
     assert client.calls == 1
-    trade_log_mock.log_polymarket_market_cache.assert_called_once_with(
+    write_log_mock.assert_awaited_once_with(
+        trade_log_mock.log_polymarket_market_cache,
         raw_fetched=3,
         cursor_present=True,
         eligible_30d=2,
-        candidate_14d=1,
+        candidate_within_admission_horizon=1,
+        admission_horizon_days=14.0,
+        market_limit=10,
+    )
+
+
+@pytest.mark.asyncio
+async def test_legacy_cache_refresh_reports_30_day_admission_horizon(monkeypatch):
+    monkeypatch.setattr(cfg, "is_paper_trading", True)
+    monkeypatch.setattr(cfg, "paper_cohort_id", "legacy")
+    monkeypatch.setattr(cfg, "paper_cohort_kind", "legacy")
+    monkeypatch.setattr(cfg, "paper_active_cohort_max_days_to_close", 14.0)
+    candidate = _market(market_id="candidate")
+    legacy_candidate = _market(
+        market_id="legacy-candidate",
+        close_time=(datetime.now(timezone.utc) + timedelta(days=20)).isoformat(),
+    )
+    beyond_30d = _market(
+        market_id="beyond-30d",
+        close_time=(datetime.now(timezone.utc) + timedelta(days=31)).isoformat(),
+    )
+    runtime = PolymarketPaperRuntime(
+        client=_FakeClient([candidate, legacy_candidate, beyond_30d], cursor="next-page"),
+        route_analysis=AsyncMock(),
+        keyword_stats=None,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+    )
+
+    with (
+        patch("polymarket.paper_runtime.trade_log") as trade_log_mock,
+        patch(
+            "polymarket.paper_runtime.write_trade_log_async",
+            new_callable=AsyncMock,
+        ) as write_log_mock,
+    ):
+        warmed = await runtime.warm_cache()
+
+    assert warmed == 2
+    write_log_mock.assert_awaited_once_with(
+        trade_log_mock.log_polymarket_market_cache,
+        raw_fetched=3,
+        cursor_present=True,
+        eligible_30d=2,
+        candidate_within_admission_horizon=2,
+        admission_horizon_days=30.0,
         market_limit=10,
     )
 
@@ -187,16 +249,36 @@ async def test_process_news_logs_no_candidate_for_empty_eligible_cache():
     )
     news = _news()
 
-    with patch("polymarket.paper_runtime.trade_log") as trade_log_mock:
+    with (
+        patch("polymarket.paper_runtime.trade_log") as trade_log_mock,
+        patch(
+            "polymarket.paper_runtime.write_trade_log_async",
+            new_callable=AsyncMock,
+        ) as write_log_mock,
+    ):
         routed_count = await runtime.process_news(news)
 
     assert routed_count == 0
-    trade_log_mock.log_match_no_candidate.assert_called_once_with(
-        source=news.source,
-        headline=news.headline,
-        venue=Venue.POLYMARKET_US.value,
-        eligible_market_count=0,
-        reason="no_eligible_markets",
+    write_log_mock.assert_has_awaits(
+        [
+            call(
+                trade_log_mock.log_polymarket_market_cache,
+                raw_fetched=0,
+                cursor_present=False,
+                eligible_30d=0,
+                candidate_within_admission_horizon=0,
+                admission_horizon_days=30.0,
+                market_limit=10,
+            ),
+            call(
+                trade_log_mock.log_match_no_candidate,
+                source=news.source,
+                headline=news.headline,
+                venue=Venue.POLYMARKET_US.value,
+                eligible_market_count=0,
+                reason="no_eligible_markets",
+            ),
+        ]
     )
 
 
@@ -218,17 +300,161 @@ async def test_process_news_logs_no_candidate_when_no_market_scores():
     )
     news = _news("Central bank releases an interest rate decision")
 
-    with patch("polymarket.paper_runtime.trade_log") as trade_log_mock:
+    with (
+        patch("polymarket.paper_runtime.trade_log") as trade_log_mock,
+        patch(
+            "polymarket.paper_runtime.write_trade_log_async",
+            new_callable=AsyncMock,
+        ) as write_log_mock,
+    ):
         routed_count = await runtime.process_news(news)
 
     assert routed_count == 0
-    trade_log_mock.log_match_no_candidate.assert_called_once_with(
-        source=news.source,
-        headline=news.headline,
-        venue=Venue.POLYMARKET_US.value,
-        eligible_market_count=1,
-        reason="no_match",
+    write_log_mock.assert_has_awaits(
+        [
+            call(
+                trade_log_mock.log_polymarket_market_cache,
+                raw_fetched=1,
+                cursor_present=False,
+                eligible_30d=1,
+                candidate_within_admission_horizon=1,
+                admission_horizon_days=30.0,
+                market_limit=10,
+            ),
+            call(
+                trade_log_mock.log_match_no_candidate,
+                source=news.source,
+                headline=news.headline,
+                venue=Venue.POLYMARKET_US.value,
+                eligible_market_count=1,
+                reason="no_match",
+            ),
+        ]
     )
+
+
+@pytest.mark.asyncio
+async def test_process_news_empty_cache_ignores_funnel_telemetry_write_failures():
+    runtime = PolymarketPaperRuntime(
+        client=_FakeClient([]),
+        route_analysis=AsyncMock(),
+        keyword_stats=None,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+    )
+
+    with (
+        patch("polymarket.paper_runtime.trade_log"),
+        patch(
+            "polymarket.paper_runtime.write_trade_log_async",
+            new=AsyncMock(side_effect=OSError("disk unavailable")),
+        ) as write_log_mock,
+    ):
+        routed_count = await runtime.process_news(_news())
+
+    assert routed_count == 0
+    assert runtime.stats().last_match_count == 0
+    assert runtime.stats().last_error is None
+    assert write_log_mock.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_process_news_no_match_ignores_funnel_telemetry_write_failures():
+    route_analysis = AsyncMock()
+    runtime = PolymarketPaperRuntime(
+        client=_FakeClient(
+            [
+                _market(
+                    title="Will a volcano erupt this year?",
+                    question="Will a volcano erupt this year?",
+                )
+            ]
+        ),
+        route_analysis=route_analysis,
+        keyword_stats=None,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+    )
+
+    with (
+        patch("polymarket.paper_runtime.trade_log"),
+        patch(
+            "polymarket.paper_runtime.write_trade_log_async",
+            new=AsyncMock(side_effect=OSError("disk unavailable")),
+        ) as write_log_mock,
+    ):
+        routed_count = await runtime.process_news(
+            _news("Central bank releases an interest rate decision")
+        )
+
+    assert routed_count == 0
+    assert runtime.stats().no_match_count == 1
+    assert write_log_mock.await_count == 2
+    route_analysis.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_warm_cache_keeps_fresh_state_when_funnel_telemetry_write_fails():
+    market = _market()
+    client = _FakeClient([market])
+    runtime = PolymarketPaperRuntime(
+        client=client,
+        route_analysis=AsyncMock(),
+        keyword_stats=None,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+    )
+
+    with (
+        patch("polymarket.paper_runtime.trade_log"),
+        patch(
+            "polymarket.paper_runtime.write_trade_log_async",
+            new=AsyncMock(side_effect=OSError("disk unavailable")),
+        ) as write_log_mock,
+    ):
+        first_warm = await runtime.warm_cache()
+        second_warm = await runtime.warm_cache()
+
+    assert (first_warm, second_warm) == (1, 1)
+    assert runtime.cached_markets() == [market]
+    assert runtime.stats().last_error is None
+    assert client.calls == 1
+    assert write_log_mock.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_cache_telemetry_does_not_hold_fetch_lock():
+    market = _market()
+    client = _FakeClient([market])
+    runtime = PolymarketPaperRuntime(
+        client=client,
+        route_analysis=AsyncMock(),
+        keyword_stats=None,
+        market_limit=10,
+        market_cache_ttl_seconds=300,
+    )
+    telemetry_started = asyncio.Event()
+    release_telemetry = asyncio.Event()
+
+    async def stalled_write_trade_log_async(*_args, **_kwargs):
+        telemetry_started.set()
+        await release_telemetry.wait()
+
+    with patch(
+        "polymarket.paper_runtime.write_trade_log_async",
+        new=stalled_write_trade_log_async,
+    ):
+        refresh = asyncio.create_task(runtime.warm_cache())
+        await telemetry_started.wait()
+        cached_read = asyncio.create_task(runtime.warm_cache())
+        try:
+            assert await asyncio.wait_for(asyncio.shield(cached_read), timeout=0.1) == 1
+        finally:
+            release_telemetry.set()
+            await refresh
+            await cached_read
+
+    assert client.calls == 1
 
 
 @pytest.mark.asyncio
@@ -675,8 +901,16 @@ async def test_process_news_fail_closed_when_public_market_fetch_fails(caplog):
         estimate_probability_fn=estimate_probability,
     )
 
-    with caplog.at_level("WARNING", logger="polymarket.paper_runtime"):
-        routed_count = await runtime.process_news(_news())
+    news = _news()
+    with (
+        caplog.at_level("WARNING", logger="polymarket.paper_runtime"),
+        patch("polymarket.paper_runtime.trade_log") as trade_log_mock,
+        patch(
+            "polymarket.paper_runtime.write_trade_log_async",
+            new_callable=AsyncMock,
+        ) as write_log_mock,
+    ):
+        routed_count = await runtime.process_news(news)
 
     assert routed_count == 0
     assert "public_market_fetch_failed" in caplog.text
@@ -684,6 +918,14 @@ async def test_process_news_fail_closed_when_public_market_fetch_fails(caplog):
     assert stats.market_count == 0
     assert stats.news_processed == 1
     assert stats.last_error == "public_market_fetch_failed"
+    write_log_mock.assert_awaited_once_with(
+        trade_log_mock.log_match_no_candidate,
+        source=news.source,
+        headline=news.headline,
+        venue=Venue.POLYMARKET_US.value,
+        eligible_market_count=0,
+        reason="market_fetch_failed",
+    )
 
 
 def test_match_polymarket_markets_filters_non_tradeable_markets():

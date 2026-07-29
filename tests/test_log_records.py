@@ -683,13 +683,14 @@ def test_trade_logger_records_polymarket_funnel_event_schemas():
             headline="Example event gets more likely",
             venue="polymarket_us",
             eligible_market_count=2,
-            reason="no_match",
+            reason="market_fetch_failed",
         )
         logger.log_polymarket_market_cache(
             raw_fetched=3,
             cursor_present=True,
             eligible_30d=2,
-            candidate_14d=1,
+            candidate_within_admission_horizon=1,
+            admission_horizon_days=14.0,
             market_limit=10,
         )
 
@@ -704,7 +705,7 @@ def test_trade_logger_records_polymarket_funnel_event_schemas():
             "headline": "Example event gets more likely",
             "venue": "polymarket_us",
             "eligible_market_count": 2,
-            "reason": "no_match",
+            "reason": "market_fetch_failed",
         }
         assert cache == {
             "type": "POLYMARKET_MARKET_CACHE",
@@ -712,7 +713,8 @@ def test_trade_logger_records_polymarket_funnel_event_schemas():
             "raw_fetched": 3,
             "cursor_present": True,
             "eligible_30d": 2,
-            "candidate_14d": 1,
+            "candidate_within_admission_horizon": 1,
+            "admission_horizon_days": 14.0,
             "market_limit": 10,
         }
     finally:

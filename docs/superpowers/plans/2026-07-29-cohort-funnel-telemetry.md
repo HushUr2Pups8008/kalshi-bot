@@ -42,11 +42,11 @@
 
 **Files:** Modify `utils/logger.py`, `polymarket/paper_runtime.py:277-301,494-528`; test `tests/polymarket/test_paper_runtime.py` and `tests/test_log_records.py`.
 
-**Interfaces:** Add `log_match_no_candidate(...)` with reasons `no_eligible_markets` and `no_match`. Add `log_polymarket_market_cache(...)` with `raw_fetched`, `cursor_present`, `eligible_30d`, `candidate_14d`, and `market_limit`.
+**Interfaces:** Add `log_match_no_candidate(...)` with reasons `no_eligible_markets`, `no_match`, and `market_fetch_failed`. Add `log_polymarket_market_cache(...)` with `raw_fetched`, `cursor_present`, `eligible_30d`, `candidate_within_admission_horizon`, `admission_horizon_days`, and `market_limit`.
 
 - [ ] Write an empty-cache `process_news()` test expecting one `MATCH_NO_CANDIDATE` event with `reason == "no_eligible_markets"`.
 - [ ] Write a no-score-match test expecting `reason == "no_match"` and the eligible cache count.
-- [ ] Write a warm-cache test with raw=3, cursor present, eligible_30d=2, candidate_14d=1.
+- [ ] Write a warm-cache test with raw=3, cursor present, eligible_30d=2, candidate_within_admission_horizon=1, and admission_horizon_days=14.
 - [ ] Run `pytest tests/polymarket/test_paper_runtime.py -k 'no_candidate or cache_refresh' -q`; it must fail before the event methods exist.
 - [ ] At the two zero-route returns in `process_news`, append `MATCH_NO_CANDIDATE`; after the existing 30-day filter in `_get_markets`, count the existing admission-horizon predicate and append `POLYMARKET_MARKET_CACHE`.
 - [ ] Do not fetch another page, alter `_markets`, or alter any return value.

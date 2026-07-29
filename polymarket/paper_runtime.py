@@ -90,6 +90,33 @@ _DISCOVERY_TOPIC_TOKENS = frozenset({
 })
 
 
+async def _write_funnel_telemetry(
+    event_type: str,
+    writer: Callable[..., Any],
+    /,
+    **fields: Any,
+) -> None:
+    """Persist optional funnel telemetry without changing routing outcomes."""
+    try:
+        await write_trade_log_async(writer, **fields)
+    except Exception:
+        log.warning(
+            "[POLYMARKET_PAPER] funnel_telemetry_write_failed event=%s",
+            event_type,
+            exc_info=True,
+        )
+
+
+@dataclass(frozen=True)
+class _MarketCacheTelemetry:
+    raw_fetched: int
+    cursor_present: bool
+    eligible_30d: int
+    candidate_within_admission_horizon: int
+    admission_horizon_days: float
+    market_limit: int
+
+
 class _PublicMarketClient(Protocol):
     def get_markets(self, *, limit: int) -> tuple[list[PolymarketMarket], str | None]:
         ...
@@ -276,15 +303,19 @@ class PolymarketPaperRuntime:
 
     async def process_news(self, news: NewsItem) -> int:
         self._news_processed += 1
-        markets = await self._get_markets()
+        markets, market_fetch_failed = await self._get_markets()
         if not markets:
             self._last_match_count = 0
-            trade_log.log_match_no_candidate(
+            await _write_funnel_telemetry(
+                "MATCH_NO_CANDIDATE",
+                trade_log.log_match_no_candidate,
                 source=news.source,
                 headline=news.headline,
                 venue=Venue.POLYMARKET_US.value,
                 eligible_market_count=0,
-                reason="no_eligible_markets",
+                reason=(
+                    "market_fetch_failed" if market_fetch_failed else "no_eligible_markets"
+                ),
             )
             self._log_heartbeat()
             return 0
@@ -304,7 +335,9 @@ class PolymarketPaperRuntime:
                 len(markets),
                 news.headline[:80],
             )
-            trade_log.log_match_no_candidate(
+            await _write_funnel_telemetry(
+                "MATCH_NO_CANDIDATE",
+                trade_log.log_match_no_candidate,
                 source=news.source,
                 headline=news.headline,
                 venue=Venue.POLYMARKET_US.value,
@@ -483,7 +516,7 @@ class PolymarketPaperRuntime:
         ]
 
     async def warm_cache(self) -> int:
-        markets = await self._get_markets()
+        markets, _ = await self._get_markets()
         return len(markets)
 
     def _log_heartbeat(self) -> None:
@@ -505,11 +538,11 @@ class PolymarketPaperRuntime:
             stats.last_error or "none",
         )
 
-    async def _get_markets(self) -> list[PolymarketMarket]:
+    async def _get_markets(self) -> tuple[list[PolymarketMarket], bool]:
         async with self._fetch_lock:
             age = time.monotonic() - self._last_fetch
             if self._markets and age < self._market_cache_ttl_seconds:
-                return list(self._markets)
+                return list(self._markets), False
             try:
                 markets, _cursor = await asyncio.to_thread(
                     self._client.get_markets,
@@ -521,7 +554,7 @@ class PolymarketPaperRuntime:
                     "[POLYMARKET_PAPER] public_market_fetch_failed error=%s",
                     exc,
                 )
-                return []
+                return [], True
             horizon_now = self._horizon_now()
             self._markets = [
                 market
@@ -532,21 +565,36 @@ class PolymarketPaperRuntime:
                     max_days_to_close=MAX_MARKET_DAYS_TO_EXPIRY,
                 ).eligible
             ]
-            trade_log.log_polymarket_market_cache(
+            self._last_fetch = time.monotonic()
+            self._last_error = None
+            admission_horizon_days = cfg.paper_admission_max_days_to_close
+            cache_telemetry = _MarketCacheTelemetry(
                 raw_fetched=len(markets),
                 cursor_present=bool(_cursor),
                 eligible_30d=len(self._markets),
-                candidate_14d=len(self.cached_candidate_markets()),
+                candidate_within_admission_horizon=len(self.cached_candidate_markets()),
+                admission_horizon_days=admission_horizon_days,
                 market_limit=self._market_limit,
             )
-            self._last_fetch = time.monotonic()
-            self._last_error = None
-            log.info(
-                "[POLYMARKET_PAPER] market_cache_refreshed markets=%d limit=%d",
-                len(self._markets),
-                self._market_limit,
-            )
-            return list(self._markets)
+            refreshed_markets = list(self._markets)
+        await _write_funnel_telemetry(
+            "POLYMARKET_MARKET_CACHE",
+            trade_log.log_polymarket_market_cache,
+            raw_fetched=cache_telemetry.raw_fetched,
+            cursor_present=cache_telemetry.cursor_present,
+            eligible_30d=cache_telemetry.eligible_30d,
+            candidate_within_admission_horizon=(
+                cache_telemetry.candidate_within_admission_horizon
+            ),
+            admission_horizon_days=cache_telemetry.admission_horizon_days,
+            market_limit=cache_telemetry.market_limit,
+        )
+        log.info(
+            "[POLYMARKET_PAPER] market_cache_refreshed markets=%d limit=%d",
+            len(refreshed_markets),
+            self._market_limit,
+        )
+        return refreshed_markets, False
 
     def _horizon_now(self) -> datetime:
         now = self._now_provider()

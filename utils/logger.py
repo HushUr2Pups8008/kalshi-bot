@@ -1323,7 +1323,7 @@ class TradeLogger:
         headline: str,
         venue: str,
         eligible_market_count: int,
-        reason: Literal["no_eligible_markets", "no_match"],
+        reason: Literal["no_eligible_markets", "no_match", "market_fetch_failed"],
     ) -> None:
         self._write(
             {
@@ -1342,7 +1342,8 @@ class TradeLogger:
         raw_fetched: int,
         cursor_present: bool,
         eligible_30d: int,
-        candidate_14d: int,
+        candidate_within_admission_horizon: int,
+        admission_horizon_days: float,
         market_limit: int,
     ) -> None:
         self._write(
@@ -1351,7 +1352,8 @@ class TradeLogger:
                 "raw_fetched": raw_fetched,
                 "cursor_present": cursor_present,
                 "eligible_30d": eligible_30d,
-                "candidate_14d": candidate_14d,
+                "candidate_within_admission_horizon": candidate_within_admission_horizon,
+                "admission_horizon_days": admission_horizon_days,
                 "market_limit": market_limit,
             }
         )
