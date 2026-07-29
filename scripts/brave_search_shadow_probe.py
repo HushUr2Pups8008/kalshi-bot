@@ -261,6 +261,15 @@ def _write_output(reservation: ReservedOutput, records: Sequence[ProbeRecord]) -
         raise ProbeInputError("output destination cannot be written") from exc
 
 
+def _validate_output_parent_chain(resolved_parent: Path) -> None:
+    for ancestor in (resolved_parent, *resolved_parent.parents):
+        ancestor_stat = ancestor.stat()
+        if not stat.S_ISDIR(ancestor_stat.st_mode):
+            raise RuntimeError("output parent chain contains a nondirectory")
+        if ancestor_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            raise RuntimeError("output parent chain is writable by another user")
+
+
 def _reserve_output(output_path: Path) -> ReservedOutput:
     directory_fd: int | None = None
     descriptor: int | None = None
@@ -282,6 +291,7 @@ def _reserve_output(output_path: Path) -> ReservedOutput:
         if not destination_name:
             raise ValueError("output destination has no filename")
         destination = resolved_parent / destination_name
+        _validate_output_parent_chain(resolved_parent)
 
         directory_fd = os.open(
             resolved_parent,
@@ -352,6 +362,24 @@ def _reserve_output(output_path: Path) -> ReservedOutput:
         stage_name=stage_name,
         descriptor=descriptor,
     )
+
+
+def _verify_canonical_output_parent(reservation: ReservedOutput) -> None:
+    directory_fd = reservation.directory_fd
+    if directory_fd is None:
+        raise ProbeInputError("output destination cannot be reported")
+    try:
+        reserved_parent_stat = os.fstat(directory_fd)
+        current_parent = reservation.destination.parent.resolve(strict=True)
+        current_parent_stat = current_parent.stat()
+        if (
+            not stat.S_ISDIR(current_parent_stat.st_mode)
+            or current_parent_stat.st_dev != reserved_parent_stat.st_dev
+            or current_parent_stat.st_ino != reserved_parent_stat.st_ino
+        ):
+            raise RuntimeError("canonical output parent no longer identifies the reservation")
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        raise ProbeInputError("output destination cannot be reported") from exc
 
 
 def _publish_output(reservation: ReservedOutput) -> None:
@@ -536,6 +564,7 @@ async def run_probe(
 
         _write_output(reserved_output, records)
         _publish_output(reserved_output)
+        _verify_canonical_output_parent(reserved_output)
         successes = sum(record.outcome == "success" for record in records)
         return ProbeRunResult(
             exit_code=0,

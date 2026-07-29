@@ -252,6 +252,37 @@ async def test_untrusted_output_parent_prevents_transport_calls(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", (0o720, 0o702), ids=("group_writable", "world_writable"))
+async def test_untrusted_output_ancestor_prevents_transport_calls(
+    tmp_path: Path, mode: int
+) -> None:
+    output_root = tmp_path / "output-root"
+    output_parent = output_root / "trusted-output"
+    output_root.mkdir(mode=0o700)
+    output_parent.mkdir(mode=0o700)
+    output_root.chmod(mode)
+    calls: list[object] = []
+
+    async def fetcher(*args: object, **kwargs: object) -> bytes:
+        calls.append((args, kwargs))
+        return b'{"web":{"results":[]}}'
+
+    try:
+        with pytest.raises(ProbeInputError, match="output destination"):
+            await run_probe(
+                _input_file(tmp_path),
+                output_parent / "probe.jsonl",
+                enabled=True,
+                api_key="brave-test-secret",
+                fetcher=fetcher,
+            )
+    finally:
+        output_root.chmod(0o700)
+
+    assert calls == []
+
+
+@pytest.mark.asyncio
 async def test_unsupported_dir_fd_replace_prevents_transport_calls(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -355,7 +386,9 @@ async def test_resolved_output_parent_resists_parent_symlink_swap(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_fd_anchored_output_survives_canonical_parent_replacement(tmp_path: Path) -> None:
+async def test_fd_anchored_output_refuses_stale_canonical_parent_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     trusted_parent = tmp_path / "trusted-output"
     displaced_parent = tmp_path / "reserved-output"
     attacker_parent = tmp_path / "attacker-output"
@@ -363,23 +396,40 @@ async def test_fd_anchored_output_survives_canonical_parent_replacement(tmp_path
     attacker_parent.mkdir(mode=0o700)
     alias_parent = tmp_path / "output-alias"
     alias_parent.symlink_to(trusted_parent, target_is_directory=True)
+    calls: list[object] = []
+    reservations: list[object] = []
+    original_reserve_output = brave_search_shadow_probe._reserve_output
+
+    def reserve_output(path: Path) -> object:
+        reservation = original_reserve_output(path)
+        reservations.append(reservation)
+        return reservation
+
+    monkeypatch.setattr(brave_search_shadow_probe, "_reserve_output", reserve_output)
 
     async def fetcher(*args: object, **kwargs: object) -> bytes:
+        calls.append((args, kwargs))
+        assert list(trusted_parent.glob(".brave-search-shadow-*.tmp"))
         trusted_parent.rename(displaced_parent)
         trusted_parent.symlink_to(attacker_parent, target_is_directory=True)
         return b'{"web":{"results":[]}}'
 
-    result = await run_probe(
-        _input_file(tmp_path),
-        alias_parent / "probe.jsonl",
-        enabled=True,
-        api_key="brave-test-secret",
-        fetcher=fetcher,
-    )
+    with pytest.raises(ProbeInputError, match="output destination"):
+        await run_probe(
+            _input_file(tmp_path),
+            alias_parent / "probe.jsonl",
+            enabled=True,
+            api_key="brave-test-secret",
+            fetcher=fetcher,
+        )
 
-    assert result.exit_code == 0
+    assert len(calls) == 1
+    assert len(reservations) == 1
+    assert reservations[0].descriptor is None
+    assert reservations[0].directory_fd is None
     assert (displaced_parent / "probe.jsonl").exists()
     assert not (attacker_parent / "probe.jsonl").exists()
+    assert list(displaced_parent.glob(".brave-search-shadow-*.tmp")) == []
 
 
 def test_main_reports_canonical_output_after_parent_alias_swap(
@@ -434,6 +484,60 @@ def test_main_reports_canonical_output_after_parent_alias_swap(
     assert str(alias_parent / "probe.jsonl") not in summary
     assert canonical_output.exists()
     assert not (attacker_parent / "probe.jsonl").exists()
+
+
+def test_main_refuses_stale_canonical_parent_output_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    trusted_parent = tmp_path / "trusted-output"
+    displaced_parent = tmp_path / "reserved-output"
+    attacker_parent = tmp_path / "attacker-output"
+    trusted_parent.mkdir(mode=0o700)
+    attacker_parent.mkdir(mode=0o700)
+    alias_parent = tmp_path / "output-alias"
+    alias_parent.symlink_to(trusted_parent, target_is_directory=True)
+    original_run_probe = brave_search_shadow_probe.run_probe
+
+    async def run_probe_with_parent_replacement(
+        input_path: Path,
+        output_path: Path,
+        *,
+        enabled: bool,
+        api_key: str,
+    ) -> brave_search_shadow_probe.ProbeRunResult:
+        async def fetcher(*args: object, **kwargs: object) -> bytes:
+            trusted_parent.rename(displaced_parent)
+            trusted_parent.symlink_to(attacker_parent, target_is_directory=True)
+            return b'{"web":{"results":[]}}'
+
+        return await original_run_probe(
+            input_path,
+            output_path,
+            enabled=enabled,
+            api_key=api_key,
+            fetcher=fetcher,
+        )
+
+    monkeypatch.setenv("ENABLE_BRAVE_SEARCH_SHADOW", "true")
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "brave-test-secret")
+    monkeypatch.setattr(brave_search_shadow_probe, "run_probe", run_probe_with_parent_replacement)
+
+    exit_code = main(
+        [
+            "--execute",
+            "--input",
+            str(_input_file(tmp_path)),
+            "--output",
+            str(alias_parent / "probe.jsonl"),
+        ]
+    )
+
+    summary = capsys.readouterr().out
+    assert exit_code == 2
+    assert "output_path=" not in summary
+    assert (displaced_parent / "probe.jsonl").exists()
+    assert not (attacker_parent / "probe.jsonl").exists()
+    assert list(displaced_parent.glob(".brave-search-shadow-*.tmp")) == []
 
 
 @pytest.mark.asyncio
