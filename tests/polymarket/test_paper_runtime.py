@@ -13,6 +13,7 @@ from config import PAPER_MAX_CANDIDATES, cfg
 from feeds import NewsItem
 import polymarket.paper_runtime as paper_runtime
 from polymarket.models import PolymarketMarket
+from polymarket.public_client import PolymarketMarketPage
 from polymarket.paper_runtime import (
     PolymarketPaperRuntime,
     _market_match_text,
@@ -101,10 +102,82 @@ class _FakeClient:
         self.markets = markets
         self.cursor = cursor
         self.calls = 0
+        self.requests = []
+
+    def get_market_page(
+        self,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        offset: int | None = None,
+    ) -> PolymarketMarketPage:
+        self.calls += 1
+        self.requests.append({"limit": limit, "cursor": cursor, "offset": offset})
+        start = offset or 0
+        markets = self.markets[start : start + limit]
+        return PolymarketMarketPage(
+            markets=markets,
+            cursor=self.cursor,
+            raw_count=len(markets),
+        )
+
+
+class _CursorPagingClient:
+    def __init__(self, first_page, second_page):
+        self.first_page = first_page
+        self.second_page = second_page
+        self.requests = []
+
+    def get_market_page(
+        self,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        offset: int | None = None,
+    ) -> PolymarketMarketPage:
+        self.requests.append({"limit": limit, "cursor": cursor, "offset": offset})
+        if cursor is None:
+            return PolymarketMarketPage(
+                markets=self.first_page,
+                cursor="next-page",
+                raw_count=len(self.first_page),
+            )
+        assert cursor == "next-page"
+        return PolymarketMarketPage(
+            markets=self.second_page,
+            cursor=None,
+            raw_count=len(self.second_page),
+        )
+
+
+class _NormalizationGapPagingClient:
+    def __init__(self, first, second):
+        self.first = first
+        self.second = second
+        self.requests = []
+
+    def get_market_page(
+        self,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        offset: int | None = None,
+    ):
+        self.requests.append({"limit": limit, "cursor": cursor, "offset": offset})
+        if offset is None:
+            return SimpleNamespace(markets=[self.first], cursor=None, raw_count=2)
+        assert offset == 2
+        return SimpleNamespace(markets=[self.second], cursor=None, raw_count=1)
+
+
+class _LegacyClient:
+    def __init__(self, markets):
+        self.markets = markets
+        self.calls = 0
 
     def get_markets(self, *, limit: int):
         self.calls += 1
-        return self.markets[:limit], self.cursor
+        return self.markets[:limit], None
 
 
 class _FakeSourceStats:
@@ -144,6 +217,224 @@ async def test_warm_cache_populates_cached_markets_for_shared_getters():
 
     assert warmed == 1
     assert runtime.cached_markets() == [market]
+
+
+@pytest.mark.asyncio
+async def test_warm_cache_pages_offsets_deduplicates_and_reports_coverage(monkeypatch):
+    _configure_legacy_paper_horizon(monkeypatch)
+    first = _market(market_id="first")
+    second = _market(market_id="second")
+    third = _market(market_id="third")
+    fourth = _market(market_id="fourth")
+    client = _FakeClient([first, second, second, third, fourth])
+    runtime = PolymarketPaperRuntime(
+        client=client,
+        route_analysis=AsyncMock(),
+        keyword_stats=None,
+        market_limit=2,
+        market_cache_ttl_seconds=300,
+    )
+
+    with (
+        patch("polymarket.paper_runtime.trade_log") as trade_log_mock,
+        patch(
+            "polymarket.paper_runtime.write_trade_log_async",
+            new_callable=AsyncMock,
+        ) as write_log_mock,
+    ):
+        warmed = await runtime.warm_cache()
+
+    assert warmed == 4
+    assert runtime.cached_markets() == [first, second, third, fourth]
+    assert client.requests == [
+        {"limit": 2, "cursor": None, "offset": None},
+        {"limit": 2, "cursor": None, "offset": 2},
+        {"limit": 2, "cursor": None, "offset": 4},
+    ]
+    write_log_mock.assert_awaited_once_with(
+        trade_log_mock.log_polymarket_market_cache,
+        raw_fetched=5,
+        raw_unique=4,
+        pages_fetched=3,
+        cursor_present=False,
+        pagination_exhausted=True,
+        pagination_stop_reason="short_page",
+        eligible_30d=4,
+        candidate_within_admission_horizon=4,
+        admission_horizon_days=30.0,
+        market_limit=2,
+    )
+
+
+@pytest.mark.asyncio
+async def test_warm_cache_follows_cursor_before_offset(monkeypatch):
+    _configure_legacy_paper_horizon(monkeypatch)
+    first = _market(market_id="first")
+    second = _market(market_id="second")
+    third = _market(market_id="third")
+    client = _CursorPagingClient([first, second], [third])
+    runtime = PolymarketPaperRuntime(
+        client=client,
+        route_analysis=AsyncMock(),
+        keyword_stats=None,
+        market_limit=2,
+        market_cache_ttl_seconds=300,
+    )
+
+    with (
+        patch("polymarket.paper_runtime.trade_log") as trade_log_mock,
+        patch(
+            "polymarket.paper_runtime.write_trade_log_async",
+            new_callable=AsyncMock,
+        ) as write_log_mock,
+    ):
+        warmed = await runtime.warm_cache()
+
+    assert warmed == 3
+    assert client.requests == [
+        {"limit": 2, "cursor": None, "offset": None},
+        {"limit": 2, "cursor": "next-page", "offset": None},
+    ]
+    write_log_mock.assert_awaited_once_with(
+        trade_log_mock.log_polymarket_market_cache,
+        raw_fetched=3,
+        raw_unique=3,
+        pages_fetched=2,
+        cursor_present=True,
+        pagination_exhausted=True,
+        pagination_stop_reason="cursor_end",
+        eligible_30d=3,
+        candidate_within_admission_horizon=3,
+        admission_horizon_days=30.0,
+        market_limit=2,
+    )
+
+
+@pytest.mark.asyncio
+async def test_warm_cache_uses_raw_page_count_after_normalization_drops(monkeypatch):
+    _configure_legacy_paper_horizon(monkeypatch)
+    first = _market(market_id="first")
+    second = _market(market_id="second")
+    client = _NormalizationGapPagingClient(first, second)
+    runtime = PolymarketPaperRuntime(
+        client=client,
+        route_analysis=AsyncMock(),
+        keyword_stats=None,
+        market_limit=2,
+        market_cache_ttl_seconds=300,
+    )
+
+    with (
+        patch("polymarket.paper_runtime.trade_log") as trade_log_mock,
+        patch(
+            "polymarket.paper_runtime.write_trade_log_async",
+            new_callable=AsyncMock,
+        ) as write_log_mock,
+    ):
+        warmed = await runtime.warm_cache()
+
+    assert warmed == 2
+    assert client.requests == [
+        {"limit": 2, "cursor": None, "offset": None},
+        {"limit": 2, "cursor": None, "offset": 2},
+    ]
+    write_log_mock.assert_awaited_once_with(
+        trade_log_mock.log_polymarket_market_cache,
+        raw_fetched=3,
+        raw_unique=2,
+        pages_fetched=2,
+        cursor_present=False,
+        pagination_exhausted=True,
+        pagination_stop_reason="short_page",
+        eligible_30d=2,
+        candidate_within_admission_horizon=2,
+        admission_horizon_days=30.0,
+        market_limit=2,
+    )
+
+
+@pytest.mark.asyncio
+async def test_warm_cache_keeps_legacy_client_single_page_contract(monkeypatch):
+    _configure_legacy_paper_horizon(monkeypatch)
+    first = _market(market_id="first")
+    second = _market(market_id="second")
+    third = _market(market_id="third")
+    client = _LegacyClient([first, second, third])
+    runtime = PolymarketPaperRuntime(
+        client=client,
+        route_analysis=AsyncMock(),
+        keyword_stats=None,
+        market_limit=2,
+        market_cache_ttl_seconds=300,
+    )
+
+    with (
+        patch("polymarket.paper_runtime.trade_log") as trade_log_mock,
+        patch(
+            "polymarket.paper_runtime.write_trade_log_async",
+            new_callable=AsyncMock,
+        ) as write_log_mock,
+    ):
+        warmed = await runtime.warm_cache()
+
+    assert warmed == 2
+    assert client.calls == 1
+    write_log_mock.assert_awaited_once_with(
+        trade_log_mock.log_polymarket_market_cache,
+        raw_fetched=2,
+        raw_unique=2,
+        pages_fetched=1,
+        cursor_present=False,
+        pagination_exhausted=False,
+        pagination_stop_reason="legacy_client_no_page_metadata",
+        eligible_30d=2,
+        candidate_within_admission_horizon=2,
+        admission_horizon_days=30.0,
+        market_limit=2,
+    )
+
+
+@pytest.mark.asyncio
+async def test_warm_cache_stops_at_bounded_page_cap(monkeypatch):
+    _configure_legacy_paper_horizon(monkeypatch)
+    monkeypatch.setattr(paper_runtime, "_MAX_MARKET_FETCH_PAGES", 2)
+    markets = [_market(market_id=f"market-{index}") for index in range(5)]
+    client = _FakeClient(markets)
+    runtime = PolymarketPaperRuntime(
+        client=client,
+        route_analysis=AsyncMock(),
+        keyword_stats=None,
+        market_limit=2,
+        market_cache_ttl_seconds=300,
+    )
+
+    with (
+        patch("polymarket.paper_runtime.trade_log") as trade_log_mock,
+        patch(
+            "polymarket.paper_runtime.write_trade_log_async",
+            new_callable=AsyncMock,
+        ) as write_log_mock,
+    ):
+        warmed = await runtime.warm_cache()
+
+    assert warmed == 4
+    assert client.requests == [
+        {"limit": 2, "cursor": None, "offset": None},
+        {"limit": 2, "cursor": None, "offset": 2},
+    ]
+    write_log_mock.assert_awaited_once_with(
+        trade_log_mock.log_polymarket_market_cache,
+        raw_fetched=4,
+        raw_unique=4,
+        pages_fetched=2,
+        cursor_present=False,
+        pagination_exhausted=False,
+        pagination_stop_reason="page_cap",
+        eligible_30d=4,
+        candidate_within_admission_horizon=4,
+        admission_horizon_days=30.0,
+        market_limit=2,
+    )
 
 
 @pytest.mark.asyncio
@@ -191,7 +482,7 @@ async def test_nonlegacy_cache_refresh_reports_14_day_admission_horizon(
         market_id="beyond-30d",
         close_time=(datetime.now(timezone.utc) + timedelta(days=31)).isoformat(),
     )
-    client = _FakeClient([candidate, eligible_only, beyond_30d], cursor="next-page")
+    client = _FakeClient([candidate, eligible_only, beyond_30d])
     runtime = PolymarketPaperRuntime(
         client=client,
         route_analysis=AsyncMock(),
@@ -215,7 +506,11 @@ async def test_nonlegacy_cache_refresh_reports_14_day_admission_horizon(
     write_log_mock.assert_awaited_once_with(
         trade_log_mock.log_polymarket_market_cache,
         raw_fetched=3,
-        cursor_present=True,
+        raw_unique=3,
+        pages_fetched=1,
+        cursor_present=False,
+        pagination_exhausted=True,
+        pagination_stop_reason="short_page",
         eligible_30d=2,
         candidate_within_admission_horizon=1,
         admission_horizon_days=14.0,
@@ -239,7 +534,7 @@ async def test_legacy_cache_refresh_reports_30_day_admission_horizon(monkeypatch
         close_time=(datetime.now(timezone.utc) + timedelta(days=31)).isoformat(),
     )
     runtime = PolymarketPaperRuntime(
-        client=_FakeClient([candidate, legacy_candidate, beyond_30d], cursor="next-page"),
+        client=_FakeClient([candidate, legacy_candidate, beyond_30d]),
         route_analysis=AsyncMock(),
         keyword_stats=None,
         market_limit=10,
@@ -259,7 +554,11 @@ async def test_legacy_cache_refresh_reports_30_day_admission_horizon(monkeypatch
     write_log_mock.assert_awaited_once_with(
         trade_log_mock.log_polymarket_market_cache,
         raw_fetched=3,
-        cursor_present=True,
+        raw_unique=3,
+        pages_fetched=1,
+        cursor_present=False,
+        pagination_exhausted=True,
+        pagination_stop_reason="short_page",
         eligible_30d=2,
         candidate_within_admission_horizon=2,
         admission_horizon_days=30.0,
@@ -638,7 +937,11 @@ async def test_process_news_logs_no_candidate_for_empty_eligible_cache(monkeypat
             call(
                 trade_log_mock.log_polymarket_market_cache,
                 raw_fetched=0,
+                raw_unique=0,
+                pages_fetched=1,
                 cursor_present=False,
+                pagination_exhausted=True,
+                pagination_stop_reason="short_page",
                 eligible_30d=0,
                 candidate_within_admission_horizon=0,
                 admission_horizon_days=30.0,
@@ -691,7 +994,11 @@ async def test_process_news_logs_eligible_cache_empty_after_universe_filter(monk
             call(
                 trade_log_mock.log_polymarket_market_cache,
                 raw_fetched=1,
+                raw_unique=1,
+                pages_fetched=1,
                 cursor_present=False,
+                pagination_exhausted=True,
+                pagination_stop_reason="short_page",
                 eligible_30d=0,
                 candidate_within_admission_horizon=0,
                 admission_horizon_days=30.0,
@@ -922,7 +1229,11 @@ async def test_process_news_logs_input_without_match_tokens_stage(monkeypatch):
             call(
                 trade_log_mock.log_polymarket_market_cache,
                 raw_fetched=1,
+                raw_unique=1,
+                pages_fetched=1,
                 cursor_present=False,
+                pagination_exhausted=True,
+                pagination_stop_reason="short_page",
                 eligible_30d=1,
                 candidate_within_admission_horizon=1,
                 admission_horizon_days=30.0,
@@ -978,7 +1289,11 @@ async def test_process_news_prioritizes_input_stage_before_admission_horizon(mon
             call(
                 trade_log_mock.log_polymarket_market_cache,
                 raw_fetched=1,
+                raw_unique=1,
+                pages_fetched=1,
                 cursor_present=False,
+                pagination_exhausted=True,
+                pagination_stop_reason="short_page",
                 eligible_30d=1,
                 candidate_within_admission_horizon=0,
                 admission_horizon_days=14.0,
@@ -1158,7 +1473,11 @@ async def test_process_news_logs_pre_admission_filter_empty_stage(monkeypatch):
             call(
                 trade_log_mock.log_polymarket_market_cache,
                 raw_fetched=1,
+                raw_unique=1,
+                pages_fetched=1,
                 cursor_present=False,
+                pagination_exhausted=True,
+                pagination_stop_reason="short_page",
                 eligible_30d=1,
                 candidate_within_admission_horizon=0,
                 admission_horizon_days=30.0,
@@ -1214,7 +1533,11 @@ async def test_process_news_logs_admission_horizon_pruned_stage(monkeypatch):
             call(
                 trade_log_mock.log_polymarket_market_cache,
                 raw_fetched=1,
+                raw_unique=1,
+                pages_fetched=1,
                 cursor_present=False,
+                pagination_exhausted=True,
+                pagination_stop_reason="short_page",
                 eligible_30d=1,
                 candidate_within_admission_horizon=0,
                 admission_horizon_days=14.0,

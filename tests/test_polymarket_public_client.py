@@ -155,6 +155,25 @@ def test_get_markets_passes_cursor_and_returns_cursor():
     }
 
 
+def test_get_markets_passes_offset():
+    client = PolymarketPublicClient(base_url="https://gateway.polymarket.us/")
+    response = MagicMock()
+    response.text = '{"markets":[]}'
+    response.json.return_value = {"markets": []}
+    response.raise_for_status.return_value = None
+    client._session.request = MagicMock(return_value=response)
+
+    markets, cursor = client.get_markets(limit=500, offset=500)
+
+    assert markets == []
+    assert cursor is None
+    assert client._session.request.call_args.kwargs["params"] == {
+        "limit": 500,
+        "closed": "false",
+        "offset": 500,
+    }
+
+
 def test_get_market_normalizes_single_market_payload():
     client = PolymarketPublicClient(base_url="https://gateway.polymarket.us")
     response = MagicMock()
@@ -491,3 +510,8 @@ def test_get_markets_skips_unsupported_payloads():
 
     assert [market.market_id for market in markets] == ["m1"]
     assert cursor is None
+
+    page = client.get_market_page()
+
+    assert [market.market_id for market in page.markets] == ["m1"]
+    assert page.raw_count == 2

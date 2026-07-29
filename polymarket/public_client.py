@@ -7,6 +7,7 @@ import time
 import urllib.error
 import urllib.parse
 from collections.abc import Awaitable
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Protocol
@@ -32,6 +33,13 @@ log = get_logger("polymarket_public")
 _POLYMARKET_AUTHORITATIVE_HOST = "gateway.polymarket.us"
 _AUTHORITATIVE_POLYMARKET_MAX_BYTES = 256 * 1024
 _AUTHORITATIVE_POLYMARKET_SLUG = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
+
+
+@dataclass(frozen=True)
+class PolymarketMarketPage:
+    markets: list[PolymarketMarket]
+    cursor: str | None
+    raw_count: int
 
 
 class BoundedHttpsFetcher(Protocol):
@@ -255,20 +263,32 @@ class PolymarketPublicClient:
         return response.json() if response.text else {}
 
     def get_markets(self, **kwargs: Any) -> tuple[list[PolymarketMarket], str | None]:
+        page = self.get_market_page(**kwargs)
+        return page.markets, page.cursor
+
+    def get_market_page(self, **kwargs: Any) -> PolymarketMarketPage:
         params = {"limit": kwargs.get("limit", 100), "closed": "false"}
         cursor = kwargs.get("cursor")
         if cursor:
             params["cursor"] = cursor
+        offset = kwargs.get("offset")
+        if offset is not None:
+            params["offset"] = offset
 
         data = self._request("GET", "/v1/markets", params=params)
         raw_markets = data.get("markets", []) if isinstance(data, dict) else data
+        raw_count = len(raw_markets)
         markets = []
         for raw in raw_markets:
             try:
                 markets.append(normalize_polymarket_market(raw))
             except ValueError as exc:
                 log.debug("Skipping unsupported Polymarket market: %s", exc)
-        return markets, data.get("cursor") if isinstance(data, dict) else None
+        return PolymarketMarketPage(
+            markets=markets,
+            cursor=data.get("cursor") if isinstance(data, dict) else None,
+            raw_count=raw_count,
+        )
 
     def get_market(self, market_id: str) -> PolymarketMarket:
         # PROFIT-DRAWDOWN-001b: delegate to get_market_payload so a slug-style
