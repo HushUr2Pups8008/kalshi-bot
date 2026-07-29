@@ -37,6 +37,7 @@ from kalshi.public_market_data import is_safe_kalshi_identifier
 from tasks.stats.source_credibility import SourceCredibility
 from config import cfg, DATA_DIR
 from trading.fees import FeeUnscorableError, fee_schedule_at
+from trading.execution_terms import FinalExecutionTerms, final_execution_terms
 from trading.paper_cohorts import (
     assert_initialized_paper_cohort_schema,
     immutable_paper_database_block_reason,
@@ -1151,6 +1152,7 @@ class PaperTrader:
         analysis: SignalAnalysis,
         *,
         entry_request_id: str | None = None,
+        execution_terms: FinalExecutionTerms | None = None,
     ) -> str:
         if config_module.cfg.enable_fee_net_paper_accounting:
             self._require_fee_net_entry_contract(analysis, entry_request_id)
@@ -1158,7 +1160,10 @@ class PaperTrader:
                 "fee-net paper entry execution is not installed"
             )
         with self._transaction_lock:
-            return self._record_trade_locked(analysis)
+            return self._record_trade_locked(
+                analysis,
+                execution_terms=execution_terms,
+            )
 
     def _require_fee_net_entry_contract(
         self,
@@ -1187,9 +1192,12 @@ class PaperTrader:
             schedule_id,
         )
 
-    def _record_trade_locked(self, analysis: SignalAnalysis) -> str:
-        from analysis.kelly import contracts_from_dollars
-
+    def _record_trade_locked(
+        self,
+        analysis: SignalAnalysis,
+        *,
+        execution_terms: FinalExecutionTerms | None = None,
+    ) -> str:
         # P-6 / LD-2 / CR-C: fail-closed when price_available=False. Past the
         # executor gate so an unavailable market here means an upstream
         # contract violation; persist nothing and emit a structured warning
@@ -1294,15 +1302,33 @@ class PaperTrader:
             return ""
 
         trade_id    = str(uuid.uuid4())[:12]
-        price_cents = max(1, min(99, int(analysis.executed_price_cents)))
+        try:
+            derived_terms = final_execution_terms(
+                capped_dollars=capped_dollars,
+                executed_price_cents=analysis.executed_price_cents,
+            )
+        except ValueError:
+            log.error(
+                "[PAPER] Skipping record_trade for %s: invalid final execution terms",
+                getattr(analysis.market, "ticker", "<unknown>"),
+            )
+            return ""
+        if execution_terms is not None and execution_terms != derived_terms:
+            log.error(
+                "[PAPER] Skipping record_trade for %s: final execution terms do not match analysis",
+                getattr(analysis.market, "ticker", "<unknown>"),
+            )
+            return ""
+        terms = execution_terms or derived_terms
+        price_cents = terms.price_cents
         # kelly_contracts: what Kelly sizes for this trade. Retained as a stored
         # column for analytics (and the §7e flat-vs-Kelly history pre-cutover).
-        kelly_contracts = contracts_from_dollars(capped_dollars, float(price_cents))
+        kelly_contracts = derived_terms.contracts
         # PROFIT-SIZING-001b: paper now MIRRORS live -- size by Kelly (not flat-5)
         # so the paper cohort predicts live behaviour. With the min-bet floor
         # removed (PROFIT-SIZING-001) trades size down to the natural 1-contract
         # floor in contracts_from_dollars. Both modes now use kelly_contracts.
-        contracts    = kelly_contracts
+        contracts = terms.contracts
         cost_dollars = contracts * price_cents / 100.0
         if cost_dollars > capped_dollars:
             log.warning(
