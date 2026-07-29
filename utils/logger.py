@@ -1420,6 +1420,12 @@ class TradeLogger:
         pre_admission_matchable_market_count: int | None = None,
         within_admission_horizon_market_count: int | None = None,
         admission_horizon_days: float | None = None,
+        post_admission_no_token_overlap_count: int | None = None,
+        post_admission_below_min_post_weight_score_count: int | None = None,
+        post_admission_weight_demoted_below_min_score_count: int | None = None,
+        post_admission_min_match_score: float | None = None,
+        post_admission_best_rejected_pre_weight_score: float | None = None,
+        post_admission_best_rejected_post_weight_score: float | None = None,
     ) -> None:
         record: dict[str, Any] = {
             "type": "MATCH_NO_CANDIDATE",
@@ -1441,6 +1447,28 @@ class TradeLogger:
             )
         if admission_horizon_days is not None:
             record["admission_horizon_days"] = admission_horizon_days
+        if post_admission_no_token_overlap_count is not None:
+            record["post_admission_no_token_overlap_count"] = (
+                post_admission_no_token_overlap_count
+            )
+        if post_admission_below_min_post_weight_score_count is not None:
+            record["post_admission_below_min_post_weight_score_count"] = (
+                post_admission_below_min_post_weight_score_count
+            )
+        if post_admission_weight_demoted_below_min_score_count is not None:
+            record["post_admission_weight_demoted_below_min_score_count"] = (
+                post_admission_weight_demoted_below_min_score_count
+            )
+        if post_admission_min_match_score is not None:
+            record["post_admission_min_match_score"] = post_admission_min_match_score
+        if post_admission_best_rejected_pre_weight_score is not None:
+            record["post_admission_best_rejected_pre_weight_score"] = (
+                post_admission_best_rejected_pre_weight_score
+            )
+        if post_admission_best_rejected_post_weight_score is not None:
+            record["post_admission_best_rejected_post_weight_score"] = (
+                post_admission_best_rejected_post_weight_score
+            )
         self._write(record)
 
     def log_polymarket_market_cache(

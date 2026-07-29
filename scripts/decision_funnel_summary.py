@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from collections import Counter
 from datetime import datetime, timezone
@@ -553,10 +554,91 @@ def _string_values(value: Any) -> list[str]:
 
 
 def _float_or_none(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
     try:
-        return float(value)
+        parsed = float(value)
     except (TypeError, ValueError):
         return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _nonnegative_int_or_none(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _post_admission_rejection_breakdown(record: dict[str, Any]) -> dict[str, int | float] | None:
+    if (
+        record.get("candidate_pool_stage") != "post_admission_no_match"
+        or record.get("reason") != "no_match"
+    ):
+        return None
+
+    eligible_market_count = _nonnegative_int_or_none(record.get("eligible_market_count"))
+    pre_admission_matchable_market_count = _nonnegative_int_or_none(
+        record.get("pre_admission_matchable_market_count")
+    )
+    within_horizon = _nonnegative_int_or_none(
+        record.get("within_admission_horizon_market_count")
+    )
+    no_token_overlap = _nonnegative_int_or_none(
+        record.get("post_admission_no_token_overlap_count")
+    )
+    below_min = _nonnegative_int_or_none(
+        record.get("post_admission_below_min_post_weight_score_count")
+    )
+    weight_demoted = _nonnegative_int_or_none(
+        record.get("post_admission_weight_demoted_below_min_score_count")
+    )
+    min_match_score = _float_or_none(record.get("post_admission_min_match_score"))
+    if (
+        eligible_market_count is None
+        or pre_admission_matchable_market_count is None
+        or within_horizon is None
+        or not (
+            0
+            < within_horizon
+            <= pre_admission_matchable_market_count
+            <= eligible_market_count
+        )
+        or no_token_overlap is None
+        or below_min is None
+        or weight_demoted is None
+        or min_match_score is None
+        or min_match_score < 0
+        or no_token_overlap + below_min != within_horizon
+        or weight_demoted > below_min
+    ):
+        return None
+
+    raw_best_pre_weight = record.get("post_admission_best_rejected_pre_weight_score")
+    raw_best_post_weight = record.get("post_admission_best_rejected_post_weight_score")
+    best_pre_weight = _float_or_none(raw_best_pre_weight)
+    best_post_weight = _float_or_none(raw_best_post_weight)
+    if below_min:
+        if (
+            best_pre_weight is None
+            or best_post_weight is None
+            or best_pre_weight < 0
+            or best_post_weight < 0
+            or best_post_weight >= min_match_score
+        ):
+            return None
+        if weight_demoted and best_pre_weight < min_match_score:
+            return None
+    elif raw_best_pre_weight is not None or raw_best_post_weight is not None:
+        return None
+
+    return {
+        "within_horizon": within_horizon,
+        "no_token_overlap": no_token_overlap,
+        "below_min": below_min,
+        "weight_demoted": weight_demoted,
+        "min_match_score": min_match_score,
+        "best_post_weight": best_post_weight,
+    }
 
 
 def _keyword_count(record: dict[str, Any]) -> int | None:
@@ -606,6 +688,14 @@ def summarize(
         "match_no_candidate_missing_candidate_pool_stage": 0,
         "match_no_candidate_venues": Counter(),
         "match_no_candidate_eligible_market_counts": Counter(),
+        "match_no_candidate_post_admission_rejection_complete_rows": 0,
+        "match_no_candidate_post_admission_rejection_missing_breakdown_rows": 0,
+        "match_no_candidate_post_admission_rejection_within_horizon_markets": 0,
+        "match_no_candidate_post_admission_no_token_overlap": 0,
+        "match_no_candidate_post_admission_below_min": 0,
+        "match_no_candidate_post_admission_weight_demoted": 0,
+        "match_no_candidate_post_admission_min_scores": Counter(),
+        "match_no_candidate_post_admission_best_rejected_post_score": None,
         "match_llm_reviews_total": 0,
         "match_llm_review_verdicts": Counter(),
         "false_positive_neutral_empty_keyword_sources": Counter(),
@@ -709,6 +799,43 @@ def summarize(
                 ] += 1
             else:
                 stats["match_no_candidate_missing_candidate_pool_stage"] += 1
+            if candidate_pool_stage == "post_admission_no_match":
+                breakdown = _post_admission_rejection_breakdown(record)
+                if breakdown is None:
+                    stats[
+                        "match_no_candidate_post_admission_rejection_missing_breakdown_rows"
+                    ] += 1
+                else:
+                    stats[
+                        "match_no_candidate_post_admission_rejection_complete_rows"
+                    ] += 1
+                    stats[
+                        "match_no_candidate_post_admission_rejection_within_horizon_markets"
+                    ] += breakdown["within_horizon"]
+                    stats["match_no_candidate_post_admission_no_token_overlap"] += breakdown[
+                        "no_token_overlap"
+                    ]
+                    stats["match_no_candidate_post_admission_below_min"] += breakdown[
+                        "below_min"
+                    ]
+                    stats["match_no_candidate_post_admission_weight_demoted"] += breakdown[
+                        "weight_demoted"
+                    ]
+                    stats["match_no_candidate_post_admission_min_scores"][
+                        breakdown["min_match_score"]
+                    ] += 1
+                    best_post_weight = breakdown["best_post_weight"]
+                    if best_post_weight is not None:
+                        current_best = stats[
+                            "match_no_candidate_post_admission_best_rejected_post_score"
+                        ]
+                        stats[
+                            "match_no_candidate_post_admission_best_rejected_post_score"
+                        ] = (
+                            best_post_weight
+                            if current_best is None
+                            else max(current_best, best_post_weight)
+                        )
             stats["match_no_candidate_venues"][_text(record.get("venue"))] += 1
             eligible_market_count = record.get("eligible_market_count")
             eligible_market_count_text = (
@@ -1207,9 +1334,43 @@ def print_summary(stats: dict[str, Any], top: int, since: datetime | None, until
     for line in format_counter(stats["match_no_candidate_candidate_pool_stages"], top=top):
         print(line)
     print(
-        "  No-candidate records missing candidate-pool stage: "
+        "No-candidate records missing candidate-pool stage: "
         f"{stats['match_no_candidate_missing_candidate_pool_stage']}"
     )
+
+    print()
+    print("Post-Admission Market Rejection Attribution")
+    complete_rows = stats["match_no_candidate_post_admission_rejection_complete_rows"]
+    unavailable_rows = stats[
+        "match_no_candidate_post_admission_rejection_missing_breakdown_rows"
+    ]
+    market_denominator = stats[
+        "match_no_candidate_post_admission_rejection_within_horizon_markets"
+    ]
+    print(f"  Complete breakdown rows: {complete_rows}")
+    print(f"  Breakdown unavailable: {unavailable_rows}")
+    print(f"  Within-horizon market rows: {market_denominator}")
+    for label, key in (
+        ("No token overlap", "match_no_candidate_post_admission_no_token_overlap"),
+        ("Overlap below minimum score", "match_no_candidate_post_admission_below_min"),
+    ):
+        count = stats[key]
+        percent = (100.0 * count / market_denominator) if market_denominator else 0.0
+        print(f"  {label}: {count} ({percent:.1f}%)")
+    print(
+        "  Weight-demoted below minimum: "
+        f"{stats['match_no_candidate_post_admission_weight_demoted']}"
+    )
+    best_rejected_score = stats[
+        "match_no_candidate_post_admission_best_rejected_post_score"
+    ]
+    if best_rejected_score is not None:
+        print(f"  Highest rejected post-weight score: {best_rejected_score:.4f}")
+    print("  Minimum-score thresholds:")
+    for line in format_counter(
+        stats["match_no_candidate_post_admission_min_scores"], top=top
+    ):
+        print(line)
 
     print()
     print(f"Explicit No-Candidate Venues (top {top})")

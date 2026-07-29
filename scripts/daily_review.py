@@ -426,6 +426,27 @@ def _format_match_attribution_lines(
     no_candidate_missing_pool_stage = int(
         funnel_stats.get("match_no_candidate_missing_candidate_pool_stage", 0) or 0
     )
+    post_admission_rejection_complete_rows = int(
+        funnel_stats.get("match_no_candidate_post_admission_rejection_complete_rows", 0)
+        or 0
+    )
+    post_admission_rejection_missing_breakdown_rows = int(
+        funnel_stats.get("match_no_candidate_post_admission_rejection_missing_breakdown_rows", 0)
+        or 0
+    )
+    post_admission_rejection_market_rows = int(
+        funnel_stats.get("match_no_candidate_post_admission_rejection_within_horizon_markets", 0)
+        or 0
+    )
+    post_admission_no_token_overlap = int(
+        funnel_stats.get("match_no_candidate_post_admission_no_token_overlap", 0) or 0
+    )
+    post_admission_below_min = int(
+        funnel_stats.get("match_no_candidate_post_admission_below_min", 0) or 0
+    )
+    post_admission_weight_demoted = int(
+        funnel_stats.get("match_no_candidate_post_admission_weight_demoted", 0) or 0
+    )
     drilldowns = [
         ("Drilldown: pre-LLM quality gate", Counter(funnel_stats.get("match_diagnostic_pre_llm_gate", {})), None),
         ("Drilldown: match diagnostic sources", Counter(funnel_stats.get("match_diagnostic_sources", {})), top),
@@ -539,6 +560,32 @@ def _format_match_attribution_lines(
         lines.append(
             "  No-candidate records missing pool-stage: "
             f"{no_candidate_missing_pool_stage}"
+        )
+    if (
+        post_admission_rejection_complete_rows
+        or post_admission_rejection_missing_breakdown_rows
+    ):
+        lines.append(
+            "  Post-admission rejection attribution: "
+            f"complete={post_admission_rejection_complete_rows} "
+            f"unavailable={post_admission_rejection_missing_breakdown_rows} "
+            f"market_rows={post_admission_rejection_market_rows}"
+        )
+        overlap_percent = (
+            100.0 * post_admission_no_token_overlap / post_admission_rejection_market_rows
+            if post_admission_rejection_market_rows
+            else 0.0
+        )
+        below_percent = (
+            100.0 * post_admission_below_min / post_admission_rejection_market_rows
+            if post_admission_rejection_market_rows
+            else 0.0
+        )
+        lines.append(
+            "    no_token_overlap="
+            f"{post_admission_no_token_overlap} ({overlap_percent:.1f}%) "
+            f"below_min_score={post_admission_below_min} ({below_percent:.1f}%) "
+            f"weight_demoted={post_admission_weight_demoted}"
         )
     if suppressions:
         coverage_parts = [

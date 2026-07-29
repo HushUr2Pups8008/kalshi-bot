@@ -125,6 +125,40 @@ class _NoCandidatePoolTelemetry:
     admission_horizon_days: float
 
 
+@dataclass(frozen=True)
+class _PostAdmissionRejectionTelemetry:
+    no_token_overlap_count: int
+    below_min_post_weight_score_count: int
+    weight_demoted_below_min_score_count: int
+    min_match_score: float
+    best_rejected_pre_weight_score: float | None
+    best_rejected_post_weight_score: float | None
+    qualifying_match_count: int
+
+    def as_log_fields(self) -> dict[str, int | float]:
+        if self.qualifying_match_count:
+            return {}
+        fields: dict[str, int | float] = {
+            "post_admission_no_token_overlap_count": self.no_token_overlap_count,
+            "post_admission_below_min_post_weight_score_count": (
+                self.below_min_post_weight_score_count
+            ),
+            "post_admission_weight_demoted_below_min_score_count": (
+                self.weight_demoted_below_min_score_count
+            ),
+            "post_admission_min_match_score": self.min_match_score,
+        }
+        if self.best_rejected_pre_weight_score is not None:
+            fields["post_admission_best_rejected_pre_weight_score"] = (
+                self.best_rejected_pre_weight_score
+            )
+        if self.best_rejected_post_weight_score is not None:
+            fields["post_admission_best_rejected_post_weight_score"] = (
+                self.best_rejected_post_weight_score
+            )
+        return fields
+
+
 class _PublicMarketClient(Protocol):
     def get_markets(self, *, limit: int) -> tuple[list[PolymarketMarket], str | None]:
         ...
@@ -348,7 +382,7 @@ class PolymarketPaperRuntime:
 
         match_now = self._horizon_now()
         admission_horizon_days = cfg.paper_admission_max_days_to_close
-        matches = match_polymarket_markets(
+        matches, post_admission_rejection = _match_polymarket_markets_with_rejection_telemetry(
             news,
             markets,
             max_results=self._max_candidates,
@@ -364,6 +398,11 @@ class PolymarketPaperRuntime:
                 markets,
                 now=match_now,
                 admission_horizon_days=admission_horizon_days,
+            )
+            rejection_fields = (
+                post_admission_rejection.as_log_fields()
+                if no_candidate_pool.candidate_pool_stage == "post_admission_no_match"
+                else {}
             )
             log.info(
                 "[POLYMARKET_MATCH] no_match markets=%d headline=%s",
@@ -386,6 +425,7 @@ class PolymarketPaperRuntime:
                     no_candidate_pool.within_admission_horizon_market_count
                 ),
                 admission_horizon_days=no_candidate_pool.admission_horizon_days,
+                **rejection_fields,
             )
             self._log_heartbeat()
             return 0
@@ -871,13 +911,52 @@ def match_polymarket_markets(
     now: datetime | None = None,
     admission_horizon_days: float | None = None,
 ) -> list[tuple[PolymarketMarket, float, dict[str, Any]]]:
+    matches, _ = _match_polymarket_markets_with_rejection_telemetry(
+        news,
+        markets,
+        max_results=max_results,
+        min_score=min_score,
+        token_weights=token_weights,
+        now=now,
+        admission_horizon_days=admission_horizon_days,
+    )
+    return matches
+
+
+def _match_polymarket_markets_with_rejection_telemetry(
+    news: NewsItem,
+    markets: Sequence[PolymarketMarket],
+    *,
+    max_results: int = _DEFAULT_MAX_CANDIDATES,
+    min_score: float = _DEFAULT_MIN_MATCH_SCORE,
+    token_weights: dict[str, dict[str, Any]] | None = None,
+    now: datetime | None = None,
+    admission_horizon_days: float | None = None,
+) -> tuple[
+    list[tuple[PolymarketMarket, float, dict[str, Any]]],
+    _PostAdmissionRejectionTelemetry,
+]:
     news_tokens, headline_tokens = _news_match_tokens(news)
     if not news_tokens and not headline_tokens:
-        return []
+        return [], _PostAdmissionRejectionTelemetry(
+            no_token_overlap_count=0,
+            below_min_post_weight_score_count=0,
+            weight_demoted_below_min_score_count=0,
+            min_match_score=min_score,
+            best_rejected_pre_weight_score=None,
+            best_rejected_post_weight_score=None,
+            qualifying_match_count=0,
+        )
     if token_weights is None:
         token_weights = _load_match_weights()
 
     scored: list[tuple[PolymarketMarket, float, dict[str, Any]]] = []
+    no_token_overlap_count = 0
+    below_min_post_weight_score_count = 0
+    weight_demoted_below_min_score_count = 0
+    best_rejected_pre_weight_score: float | None = None
+    best_rejected_post_weight_score: float | None = None
+    qualifying_match_count = 0
     match_time = now or datetime.now(timezone.utc)
     if match_time.tzinfo is None or match_time.utcoffset() is None:
         raise ValueError("Polymarket market matching clock must be timezone-aware")
@@ -899,13 +978,14 @@ def match_polymarket_markets(
         overlap = news_tokens & market_tokens
         headline_overlap = headline_tokens & market_tokens
         if not overlap:
+            no_token_overlap_count += 1
             continue
         full_score = len(overlap) / max(1, len(news_tokens | market_tokens))
         headline_score = len(headline_overlap) / max(1, len(headline_tokens | market_tokens))
         score = max(full_score, headline_score)
+        pre_weight_score = score
         market_prefix = market_prefix_for(market)
         if overlap and token_weights:
-            pre_weight_score = score
             weight_details = _token_downweight_details(
                 overlap,
                 market_prefix,
@@ -926,7 +1006,19 @@ def match_polymarket_markets(
                 post_weight_score=score,
             )
         if score < min_score:
+            below_min_post_weight_score_count += 1
+            if pre_weight_score >= min_score:
+                weight_demoted_below_min_score_count += 1
+            best_rejected_pre_weight_score = max(
+                best_rejected_pre_weight_score or pre_weight_score,
+                pre_weight_score,
+            )
+            best_rejected_post_weight_score = max(
+                best_rejected_post_weight_score or score,
+                score,
+            )
             continue
+        qualifying_match_count += 1
         rounded_score = round(score, 4)
         matched_tokens = sorted(overlap)
         pre_llm_meta = _compute_pre_llm_match_meta(
@@ -961,7 +1053,15 @@ def match_polymarket_markets(
         scored.append((market, rounded_score, meta))
 
     scored.sort(key=lambda item: item[1], reverse=True)
-    return scored[:max_results]
+    return scored[:max_results], _PostAdmissionRejectionTelemetry(
+        no_token_overlap_count=no_token_overlap_count,
+        below_min_post_weight_score_count=below_min_post_weight_score_count,
+        weight_demoted_below_min_score_count=weight_demoted_below_min_score_count,
+        min_match_score=min_score,
+        best_rejected_pre_weight_score=best_rejected_pre_weight_score,
+        best_rejected_post_weight_score=best_rejected_post_weight_score,
+        qualifying_match_count=qualifying_match_count,
+    )
 
 
 def _classify_no_candidate_pool(
