@@ -573,6 +573,293 @@ def test_summarize_attributes_match_diagnostic_loss(local_tmp_dir):
     assert stats["match_diagnostic_tickers"]["KXTRUMPUAP-26MAY-JUL01"] == 1
 
 
+def test_summarize_tracks_fresh_pass_route_log_linkage_and_route_exit_types(
+    local_tmp_dir,
+):
+    path = local_tmp_dir / "trades.jsonl"
+    write_jsonl(
+        path,
+        [
+            {
+                "type": "EARLY_FRESH_PASS",
+                "source": "AP",
+                "headline": "Alpha event",
+                "ts": "2026-04-11T00:00:00+00:00",
+            },
+            {
+                "type": "MATCH_DIAGNOSTIC",
+                "source": "AP",
+                "headline": "Alpha event",
+                "ticker": "KXALPHA-1",
+                "ts": "2026-04-11T00:00:01+00:00",
+            },
+            {
+                "type": "EARLY_FRESH_PASS",
+                "source": "Reuters",
+                "headline": "Beta event",
+                "ts": "2026-04-11T00:01:00+00:00",
+            },
+            {
+                "type": "MATCH_NO_CANDIDATE",
+                "source": "Reuters",
+                "headline": "Beta event",
+                "venue": "polymarket_us",
+                "reason": "no_match",
+                "eligible_market_count": 15,
+                "ts": "2026-04-11T00:01:01+00:00",
+            },
+            {
+                "type": "MATCH_NO_CANDIDATE",
+                "source": "Reuters",
+                "headline": "Beta event",
+                "venue": "polymarket_us",
+                "reason": "no_match",
+                "eligible_market_count": 15,
+                "ts": "2026-04-11T00:01:02+00:00",
+            },
+            {
+                "type": "EARLY_FRESH_PASS",
+                "source": "Reuters",
+                "headline": "Shared cross-venue event",
+                "ts": "2026-04-11T00:02:00+00:00",
+            },
+            {
+                "type": "MATCH_DIAGNOSTIC",
+                "source": "Reuters",
+                "headline": "Shared cross-venue event",
+                "ticker": "KXSHARED-1",
+                "ts": "2026-04-11T00:02:01+00:00",
+            },
+            {
+                "type": "MATCH_NO_CANDIDATE",
+                "source": "Reuters",
+                "headline": "Shared cross-venue event",
+                "venue": "polymarket_us",
+                "reason": "no_match",
+                "eligible_market_count": 15,
+                "ts": "2026-04-11T00:02:02+00:00",
+            },
+            {
+                "type": "MATCH_NO_CANDIDATE",
+                "source": "AP",
+                "headline": "Empty candidate cache",
+                "venue": "polymarket_us",
+                "reason": "no_eligible_markets",
+                "eligible_market_count": 0,
+                "ts": "2026-04-11T00:02:03+00:00",
+            },
+            {
+                "type": "EARLY_FRESH_PASS",
+                "source": "BBC",
+                "headline": "No matcher signal event",
+                "ts": "2026-04-11T00:03:00+00:00",
+            },
+            {
+                "type": "EARLY_FRESH_PASS",
+                "source": "AP",
+                "headline": "Repeated event",
+                "ts": "2026-04-11T00:04:00+00:00",
+            },
+            {
+                "type": "EARLY_FRESH_PASS",
+                "source": "AP",
+                "headline": "Repeated event",
+                "ts": "2026-04-11T00:04:01+00:00",
+            },
+            {
+                "type": "EARLY_FRESH_PASS",
+                "source": "AP",
+                "headline": "Market fetch failure event",
+                "ts": "2026-04-11T00:04:02+00:00",
+            },
+            {
+                "type": "MATCH_NO_CANDIDATE",
+                "source": "AP",
+                "headline": "Market fetch failure event",
+                "venue": "polymarket_us",
+                "reason": "market_fetch_failed",
+                "eligible_market_count": 0,
+                "ts": "2026-04-11T00:04:03+00:00",
+            },
+            {
+                "type": "EARLY_FRESH_PASS",
+                "source": "AP",
+                "headline": "Unknown route exit event",
+                "ts": "2026-04-11T00:04:04+00:00",
+            },
+            {
+                "type": "MATCH_NO_CANDIDATE",
+                "source": "AP",
+                "headline": "Unknown route exit event",
+                "venue": "polymarket_us",
+                "reason": "future_route_exit",
+                "eligible_market_count": 0,
+                "ts": "2026-04-11T00:04:05+00:00",
+            },
+            {
+                "type": "EARLY_FRESH_PASS",
+                "source": "AP",
+                "ts": "2026-04-11T00:05:00+00:00",
+            },
+            {
+                "type": "MATCH_DIAGNOSTIC",
+                "source": "AP",
+                "ticker": "KXLEGACY-1",
+                "ts": "2026-04-11T00:05:01+00:00",
+            },
+            {
+                "type": "MATCH_NO_CANDIDATE",
+                "source": "AP",
+                "venue": "polymarket_us",
+                "reason": "market_fetch_failed",
+                "eligible_market_count": 0,
+                "ts": "2026-04-11T00:05:02+00:00",
+            },
+        ],
+    )
+
+    stats = summarize(path, since=None, until=None)
+
+    assert stats["fresh_pass_route_log_linkage"] == {
+        "fresh_pass_rows": 9,
+        "fresh_pass_distinct_keys": 7,
+        "fresh_pass_unique_keys": 6,
+        "fresh_pass_keys_with_candidate_diagnostic": 2,
+        "fresh_pass_keys_with_explicit_no_match": 2,
+        "fresh_pass_keys_with_market_availability_exit": 1,
+        "fresh_pass_keys_with_unknown_route_exit": 1,
+        "fresh_pass_keys_with_multiple_route_signals": 1,
+        "fresh_pass_keys_without_tracked_route_signal": 1,
+        "fresh_pass_ambiguous_duplicate_keys": 1,
+        "fresh_pass_missing_identity_rows": 1,
+        "match_diagnostic_missing_identity_rows": 1,
+        "match_no_candidate_missing_identity_rows": 1,
+        "candidate_diagnostic_keys_without_fresh_pass": 0,
+        "explicit_no_match_keys_without_fresh_pass": 0,
+        "market_availability_keys_without_fresh_pass": 1,
+        "unknown_route_exit_keys_without_fresh_pass": 0,
+        "match_no_candidate_duplicate_keys": 1,
+    }
+    assert stats["fresh_pass_without_tracked_route_signal_sources"] == Counter({"BBC": 1})
+    assert stats["match_no_candidate_total"] == 7
+    assert stats["match_no_candidate_sources"] == Counter({"Reuters": 3, "AP": 4})
+    assert stats["match_no_candidate_reasons"] == Counter(
+        {
+            "no_match": 3,
+            "no_eligible_markets": 1,
+            "market_fetch_failed": 2,
+            "future_route_exit": 1,
+        }
+    )
+    assert stats["match_no_candidate_venues"] == Counter({"polymarket_us": 7})
+    assert stats["match_no_candidate_eligible_market_counts"] == Counter({"15": 3, "0": 4})
+
+
+def test_print_summary_includes_fresh_pass_route_log_linkage(capsys, local_tmp_dir):
+    path = local_tmp_dir / "trades.jsonl"
+    write_jsonl(
+        path,
+        [
+            {
+                "type": "EARLY_FRESH_PASS",
+                "source": "AP",
+                "headline": "Alpha event",
+                "ts": "2026-04-11T00:00:00+00:00",
+            },
+            {
+                "type": "MATCH_DIAGNOSTIC",
+                "source": "AP",
+                "headline": "Alpha event",
+                "ticker": "KXALPHA-1",
+                "ts": "2026-04-11T00:00:01+00:00",
+            },
+            {
+                "type": "EARLY_FRESH_PASS",
+                "source": "Reuters",
+                "headline": "Beta event",
+                "ts": "2026-04-11T00:01:00+00:00",
+            },
+            {
+                "type": "MATCH_NO_CANDIDATE",
+                "source": "Reuters",
+                "headline": "Beta event",
+                "venue": "polymarket_us",
+                "reason": "no_match",
+                "eligible_market_count": 15,
+                "ts": "2026-04-11T00:01:01+00:00",
+            },
+        ],
+    )
+
+    stats = summarize(path, since=None, until=None)
+    print_summary(stats, top=5, since=None, until=None)
+    output = capsys.readouterr().out
+
+    assert "Fresh-pass Route Log Linkage" in output
+    assert "venue-agnostic normalized source + headline; not lifecycle, attempt, conversion, or per-venue coverage; signal rates overlap" in output
+    assert "Fresh pass rows                 : 2" in output
+    assert "Linkable unique fresh keys      : 2" in output
+    assert "Candidate diagnostic observed   : 1 (50.0%)" in output
+    assert "Explicit no-match observed      : 1 (50.0%)" in output
+    assert "Market-unavailable exit observed: 0 (0.0%)" in output
+    assert "Unknown/other route exit observed: 0 (0.0%)" in output
+    assert "Multiple route signals observed : 0" in output
+    assert "No tracked route signal observed: 0" in output
+    assert "Explicit no-candidate rows      : 1" in output
+    assert "Fresh-pass Keys Without Tracked Route Signals (top 5)" in output
+    assert "Explicit No-Candidate Reasons" in output
+    assert "no_match" in output
+
+
+def test_summarize_keeps_matcher_signals_window_local(local_tmp_dir):
+    path = local_tmp_dir / "trades.jsonl"
+    write_jsonl(
+        path,
+        [
+            {
+                "type": "EARLY_FRESH_PASS",
+                "source": "AP",
+                "headline": "Boundary event",
+                "ts": "2026-04-11T00:00:00+00:00",
+            },
+            {
+                "type": "MATCH_DIAGNOSTIC",
+                "source": "AP",
+                "headline": "Boundary event",
+                "ticker": "KXBOUNDARY-1",
+                "ts": "2026-04-11T00:01:00+00:00",
+            },
+        ],
+    )
+
+    stats = summarize(
+        path,
+        since=datetime(2026, 4, 11, 0, 0, 30, tzinfo=timezone.utc),
+        until=None,
+    )
+
+    assert stats["fresh_pass_route_log_linkage"] == {
+        "fresh_pass_rows": 0,
+        "fresh_pass_distinct_keys": 0,
+        "fresh_pass_unique_keys": 0,
+        "fresh_pass_keys_with_candidate_diagnostic": 0,
+        "fresh_pass_keys_with_explicit_no_match": 0,
+        "fresh_pass_keys_with_market_availability_exit": 0,
+        "fresh_pass_keys_with_unknown_route_exit": 0,
+        "fresh_pass_keys_with_multiple_route_signals": 0,
+        "fresh_pass_keys_without_tracked_route_signal": 0,
+        "fresh_pass_ambiguous_duplicate_keys": 0,
+        "fresh_pass_missing_identity_rows": 0,
+        "match_diagnostic_missing_identity_rows": 0,
+        "match_no_candidate_missing_identity_rows": 0,
+        "candidate_diagnostic_keys_without_fresh_pass": 1,
+        "explicit_no_match_keys_without_fresh_pass": 0,
+        "market_availability_keys_without_fresh_pass": 0,
+        "unknown_route_exit_keys_without_fresh_pass": 0,
+        "match_no_candidate_duplicate_keys": 0,
+    }
+
+
 def test_summarize_attributes_match_suppression_and_token_weights(local_tmp_dir):
     path = local_tmp_dir / "trades.jsonl"
     write_jsonl(
