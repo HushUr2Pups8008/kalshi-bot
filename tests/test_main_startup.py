@@ -35,6 +35,7 @@ from trading.settlement import (
     VoidRefundContract,
     build_settlement_observation,
 )
+from trading.paper_cohorts import PaperCohort
 from trading.venue import MarketRef, Venue
 
 
@@ -42,6 +43,24 @@ def _tmp_root() -> Path:
     root = Path(__file__).resolve().parent / "_tmp_main_startup" / uuid.uuid4().hex
     root.mkdir(parents=True, exist_ok=False)
     return root
+
+
+def _patch_legacy_cli_runtime_cohort(monkeypatch) -> PaperCohort:
+    """Keep CLI-mode tests independent of the operator's active cohort config."""
+
+    cohort = PaperCohort(
+        cohort_id="legacy",
+        db_path=main.DATA_DIR / "paper_trades.db",
+        starting_bankroll=cfg.bankroll,
+        writable=True,
+        storage_root=main.DATA_DIR,
+    )
+    monkeypatch.setattr(
+        main,
+        "_runtime_paper_cohort_from_config",
+        lambda: (cohort, (cohort,), None),
+    )
+    return cohort
 
 
 def _cutover_eligible_legacy_db(path: Path) -> None:
@@ -242,7 +261,9 @@ def test_trading_bot_binds_global_trade_log_to_resolved_paper_cohort(
         pass
 
     bound_trade_log = MagicMock()
+    bound_shadow_trade_log = MagicMock()
     monkeypatch.setattr(main, "trade_log", bound_trade_log)
+    monkeypatch.setattr(main, "shadow_trade_log", bound_shadow_trade_log, raising=False)
     monkeypatch.setattr(
         main,
         "_runtime_paper_cohort_from_config",
@@ -266,6 +287,10 @@ def test_trading_bot_binds_global_trade_log_to_resolved_paper_cohort(
         main.TradingBot()
 
     bound_trade_log.bind_runtime_context.assert_called_once_with(
+        cohort_id=cohort.cohort_id,
+        cohort_kind="legacy_pending",
+    )
+    bound_shadow_trade_log.bind_runtime_context.assert_called_once_with(
         cohort_id=cohort.cohort_id,
         cohort_kind="legacy_pending",
     )
@@ -528,6 +553,30 @@ def test_runtime_instance_guard_blocks_second_long_running_instance():
 
         assert second.acquire() is True
         second.release()
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_runtime_instance_guard_binds_runtime_paper_cohort():
+    root = _tmp_root()
+    try:
+        lock_path = root / "bot_runtime.lock"
+        guard = _RuntimeInstanceGuard(lock_path)
+
+        assert guard.acquire() is True
+        guard.bind_runtime_paper_cohort("legacy-pending-20260729", "legacy_pending")
+
+        metadata = json.loads(lock_path.read_text(encoding="utf-8"))
+        assert metadata["runtime_paper_cohort"] == {
+            "schema_version": 1,
+            "cohort_id": "legacy-pending-20260729",
+            "cohort_kind": "legacy_pending",
+            "owner_pid": metadata["pid"],
+            "boot_started_utc": metadata["started_utc"],
+        }
+        assert metadata["started_utc"]
+
+        guard.release()
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -851,11 +900,12 @@ async def test_startup_observability_probe_strict_fails_when_required_fields_mis
 
 
 @pytest.mark.asyncio
-async def test_async_main_cli_path_is_not_blocked_by_runtime_lock(caplog):
+async def test_async_main_cli_path_is_not_blocked_by_runtime_lock(monkeypatch, caplog):
     root = _tmp_root()
     try:
         guard = _RuntimeInstanceGuard(root / "bot_runtime.lock")
         assert guard.acquire() is True
+        _patch_legacy_cli_runtime_cohort(monkeypatch)
 
         paper = MagicMock()
         paper.generate_report.return_value = "report"
@@ -934,6 +984,7 @@ async def test_async_main_resolve_is_blocked_before_shared_state_mutation(monkey
 def available_cli_runtime_lock(monkeypatch, tmp_path):
     lock_path = tmp_path / "bot_runtime.lock"
     monkeypatch.setattr("main._BOT_RUNTIME_LOCK", lock_path)
+    _patch_legacy_cli_runtime_cohort(monkeypatch)
     return lock_path
 
 
@@ -1448,6 +1499,7 @@ async def test_async_main_runtime_path_uses_runtime_context_for_boot_logging(cap
          patch("main._BOT_RUNTIME_LOCK") as lock_path, \
          patch("main._RuntimeInstanceGuard") as guard_cls, \
          patch("main.TradingBot") as bot_cls, \
+         patch("main._configured_paper_cohort_kind", return_value="legacy_pending"), \
          caplog.at_level("INFO", logger="main"):
         guard = MagicMock()
         guard.acquire.return_value = True
@@ -1455,6 +1507,7 @@ async def test_async_main_runtime_path_uses_runtime_context_for_boot_logging(cap
 
         bot = MagicMock()
         bot.run = MagicMock()
+        bot.paper_cohort.cohort_id = "legacy-pending-20260729"
         bot_cls.return_value = bot
 
         async def _fake_run():
@@ -1466,6 +1519,37 @@ async def test_async_main_runtime_path_uses_runtime_context_for_boot_logging(cap
     assert "[BOOT]" in caplog.text
     assert "ctx=runtime" in caplog.text
     guard_cls.assert_called_once_with(lock_path)
+    guard.bind_runtime_paper_cohort.assert_called_once_with(
+        "legacy-pending-20260729",
+        "legacy_pending",
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_main_stops_before_runtime_when_cohort_lock_binding_fails(caplog):
+    with patch("main.parse_args", return_value=Namespace(report=False, credibility=False, resolve=None, go_live=False, rotate_logs=False)), \
+         patch("main._BOT_RUNTIME_LOCK") as lock_path, \
+         patch("main._RuntimeInstanceGuard") as guard_cls, \
+         patch("main.TradingBot") as bot_cls, \
+         patch("main._configured_paper_cohort_kind", return_value="legacy_pending"), \
+         caplog.at_level("ERROR", logger="main"):
+        guard = MagicMock()
+        guard.acquire.return_value = True
+        guard.bind_runtime_paper_cohort.side_effect = OSError("lock is read-only")
+        guard_cls.return_value = guard
+
+        bot = MagicMock()
+        bot.paper_cohort.cohort_id = "legacy-pending-20260729"
+        bot.run = AsyncMock()
+        bot_cls.return_value = bot
+
+        with pytest.raises(SystemExit) as excinfo:
+            await async_main()
+
+    assert excinfo.value.code == 1
+    bot.run.assert_not_awaited()
+    guard.release.assert_called_once_with()
+    assert "runtime_paper_cohort_lock_binding=unavailable" in caplog.text
 
 
 @pytest.mark.asyncio

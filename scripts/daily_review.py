@@ -13,10 +13,12 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime, timedelta, time as dt_time, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -36,6 +38,12 @@ from scripts import paper_performance_drilldown
 from scripts import since_restart_money_path
 from scripts import signal_edge_diagnostics
 from scripts import source_scorecard
+from scripts.runtime_paper_cohort_scope import (
+    RuntimePaperCohortScopeError,
+    derive_runtime_paper_cohort_db_path,
+    record_has_runtime_paper_cohort_lineage,
+    validate_runtime_paper_cohort_lineage,
+)
 from scripts.throughput_operator_metrics import (
     format_operator_throughput_lines,
     summarize_operator_throughput_from_trade_log,
@@ -120,6 +128,18 @@ def parse_args() -> argparse.Namespace:
         help="Exclude synthetic/test records (source contains 'r/test' or ticker contains 'KXTEST')",
     )
     parser.add_argument(
+        "--runtime-paper-cohort-id",
+        help="Scope lifecycle attribution to this runtime paper-cohort ID",
+    )
+    parser.add_argument(
+        "--runtime-paper-cohort-kind",
+        help="Required cohort kind for --runtime-paper-cohort-id",
+    )
+    parser.add_argument(
+        "--paper-db",
+        help="Canonical paper database for a supplied runtime cohort lineage pair",
+    )
+    parser.add_argument(
         "--progress",
         action="store_true",
         help="Print record-scan progress to stderr every 10k records",
@@ -129,7 +149,32 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print per-stage elapsed time to stderr",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    has_runtime_cohort_id = args.runtime_paper_cohort_id is not None
+    has_runtime_cohort_kind = args.runtime_paper_cohort_kind is not None
+    if has_runtime_cohort_id != has_runtime_cohort_kind:
+        parser.error("runtime paper cohort ID and kind must be supplied together")
+    if has_runtime_cohort_id:
+        try:
+            cohort_id, cohort_kind = validate_runtime_paper_cohort_lineage(
+                args.runtime_paper_cohort_id,
+                args.runtime_paper_cohort_kind,
+            )
+        except RuntimePaperCohortScopeError as exc:
+            parser.error(str(exc))
+        if args.paper_db is None:
+            parser.error("--paper-db is required with runtime paper cohort scope")
+        expected_db_path = derive_runtime_paper_cohort_db_path(
+            REPO_ROOT,
+            cohort_id,
+            cohort_kind,
+        )
+        supplied_db_path = Path(args.paper_db)
+        if supplied_db_path.resolve(strict=False) != expected_db_path.resolve(strict=False):
+            parser.error("--paper-db must be the canonical path for the runtime paper cohort")
+    elif args.paper_db is not None:
+        parser.error("--paper-db requires runtime paper cohort ID and kind")
+    return args
 
 
 def parse_date_start(value: str | None) -> datetime | None:
@@ -196,11 +241,21 @@ def _fresh_pass_assignment_shadow_path(trades_path: Path) -> Path:
 def _summarize_fresh_pass_assignment_shadow(
     trades_path: Path,
     *,
+    shadow_path: Path | None = None,
     since: datetime | None,
     until: datetime | None,
     exclude_test: bool = False,
+    runtime_paper_cohort_id: str | None = None,
+    runtime_paper_cohort_kind: str | None = None,
 ) -> dict[str, Any]:
-    shadow_path = _fresh_pass_assignment_shadow_path(trades_path)
+    if (runtime_paper_cohort_id is None) != (runtime_paper_cohort_kind is None):
+        raise RuntimePaperCohortScopeError("runtime paper cohort ID and kind must be supplied together")
+    if runtime_paper_cohort_id is not None:
+        validate_runtime_paper_cohort_lineage(
+            runtime_paper_cohort_id,
+            runtime_paper_cohort_kind,
+        )
+    shadow_path = shadow_path or _fresh_pass_assignment_shadow_path(trades_path)
     stats: dict[str, Any] = {
         "path": shadow_path,
         "rows": 0,
@@ -219,6 +274,12 @@ def _summarize_fresh_pass_assignment_shadow(
         event_types={"FRESH_PASS_ASSIGNMENT_SHADOW"},
     ):
         if exclude_test and is_test_record_source_only(record):
+            continue
+        if runtime_paper_cohort_id is not None and not record_has_runtime_paper_cohort_lineage(
+            record,
+            runtime_paper_cohort_id,
+            runtime_paper_cohort_kind,
+        ):
             continue
         stats["rows"] += 1
         if bool(record.get("malformed")):
@@ -260,6 +321,11 @@ def _format_same_window_lifecycle_attribution_lines(
     *,
     since: datetime | None = None,
     until: datetime | None = None,
+    runtime_paper_cohort_id: str | None = None,
+    runtime_paper_cohort_kind: str | None = None,
+    excluded_untagged_records: int = 0,
+    excluded_other_cohort_records: int = 0,
+    excluded_malformed_records: int = 0,
 ) -> list[str]:
     paper_trade_status = str(attribution.get("paper_trade_lifecycle_status") or "unavailable")
     paper_trade_event_rows = int(attribution.get("paper_trade_event_rows") or 0)
@@ -288,9 +354,24 @@ def _format_same_window_lifecycle_attribution_lines(
     incomplete_lifecycles = int(attribution.get("identity_incomplete_lifecycle_count") or 0)
     reused_opportunities = int(attribution.get("reused_opportunity_lifecycle_count") or 0)
     unattributed = Counter(attribution.get("unattributed_event_counts") or {})
+    opportunities = int(attribution.get("opportunity_lifecycle_count") or 0)
+    if runtime_paper_cohort_id is None:
+        scope_lines = [
+            f"  Same-window linkable lifecycles  : {opportunities} opportunities",
+            "    Funnel scope                   : decision-funnel-derived fields are unscoped; "
+            "all log diagnostics and paper DB figures retain their source scope",
+        ]
+    else:
+        scope_lines = [
+            "  Same-window linkable cohort      : "
+            f"{runtime_paper_cohort_id} ({runtime_paper_cohort_kind}); {opportunities} opportunities",
+            "    Funnel scope                   : cohort-only; "
+            f"excluded untagged={excluded_untagged_records}, "
+            f"other_cohort={excluded_other_cohort_records}, "
+            f"malformed={excluded_malformed_records}; all structured-log readers and paper DB use this lineage",
+        ]
     lines = [
-        "  Same-window linkable cohort      : "
-        f"{int(attribution.get('opportunity_lifecycle_count') or 0)} opportunities",
+        *scope_lines,
         "    Window                         : "
         f"{since.isoformat() if since else '(beginning)'} -> {until.isoformat() if until else '(latest)'}",
         "    Terminal attribution           : "
@@ -858,7 +939,7 @@ def _fmt_unsigned_money(value: Any) -> str:
         return "n/a"
 
 
-def _collect_kalshi_drift_state() -> tuple[dict[str, Any], str | None]:
+def _collect_kalshi_drift_state(paper_db_path: Path) -> tuple[dict[str, Any], str | None]:
     """Read the same P0 heartbeat sources `scripts/botcheck.py` consumes.
 
     Returns ``(halt_state, cohort_ts)`` for `_format_kalshi_drift_lines`
@@ -866,8 +947,8 @@ def _collect_kalshi_drift_state() -> tuple[dict[str, Any], str | None]:
 
     - ``data/runtime/kalshi_drift_halt.json`` — DriftCounter halt sentinel
       (LD-6/LD-6b: presence-equals-halt; manual clearance only).
-    - ``data/paper_trades.db`` ``bot_state.p0_price_fix_deployed_ts`` —
-      POST_FIX_NEW cohort boundary (LD-7/CR-F).
+    - selected paper DB ``bot_state.p0_price_fix_deployed_ts`` —
+      POST_FIX_NEW cohort boundary when that ledger carries the sentinel.
 
     If either source is missing or unreadable, that signal renders as
     ``null`` rather than crashing the daily review. The DriftCounter
@@ -899,10 +980,9 @@ def _collect_kalshi_drift_state() -> tuple[dict[str, Any], str | None]:
             halt_state["halt"] = True
 
     cohort_ts: str | None = None
-    db_path = REPO_ROOT / "data" / "paper_trades.db"
-    if db_path.is_file():
+    if paper_db_path.is_file():
         try:
-            conn = sqlite3.connect(str(db_path))
+            conn = sqlite3.connect(str(paper_db_path))
             try:
                 row = conn.execute(
                     "SELECT value FROM bot_state WHERE key = ?",
@@ -925,7 +1005,7 @@ def _format_kalshi_drift_lines(halt_state: dict[str, Any], cohort_ts: str | None
     so a single operator visual model covers both surfaces.
     """
     return [
-        "0. SYSTEM HEALTH  [source: data/runtime/kalshi_drift_halt.json + data/paper_trades.db]",
+        "0. SYSTEM HEALTH  [source: data/runtime/kalshi_drift_halt.json + selected paper DB]",
         f"  kalshi_drift: cycle_count={halt_state['cycle_count']} "
         f"halt={halt_state['halt']} "
         f"last_halt_at={halt_state['last_halt_at'] or 'null'} "
@@ -1060,8 +1140,33 @@ def _build_tier_by_source(scorecard_stats: dict[str, Any]) -> dict[str, str]:
     return tier_by_source
 
 
-def _load_previous_tier_state(path: Path) -> dict[str, Any] | None:
+def _tier_state_runtime_cohort_lineage(
+    runtime_paper_cohort_id: str | None,
+    runtime_paper_cohort_kind: str | None,
+) -> dict[str, str] | None:
+    if (runtime_paper_cohort_id is None) != (runtime_paper_cohort_kind is None):
+        raise RuntimePaperCohortScopeError("runtime paper cohort ID and kind must be supplied together")
+    if runtime_paper_cohort_id is None:
+        return None
+    cohort_id, cohort_kind = validate_runtime_paper_cohort_lineage(
+        runtime_paper_cohort_id,
+        runtime_paper_cohort_kind,
+    )
+    return {"cohort_id": cohort_id, "cohort_kind": cohort_kind}
+
+
+def _load_previous_tier_state(
+    path: Path,
+    *,
+    runtime_paper_cohort_id: str | None = None,
+    runtime_paper_cohort_kind: str | None = None,
+) -> dict[str, Any] | None:
     """Load the persisted tier-state JSON; return None if absent or corrupt."""
+
+    expected_lineage = _tier_state_runtime_cohort_lineage(
+        runtime_paper_cohort_id,
+        runtime_paper_cohort_kind,
+    )
     if not path.exists():
         return None
     try:
@@ -1071,6 +1176,12 @@ def _load_previous_tier_state(path: Path) -> dict[str, Any] | None:
         return None
     if not isinstance(data, dict):
         return None
+    saved_lineage = data.get("runtime_paper_cohort")
+    if expected_lineage is None:
+        if saved_lineage is not None:
+            return None
+    elif saved_lineage != expected_lineage:
+        return None
     return data
 
 
@@ -1078,25 +1189,38 @@ def _save_current_tier_state(
     path: Path,
     tier_by_source: dict[str, str],
     now_utc: datetime,
+    *,
+    runtime_paper_cohort_id: str | None = None,
+    runtime_paper_cohort_kind: str | None = None,
 ) -> None:
     """Persist today's tier map with two-deep history (current + previous).
 
     Same-day reruns refresh `current` but preserve `previous` so the next
     distinct day still has yesterday's reference for the change diff.
     """
+    runtime_paper_cohort = _tier_state_runtime_cohort_lineage(
+        runtime_paper_cohort_id,
+        runtime_paper_cohort_kind,
+    )
     today_str = now_utc.date().isoformat()
     current_block = {
         "date": today_str,
         "saved_at_utc": now_utc.isoformat(),
         "tiers": tier_by_source,
     }
-    prior = _load_previous_tier_state(path)
+    prior = _load_previous_tier_state(
+        path,
+        runtime_paper_cohort_id=runtime_paper_cohort_id,
+        runtime_paper_cohort_kind=runtime_paper_cohort_kind,
+    )
     if prior is None or not isinstance(prior.get("current"), dict):
         new_state: dict[str, Any] = {"current": current_block, "previous": None}
     elif prior["current"].get("date") == today_str:
         new_state = {"current": current_block, "previous": prior.get("previous")}
     else:
         new_state = {"current": current_block, "previous": prior["current"]}
+    if runtime_paper_cohort is not None:
+        new_state["runtime_paper_cohort"] = runtime_paper_cohort
 
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -1154,7 +1278,85 @@ def _format_tier_change_lines(
     return lines
 
 
-def build_daily_review(
+@dataclass(frozen=True)
+class _RuntimeCohortTradeLog:
+    path: Path
+    excluded_untagged_records: int
+    excluded_other_cohort_records: int
+    excluded_malformed_records: int
+
+
+def _materialize_runtime_cohort_trade_log(
+    trades_path: Path,
+    cohort_id: str,
+    cohort_kind: str,
+    *,
+    since: datetime | None,
+    until: datetime | None,
+    exclude_test: bool,
+) -> _RuntimeCohortTradeLog:
+    """Write an exact-lineage JSONL view for every log-backed report reader."""
+
+    validate_runtime_paper_cohort_lineage(cohort_id, cohort_kind)
+    excluded_untagged_records = 0
+    excluded_other_cohort_records = 0
+    excluded_malformed_records = 0
+    fd, temporary_path = tempfile.mkstemp(prefix="daily-review-runtime-cohort-", suffix=".jsonl")
+    path = Path(temporary_path)
+    try:
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            for record in iter_trade_records(trades_path):
+                if record_has_runtime_paper_cohort_lineage(record, cohort_id, cohort_kind):
+                    handle.write(json.dumps(record, separators=(",", ":")) + "\n")
+        # The temporary view must retain every exact-lineage row for readers with
+        # longer windows. Count exclusions separately with the funnel's window and
+        # test-record semantics so the report does not misstate this run's scope.
+        for record in iter_trade_records(trades_path, since=since, until=until):
+            if exclude_test and decision_funnel_summary.is_test_record(record):
+                continue
+            record_cohort_id = record.get("runtime_paper_cohort_id")
+            record_cohort_kind = record.get("runtime_paper_cohort_kind")
+            if record_cohort_id is None or record_cohort_kind is None:
+                excluded_untagged_records += 1
+            elif type(record_cohort_id) is not str or type(record_cohort_kind) is not str:
+                excluded_malformed_records += 1
+            elif not record_has_runtime_paper_cohort_lineage(record, cohort_id, cohort_kind):
+                excluded_other_cohort_records += 1
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+    return _RuntimeCohortTradeLog(
+        path=path,
+        excluded_untagged_records=excluded_untagged_records,
+        excluded_other_cohort_records=excluded_other_cohort_records,
+        excluded_malformed_records=excluded_malformed_records,
+    )
+
+
+def _runtime_cohort_tier_state_path(
+    tier_state_path: Path | None,
+    cohort_id: str,
+    cohort_kind: str,
+) -> Path | None:
+    """Keep a scoped report's source-tier history out of the aggregate baseline."""
+
+    if tier_state_path is None:
+        return None
+    cohort_id, cohort_kind = validate_runtime_paper_cohort_lineage(cohort_id, cohort_kind)
+    return (
+        tier_state_path.parent
+        / "runtime_paper_cohorts"
+        / cohort_kind
+        / cohort_id
+        / tier_state_path.name
+    )
+
+
+def _build_daily_review_from_paths(
     *,
     trades_path: Path,
     paper_db_path: Path,
@@ -1162,11 +1364,18 @@ def build_daily_review(
     until: datetime | None,
     top: int,
     exclude_test: bool,
+    runtime_paper_cohort_id: str | None = None,
+    runtime_paper_cohort_kind: str | None = None,
     show_progress: bool = False,
     show_profile: bool = False,
     tier_state_path: Path | None = None,
     mark_provider: paper_performance_drilldown.MarketProvider | None = None,
     mark_as_of: datetime | None = None,
+    display_trades_path: Path | None = None,
+    assignment_shadow_path: Path | None = None,
+    runtime_paper_cohort_excluded_untagged_records: int | None = None,
+    runtime_paper_cohort_excluded_other_cohort_records: int | None = None,
+    runtime_paper_cohort_excluded_malformed_records: int | None = None,
 ) -> list[str]:
     _t0 = time.perf_counter()
 
@@ -1192,8 +1401,26 @@ def build_daily_review(
             since,
             until,
             exclude_test=exclude_test,
+            runtime_paper_cohort_id=runtime_paper_cohort_id,
+            runtime_paper_cohort_kind=runtime_paper_cohort_kind,
             progress_tracker=ProgressTracker() if show_progress else None,
         )
+    supplied_scope_counts = (
+        runtime_paper_cohort_excluded_untagged_records,
+        runtime_paper_cohort_excluded_other_cohort_records,
+        runtime_paper_cohort_excluded_malformed_records,
+    )
+    if any(value is not None for value in supplied_scope_counts):
+        if runtime_paper_cohort_id is None or any(value is None for value in supplied_scope_counts):
+            raise RuntimePaperCohortScopeError("runtime cohort exclusion counts require a complete runtime cohort scope")
+        (
+            excluded_untagged_records,
+            excluded_other_cohort_records,
+            excluded_malformed_records,
+        ) = supplied_scope_counts
+        funnel_stats["runtime_paper_cohort_excluded_untagged_records"] = excluded_untagged_records
+        funnel_stats["runtime_paper_cohort_excluded_other_cohort_records"] = excluded_other_cohort_records
+        funnel_stats["runtime_paper_cohort_excluded_malformed_records"] = excluded_malformed_records
     with stage_timer("signal edge diagnostics", enabled=show_profile):
         edge_stats = signal_edge_diagnostics.summarize(
             trades_path,
@@ -1283,9 +1510,12 @@ def build_daily_review(
     analysis_rejections = Counter(funnel_stats.get("analysis_rejected_reasons", {}))
     assignment_shadow_stats = _summarize_fresh_pass_assignment_shadow(
         trades_path,
+        shadow_path=assignment_shadow_path,
         since=since,
         until=until,
         exclude_test=exclude_test,
+        runtime_paper_cohort_id=runtime_paper_cohort_id,
+        runtime_paper_cohort_kind=runtime_paper_cohort_kind,
     )
     skip_breakdown = edge_stats.get("skip_breakdown", {})
     match_flags = Counter(match_stats.get("heuristic_flags", {}))
@@ -1309,8 +1539,15 @@ def build_daily_review(
     lines: list[str] = []
     lines.append("PIPELINE REVIEW")
     lines.append(f"Software version                 : {_software_version()}")
-    lines.append(f"Trades log: {trades_path}")
+    lines.append(f"Trades log: {display_trades_path or trades_path}")
     lines.append(f"Paper DB : {paper_db_path}")
+    if runtime_paper_cohort_id is not None:
+        lines.append(
+            "Runtime cohort scope            : "
+            f"{runtime_paper_cohort_id} ({runtime_paper_cohort_kind}); "
+            "all structured-log readers and paper DB are lineage-filtered"
+        )
+        lines.append("System health and gate state      : global runtime state; not cohort P&L")
     if since or until:
         since_text = since.date().isoformat() if since else "(beginning)"
         until_text = until.date().isoformat() if until else "(latest)"
@@ -1323,7 +1560,7 @@ def build_daily_review(
     # cohort sentinel is visible before the operator wades through the
     # downstream analysis sections. Same data sources as
     # `scripts/botcheck.py::print_kalshi_drift_section` (P-9 / LD-14).
-    halt_state, cohort_ts = _collect_kalshi_drift_state()
+    halt_state, cohort_ts = _collect_kalshi_drift_state(paper_db_path)
     lines.extend(_format_kalshi_drift_lines(halt_state, cohort_ts))
 
     # Gates & experiments: live-readiness (POST_FIX_NEW), the edge-prioritization
@@ -1370,6 +1607,17 @@ def build_daily_review(
                 attribution,
                 since=since,
                 until=until,
+                runtime_paper_cohort_id=funnel_stats.get("runtime_paper_cohort_filter_id"),
+                runtime_paper_cohort_kind=funnel_stats.get("runtime_paper_cohort_filter_kind"),
+                excluded_untagged_records=int(
+                    funnel_stats.get("runtime_paper_cohort_excluded_untagged_records") or 0
+                ),
+                excluded_other_cohort_records=int(
+                    funnel_stats.get("runtime_paper_cohort_excluded_other_cohort_records") or 0
+                ),
+                excluded_malformed_records=int(
+                    funnel_stats.get("runtime_paper_cohort_excluded_malformed_records") or 0
+                ),
             )
         )
     lines.extend(_format_match_attribution_lines(funnel_stats, top=top))
@@ -1396,7 +1644,11 @@ def build_daily_review(
     tier_by_source = _build_tier_by_source(scorecard_stats)
 
     if tier_state_path is not None:
-        prior_state = _load_previous_tier_state(tier_state_path) or {}
+        prior_state = _load_previous_tier_state(
+            tier_state_path,
+            runtime_paper_cohort_id=runtime_paper_cohort_id,
+            runtime_paper_cohort_kind=runtime_paper_cohort_kind,
+        ) or {}
         prior_previous = prior_state.get("previous") or {}
         prior_tiers = prior_previous.get("tiers") if isinstance(prior_previous, dict) else None
         prior_date = prior_previous.get("date") if isinstance(prior_previous, dict) else None
@@ -1955,13 +2207,104 @@ def build_daily_review(
     # Reporting-only feature: log to stderr on IO failure, never raise.
     if tier_state_path is not None:
         try:
-            _save_current_tier_state(tier_state_path, tier_by_source, datetime.now(timezone.utc))
+            _save_current_tier_state(
+                tier_state_path,
+                tier_by_source,
+                datetime.now(timezone.utc),
+                runtime_paper_cohort_id=runtime_paper_cohort_id,
+                runtime_paper_cohort_kind=runtime_paper_cohort_kind,
+            )
         except OSError as exc:
             _eprint(
                 f"warning: failed to persist source tier state to {tier_state_path}: {exc.__class__.__name__}: {exc}"
             )
 
     return lines
+
+
+def build_daily_review(
+    *,
+    trades_path: Path,
+    paper_db_path: Path,
+    since: datetime | None,
+    until: datetime | None,
+    top: int,
+    exclude_test: bool,
+    runtime_paper_cohort_id: str | None = None,
+    runtime_paper_cohort_kind: str | None = None,
+    show_progress: bool = False,
+    show_profile: bool = False,
+    tier_state_path: Path | None = None,
+    mark_provider: paper_performance_drilldown.MarketProvider | None = None,
+    mark_as_of: datetime | None = None,
+) -> list[str]:
+    """Render one report with all log readers bound to an optional lineage pair."""
+
+    if (runtime_paper_cohort_id is None) != (runtime_paper_cohort_kind is None):
+        raise RuntimePaperCohortScopeError("runtime paper cohort ID and kind must be supplied together")
+    if runtime_paper_cohort_id is None:
+        return _build_daily_review_from_paths(
+            trades_path=trades_path,
+            paper_db_path=paper_db_path,
+            since=since,
+            until=until,
+            top=top,
+            exclude_test=exclude_test,
+            show_progress=show_progress,
+            show_profile=show_profile,
+            tier_state_path=tier_state_path,
+            mark_provider=mark_provider,
+            mark_as_of=mark_as_of,
+        )
+
+    cohort_id, cohort_kind = validate_runtime_paper_cohort_lineage(
+        runtime_paper_cohort_id,
+        runtime_paper_cohort_kind,
+    )
+    expected_paper_db_path = derive_runtime_paper_cohort_db_path(
+        REPO_ROOT,
+        cohort_id,
+        cohort_kind,
+    )
+    if paper_db_path.resolve(strict=False) != expected_paper_db_path.resolve(strict=False):
+        raise RuntimePaperCohortScopeError(
+            "paper DB must be the canonical path for the runtime paper cohort"
+        )
+    scoped_trade_log = _materialize_runtime_cohort_trade_log(
+        trades_path,
+        cohort_id,
+        cohort_kind,
+        since=since,
+        until=until,
+        exclude_test=exclude_test,
+    )
+    try:
+        return _build_daily_review_from_paths(
+            trades_path=scoped_trade_log.path,
+            paper_db_path=paper_db_path,
+            since=since,
+            until=until,
+            top=top,
+            exclude_test=exclude_test,
+            runtime_paper_cohort_id=cohort_id,
+            runtime_paper_cohort_kind=cohort_kind,
+            show_progress=show_progress,
+            show_profile=show_profile,
+            tier_state_path=_runtime_cohort_tier_state_path(
+                tier_state_path,
+                cohort_id,
+                cohort_kind,
+            ),
+            mark_provider=mark_provider,
+            mark_as_of=mark_as_of,
+            display_trades_path=trades_path,
+            assignment_shadow_path=_fresh_pass_assignment_shadow_path(trades_path),
+            runtime_paper_cohort_excluded_untagged_records=scoped_trade_log.excluded_untagged_records,
+            runtime_paper_cohort_excluded_other_cohort_records=scoped_trade_log.excluded_other_cohort_records,
+            runtime_paper_cohort_excluded_malformed_records=scoped_trade_log.excluded_malformed_records,
+        )
+    finally:
+        scoped_trade_log.path.unlink(missing_ok=True)
 
 
 def main() -> int:
@@ -1982,11 +2325,13 @@ def main() -> int:
     mark_as_of = datetime.now(timezone.utc)
     lines = build_daily_review(
         trades_path=Path(args.path),
-        paper_db_path=DEFAULT_PAPER_DB_PATH,
+        paper_db_path=Path(args.paper_db) if args.paper_db else DEFAULT_PAPER_DB_PATH,
         since=since,
         until=until,
         top=max(1, args.top),
         exclude_test=args.exclude_test,
+        runtime_paper_cohort_id=args.runtime_paper_cohort_id,
+        runtime_paper_cohort_kind=args.runtime_paper_cohort_kind,
         show_progress=args.progress,
         show_profile=args.profile,
         tier_state_path=SOURCE_TIER_STATE_PATH,

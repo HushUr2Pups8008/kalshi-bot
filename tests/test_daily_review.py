@@ -1,8 +1,12 @@
 import json
+import sys
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
+from scripts import daily_review
 from scripts.daily_review import (
     _build_tier_by_source,
     _format_fresh_pass_conversion_lines,
@@ -73,7 +77,8 @@ def test_format_same_window_lifecycle_attribution_lines_surfaces_missing_executi
     )
 
     assert lines == [
-        "  Same-window linkable cohort      : 3 opportunities",
+        "  Same-window linkable lifecycles  : 3 opportunities",
+        "    Funnel scope                   : decision-funnel-derived fields are unscoped; all log diagnostics and paper DB figures retain their source scope",
         "    Window                         : 2026-04-11T00:00:00+00:00 -> 2026-04-12T00:00:00+00:00",
         "    Terminal attribution           : G7 skips=1, zero-cap skips=1, other skips=0, paper trades=0, live submissions=0, unknown live submissions=0, intents without matching terminal journal=0, conflicts=0, receipt conflicts=0, pending=1, orphan skips=1",
         "    Paper-trade lineage            : unavailable (0/1 event rows linked)",
@@ -84,6 +89,191 @@ def test_format_same_window_lifecycle_attribution_lines_surfaces_missing_executi
         "    P&L basis                      : settlement and mark P&L excluded from lifecycle linkage",
         "    Unattributed lifecycle events  : PAPER_TRADE=1",
     ]
+
+
+def test_format_same_window_lifecycle_attribution_lines_shows_selected_cohort_scope():
+    lines = _format_same_window_lifecycle_attribution_lines(
+        {},
+        runtime_paper_cohort_id="legacy-pending-20260729",
+        runtime_paper_cohort_kind="legacy_pending",
+        excluded_untagged_records=7,
+        excluded_other_cohort_records=3,
+        excluded_malformed_records=1,
+    )
+
+    assert lines[:2] == [
+        "  Same-window linkable cohort      : legacy-pending-20260729 (legacy_pending); 0 opportunities",
+        "    Funnel scope                   : cohort-only; excluded untagged=7, other_cohort=3, malformed=1; all structured-log readers and paper DB use this lineage",
+    ]
+
+
+def test_main_forwards_runtime_paper_cohort_scope(monkeypatch, tmp_path):
+    captured: dict[str, object] = {}
+
+    def fake_build_daily_review(**kwargs):
+        captured.update(kwargs)
+        return ["DAILY REVIEW"]
+
+    monkeypatch.setattr(daily_review, "REPORTS_DIR", tmp_path)
+    monkeypatch.setattr(daily_review, "DEFAULT_REPORT_PATH", tmp_path / "daily_review.txt")
+    monkeypatch.setattr(daily_review, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(daily_review, "build_daily_review", fake_build_daily_review)
+    monkeypatch.setattr(daily_review, "write_report", lambda path, lines: None)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "daily_review.py",
+            "--runtime-paper-cohort-id",
+            "legacy-pending-20260729",
+            "--runtime-paper-cohort-kind",
+            "legacy_pending",
+            "--paper-db",
+            str(tmp_path / "data" / "legacy_pending_paper_cohorts" / "legacy-pending-20260729" / "paper_trades.db"),
+        ],
+    )
+
+    assert daily_review.main() == 0
+    assert captured["runtime_paper_cohort_id"] == "legacy-pending-20260729"
+    assert captured["runtime_paper_cohort_kind"] == "legacy_pending"
+    assert captured["paper_db_path"] == tmp_path / "data" / "legacy_pending_paper_cohorts" / "legacy-pending-20260729" / "paper_trades.db"
+
+
+def test_parse_args_rejects_blank_runtime_paper_cohort_id(monkeypatch, capsys):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "daily_review.py",
+            "--runtime-paper-cohort-id",
+            "   ",
+            "--runtime-paper-cohort-kind",
+            "legacy_pending",
+        ],
+    )
+
+    with pytest.raises(SystemExit):
+        daily_review.parse_args()
+
+    assert "runtime paper cohort id" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--runtime-paper-cohort-id", "legacy-pending-20260729"],
+        ["--runtime-paper-cohort-kind", "legacy_pending"],
+        [
+            "--runtime-paper-cohort-id",
+            "legacy-pending-20260729",
+            "--runtime-paper-cohort-kind",
+            "legacy_pending",
+            "--paper-db",
+            "data/paper_trades.db",
+        ],
+        [
+            "--runtime-paper-cohort-id",
+            " legacy-pending-20260729 ",
+            "--runtime-paper-cohort-kind",
+            "legacy_pending",
+        ],
+    ],
+)
+def test_parse_args_rejects_ambiguous_runtime_paper_cohort_scope(monkeypatch, capsys, args):
+    monkeypatch.setattr(sys, "argv", ["daily_review.py", *args])
+
+    with pytest.raises(SystemExit):
+        daily_review.parse_args()
+
+    assert "runtime paper cohort" in capsys.readouterr().err
+
+
+def test_build_daily_review_filters_every_log_reader_to_runtime_cohort(monkeypatch, tmp_path):
+    input_log = tmp_path / "trades.jsonl"
+    input_log.write_text(
+        "\n".join(
+            json.dumps(record)
+            for record in (
+                {
+                    "type": "SIGNAL",
+                    "runtime_paper_cohort_id": "legacy-pending-20260729",
+                    "runtime_paper_cohort_kind": "legacy_pending",
+                },
+                {
+                    "type": "SIGNAL",
+                    "runtime_paper_cohort_id": "legacy-pending-20260729",
+                    "runtime_paper_cohort_kind": "active",
+                },
+                {"type": "SIGNAL"},
+                {
+                    "type": "SIGNAL",
+                    "runtime_paper_cohort_id": ["legacy-pending-20260729"],
+                    "runtime_paper_cohort_kind": "legacy_pending",
+                },
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    def fake_internal(**kwargs):
+        scoped_path = kwargs["trades_path"]
+        assert isinstance(scoped_path, Path)
+        captured["display_trades_path"] = kwargs["display_trades_path"]
+        captured["records"] = [json.loads(line) for line in scoped_path.read_text(encoding="utf-8").splitlines()]
+        captured["scoped_path"] = scoped_path
+        captured["excluded_untagged"] = kwargs["runtime_paper_cohort_excluded_untagged_records"]
+        captured["excluded_other"] = kwargs["runtime_paper_cohort_excluded_other_cohort_records"]
+        captured["excluded_malformed"] = kwargs["runtime_paper_cohort_excluded_malformed_records"]
+        captured["tier_state_path"] = kwargs["tier_state_path"]
+        captured["assignment_shadow_path"] = kwargs["assignment_shadow_path"]
+        return ["DAILY REVIEW"]
+
+    monkeypatch.setattr(daily_review, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(daily_review, "_build_daily_review_from_paths", fake_internal)
+    paper_db_path = (
+        tmp_path
+        / "data"
+        / "legacy_pending_paper_cohorts"
+        / "legacy-pending-20260729"
+        / "paper_trades.db"
+    )
+
+    assert build_daily_review(
+        trades_path=input_log,
+        paper_db_path=paper_db_path,
+        since=None,
+        until=None,
+        top=5,
+        exclude_test=False,
+        runtime_paper_cohort_id="legacy-pending-20260729",
+        runtime_paper_cohort_kind="legacy_pending",
+        tier_state_path=tmp_path / "derived" / "source_tier_state.json",
+    ) == ["DAILY REVIEW"]
+    assert captured["display_trades_path"] == input_log
+    assert captured["records"] == [
+        {
+            "type": "SIGNAL",
+            "runtime_paper_cohort_id": "legacy-pending-20260729",
+            "runtime_paper_cohort_kind": "legacy_pending",
+        }
+    ]
+    assert captured["excluded_untagged"] == 1
+    assert captured["excluded_other"] == 1
+    assert captured["excluded_malformed"] == 1
+    assert captured["tier_state_path"] == (
+        tmp_path
+        / "derived"
+        / "runtime_paper_cohorts"
+        / "legacy_pending"
+        / "legacy-pending-20260729"
+        / "source_tier_state.json"
+    )
+    assert captured["assignment_shadow_path"] == (
+        tmp_path / "shadow" / "fresh_pass_assignment_shadow.jsonl"
+    )
+    assert not captured["scoped_path"].exists()
 
 
 def test_write_report_overwrites_previous_snapshot_atomically(tmp_path):
@@ -193,7 +383,103 @@ def test_summarize_fresh_pass_assignment_shadow_counts_assignment_outcomes(tmp_p
     assert stats["top_unassigned_sources"] == Counter({"AP": 1})
 
 
+def test_summarize_fresh_pass_assignment_shadow_filters_to_runtime_cohort(tmp_path):
+    trades_path = tmp_path / "logs" / "trades" / "live" / "trades.jsonl"
+    shadow_path = tmp_path / "logs" / "trades" / "shadow" / "fresh_pass_assignment_shadow.jsonl"
+    shadow_path.parent.mkdir(parents=True)
+    trades_path.parent.mkdir(parents=True)
+    trades_path.write_text("", encoding="utf-8")
+    shadow_path.write_text(
+        "\n".join(
+            json.dumps(record)
+            for record in (
+                {
+                    "type": "FRESH_PASS_ASSIGNMENT_SHADOW",
+                    "ts": "2026-04-11T12:00:00+00:00",
+                    "source": "Reuters",
+                    "assigned": True,
+                    "runtime_paper_cohort_id": "legacy-pending-20260729",
+                    "runtime_paper_cohort_kind": "legacy_pending",
+                },
+                {
+                    "type": "FRESH_PASS_ASSIGNMENT_SHADOW",
+                    "ts": "2026-04-11T13:00:00+00:00",
+                    "source": "AP",
+                    "assigned": False,
+                    "runtime_paper_cohort_id": "legacy-pending-20260729",
+                    "runtime_paper_cohort_kind": "active",
+                },
+                {
+                    "type": "FRESH_PASS_ASSIGNMENT_SHADOW",
+                    "ts": "2026-04-11T13:30:00+00:00",
+                    "source": "NPR",
+                    "assigned": False,
+                    "runtime_paper_cohort_id": "other-pending-20260729",
+                    "runtime_paper_cohort_kind": "legacy_pending",
+                },
+                {
+                    "type": "FRESH_PASS_ASSIGNMENT_SHADOW",
+                    "ts": "2026-04-11T14:00:00+00:00",
+                    "source": "BBC",
+                    "assigned": False,
+                },
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    stats = _summarize_fresh_pass_assignment_shadow(
+        trades_path,
+        shadow_path=shadow_path,
+        since=datetime(2026, 4, 11, tzinfo=timezone.utc),
+        until=datetime(2026, 4, 11, 23, 59, tzinfo=timezone.utc),
+        runtime_paper_cohort_id="legacy-pending-20260729",
+        runtime_paper_cohort_kind="legacy_pending",
+    )
+
+    assert stats["path"] == shadow_path
+    assert stats["rows"] == 1
+    assert stats["assigned"] == 1
+    assert stats["unassigned"] == 0
+
+
+def test_save_current_tier_state_rejects_mismatched_runtime_cohort_lineage(tmp_path):
+    state_path = tmp_path / "source_tier_state.json"
+    cohort_id = "cohort-20260729"
+    first_run = datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc)
+    second_run = datetime(2026, 7, 29, 12, 0, tzinfo=timezone.utc)
+
+    _save_current_tier_state(
+        state_path,
+        {"Reuters": "keep"},
+        first_run,
+        runtime_paper_cohort_id=cohort_id,
+        runtime_paper_cohort_kind="active",
+    )
+    _save_current_tier_state(
+        state_path,
+        {"Reuters": "watch / investigate"},
+        second_run,
+        runtime_paper_cohort_id=cohort_id,
+        runtime_paper_cohort_kind="legacy_pending",
+    )
+
+    saved = json.loads(state_path.read_text(encoding="utf-8"))
+    assert saved["runtime_paper_cohort"] == {
+        "cohort_id": cohort_id,
+        "cohort_kind": "legacy_pending",
+    }
+    assert saved["previous"] is None
+    assert _load_previous_tier_state(
+        state_path,
+        runtime_paper_cohort_id=cohort_id,
+        runtime_paper_cohort_kind="active",
+    ) is None
+
+
 def test_build_daily_review_formats_pipeline_stages(monkeypatch):
+    funnel_calls: list[dict[str, object]] = []
     monkeypatch.setattr(
         "scripts.daily_review._ollama_runtime_summary",
         lambda: "configured=qwen2.5:7b health=ok available=['qwen2.5:7b']",
@@ -239,8 +525,13 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     )
     monkeypatch.setattr(
         "scripts.daily_review.decision_funnel_summary.summarize",
-        lambda *args, **kwargs: {
+        lambda *args, **kwargs: (funnel_calls.append(kwargs), {
             "records_kept": 25,
+            "runtime_paper_cohort_filter_id": "legacy-pending-20260729",
+            "runtime_paper_cohort_filter_kind": "legacy_pending",
+            "runtime_paper_cohort_excluded_untagged_records": 7,
+            "runtime_paper_cohort_excluded_other_cohort_records": 3,
+            "runtime_paper_cohort_excluded_malformed_records": 1,
             "event_counts": {
                 "MATCH_SUPPRESSION_CANDIDATE": 1,
                 "MATCH_SUPPRESSED": 1,
@@ -331,7 +622,7 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
             "skip_retrieval_modes": Counter({"rss": 1}),
             "skip_evidence_ids": Counter({"ev-skip-1": 1}),
             "skip_settlement_source_matches": Counter({"unknown": 1}),
-        },
+        })[1],
     )
     monkeypatch.setattr(
         "scripts.daily_review._summarize_fresh_pass_assignment_shadow",
@@ -646,11 +937,19 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
 
     lines = build_daily_review(
         trades_path=Path("logs/trades/trades.jsonl"),
-        paper_db_path=Path("data/paper_trades.db"),
+        paper_db_path=(
+            daily_review.REPO_ROOT
+            / "data"
+            / "legacy_pending_paper_cohorts"
+            / "legacy-pending-20260729"
+            / "paper_trades.db"
+        ),
         since=datetime(2026, 4, 10, tzinfo=timezone.utc),
         until=datetime(2026, 4, 11, 23, 59, tzinfo=timezone.utc),
         top=2,
         exclude_test=True,
+        runtime_paper_cohort_id="legacy-pending-20260729",
+        runtime_paper_cohort_kind="legacy_pending",
     )
 
     rendered = "\n".join(lines)
@@ -713,7 +1012,20 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     assert "No-candidate records missing pool-stage: 0" in rendered
     assert "Drilldown: no-candidate pool stages" in rendered
     assert "post_admission_no_match" in rendered
-    assert "Same-window linkable cohort      : 3 opportunities" in rendered
+    assert funnel_calls == [
+        {
+            "exclude_test": True,
+            "runtime_paper_cohort_id": "legacy-pending-20260729",
+            "runtime_paper_cohort_kind": "legacy_pending",
+            "progress_tracker": None,
+        }
+    ]
+    assert "Same-window linkable cohort      : legacy-pending-20260729 (legacy_pending); 3 opportunities" in rendered
+    scope_line = next(line for line in rendered.splitlines() if "Funnel scope" in line)
+    assert scope_line == (
+        "    Funnel scope                   : cohort-only; excluded untagged=0, other_cohort=0, malformed=0; "
+        "all structured-log readers and paper DB use this lineage"
+    )
     assert "Paper-trade lineage            : unavailable (0/2 event rows linked)" in rendered
     assert "Live submission lineage        : 0/0 event rows linked; not fill or P&L evidence" in rendered
     assert "P&L basis                      : settlement and mark P&L excluded from lifecycle linkage" in rendered

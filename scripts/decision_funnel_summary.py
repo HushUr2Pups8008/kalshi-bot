@@ -43,6 +43,11 @@ from utils.diagnostics_script_helpers import (
 from utils.diagnostic_reporting_helpers import format_counter, print_standard_trade_log_header
 from utils.reporting_helpers import DEFAULT_CURRENT_STATE_WINDOW_HOURS, resolve_recent_window
 from utils.trade_log_reader import TradeLogReadStats, iter_trade_records
+from scripts.runtime_paper_cohort_scope import (
+    RuntimePaperCohortScopeError,
+    record_has_runtime_paper_cohort_lineage,
+    validate_runtime_paper_cohort_lineage,
+)
 
 
 # Default to the active live file -- the funnel summary is a current-run metric.
@@ -151,7 +156,25 @@ def parse_args() -> argparse.Namespace:
         parser,
         help_text="Exclude synthetic/test records (source contains 'r/test' or ticker contains 'KXTEST')",
     )
+    parser.add_argument(
+        "--runtime-paper-cohort-id",
+        help="Only include records tagged with this active runtime paper-cohort ID",
+    )
+    parser.add_argument(
+        "--runtime-paper-cohort-kind",
+        help="Required cohort kind for --runtime-paper-cohort-id",
+    )
     args = parser.parse_args()
+    if (args.runtime_paper_cohort_id is None) != (args.runtime_paper_cohort_kind is None):
+        parser.error("runtime paper cohort ID and kind must be supplied together")
+    if args.runtime_paper_cohort_id is not None:
+        try:
+            validate_runtime_paper_cohort_lineage(
+                args.runtime_paper_cohort_id,
+                args.runtime_paper_cohort_kind,
+            )
+        except RuntimePaperCohortScopeError as exc:
+            parser.error(str(exc))
     if (args.since_utc or args.until_utc) and (args.since or args.until):
         parser.error("--since-utc/--until-utc cannot be combined with --since/--until")
     return args
@@ -916,13 +939,32 @@ def _keyword_count(record: dict[str, Any]) -> int | None:
 
 
 def summarize(
-    path: Path, since: datetime | None, until: datetime | None, exclude_test: bool = False, *, progress_tracker=None
+    path: Path,
+    since: datetime | None,
+    until: datetime | None,
+    exclude_test: bool = False,
+    *,
+    runtime_paper_cohort_id: str | None = None,
+    runtime_paper_cohort_kind: str | None = None,
+    progress_tracker=None,
 ) -> dict[str, Any]:
+    if (runtime_paper_cohort_id is None) != (runtime_paper_cohort_kind is None):
+        raise RuntimePaperCohortScopeError("runtime paper cohort ID and kind must be supplied together")
+    if runtime_paper_cohort_id is not None:
+        validate_runtime_paper_cohort_lineage(
+            runtime_paper_cohort_id,
+            runtime_paper_cohort_kind,
+        )
     stats: dict[str, Any] = {
         "path": path,
         "lines_total": 0,
         "lines_malformed": 0,
         "records_kept": 0,
+        "runtime_paper_cohort_filter_id": runtime_paper_cohort_id,
+        "runtime_paper_cohort_filter_kind": runtime_paper_cohort_kind,
+        "runtime_paper_cohort_excluded_untagged_records": 0,
+        "runtime_paper_cohort_excluded_other_cohort_records": 0,
+        "runtime_paper_cohort_excluded_malformed_records": 0,
         "event_counts": Counter(),
         "skip_reasons": Counter(),
         "skip_categories": Counter(),
@@ -1008,6 +1050,22 @@ def summarize(
             progress_tracker.tick()
         if exclude_test and is_test_record(record):
             continue
+        if runtime_paper_cohort_id is not None:
+            record_cohort_id = record.get("runtime_paper_cohort_id")
+            record_cohort_kind = record.get("runtime_paper_cohort_kind")
+            if record_cohort_id is None or record_cohort_kind is None:
+                stats["runtime_paper_cohort_excluded_untagged_records"] += 1
+                continue
+            if type(record_cohort_id) is not str or type(record_cohort_kind) is not str:
+                stats["runtime_paper_cohort_excluded_malformed_records"] += 1
+                continue
+            if not record_has_runtime_paper_cohort_lineage(
+                record,
+                runtime_paper_cohort_id,
+                runtime_paper_cohort_kind,
+            ):
+                stats["runtime_paper_cohort_excluded_other_cohort_records"] += 1
+                continue
 
         stats["records_kept"] += 1
         event_type = str(record.get("type") or "UNKNOWN").strip() or "UNKNOWN"
@@ -1394,6 +1452,26 @@ def print_summary(stats: dict[str, Any], top: int, since: datetime | None, until
         lines_malformed=stats["lines_malformed"],
         records_kept=stats["records_kept"],
     )
+
+    runtime_paper_cohort_id = stats["runtime_paper_cohort_filter_id"]
+    if runtime_paper_cohort_id is not None:
+        runtime_paper_cohort_kind = stats["runtime_paper_cohort_filter_kind"]
+        print()
+        print("Runtime paper cohort scope")
+        print(f"  Cohort ID                   : {runtime_paper_cohort_id}")
+        print(f"  Cohort kind                 : {runtime_paper_cohort_kind}")
+        print(
+            "  Excluded untagged rows      : "
+            f"{stats['runtime_paper_cohort_excluded_untagged_records']}"
+        )
+        print(
+            "  Excluded other-cohort rows : "
+            f"{stats['runtime_paper_cohort_excluded_other_cohort_records']}"
+        )
+        print(
+            "  Excluded malformed rows     : "
+            f"{stats['runtime_paper_cohort_excluded_malformed_records']}"
+        )
 
     if stats["records_kept"] == 0:
         print()
@@ -1885,7 +1963,14 @@ def main() -> int:
     if since and until and since > until:
         raise SystemExit("--since must be on or before --until")
 
-    stats = summarize(Path(args.path), since, until, exclude_test=args.exclude_test)
+    stats = summarize(
+        Path(args.path),
+        since,
+        until,
+        exclude_test=args.exclude_test,
+        runtime_paper_cohort_id=args.runtime_paper_cohort_id,
+        runtime_paper_cohort_kind=args.runtime_paper_cohort_kind,
+    )
     print_summary(stats, top=max(1, args.top), since=since, until=until)
     return 0
 

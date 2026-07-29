@@ -142,13 +142,118 @@ else:
         || printf 'matcher_weights=unavailable reason=status_helper_failed\n'
     )
 }
-runtime_started_utc() {
+runtime_paper_cohort_scope() {
+    local expected_pid="$1"
     local py
     py="$(python_bin)"
-    if [[ ! -f "$BOT_RUNTIME_LOCK" || -z "$py" ]]; then
-        return 1
+    if [[ -z "$py" ]]; then
+        printf 'unavailable\tpython_unavailable\t\t\t\n'
+        return 0
     fi
-    "$py" -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("started_utc") or "")' "$BOT_RUNTIME_LOCK" 2>/dev/null
+    if [[ ! -f "$BOT_RUNTIME_LOCK" ]]; then
+        printf 'unavailable\truntime_lock_missing\t\t\t\n'
+        return 0
+    fi
+    "$py" - "$BOT_RUNTIME_LOCK" "$expected_pid" "$REPO_ROOT" <<'PY'
+import fcntl
+import json
+import os
+import re
+import sys
+from datetime import datetime
+from pathlib import Path
+
+lock_path = Path(sys.argv[1])
+expected_pid_text = sys.argv[2]
+repo_root = Path(sys.argv[3])
+
+
+def unavailable(reason: str) -> None:
+    print("unavailable", reason, "", "", "", sep="\t")
+    raise SystemExit(0)
+
+
+def valid_pid(value: object) -> bool:
+    return not isinstance(value, bool) and isinstance(value, int) and value > 0
+
+
+def valid_timestamp(value: object) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).tzinfo is not None
+    except ValueError:
+        return False
+
+
+try:
+    expected_pid = int(expected_pid_text)
+except ValueError:
+    unavailable("launchd_pid_invalid")
+if expected_pid <= 0:
+    unavailable("launchd_pid_invalid")
+
+try:
+    with lock_path.open("r", encoding="utf-8") as lock_file:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            pass
+        except OSError:
+            unavailable("runtime_lock_unverifiable")
+        else:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            unavailable("runtime_lock_unheld")
+        try:
+            payload = json.load(lock_file)
+        except (json.JSONDecodeError, OSError, ValueError):
+            unavailable("runtime_lock_invalid_json")
+except OSError:
+    unavailable("runtime_lock_unreadable")
+
+if not isinstance(payload, dict):
+    unavailable("runtime_lock_invalid_payload")
+lock_pid = payload.get("pid")
+if not valid_pid(lock_pid) or lock_pid != expected_pid:
+    unavailable("pid_mismatch")
+if payload.get("cwd") != str(repo_root):
+    unavailable("cwd_mismatch")
+started_utc = payload.get("started_utc")
+if not valid_timestamp(started_utc):
+    unavailable("started_utc_invalid")
+argv = payload.get("argv")
+if not isinstance(argv, list) or not any(isinstance(item, str) and Path(item).name == "main.py" for item in argv):
+    unavailable("argv_invalid")
+lineage = payload.get("runtime_paper_cohort")
+if not isinstance(lineage, dict) or lineage.get("schema_version") != 1:
+    unavailable("runtime_cohort_context_missing")
+cohort_id = lineage.get("cohort_id")
+cohort_kind = lineage.get("cohort_kind")
+if lineage.get("owner_pid") != lock_pid:
+    unavailable("runtime_cohort_owner_pid_mismatch")
+if lineage.get("boot_started_utc") != started_utc:
+    unavailable("runtime_cohort_boot_mismatch")
+if not isinstance(cohort_id, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", cohort_id):
+    unavailable("runtime_cohort_id_invalid")
+if cohort_kind not in {"legacy", "active", "legacy_pending"}:
+    unavailable("runtime_cohort_kind_invalid")
+if (cohort_id == "legacy") != (cohort_kind == "legacy"):
+    unavailable("runtime_cohort_pair_invalid")
+if cohort_kind == "legacy":
+    db_path = repo_root / "data" / "paper_trades.db"
+elif cohort_kind == "active":
+    db_path = repo_root / "data" / "paper_cohorts" / cohort_id / "paper_trades.db"
+else:
+    db_path = repo_root / "data" / "legacy_pending_paper_cohorts" / cohort_id / "paper_trades.db"
+if not db_path.is_file() or db_path.is_symlink():
+    unavailable("runtime_cohort_db_unavailable")
+try:
+    os.kill(lock_pid, 0)
+except OSError:
+    unavailable("runtime_pid_not_alive")
+
+print("verified", cohort_id, cohort_kind, str(db_path), started_utc, sep="\t")
+PY
 }
 elapsed_hours_since() {
     local started="$1"
@@ -200,27 +305,58 @@ else
 fi
 codeblock_end
 
-# ── 2. Bankroll trajectory ────────────────────────────────────────────────────
-section "2. Notional bankroll"
+# ── 1a. Runtime cohort provenance ───────────────────────────────────────────
+RUNTIME_COHORT_SCOPE_STATUS="unavailable"
+RUNTIME_COHORT_SCOPE_REASON="bot_not_running"
+RUNTIME_COHORT_ID=""
+RUNTIME_COHORT_KIND=""
+RUNTIME_PAPER_DB=""
+RUNTIME_STARTED=""
+if (( BOT_ALIVE == 1 )); then
+    RUNTIME_SCOPE_RESULT="$(runtime_paper_cohort_scope "$BOT_PID" || true)"
+    IFS=$'\t' read -r RUNTIME_COHORT_SCOPE_STATUS RUNTIME_SCOPE_VALUE RUNTIME_COHORT_KIND RUNTIME_PAPER_DB RUNTIME_STARTED <<<"$RUNTIME_SCOPE_RESULT"
+    if [[ "$RUNTIME_COHORT_SCOPE_STATUS" == "verified" ]]; then
+        RUNTIME_COHORT_ID="$RUNTIME_SCOPE_VALUE"
+        RUNTIME_COHORT_SCOPE_REASON=""
+    else
+        RUNTIME_COHORT_SCOPE_STATUS="unavailable"
+        RUNTIME_COHORT_SCOPE_REASON="${RUNTIME_SCOPE_VALUE:-runtime_scope_helper_failed}"
+        RUNTIME_COHORT_KIND=""
+        RUNTIME_PAPER_DB=""
+        RUNTIME_STARTED=""
+    fi
+fi
+section "1a. Runtime cohort provenance"
 codeblock_start
-if [[ -f "$PAPER_DB" ]]; then
-    NOTIONAL="$(sql "$PAPER_DB" "SELECT value FROM bot_state WHERE key='notional_bankroll';")"
+if [[ "$RUNTIME_COHORT_SCOPE_STATUS" == "verified" ]]; then
+    printf 'runtime_cohort_scope=verified id=%s kind=%s db=%s started_utc=%s\n' \
+        "$RUNTIME_COHORT_ID" "$RUNTIME_COHORT_KIND" "$RUNTIME_PAPER_DB" "$RUNTIME_STARTED" >>"$REPORT"
+else
+    printf 'runtime_cohort_scope=unavailable reason=%s\n' "$RUNTIME_COHORT_SCOPE_REASON" >>"$REPORT"
+fi
+codeblock_end
+
+# ── 2. Bankroll trajectory ────────────────────────────────────────────────────
+section "2. Runtime cohort notional bankroll"
+codeblock_start
+if [[ "$RUNTIME_COHORT_SCOPE_STATUS" == "verified" ]]; then
+    NOTIONAL="$(sql "$RUNTIME_PAPER_DB" "SELECT value FROM bot_state WHERE key='notional_bankroll';")"
     printf 'current notional_bankroll : $%s\n' "${NOTIONAL:-?}" >>"$REPORT"
-    PAPER_START="$(sql "$PAPER_DB" "SELECT value FROM bot_state WHERE key='paper_start_time';")"
+    PAPER_START="$(sql "$RUNTIME_PAPER_DB" "SELECT value FROM bot_state WHERE key='paper_start_time';")"
     printf 'paper_start_time          : %s\n' "${PAPER_START:-?}" >>"$REPORT"
     # 7-day delta via min/max of notional_bankroll_after across the window
-    BR_7D="$(sql "$PAPER_DB" "SELECT printf('rows=%d min=%.2f max=%.2f last=%.2f', COUNT(*), MIN(notional_bankroll_after), MAX(notional_bankroll_after), (SELECT notional_bankroll_after FROM paper_trades ORDER BY ts DESC LIMIT 1)) FROM paper_trades WHERE ts >= datetime('now','-7 days');")"
+    BR_7D="$(sql "$RUNTIME_PAPER_DB" "SELECT printf('rows=%d min=%.2f max=%.2f last=%.2f', COUNT(*), MIN(notional_bankroll_after), MAX(notional_bankroll_after), (SELECT notional_bankroll_after FROM paper_trades ORDER BY ts DESC LIMIT 1)) FROM paper_trades WHERE ts >= datetime('now','-7 days');")"
     printf 'last 7d (paper_trades)    : %s\n' "${BR_7D:-(no rows)}" >>"$REPORT"
 else
-    printf '(paper_trades.db not found at %s)\n' "$PAPER_DB" >>"$REPORT"
+    printf '(runtime cohort paper DB unavailable: %s)\n' "$RUNTIME_COHORT_SCOPE_REASON" >>"$REPORT"
 fi
 codeblock_end
 
 # ── 3. Paper-trade summary ────────────────────────────────────────────────────
-section "3. Paper-trade summary"
+section "3. Runtime cohort paper-trade summary"
 codeblock_start
-if [[ -f "$PAPER_DB" ]]; then
-    sql "$PAPER_DB" "
+if [[ "$RUNTIME_COHORT_SCOPE_STATUS" == "verified" ]]; then
+    sql "$RUNTIME_PAPER_DB" "
 SELECT
   printf('lifetime: %d trades, %d resolved, %d wins, %d losses, pnl_total=%.2f, win_rate=%.1f%%',
     COUNT(*),
@@ -232,12 +368,12 @@ SELECT
                   / NULLIF(SUM(CASE WHEN resolved=1 THEN 1 ELSE 0 END), 0))
 FROM paper_trades;
 " >>"$REPORT"
-    sql "$PAPER_DB" "
+    sql "$RUNTIME_PAPER_DB" "
 SELECT printf('last 24h: %d trades, %d resolved', COUNT(*), SUM(CASE WHEN resolved=1 THEN 1 ELSE 0 END))
 FROM paper_trades WHERE ts >= datetime('now','-1 day');
 " >>"$REPORT"
 else
-    printf '(paper_trades.db not found)\n' >>"$REPORT"
+    printf '(runtime cohort paper DB unavailable: %s)\n' "$RUNTIME_COHORT_SCOPE_REASON" >>"$REPORT"
 fi
 codeblock_end
 
@@ -354,8 +490,8 @@ else
 fi
 codeblock_end
 
-# ── P0. Kalshi drift / cohort / readiness heartbeat ─────────────────────────
-section "P0. Kalshi drift and cohort"
+# ── P0. Global legacy readiness heartbeat ───────────────────────────────────
+section "P0. Global legacy readiness gates"
 codeblock_start
 KALSHI_DRIFT_STATUS="kalshi_drift=ok"
 P0_COHORT_STATUS="p0_cohort=db_missing"
@@ -367,6 +503,10 @@ MATCHER_WEIGHTS_STATUS="$(matcher_weights_status)"
 POST_FIX_NEW_READINESS=""
 POST_FIX_NEW_REASON=""
 POST_FIX_NEW_CHECK_STATE="not_checked"
+P0_LEGACY_GATE_APPLICABLE=1
+if [[ "$RUNTIME_COHORT_SCOPE_STATUS" == "verified" && "$RUNTIME_COHORT_KIND" != "legacy" ]]; then
+    P0_LEGACY_GATE_APPLICABLE=0
+fi
 
 if [[ -f "$DRIFT_HALT_SENTINEL" ]]; then
     DRIFT_HALT_MTIME="$(file_mtime_utc "$DRIFT_HALT_SENTINEL" || true)"
@@ -376,7 +516,11 @@ else
     printf '%s\n' "$KALSHI_DRIFT_STATUS" >>"$REPORT"
 fi
 
-if [[ -f "$PAPER_DB" ]]; then
+printf 'p0_scope=global_legacy_db path=%s applicable_to_runtime=%s\n' "$PAPER_DB" "$P0_LEGACY_GATE_APPLICABLE" >>"$REPORT"
+if (( P0_LEGACY_GATE_APPLICABLE == 0 )); then
+    P0_COHORT_STATUS="p0_cohort=not_applicable runtime_cohort=${RUNTIME_COHORT_ID}/${RUNTIME_COHORT_KIND}"
+    printf '%s\n' "$P0_COHORT_STATUS" >>"$REPORT"
+elif [[ -f "$PAPER_DB" ]]; then
     P0_SENTINEL_TS="$(sql_ro "$PAPER_DB" "SELECT value FROM bot_state WHERE key='p0_price_fix_deployed_ts';" || true)"
     if [[ -n "$P0_SENTINEL_TS" ]]; then
         P0_POST_SENTINEL_ROWS="$(sql_ro "$PAPER_DB" "SELECT COUNT(*) FROM paper_trades WHERE ts >= '$P0_SENTINEL_TS';" || true)"
@@ -389,8 +533,7 @@ else
     printf '%s path=%s\n' "$P0_COHORT_STATUS" "$PAPER_DB" >>"$REPORT"
 fi
 
-RUNTIME_STARTED="$(runtime_started_utc || true)"
-if [[ -n "$RUNTIME_STARTED" ]]; then
+if [[ "$RUNTIME_COHORT_SCOPE_STATUS" == "verified" && -n "$RUNTIME_STARTED" ]]; then
     P0_RUNTIME_HOURS="$(elapsed_hours_since "$RUNTIME_STARTED" || true)"
     printf 'bot_runtime.started_utc=%s elapsed_hours=%s\n' "$RUNTIME_STARTED" "${P0_RUNTIME_HOURS:-unknown}" >>"$REPORT"
 else
@@ -398,7 +541,7 @@ else
 fi
 printf '%s\n' "$MATCHER_WEIGHTS_STATUS" >>"$REPORT"
 
-if [[ -f "$READINESS_SCRIPT" && -f "$PAPER_DB" ]]; then
+if (( P0_LEGACY_GATE_APPLICABLE == 1 )) && [[ -f "$READINESS_SCRIPT" && -f "$PAPER_DB" ]]; then
     READINESS_PY="$(python_bin)"
     if [[ -n "$READINESS_PY" ]]; then
         READINESS_JSON="$("$READINESS_PY" "$READINESS_SCRIPT" --db "$PAPER_DB" --json 2>/dev/null || true)"
@@ -424,7 +567,11 @@ if [[ -f "$READINESS_SCRIPT" && -f "$PAPER_DB" ]]; then
         POST_FIX_NEW_CHECK_STATE="unavailable"
     fi
 else
-    POST_FIX_NEW_STATUS="post_fix_new=not_checked"
+    if (( P0_LEGACY_GATE_APPLICABLE == 0 )); then
+        POST_FIX_NEW_STATUS="post_fix_new=not_applicable runtime_cohort=${RUNTIME_COHORT_ID}/${RUNTIME_COHORT_KIND}"
+    else
+        POST_FIX_NEW_STATUS="post_fix_new=not_checked"
+    fi
 fi
 printf '%s\n' "$POST_FIX_NEW_STATUS" >>"$REPORT"
 codeblock_end
@@ -479,50 +626,17 @@ if [[ "$POST_DEPLOY" == "1" ]]; then
 fi
 
 # ── 9. Opportunity-vs-trade drift ─────────────────────────────────────────────
-# Wired per operator goal "fix kalshi-bot bugs to enable paper-trade
-# evaluation" (Step 4): the watcher at scripts/observability/
-# opportunity_trade_drift.py was authored 2026-05-13 (commit 72fdf4a)
-# specifically to surface the silent-attrition condition where
-# OPPORTUNITY events emit but paper_trades stays flat. It shipped without
-# a delivery contract -- no scheduled surface invoked it. Wiring it here
-# gives daily operator visibility into executor-boundary attrition; this
-# watcher is downstream of the market-universe-shape failure mode the
-# 2026-05-12 incident exposed, and is intentionally complementary to it.
-# Section emits only; the verdict cascade is NOT extended in this commit
-# so the existing GREEN/YELLOW/RED logic stays load-bearing-stable.
+# The watcher accepts a DB and raw logs independently. Until it accepts the
+# same runtime lineage pair for both sides, scheduled output would mix cohorts.
 section "9. Opportunity-vs-trade drift"
 codeblock_start
-WATCHER_PY="$(python_bin)" || true
 DRIFT_VERDICT="UNAVAILABLE"
-if [[ -n "$WATCHER_PY" ]]; then
-    WATCHER_SCRIPT="$REPO_ROOT/scripts/observability/opportunity_trade_drift.py"
-    if [[ -f "$WATCHER_SCRIPT" ]]; then
-        WATCHER_OUT="$("$WATCHER_PY" \
-            "$WATCHER_SCRIPT" \
-            --db "$PAPER_DB" \
-            --trade-log-live "$TRADES_LOG" \
-            --trade-log-archive-dir "$OUTPUT_ROOT/trades/archive" \
-            --json 2>&1)"
-        WATCHER_EXIT=$?
-        printf '%s\n' "$WATCHER_OUT" >>"$REPORT"
-        if (( WATCHER_EXIT == 0 )); then
-            DRIFT_VERDICT="$(printf '%s' "$WATCHER_OUT" \
-                | "$WATCHER_PY" -c 'import sys,json
-try:
-    print(json.load(sys.stdin).get("verdict","UNKNOWN"))
-except Exception:
-    print("UNKNOWN")' 2>/dev/null || echo "UNKNOWN")"
-        else
-            printf '\nwatcher exit_status=%s\n' "$WATCHER_EXIT" >>"$REPORT"
-            DRIFT_VERDICT="WATCHER_ERROR"
-        fi
-    else
-        printf 'watcher script missing at %s\n' "$WATCHER_SCRIPT" >>"$REPORT"
-        DRIFT_VERDICT="UNAVAILABLE"
-    fi
+if [[ "$RUNTIME_COHORT_SCOPE_STATUS" == "verified" ]]; then
+    printf 'opportunity_trade_drift=skipped reason=unscoped_db_and_log runtime_cohort=%s/%s\n' \
+        "$RUNTIME_COHORT_ID" "$RUNTIME_COHORT_KIND" >>"$REPORT"
 else
-    printf 'python not available; skipping drift watcher\n' >>"$REPORT"
-    DRIFT_VERDICT="UNAVAILABLE"
+    printf 'opportunity_trade_drift=skipped reason=runtime_cohort_scope_unavailable detail=%s\n' \
+        "$RUNTIME_COHORT_SCOPE_REASON" >>"$REPORT"
 fi
 printf '\ndrift_verdict=%s\n' "$DRIFT_VERDICT" >>"$REPORT"
 codeblock_end
@@ -540,10 +654,20 @@ if [[ "$RUN_DAILY_REVIEW" == "1" ]]; then
     elif [[ ! -f "$DAILY_REVIEW_SCRIPT" ]]; then
         printf 'daily_review.py missing at %s\n' "$DAILY_REVIEW_SCRIPT" >>"$REPORT"
         DAILY_REVIEW_STATUS="script_missing"
+    elif [[ "$RUNTIME_COHORT_SCOPE_STATUS" != "verified" ]]; then
+        printf 'daily_review cohort_scope=skipped reason=%s\n' "$RUNTIME_COHORT_SCOPE_REASON" >>"$REPORT"
+        DAILY_REVIEW_STATUS="scope_skipped"
     else
         DAILY_REVIEW_REPORT="$DAILY_REVIEW_DIR/daily_review_$(date +%Y%m%d).txt"
         DAILY_REVIEW_STDOUT="$(mktemp)"
-        KALSHI_OUTPUT_ROOT="$OUTPUT_ROOT" "$DAILY_REVIEW_PY" "$DAILY_REVIEW_SCRIPT" >"$DAILY_REVIEW_STDOUT" 2>&1
+        DAILY_REVIEW_ARGS=(
+            --runtime-paper-cohort-id "$RUNTIME_COHORT_ID"
+            --runtime-paper-cohort-kind "$RUNTIME_COHORT_KIND"
+            --paper-db "$RUNTIME_PAPER_DB"
+        )
+        printf 'daily_review cohort_scope=verified id=%s kind=%s db=%s\n' \
+            "$RUNTIME_COHORT_ID" "$RUNTIME_COHORT_KIND" "$RUNTIME_PAPER_DB" >>"$REPORT"
+        KALSHI_OUTPUT_ROOT="$OUTPUT_ROOT" "$DAILY_REVIEW_PY" "$DAILY_REVIEW_SCRIPT" "${DAILY_REVIEW_ARGS[@]}" >"$DAILY_REVIEW_STDOUT" 2>&1
         DAILY_REVIEW_EXIT=$?
         printf 'daily_review exit_status=%s\n' "$DAILY_REVIEW_EXIT" >>"$REPORT"
         printf 'daily_review report=%s\n' "$DAILY_REVIEW_REPORT" >>"$REPORT"
@@ -572,43 +696,8 @@ PERFORMANCE_REPORT=""
 if [[ "$RUN_DAILY_REVIEW" == "1" ]]; then
     section "11. Performance analysis report"
     codeblock_start
-    PERFORMANCE_PY="$(python_bin)" || true
-    if [[ -z "$PERFORMANCE_PY" ]]; then
-        printf 'python not available; skipping performance analysis\n' >>"$REPORT"
-        PERFORMANCE_STATUS="python_unavailable"
-    elif [[ ! -f "$PERFORMANCE_SCRIPT" ]]; then
-        printf 'performance_analysis.py missing at %s\n' "$PERFORMANCE_SCRIPT" >>"$REPORT"
-        PERFORMANCE_STATUS="script_missing"
-    else
-        PERFORMANCE_STDOUT="$(mktemp)"
-        (
-            cd "$REPO_ROOT" || exit 1
-            KALSHI_OUTPUT_ROOT="$OUTPUT_ROOT" "$PERFORMANCE_PY" "$PERFORMANCE_SCRIPT"
-        ) >"$PERFORMANCE_STDOUT" 2>&1
-        PERFORMANCE_EXIT=$?
-        PERFORMANCE_REPORT="$(awk -F'Report saved to: ' '/Report saved to:/ {print $2}' "$PERFORMANCE_STDOUT" | tail -1)"
-        printf 'performance_analysis exit_status=%s\n' "$PERFORMANCE_EXIT" >>"$REPORT"
-        if [[ -n "$PERFORMANCE_REPORT" ]]; then
-            printf 'performance_analysis report=%s\n' "$PERFORMANCE_REPORT" >>"$REPORT"
-        else
-            printf 'performance_analysis report=(not reported)\n' >>"$REPORT"
-        fi
-        if (( PERFORMANCE_EXIT == 0 )); then
-            PERFORMANCE_STATUS="ok"
-            if [[ -n "$PERFORMANCE_REPORT" && -f "$PERFORMANCE_REPORT" ]]; then
-                printf 'performance_analysis lines=%s bytes=%s\n' \
-                    "$(wc -l <"$PERFORMANCE_REPORT" | tr -d ' ')" \
-                    "$(wc -c <"$PERFORMANCE_REPORT" | tr -d ' ')" >>"$REPORT"
-            fi
-            printf 'performance_analysis body=standalone artifact only; not embedded in bothealth\n' >>"$REPORT"
-            printf 'operator_throughput section: see 6c. OPERATOR THROUGHPUT LEADING INDICATORS in performance_analysis report\n' >>"$REPORT"
-        else
-            PERFORMANCE_STATUS="failed"
-            printf 'performance_analysis tail:\n' >>"$REPORT"
-            tail -20 "$PERFORMANCE_STDOUT" >>"$REPORT"
-        fi
-        rm -f "$PERFORMANCE_STDOUT"
-    fi
+    printf 'performance_analysis=skipped reason=unscoped_db_and_log\n' >>"$REPORT"
+    PERFORMANCE_STATUS="scope_skipped"
     codeblock_end
 fi
 
@@ -623,13 +712,15 @@ section "Verdict"
         VERDICT="**RED** — governance shadow-mode invariant violated (applied=$APPLIED, KILL_SWITCH=$KS, VALIDATION_ERROR=$VE, batch_aborted=$BATCH_ABORTED)"
     elif [[ "$MATCHER_WEIGHTS_STATUS" == matcher_weights=unverified* ]]; then
         VERDICT="**YELLOW** — matcher weights unverified; matcher fail-closed"
-    elif [[ -f "$PAPER_DB" && -z "$P0_SENTINEL_TS" ]]; then
+    elif [[ "$RUNTIME_COHORT_SCOPE_STATUS" != "verified" ]]; then
+        VERDICT="**YELLOW** — runtime cohort provenance unavailable; review section 1a"
+    elif (( P0_LEGACY_GATE_APPLICABLE == 1 )) && [[ -f "$PAPER_DB" && -z "$P0_SENTINEL_TS" ]]; then
         VERDICT="**YELLOW** — P0 sentinel missing"
     elif [[ "$POST_FIX_NEW_READINESS" == "NOT_READY" ]]; then
         VERDICT="**RED** — POST_FIX_NEW readiness NOT_READY (${POST_FIX_NEW_REASON:-review P0 section})"
     elif [[ "$POST_FIX_NEW_CHECK_STATE" == "unavailable" ]]; then
         VERDICT="**YELLOW** — POST_FIX_NEW readiness unavailable; review P0 section"
-    elif [[ "${P0_POST_SENTINEL_ROWS:-}" == "0" && "${P0_RUNTIME_HOURS:-0}" =~ ^[0-9]+$ && "$P0_RUNTIME_HOURS" -ge 6 ]]; then
+    elif (( P0_LEGACY_GATE_APPLICABLE == 1 )) && [[ "${P0_POST_SENTINEL_ROWS:-}" == "0" && "${P0_RUNTIME_HOURS:-0}" =~ ^[0-9]+$ && "$P0_RUNTIME_HOURS" -ge 6 ]]; then
         VERDICT="**YELLOW** — No new paper_trades since clean-start (${P0_RUNTIME_HOURS}h elapsed)"
     elif [[ "$DAILY_REVIEW_STATUS" == "failed" || "$DAILY_REVIEW_STATUS" == "script_missing" || "$DAILY_REVIEW_STATUS" == "python_unavailable" ]]; then
         VERDICT="**YELLOW** — daily review ${DAILY_REVIEW_STATUS}; review section 10"

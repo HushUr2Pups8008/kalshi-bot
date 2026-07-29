@@ -2476,9 +2476,29 @@ class ShadowTradeLogger:
     def __init__(self, path: Path = SHADOW_ASSIGNMENT_LOG_FILE) -> None:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._runtime_paper_context: dict[str, str] = {}
+
+    def bind_runtime_context(self, *, cohort_id: str, cohort_kind: str) -> None:
+        """Attach immutable runtime lineage to future shadow diagnostic rows."""
+
+        runtime_paper_context = {
+            "runtime_paper_cohort_id": cohort_id,
+            "runtime_paper_cohort_kind": cohort_kind,
+        }
+        if not self._runtime_paper_context:
+            self._runtime_paper_context = runtime_paper_context
+            return
+        if self._runtime_paper_context != runtime_paper_context:
+            existing_id = self._runtime_paper_context["runtime_paper_cohort_id"]
+            existing_kind = self._runtime_paper_context["runtime_paper_cohort_kind"]
+            raise RuntimeError(
+                "runtime paper cohort is already bound to "
+                f"({existing_id!r}, {existing_kind!r}); refusing to rebind to "
+                f"({cohort_id!r}, {cohort_kind!r})"
+            )
 
     def _write(self, record: dict[str, Any]) -> None:
-        record = dict(record)
+        record = {**record, **self._runtime_paper_context}
         record.setdefault("ts", datetime.now(timezone.utc).isoformat())
         record.setdefault("shadow_only", True)
         with self.path.open("a", encoding="utf-8") as fh:
