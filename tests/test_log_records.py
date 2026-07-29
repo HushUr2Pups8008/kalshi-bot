@@ -1395,7 +1395,11 @@ def test_trade_logger_records_polymarket_funnel_event_schemas():
         )
         logger.log_polymarket_market_cache(
             raw_fetched=3,
+            raw_unique=3,
+            pages_fetched=1,
             cursor_present=True,
+            pagination_exhausted=True,
+            pagination_stop_reason="short_page",
             eligible_30d=2,
             candidate_within_admission_horizon=1,
             admission_horizon_days=14.0,
@@ -1449,7 +1453,11 @@ def test_trade_logger_records_polymarket_funnel_event_schemas():
             "type": "POLYMARKET_MARKET_CACHE",
             "ts": cache["ts"],
             "raw_fetched": 3,
+            "raw_unique": 3,
+            "pages_fetched": 1,
             "cursor_present": True,
+            "pagination_exhausted": True,
+            "pagination_stop_reason": "short_page",
             "eligible_30d": 2,
             "candidate_within_admission_horizon": 1,
             "admission_horizon_days": 14.0,

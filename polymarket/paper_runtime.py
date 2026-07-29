@@ -46,6 +46,10 @@ _DEFAULT_MARKET_LIMIT = 500
 _DEFAULT_MARKET_CACHE_TTL_SECONDS = 300.0
 _DEFAULT_MAX_CANDIDATES = PAPER_MAX_CANDIDATES
 _DEFAULT_MIN_MATCH_SCORE = 0.08
+# The public gateway caps a page at 500. Thirty pages cover the current open
+# universe while retaining an explicit bound when the universe grows.
+_PUBLIC_MARKET_PAGE_SIZE = 500
+_MAX_MARKET_FETCH_PAGES = 30
 _HORIZON_SHADOW_END_DAYS = float(MAX_MARKET_DAYS_TO_EXPIRY)
 _COUNTERFACTUAL_SNAPSHOT_SCHEMA_VERSION = 1
 _COUNTERFACTUAL_SNAPSHOT_MAX_CANDIDATES = 4
@@ -192,7 +196,11 @@ async def _write_funnel_telemetry(
 @dataclass(frozen=True)
 class _MarketCacheTelemetry:
     raw_fetched: int
+    raw_unique: int
+    pages_fetched: int
     cursor_present: bool
+    pagination_exhausted: bool
+    pagination_stop_reason: str
     eligible_30d: int
     candidate_within_admission_horizon: int
     admission_horizon_days: float
@@ -249,6 +257,17 @@ class _PostAdmissionRejectionTelemetry:
 class _PublicMarketClient(Protocol):
     def get_markets(self, *, limit: int) -> tuple[list[PolymarketMarket], str | None]:
         ...
+
+
+@dataclass(frozen=True)
+class _MarketPageFetch:
+    markets: list[PolymarketMarket]
+    raw_fetched: int
+    raw_unique: int
+    pages_fetched: int
+    cursor_present: bool
+    pagination_exhausted: bool
+    pagination_stop_reason: str
 
 
 _RouteAnalysis = Callable[..., Awaitable[Any]]
@@ -830,16 +849,122 @@ class PolymarketPaperRuntime:
             stats.last_error or "none",
         )
 
+    def _fetch_market_pages(self) -> _MarketPageFetch:
+        page_size = min(self._market_limit, _PUBLIC_MARKET_PAGE_SIZE)
+        if page_size <= 0:
+            raise ValueError("Polymarket market_limit must be positive")
+
+        markets: list[PolymarketMarket] = []
+        seen_market_ids: set[str] = set()
+        seen_cursors: set[str] = set()
+        raw_fetched = 0
+        pages_fetched = 0
+        cursor_present = False
+        using_cursor = False
+        cursor: str | None = None
+        offset = 0
+        get_market_page = getattr(self._client, "get_market_page", None)
+        has_page_metadata = callable(get_market_page)
+
+        for _ in range(_MAX_MARKET_FETCH_PAGES):
+            request: dict[str, Any] = {"limit": page_size}
+            if cursor is not None:
+                request["cursor"] = cursor
+            elif offset:
+                request["offset"] = offset
+            if has_page_metadata:
+                page_result = get_market_page(**request)
+                page = page_result.markets
+                next_cursor = page_result.cursor
+                raw_page_count = page_result.raw_count
+                if (
+                    isinstance(raw_page_count, bool)
+                    or not isinstance(raw_page_count, int)
+                    or raw_page_count < len(page)
+                    or raw_page_count > page_size
+                ):
+                    raise ValueError("Polymarket market page raw_count is invalid")
+            else:
+                page, next_cursor = self._client.get_markets(limit=page_size)
+                raw_page_count = len(page)
+            pages_fetched += 1
+            raw_fetched += raw_page_count
+
+            for market in page:
+                if market.market_id in seen_market_ids:
+                    continue
+                seen_market_ids.add(market.market_id)
+                markets.append(market)
+
+            if not has_page_metadata:
+                return _MarketPageFetch(
+                    markets=markets,
+                    raw_fetched=raw_fetched,
+                    raw_unique=len(markets),
+                    pages_fetched=pages_fetched,
+                    cursor_present=bool(next_cursor),
+                    pagination_exhausted=False,
+                    pagination_stop_reason="legacy_client_no_page_metadata",
+                )
+
+            if next_cursor:
+                cursor_present = True
+                if next_cursor in seen_cursors:
+                    return _MarketPageFetch(
+                        markets=markets,
+                        raw_fetched=raw_fetched,
+                        raw_unique=len(markets),
+                        pages_fetched=pages_fetched,
+                        cursor_present=cursor_present,
+                        pagination_exhausted=False,
+                        pagination_stop_reason="cursor_cycle",
+                    )
+                seen_cursors.add(next_cursor)
+                cursor = next_cursor
+                using_cursor = True
+                continue
+
+            if using_cursor:
+                return _MarketPageFetch(
+                    markets=markets,
+                    raw_fetched=raw_fetched,
+                    raw_unique=len(markets),
+                    pages_fetched=pages_fetched,
+                    cursor_present=cursor_present,
+                    pagination_exhausted=True,
+                    pagination_stop_reason="cursor_end",
+                )
+
+            if raw_page_count < page_size:
+                return _MarketPageFetch(
+                    markets=markets,
+                    raw_fetched=raw_fetched,
+                    raw_unique=len(markets),
+                    pages_fetched=pages_fetched,
+                    cursor_present=cursor_present,
+                    pagination_exhausted=True,
+                    pagination_stop_reason="short_page",
+                )
+
+            offset += page_size
+
+        return _MarketPageFetch(
+            markets=markets,
+            raw_fetched=raw_fetched,
+            raw_unique=len(markets),
+            pages_fetched=pages_fetched,
+            cursor_present=cursor_present,
+            pagination_exhausted=False,
+            pagination_stop_reason="page_cap",
+        )
+
     async def _get_markets(self) -> tuple[list[PolymarketMarket], bool]:
         async with self._fetch_lock:
             age = time.monotonic() - self._last_fetch
             if self._markets and age < self._market_cache_ttl_seconds:
                 return list(self._markets), False
             try:
-                markets, _cursor = await asyncio.to_thread(
-                    self._client.get_markets,
-                    limit=self._market_limit,
-                )
+                market_fetch = await asyncio.to_thread(self._fetch_market_pages)
             except Exception as exc:
                 self._last_error = "public_market_fetch_failed"
                 log.warning(
@@ -847,6 +972,7 @@ class PolymarketPaperRuntime:
                     exc,
                 )
                 return [], True
+            markets = market_fetch.markets
             horizon_now = self._horizon_now()
             self._markets = [
                 market
@@ -861,8 +987,12 @@ class PolymarketPaperRuntime:
             self._last_error = None
             admission_horizon_days = cfg.paper_admission_max_days_to_close
             cache_telemetry = _MarketCacheTelemetry(
-                raw_fetched=len(markets),
-                cursor_present=bool(_cursor),
+                raw_fetched=market_fetch.raw_fetched,
+                raw_unique=market_fetch.raw_unique,
+                pages_fetched=market_fetch.pages_fetched,
+                cursor_present=market_fetch.cursor_present,
+                pagination_exhausted=market_fetch.pagination_exhausted,
+                pagination_stop_reason=market_fetch.pagination_stop_reason,
                 eligible_30d=len(self._markets),
                 candidate_within_admission_horizon=len(self.cached_candidate_markets()),
                 admission_horizon_days=admission_horizon_days,
@@ -873,7 +1003,11 @@ class PolymarketPaperRuntime:
             "POLYMARKET_MARKET_CACHE",
             trade_log.log_polymarket_market_cache,
             raw_fetched=cache_telemetry.raw_fetched,
+            raw_unique=cache_telemetry.raw_unique,
+            pages_fetched=cache_telemetry.pages_fetched,
             cursor_present=cache_telemetry.cursor_present,
+            pagination_exhausted=cache_telemetry.pagination_exhausted,
+            pagination_stop_reason=cache_telemetry.pagination_stop_reason,
             eligible_30d=cache_telemetry.eligible_30d,
             candidate_within_admission_horizon=(
                 cache_telemetry.candidate_within_admission_horizon
@@ -882,8 +1016,14 @@ class PolymarketPaperRuntime:
             market_limit=cache_telemetry.market_limit,
         )
         log.info(
-            "[POLYMARKET_PAPER] market_cache_refreshed markets=%d limit=%d",
+            "[POLYMARKET_PAPER] market_cache_refreshed markets=%d raw=%d unique=%d "
+            "pages=%d exhausted=%s stop=%s limit=%d",
             len(refreshed_markets),
+            cache_telemetry.raw_fetched,
+            cache_telemetry.raw_unique,
+            cache_telemetry.pages_fetched,
+            cache_telemetry.pagination_exhausted,
+            cache_telemetry.pagination_stop_reason,
             self._market_limit,
         )
         return refreshed_markets, False
