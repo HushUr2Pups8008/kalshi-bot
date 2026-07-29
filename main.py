@@ -131,10 +131,12 @@ from trading.paper_cohorts import (
     LEGACY_PAPER_COHORT_ID,
     PaperCohort,
     aggregate_open_exposure_snapshot,
+    discover_legacy_pending_paper_risk_cohorts,
     discover_paper_risk_cohorts,
-    provisioned_active_cohort_block_reason,
+    provisioned_paper_cohort_block_reason,
     resolve_runtime_paper_cohort,
     validate_active_paper_cohort_manifest,
+    validate_legacy_pending_paper_cohort_manifest,
 )
 from trading.paper_trader import PaperTrader
 from trading.profit_evidence import independent_realized_profit_evidence_available
@@ -178,16 +180,34 @@ log = get_logger("main")
 _ACTIVE_COHORT_LIVE_TRANSITION_BLOCK = (
     "active paper cohort remains isolated from live trading"
 )
+_LEGACY_PENDING_COHORT_LIVE_TRANSITION_BLOCK = (
+    "legacy-pending paper cohort remains permanently isolated from live trading"
+)
+
+
+def _configured_paper_cohort_kind() -> str:
+    """Return the explicit kind, retaining compatibility with older test configs."""
+
+    configured_kind = str(getattr(cfg, "paper_cohort_kind", "") or "").strip().lower()
+    if configured_kind:
+        return configured_kind
+    cohort_id = getattr(cfg, "paper_cohort_id", LEGACY_PAPER_COHORT_ID)
+    return (
+        "legacy"
+        if str(cohort_id or "").strip().lower() == LEGACY_PAPER_COHORT_ID
+        else "active"
+    )
 
 
 def _runtime_paper_cohort_from_config(
     *,
     db_root: Path = DATA_DIR,
 ) -> tuple[PaperCohort, tuple[PaperCohort, ...], str | None]:
-    """Resolve one writable runtime account and validate active binding first."""
+    """Resolve one writable runtime account and validate its immutable binding."""
 
     cohort_id = getattr(cfg, "paper_cohort_id", LEGACY_PAPER_COHORT_ID)
-    requested_legacy_runtime = str(cohort_id or "").strip().lower() == LEGACY_PAPER_COHORT_ID
+    cohort_kind = _configured_paper_cohort_kind()
+    requested_legacy_runtime = cohort_kind == "legacy"
     runtime_cohort = resolve_runtime_paper_cohort(
         cohort_id,
         legacy_starting_bankroll=cfg.bankroll if requested_legacy_runtime else None,
@@ -196,13 +216,31 @@ def _runtime_paper_cohort_from_config(
             "paper_active_cohort_starting_bankroll",
             None,
         ),
+        cohort_kind=cohort_kind,
         db_root=db_root,
     )
-    if runtime_cohort.cohort_id == LEGACY_PAPER_COHORT_ID:
-        active_block = provisioned_active_cohort_block_reason(db_root)
-        if active_block is not None:
-            raise RuntimeError(f"legacy paper runtime is blocked: {active_block}")
+    if cohort_kind == "legacy":
+        provisioned_block = provisioned_paper_cohort_block_reason(db_root)
+        if provisioned_block is not None:
+            raise RuntimeError(f"legacy paper runtime is blocked: {provisioned_block}")
         return runtime_cohort, (runtime_cohort,), None
+
+    if cohort_kind == "legacy_pending":
+        validate_legacy_pending_paper_cohort_manifest(
+            runtime_cohort,
+            max_days_to_close=getattr(
+                cfg,
+                "paper_active_cohort_max_days_to_close",
+                14.0,
+            ),
+            legacy_db_path=runtime_cohort.storage_root / "paper_trades.db",
+            legacy_starting_bankroll=None,
+        )
+        return (
+            runtime_cohort,
+            discover_legacy_pending_paper_risk_cohorts(db_root),
+            _LEGACY_PENDING_COHORT_LIVE_TRANSITION_BLOCK,
+        )
 
     validate_active_paper_cohort_manifest(
         runtime_cohort,
@@ -954,6 +992,7 @@ class TradingBot:
             calibration_task=self._calibration_task,
             starting_bankroll=self.paper_cohort.starting_bankroll,
             cohort_id=self.paper_cohort.cohort_id,
+            live_transition_block_reason=_live_transition_block_reason,
             paper_cohort_storage_root=self.paper_cohort.storage_root,
         )
         self._settlement_outbox_task: SettlementOutboxTask | None = None
@@ -4224,6 +4263,7 @@ async def async_main() -> None:
                 startup_context="cli",
                 starting_bankroll=paper_cohort.starting_bankroll,
                 cohort_id=paper_cohort.cohort_id,
+                live_transition_block_reason=_live_transition_block_reason,
                 paper_cohort_storage_root=paper_cohort.storage_root,
             )
             if args.report:
@@ -4440,18 +4480,20 @@ def _check_go_live_gates(paper: PaperTrader) -> list[str]:
     notional = paper.get_notional_bankroll()
     failures: list[str] = []
 
-    provisioned_active_cohorts, cohort_risk_failures = (
+    provisioned_paper_cohorts, cohort_risk_failures = (
         _provisioned_cohort_live_risk_gate_failures()
     )
     failures.extend(cohort_risk_failures)
+    configured_cohort_kind = _configured_paper_cohort_kind()
     if (
-        not provisioned_active_cohorts
-        and getattr(cfg, "paper_cohort_id", LEGACY_PAPER_COHORT_ID)
-        != LEGACY_PAPER_COHORT_ID
+        not provisioned_paper_cohorts
+        and configured_cohort_kind != "legacy"
     ):
         failures.append(
             "Live trading remains blocked: "
-            f"{_ACTIVE_COHORT_LIVE_TRANSITION_BLOCK}"
+            f"{_LEGACY_PENDING_COHORT_LIVE_TRANSITION_BLOCK}"
+            if configured_cohort_kind == "legacy_pending"
+            else f"{_ACTIVE_COHORT_LIVE_TRANSITION_BLOCK}"
         )
 
     if not independent_realized_profit_evidence_available(db_path=paper.db_path):
@@ -4502,7 +4544,7 @@ def _check_go_live_gates(paper: PaperTrader) -> list[str]:
                 f"Win rate: {win_rate:.1%} < minimum {cfg.go_live_min_win_rate:.1%}"
             )
 
-    if not provisioned_active_cohorts:
+    if not provisioned_paper_cohorts:
         _append_selected_cohort_drawdown_failure(
             failures,
             paper=paper,
@@ -4518,35 +4560,57 @@ def _provisioned_cohort_live_risk_gate_failures(
 ) -> tuple[bool, list[str]]:
     """Fail closed on every provisioned cohort, independent of runtime selection."""
 
-    active_root = Path(db_root) / "paper_cohorts"
-    try:
-        active_root.lstat()
-    except FileNotFoundError:
-        return False, []
-    except OSError as exc:
-        return True, [
-            "Paper cohort discovery unavailable "
-            f"({str(exc)[:80]}) -- gate fails closed"
-        ]
-    if active_root.is_symlink() or not active_root.is_dir():
-        return True, ["Paper cohort root is invalid -- gate fails closed"]
-    try:
-        cohorts = discover_paper_risk_cohorts(db_root)
-    except Exception as exc:  # noqa: BLE001 - live-money boundary must fail closed
-        return True, [
-            "Paper cohort discovery unavailable "
-            f"({str(exc)[:80]}) -- gate fails closed"
-        ]
-    if not cohorts:
+    discovered: list[PaperCohort] = []
+    provisioned_kinds: set[str] = set()
+    roots = (
+        ("active", Path(db_root) / "paper_cohorts", discover_paper_risk_cohorts),
+        (
+            "legacy_pending",
+            Path(db_root) / "legacy_pending_paper_cohorts",
+            discover_legacy_pending_paper_risk_cohorts,
+        ),
+    )
+    for cohort_kind, cohort_root, discover in roots:
+        try:
+            cohort_root.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            return True, [
+                "Paper cohort discovery unavailable "
+                f"({str(exc)[:80]}) -- gate fails closed"
+            ]
+        if cohort_root.is_symlink() or not cohort_root.is_dir():
+            return True, ["Paper cohort root is invalid -- gate fails closed"]
+        try:
+            cohorts = discover(db_root)
+        except Exception as exc:  # noqa: BLE001 - live-money boundary must fail closed
+            return True, [
+                "Paper cohort discovery unavailable "
+                f"({str(exc)[:80]}) -- gate fails closed"
+            ]
+        if cohorts:
+            discovered.extend(cohorts)
+            provisioned_kinds.add(cohort_kind)
+
+    if not discovered:
         return False, []
 
-    failures = [
-        "Live trading remains blocked: active paper cohort remains isolated from "
-        "live trading until all-cohort settlement and realized-profit reconciliation "
-        "is explicitly reviewed"
-    ]
+    failures: list[str] = []
+    if "active" in provisioned_kinds:
+        failures.append(
+            "Live trading remains blocked: active paper cohort remains isolated from "
+            "live trading until all-cohort settlement and realized-profit reconciliation "
+            "is explicitly reviewed"
+        )
+    if "legacy_pending" in provisioned_kinds:
+        failures.append(
+            "Live trading remains blocked: legacy-pending paper cohort remains permanently "
+            "isolated from live trading until a reviewed settlement certificate explicitly "
+            "finalizes the pending cohort"
+        )
     try:
-        snapshot = aggregate_open_exposure_snapshot(cohorts)
+        snapshot = aggregate_open_exposure_snapshot(tuple(discovered))
     except Exception as exc:  # noqa: BLE001 - live-money boundary must fail closed
         return True, [
             *failures,

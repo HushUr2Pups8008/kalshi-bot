@@ -14,13 +14,21 @@ import pytest
 
 from trading.paper_cohorts import (
     LEGACY_PAPER_COHORT_ID,
+    LEGACY_PENDING_BASELINE_COHORT_ID,
     active_cohort_binding_for_db,
     aggregate_open_exposure_snapshot,
+    discover_legacy_pending_paper_risk_cohorts,
     discover_paper_risk_cohorts,
+    immutable_paper_database_block_reason,
     initialize_active_paper_cohort_manifest,
+    initialize_legacy_pending_paper_cohort_manifest,
+    legacy_open_exposure_fingerprint,
+    paper_runtime_database_topology_block_reason,
     resolve_runtime_paper_cohort,
     risk_cohorts_for_runtime,
     validate_active_paper_cohort_manifest,
+    validate_legacy_pending_paper_cohort_manifest,
+    unbound_paper_runtime_database_block_reason,
 )
 
 
@@ -83,6 +91,21 @@ def test_active_runtime_cohort_requires_explicit_bankroll_and_isolated_path(tmp_
     assert legacy.db_path == tmp_path / "paper_trades.db"
     assert legacy.writable is False
     assert active == runtime
+
+
+def test_pending_runtime_risk_helper_requires_immutable_pending_discovery(
+    tmp_path: Path,
+):
+    runtime = resolve_runtime_paper_cohort(
+        "pending-20260728",
+        legacy_starting_bankroll=None,
+        active_starting_bankroll=125.0,
+        db_root=tmp_path,
+        cohort_kind="legacy_pending",
+    )
+
+    with pytest.raises(ValueError, match="discover_legacy_pending_paper_risk_cohorts"):
+        risk_cohorts_for_runtime(runtime, legacy_starting_bankroll=500.0)
 
 
 def test_active_cohort_requires_immutable_manifest_before_runtime_bootstrap(tmp_path: Path):
@@ -468,6 +491,190 @@ def test_active_cohort_provisioning_requires_reconciled_legacy_trades(tmp_path: 
             legacy_starting_bankroll=500.0,
         )
     assert not runtime.db_path.parent.exists()
+
+
+def test_legacy_pending_cohort_snapshots_attested_open_legacy_exposure(tmp_path: Path):
+    legacy_path = tmp_path / "paper_trades.db"
+    _state_db(legacy_path, notional_bankroll=500.0, unresolved=2)
+    runtime = resolve_runtime_paper_cohort(
+        "pending-20260728",
+        legacy_starting_bankroll=None,
+        active_starting_bankroll=125.0,
+        db_root=tmp_path,
+        cohort_kind="legacy_pending",
+    )
+    exposure = legacy_open_exposure_fingerprint(legacy_path)
+
+    manifest_path = initialize_legacy_pending_paper_cohort_manifest(
+        runtime,
+        max_days_to_close=14.0,
+        legacy_db_path=legacy_path,
+        legacy_starting_bankroll=500.0,
+        expected_legacy_open_trade_count=exposure.unresolved_trade_count,
+        expected_legacy_open_rows_sha256=exposure.rows_sha256,
+    )
+
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert payload["cohort_type"] == "legacy_pending"
+    assert payload["legacy_pending_open_trade_count"] == 2
+    assert payload["legacy_pending_open_rows_sha256"] == exposure.rows_sha256
+
+    binding = validate_legacy_pending_paper_cohort_manifest(
+        runtime,
+        max_days_to_close=14.0,
+        legacy_db_path=legacy_path,
+        legacy_starting_bankroll=500.0,
+    )
+    assert binding.cohort_type == "legacy_pending"
+    assert binding.legacy_open_exposure.unresolved_trade_count == 2
+    assert binding.legacy_open_exposure.rows_sha256 == exposure.rows_sha256
+
+    cohorts = discover_legacy_pending_paper_risk_cohorts(tmp_path)
+    assert [cohort.cohort_id for cohort in cohorts] == [
+        LEGACY_PENDING_BASELINE_COHORT_ID,
+        "pending-20260728",
+    ]
+    assert cohorts[0].db_path == runtime.db_path.parent / "legacy_cutover.db"
+
+
+def test_legacy_pending_cohort_requires_exact_open_exposure_confirmation(
+    tmp_path: Path,
+):
+    legacy_path = tmp_path / "paper_trades.db"
+    _state_db(legacy_path, notional_bankroll=500.0, unresolved=1)
+    runtime = resolve_runtime_paper_cohort(
+        "pending-20260728",
+        legacy_starting_bankroll=None,
+        active_starting_bankroll=125.0,
+        db_root=tmp_path,
+        cohort_kind="legacy_pending",
+    )
+    exposure = legacy_open_exposure_fingerprint(legacy_path)
+
+    with pytest.raises(ValueError, match="expected legacy open exposure"):
+        initialize_legacy_pending_paper_cohort_manifest(
+            runtime,
+            max_days_to_close=14.0,
+            legacy_db_path=legacy_path,
+            legacy_starting_bankroll=500.0,
+            expected_legacy_open_trade_count=exposure.unresolved_trade_count + 1,
+            expected_legacy_open_rows_sha256=exposure.rows_sha256,
+        )
+    assert not runtime.db_path.parent.exists()
+
+
+def test_legacy_pending_cohort_stays_bound_after_root_legacy_settlement(
+    tmp_path: Path,
+):
+    legacy_path = tmp_path / "paper_trades.db"
+    _state_db(legacy_path, notional_bankroll=500.0, unresolved=1)
+    runtime = resolve_runtime_paper_cohort(
+        "pending-20260728",
+        legacy_starting_bankroll=None,
+        active_starting_bankroll=125.0,
+        db_root=tmp_path,
+        cohort_kind="legacy_pending",
+    )
+    exposure = legacy_open_exposure_fingerprint(legacy_path)
+    initialize_legacy_pending_paper_cohort_manifest(
+        runtime,
+        max_days_to_close=14.0,
+        legacy_db_path=legacy_path,
+        legacy_starting_bankroll=500.0,
+        expected_legacy_open_trade_count=exposure.unresolved_trade_count,
+        expected_legacy_open_rows_sha256=exposure.rows_sha256,
+    )
+
+    with sqlite3.connect(legacy_path) as conn:
+        conn.execute("UPDATE paper_trades SET resolved = 1")
+
+    binding = validate_legacy_pending_paper_cohort_manifest(
+        runtime,
+        max_days_to_close=14.0,
+        legacy_db_path=legacy_path,
+        legacy_starting_bankroll=500.0,
+    )
+    assert legacy_open_exposure_fingerprint(legacy_path).unresolved_trade_count == 0
+    assert binding.legacy_open_exposure == exposure
+    assert discover_legacy_pending_paper_risk_cohorts(tmp_path)[0].db_path == (
+        runtime.db_path.parent / "legacy_cutover.db"
+    )
+
+
+def test_active_cutover_cannot_coexist_with_legacy_pending_root(tmp_path: Path):
+    legacy_path = tmp_path / "paper_trades.db"
+    _state_db(legacy_path, notional_bankroll=500.0, unresolved=1)
+    pending = resolve_runtime_paper_cohort(
+        "pending-20260728",
+        legacy_starting_bankroll=None,
+        active_starting_bankroll=125.0,
+        db_root=tmp_path,
+        cohort_kind="legacy_pending",
+    )
+    exposure = legacy_open_exposure_fingerprint(legacy_path)
+    initialize_legacy_pending_paper_cohort_manifest(
+        pending,
+        max_days_to_close=14.0,
+        legacy_db_path=legacy_path,
+        legacy_starting_bankroll=500.0,
+        expected_legacy_open_trade_count=exposure.unresolved_trade_count,
+        expected_legacy_open_rows_sha256=exposure.rows_sha256,
+    )
+    with sqlite3.connect(legacy_path) as conn:
+        conn.execute("UPDATE paper_trades SET resolved = 1")
+    active = resolve_runtime_paper_cohort(
+        "active-20260728",
+        legacy_starting_bankroll=None,
+        active_starting_bankroll=125.0,
+        db_root=tmp_path,
+        cohort_kind="active",
+    )
+
+    with pytest.raises(ValueError, match="cannot coexist"):
+        initialize_active_paper_cohort_manifest(
+            active,
+            max_days_to_close=14.0,
+            legacy_db_path=legacy_path,
+            legacy_starting_bankroll=500.0,
+        )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX hardlink semantics")
+def test_pending_snapshot_external_hardlink_is_blocked_without_storage_root(
+    tmp_path: Path,
+):
+    state_root = tmp_path / "state"
+    state_root.mkdir()
+    legacy_path = state_root / "paper_trades.db"
+    _state_db(legacy_path, notional_bankroll=500.0, unresolved=1)
+    pending = resolve_runtime_paper_cohort(
+        "pending-external-hardlink",
+        legacy_starting_bankroll=None,
+        active_starting_bankroll=125.0,
+        db_root=state_root,
+        cohort_kind="legacy_pending",
+    )
+    exposure = legacy_open_exposure_fingerprint(legacy_path)
+    initialize_legacy_pending_paper_cohort_manifest(
+        pending,
+        max_days_to_close=14.0,
+        legacy_db_path=legacy_path,
+        legacy_starting_bankroll=500.0,
+        expected_legacy_open_trade_count=exposure.unresolved_trade_count,
+        expected_legacy_open_rows_sha256=exposure.rows_sha256,
+    )
+    alias_path = tmp_path / "outside-pending-snapshot.db"
+    os.link(pending.db_path.parent / "legacy_cutover.db", alias_path)
+
+    assert paper_runtime_database_topology_block_reason(alias_path) == (
+        "paper runtime database must not be a hard link"
+    )
+    assert immutable_paper_database_block_reason(alias_path) == (
+        "paper runtime database must not be a hard link"
+    )
+    assert unbound_paper_runtime_database_block_reason(alias_path) == (
+        "paper runtime database must not be a hard link"
+    )
 
 
 @pytest.mark.parametrize(
