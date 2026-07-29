@@ -103,6 +103,7 @@ def _make_bot_stub():
     bot.matcher.find_all_candidates = AsyncMock(return_value=[])
     bot.matcher._cache = MagicMock()
     bot.matcher._cache.get_markets = AsyncMock(return_value=[])
+    bot.matcher._cache.has_market_snapshot.return_value = True
     bot.source_stats = MagicMock()
     bot.keyword_stats = MagicMock()
     bot._dedup = MagicMock()
@@ -3574,6 +3575,428 @@ async def test_on_news_item_times_out_kalshi_matching_without_starving_polymarke
     assert bot.matcher.find_candidates.await_count == 2
     for call in bot.matcher.find_candidates.await_args_list:
         assert call.kwargs["refresh_cache"] is False
+
+
+@pytest.mark.asyncio
+async def test_on_news_item_defers_only_kalshi_until_nonempty_cache_then_replays_once(
+    monkeypatch,
+):
+    writer = AsyncMock()
+    monkeypatch.setattr(main_module, "write_trade_log_async", writer)
+    bot = _make_bot_stub()
+    bot.polymarket_paper_runtime = MagicMock()
+    bot.polymarket_paper_runtime.process_news = AsyncMock(return_value=0)
+    bot.matcher._cache.has_market_snapshot.return_value = False
+    market = _make_market()
+    bot.matcher.find_candidates = AsyncMock(return_value=[(market, 0.9, {})])
+    bot._process_candidate = AsyncMock()
+    news = _make_news()
+
+    await bot.on_news_item(news)
+
+    bot.source_stats.increment_posts.assert_called_once_with(news.source)
+    bot.polymarket_paper_runtime.process_news.assert_awaited_once_with(news)
+    bot.matcher.find_candidates.assert_not_awaited()
+    assert len(bot._kalshi_cold_cache_pending) == 1
+
+    bot.matcher._cache.has_market_snapshot.return_value = True
+    await bot._schedule_kalshi_cold_cache_replay_if_ready()
+    replay_task = bot._kalshi_cold_cache_replay_task
+    assert replay_task is not None
+    await replay_task
+
+    bot.matcher.find_candidates.assert_awaited_once_with(news, refresh_cache=False)
+    bot._process_candidate.assert_awaited_once_with(news, market, 0.9, {})
+    assert len(bot._kalshi_cold_cache_pending) == 0
+    assert [
+        call.kwargs["action"]
+        for call in writer.await_args_list
+        if "action" in call.kwargs
+    ] == ["deferred", "replay_started", "replayed"]
+
+
+@pytest.mark.asyncio
+async def test_kalshi_cold_cache_deduplicates_pending_news_and_never_replays_twice(
+    monkeypatch,
+):
+    writer = AsyncMock()
+    monkeypatch.setattr(main_module, "write_trade_log_async", writer)
+    bot = _make_bot_stub()
+    bot.polymarket_paper_runtime = MagicMock()
+    bot.polymarket_paper_runtime.process_news = AsyncMock(return_value=0)
+    bot.matcher._cache.has_market_snapshot.return_value = False
+    bot.matcher.find_candidates = AsyncMock(return_value=[])
+    news = _make_news()
+
+    await bot.on_news_item(news)
+    await bot.on_news_item(news)
+
+    assert len(bot._kalshi_cold_cache_pending) == 1
+    bot.matcher.find_candidates.assert_not_awaited()
+
+    bot.matcher._cache.has_market_snapshot.return_value = True
+    await bot._schedule_kalshi_cold_cache_replay_if_ready()
+    replay_task = bot._kalshi_cold_cache_replay_task
+    assert replay_task is not None
+    await replay_task
+    await bot._schedule_kalshi_cold_cache_replay_if_ready()
+    await bot.on_news_item(news)
+
+    bot.matcher.find_candidates.assert_awaited_once_with(news, refresh_cache=False)
+    assert len(bot._kalshi_cold_cache_pending) == 0
+    assert "deduplicated" in [
+        call.kwargs["action"]
+        for call in writer.await_args_list
+        if "action" in call.kwargs
+    ]
+
+
+@pytest.mark.asyncio
+async def test_kalshi_cold_cache_keeps_timestampless_identity_for_the_process(monkeypatch):
+    writer = AsyncMock()
+    monkeypatch.setattr(main_module, "write_trade_log_async", writer)
+    monkeypatch.setattr(main_module, "EARLY_DROP_IF_NO_TIMESTAMP", False)
+    monkeypatch.setattr(main_module, "EARLY_MAX_NEWS_AGE_SECONDS", 0)
+    bot = _make_bot_stub()
+    bot.polymarket_paper_runtime = None
+    bot.matcher._cache.has_market_snapshot.return_value = False
+    bot.matcher.find_candidates = AsyncMock(return_value=[])
+    news = _make_news()
+    news.published = None
+
+    await bot.on_news_item(news)
+    await bot.on_news_item(news)
+
+    assert len(bot._kalshi_cold_cache_pending) == 1
+    assert "deduplicated" in [
+        call.kwargs["action"]
+        for call in writer.await_args_list
+        if "action" in call.kwargs
+    ]
+
+
+@pytest.mark.asyncio
+async def test_kalshi_cold_cache_ready_during_defer_uses_normal_matching_once(
+    monkeypatch,
+):
+    monkeypatch.setattr(main_module, "write_trade_log_async", AsyncMock())
+    bot = _make_bot_stub()
+    bot.polymarket_paper_runtime = None
+    bot.matcher.find_candidates = AsyncMock(return_value=[])
+    bot.matcher._cache.has_market_snapshot.side_effect = [
+        False,
+        True,
+        True,
+        True,
+        True,
+    ]
+    news = _make_news()
+
+    await bot.on_news_item(news)
+
+    assert len(bot._kalshi_cold_cache_pending) == 0
+    bot.matcher.find_candidates.assert_awaited_once_with(news, refresh_cache=False)
+
+
+@pytest.mark.asyncio
+async def test_kalshi_cold_cache_retries_when_snapshot_warms_after_candidate_lane_check(
+    monkeypatch,
+):
+    monkeypatch.setattr(main_module, "write_trade_log_async", AsyncMock())
+    bot = _make_bot_stub()
+    bot.polymarket_paper_runtime = None
+    bot.matcher.find_candidates = AsyncMock(return_value=[])
+    bot.matcher._cache.has_market_snapshot.side_effect = [
+        True,
+        False,
+        True,
+        True,
+        True,
+    ]
+    news = _make_news()
+
+    await bot.on_news_item(news)
+
+    assert len(bot._kalshi_cold_cache_pending) == 0
+    bot.matcher.find_candidates.assert_awaited_once_with(news, refresh_cache=False)
+
+
+@pytest.mark.asyncio
+async def test_kalshi_cold_cache_drops_newest_item_when_pending_queue_is_full(monkeypatch):
+    writer = AsyncMock()
+    monkeypatch.setattr(main_module, "write_trade_log_async", writer)
+    bot = _make_bot_stub()
+    bot.polymarket_paper_runtime = None
+    bot.matcher._cache.has_market_snapshot.return_value = False
+    bot.matcher.find_candidates = AsyncMock(return_value=[])
+
+    for number in range(bot._news_queue.maxsize + 1):
+        news = _make_news()
+        news.item_id = f"cold-cache-{number}"
+        news.headline = f"Cold cache headline {number}"
+        await bot.on_news_item(news)
+
+    assert len(bot._kalshi_cold_cache_pending) == bot._news_queue.maxsize
+    bot.matcher.find_candidates.assert_not_awaited()
+    drop_calls = [
+        call.kwargs
+        for call in writer.await_args_list
+        if call.kwargs.get("action") == "dropped"
+    ]
+    assert drop_calls[-1]["reason"] == "pending_queue_full"
+
+
+@pytest.mark.asyncio
+async def test_kalshi_cold_cache_keeps_pending_news_until_cache_is_nonempty(monkeypatch):
+    monkeypatch.setattr(main_module, "write_trade_log_async", AsyncMock())
+    bot = _make_bot_stub()
+    bot.polymarket_paper_runtime = None
+    bot.matcher._cache.has_market_snapshot.return_value = False
+    bot.matcher.find_candidates = AsyncMock(return_value=[])
+    news = _make_news()
+
+    await bot.on_news_item(news)
+    await bot._schedule_kalshi_cold_cache_replay_if_ready()
+
+    assert bot._kalshi_cold_cache_replay_task is None
+    assert len(bot._kalshi_cold_cache_pending) == 1
+    bot.matcher.find_candidates.assert_not_awaited()
+
+    bot.matcher._cache.has_market_snapshot.return_value = True
+    await bot._schedule_kalshi_cold_cache_replay_if_ready()
+    replay_task = bot._kalshi_cold_cache_replay_task
+    assert replay_task is not None
+    await replay_task
+
+    bot.matcher.find_candidates.assert_awaited_once_with(news, refresh_cache=False)
+
+
+@pytest.mark.asyncio
+async def test_kalshi_cold_cache_continues_after_snapshot_flips_cold_then_warm(monkeypatch):
+    monkeypatch.setattr(main_module, "write_trade_log_async", AsyncMock())
+    bot = _make_bot_stub()
+    bot.polymarket_paper_runtime = None
+    bot.matcher._cache.has_market_snapshot.return_value = False
+    bot.matcher.find_candidates = AsyncMock(return_value=[])
+    news = _make_news()
+    await bot.on_news_item(news)
+
+    bot.matcher._cache.has_market_snapshot.side_effect = [
+        True,
+        True,
+        False,
+        True,
+        True,
+        True,
+    ]
+    await bot._schedule_kalshi_cold_cache_replay_if_ready()
+    replay_task = bot._kalshi_cold_cache_replay_task
+    assert replay_task is not None
+    await replay_task
+
+    assert len(bot._kalshi_cold_cache_pending) == 0
+    bot.matcher.find_candidates.assert_awaited_once_with(news, refresh_cache=False)
+
+
+@pytest.mark.asyncio
+async def test_market_refresh_schedules_kalshi_cold_cache_replay_after_nonempty_snapshot(
+    monkeypatch,
+):
+    monkeypatch.setattr(main_module, "write_trade_log_async", AsyncMock())
+    bot = _make_bot_stub()
+    bot.polymarket_paper_runtime = None
+    bot.matcher._cache.has_market_snapshot.return_value = False
+    bot.matcher.find_candidates = AsyncMock(return_value=[])
+    news = _make_news()
+    await bot.on_news_item(news)
+
+    market = _make_market()
+    bot.matcher.refresh_cache = AsyncMock()
+    bot.matcher._cache.get_markets = AsyncMock(return_value=[market])
+    bot.matcher._cache.has_market_snapshot.return_value = True
+    await bot._refresh_market_cache_once(initial=True)
+
+    replay_task = bot._kalshi_cold_cache_replay_task
+    assert replay_task is not None
+    await replay_task
+    bot.matcher.find_candidates.assert_awaited_once_with(news, refresh_cache=False)
+
+
+@pytest.mark.asyncio
+async def test_kalshi_cold_cache_drops_news_that_becomes_stale_while_waiting(monkeypatch):
+    writer = AsyncMock()
+    monkeypatch.setattr(main_module, "write_trade_log_async", writer)
+    bot = _make_bot_stub()
+    bot.polymarket_paper_runtime = None
+    bot.matcher._cache.has_market_snapshot.return_value = False
+    bot.matcher.find_candidates = AsyncMock(return_value=[])
+    news = _make_news()
+
+    await bot.on_news_item(news)
+
+    monkeypatch.setattr(main_module, "EARLY_MAX_NEWS_AGE_SECONDS", 0)
+    bot.matcher._cache.has_market_snapshot.return_value = True
+    await bot._schedule_kalshi_cold_cache_replay_if_ready()
+    replay_task = bot._kalshi_cold_cache_replay_task
+    assert replay_task is not None
+    await replay_task
+
+    bot.matcher.find_candidates.assert_not_awaited()
+    drop_calls = [
+        call.kwargs
+        for call in writer.await_args_list
+        if call.kwargs.get("action") == "dropped"
+    ]
+    assert drop_calls[-1]["reason"] == "stale_by_source_policy"
+
+
+@pytest.mark.asyncio
+async def test_kalshi_cold_cache_rechecks_source_policy_before_replay(monkeypatch):
+    writer = AsyncMock()
+    monkeypatch.setattr(main_module, "write_trade_log_async", writer)
+    bot = _make_bot_stub()
+    bot.polymarket_paper_runtime = None
+    bot.matcher._cache.has_market_snapshot.return_value = False
+    bot.matcher.find_candidates = AsyncMock(return_value=[])
+    news = _make_news()
+    await bot.on_news_item(news)
+
+    monkeypatch.setattr(main_module, "_is_disabled_news_source", lambda _source: True)
+    bot.matcher._cache.has_market_snapshot.return_value = True
+    await bot._schedule_kalshi_cold_cache_replay_if_ready()
+    replay_task = bot._kalshi_cold_cache_replay_task
+    assert replay_task is not None
+    await replay_task
+
+    bot.matcher.find_candidates.assert_not_awaited()
+    drop_calls = [
+        call.kwargs
+        for call in writer.await_args_list
+        if call.kwargs.get("action") == "dropped"
+    ]
+    assert drop_calls[-1]["reason"] == "disabled_source"
+
+
+@pytest.mark.asyncio
+async def test_kalshi_cold_cache_rechecks_exchange_before_replay(monkeypatch):
+    writer = AsyncMock()
+    monkeypatch.setattr(main_module, "write_trade_log_async", writer)
+    bot = _make_bot_stub()
+    bot.polymarket_paper_runtime = None
+    bot.matcher._cache.has_market_snapshot.return_value = False
+    bot.matcher.find_candidates = AsyncMock(return_value=[])
+    news = _make_news()
+    await bot.on_news_item(news)
+
+    from kalshi import ExchangeState
+
+    bot.rest.get_exchange_status.return_value = ExchangeState(
+        exchange_active=False,
+        trading_active=True,
+    )
+    bot.matcher._cache.has_market_snapshot.return_value = True
+    await bot._schedule_kalshi_cold_cache_replay_if_ready()
+    replay_task = bot._kalshi_cold_cache_replay_task
+    assert replay_task is not None
+    await replay_task
+
+    bot.matcher.find_candidates.assert_not_awaited()
+    drop_calls = [
+        call.kwargs
+        for call in writer.await_args_list
+        if call.kwargs.get("action") == "dropped"
+    ]
+    assert drop_calls[-1]["reason"] == "exchange_not_open"
+
+
+@pytest.mark.asyncio
+async def test_kalshi_cold_cache_timeout_is_dropped_without_retry(monkeypatch):
+    writer = AsyncMock()
+    monkeypatch.setattr(main_module, "write_trade_log_async", writer)
+    monkeypatch.setattr(main_module, "NEWS_CANDIDATE_DISCOVERY_TIMEOUT_SECONDS", 0.01)
+    bot = _make_bot_stub()
+    bot.polymarket_paper_runtime = None
+    bot.matcher._cache.has_market_snapshot.return_value = False
+
+    async def _never_returns(_news, **_kwargs):
+        await asyncio.Event().wait()
+
+    bot.matcher.find_candidates = AsyncMock(side_effect=_never_returns)
+    news = _make_news()
+    await bot.on_news_item(news)
+
+    bot.matcher._cache.has_market_snapshot.return_value = True
+    await bot._schedule_kalshi_cold_cache_replay_if_ready()
+    replay_task = bot._kalshi_cold_cache_replay_task
+    assert replay_task is not None
+    await replay_task
+    await bot._schedule_kalshi_cold_cache_replay_if_ready()
+
+    bot.matcher.find_candidates.assert_awaited_once_with(news, refresh_cache=False)
+    drop_calls = [
+        call.kwargs
+        for call in writer.await_args_list
+        if call.kwargs.get("action") == "dropped"
+    ]
+    assert drop_calls[-1]["reason"] == "candidate_discovery_timeout"
+
+
+@pytest.mark.asyncio
+async def test_kalshi_cold_cache_replays_when_telemetry_writer_fails(monkeypatch):
+    monkeypatch.setattr(
+        main_module,
+        "write_trade_log_async",
+        AsyncMock(side_effect=OSError("structured log unavailable")),
+    )
+    bot = _make_bot_stub()
+    bot.polymarket_paper_runtime = None
+    bot.matcher._cache.has_market_snapshot.return_value = False
+    bot.matcher.find_candidates = AsyncMock(return_value=[])
+    news = _make_news()
+    await bot.on_news_item(news)
+
+    bot.matcher._cache.has_market_snapshot.return_value = True
+    await bot._schedule_kalshi_cold_cache_replay_if_ready()
+    replay_task = bot._kalshi_cold_cache_replay_task
+    assert replay_task is not None
+    await replay_task
+
+    assert len(bot._kalshi_cold_cache_pending) == 0
+    bot.matcher.find_candidates.assert_awaited_once_with(news, refresh_cache=False)
+
+
+@pytest.mark.asyncio
+async def test_kalshi_cold_cache_shutdown_cancels_claimed_replay_without_retry(monkeypatch):
+    writer = AsyncMock()
+    monkeypatch.setattr(main_module, "write_trade_log_async", writer)
+    bot = _make_bot_stub()
+    bot.polymarket_paper_runtime = None
+    bot.matcher._cache.has_market_snapshot.return_value = False
+
+    started = asyncio.Event()
+
+    async def _never_returns(_news, **_kwargs):
+        started.set()
+        await asyncio.Event().wait()
+
+    bot.matcher.find_candidates = AsyncMock(side_effect=_never_returns)
+    news = _make_news()
+    await bot.on_news_item(news)
+
+    bot.matcher._cache.has_market_snapshot.return_value = True
+    await bot._schedule_kalshi_cold_cache_replay_if_ready()
+    await asyncio.wait_for(started.wait(), timeout=1)
+    await bot._cancel_kalshi_cold_cache_replay_task()
+    await bot._schedule_kalshi_cold_cache_replay_if_ready()
+
+    bot.matcher.find_candidates.assert_awaited_once_with(news, refresh_cache=False)
+    assert len(bot._kalshi_cold_cache_pending) == 0
+    drop_calls = [
+        call.kwargs
+        for call in writer.await_args_list
+        if call.kwargs.get("action") == "dropped"
+    ]
+    assert drop_calls[-1]["reason"] == "shutdown_cancelled"
 
 
 @pytest.mark.asyncio
