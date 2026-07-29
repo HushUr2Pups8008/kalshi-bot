@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from kalshi import KalshiMarket
+from kalshi import rest_client as kalshi_rest_client_module
 from kalshi.rest_client import KalshiRestClient
 from polymarket.public_client import PolymarketPublicClient
 from polymarket.settlement import normalize_polymarket_settlement
@@ -83,6 +84,39 @@ async def test_kalshi_bounded_exact_market_uses_documented_host_and_decodes_obje
         "timeout": 2.0,
         "max_bytes": 262_144,
     }
+
+
+@pytest.mark.asyncio
+async def test_kalshi_bounded_exact_market_default_transport_remains_ipv4_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = KalshiRestClient()
+    client._base = "https://external-api.kalshi.com/trade-api/v2"
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    async def ipv4_fetch(url: str, **kwargs: object) -> bytes:
+        calls.append((url, kwargs))
+        return _kalshi_market_payload("KXTEST-1")
+
+    async def unexpected_dual_stack_fetch(*_: object, **__: object) -> bytes:
+        pytest.fail("Kalshi authoritative settlement must stay on IPv4 transport")
+
+    monkeypatch.setattr(
+        kalshi_rest_client_module,
+        "fetch_bounded_https_ipv4",
+        ipv4_fetch,
+    )
+    monkeypatch.setattr(
+        kalshi_rest_client_module,
+        "fetch_bounded_https_dual_stack",
+        unexpected_dual_stack_fetch,
+        raising=False,
+    )
+
+    market = await client.get_market_exact_bounded("KXTEST-1", timeout_seconds=2.0)
+
+    assert market is not None
+    assert len(calls) == 1
 
 
 @pytest.mark.asyncio

@@ -20,7 +20,7 @@ _RSS = b"""<?xml version="1.0" encoding="UTF-8"?>
 
 
 @pytest.mark.asyncio
-async def test_rss_search_uses_bounded_ipv4_google_news_transport(
+async def test_rss_search_uses_bounded_dual_stack_google_news_transport(
     monkeypatch,
 ) -> None:
     calls: list[tuple[str, float, int]] = []
@@ -29,7 +29,7 @@ async def test_rss_search_uses_bounded_ipv4_google_news_transport(
         calls.append((url, timeout, max_bytes))
         return _RSS
 
-    monkeypatch.setattr(research_gate, "_fetch_google_news_rss_ipv4", fetch)
+    monkeypatch.setattr(research_gate, "_fetch_google_news_rss_dual_stack", fetch)
 
     evidence = await research_gate._rss_search(
         research_gate.ResearchQuery(
@@ -49,6 +49,38 @@ async def test_rss_search_uses_bounded_ipv4_google_news_transport(
             300_000,
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_google_news_transport_uses_bounded_dual_stack_transport(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    async def fetch(url: str, **kwargs: object) -> bytes:
+        calls.append((url, kwargs))
+        return _RSS
+
+    monkeypatch.setattr(
+        research_gate,
+        "fetch_bounded_https_dual_stack",
+        fetch,
+        raising=False,
+    )
+    transport = getattr(research_gate, "_fetch_google_news_rss_dual_stack", None)
+    assert transport is not None
+
+    await transport(
+        "https://news.google.com/rss/search?q=test",
+        timeout=1.0,
+        max_bytes=1_000,
+    )
+
+    assert calls[0][0] == "https://news.google.com/rss/search?q=test"
+    assert calls[0][1]["canonical_host"] == "news.google.com"
+    assert calls[0][1]["provider_name"] == "Google News RSS"
+    assert callable(calls[0][1]["admission_factory"])
+    assert callable(calls[0][1]["telemetry_sink"])
 
 
 def test_ipv4_validation_deduplicates_global_answers() -> None:
@@ -103,7 +135,7 @@ def test_ipv4_validation_maps_empty_answer_to_availability_failure() -> None:
 @pytest.mark.asyncio
 async def test_google_news_transport_rejects_noncanonical_host() -> None:
     with pytest.raises(ValueError, match="canonical HTTPS host"):
-        await research_gate._fetch_google_news_rss_ipv4(
+        await research_gate._fetch_google_news_rss_dual_stack(
             "https://news.google.com.attacker.example/rss/search?q=test",
             timeout=1.0,
             max_bytes=1_000,
@@ -113,7 +145,7 @@ async def test_google_news_transport_rejects_noncanonical_host() -> None:
 @pytest.mark.asyncio
 async def test_duckduckgo_transport_rejects_noncanonical_host() -> None:
     with pytest.raises(ValueError, match="canonical HTTPS host"):
-        await research_gate._fetch_duckduckgo_lite_ipv4(
+        await research_gate._fetch_duckduckgo_lite_dual_stack(
             "https://lite.duckduckgo.com.attacker.example/lite/?q=test",
             timeout=1.0,
             max_bytes=1_000,

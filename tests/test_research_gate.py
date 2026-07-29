@@ -5396,7 +5396,7 @@ def _stub_google_news_rss(monkeypatch, rss: bytes) -> None:
 
     monkeypatch.setattr(
         research_gate_module,
-        "_fetch_google_news_rss_ipv4",
+        "_fetch_google_news_rss_dual_stack",
         fetch,
     )
 
@@ -5865,7 +5865,7 @@ def test_duckduckgo_lite_search_parses_result_links_and_snippets(monkeypatch):
 
     monkeypatch.setattr(
         research_gate_module,
-        "_fetch_duckduckgo_lite_ipv4",
+        "_fetch_duckduckgo_lite_dual_stack",
         fetch,
     )
 
@@ -5957,7 +5957,7 @@ def test_duckduckgo_lite_search_ignores_internal_navigation_links(monkeypatch):
 
     monkeypatch.setattr(
         research_gate_module,
-        "_fetch_duckduckgo_lite_ipv4",
+        "_fetch_duckduckgo_lite_dual_stack",
         fetch,
     )
 

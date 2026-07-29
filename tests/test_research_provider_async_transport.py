@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import aiohttp
+import dns.resolver
 import pytest
 
 from analysis import research_gate
@@ -42,6 +43,7 @@ class _Resolver:
         self,
         addresses: tuple[str, ...] = ("8.8.8.8",),
         *,
+        ipv6_addresses: tuple[str, ...] = (),
         delay: float = 0.0,
         blocker: asyncio.Event | None = None,
         started: asyncio.Event | None = None,
@@ -50,6 +52,7 @@ class _Resolver:
         counters: dict[str, int] | None = None,
     ) -> None:
         self.addresses = addresses
+        self.ipv6_addresses = ipv6_addresses
         self.delay = delay
         self.blocker = blocker
         self.started = started
@@ -89,7 +92,13 @@ class _Resolver:
                 await self.blocker.wait()
             if self.error is not None:
                 raise self.error
-            return [_Address(item) for item in self.addresses]
+            if rdtype == "A":
+                return [_Address(item) for item in self.addresses]
+            if rdtype == "AAAA":
+                if not self.ipv6_addresses:
+                    raise dns.resolver.NoAnswer()
+                return [_Address(item) for item in self.ipv6_addresses]
+            raise AssertionError(f"unexpected DNS record type: {rdtype}")
         finally:
             if self.counters is not None:
                 self.counters["active"] -= 1
@@ -257,7 +266,7 @@ async def test_slow_dns_is_cancelled_by_total_deadline_without_background_work()
     before = time.monotonic()
 
     with pytest.raises(TimeoutError):
-        await research_gate._fetch_google_news_rss_ipv4(
+        await research_gate._fetch_google_news_rss_dual_stack(
             "https://news.google.com/rss/search?q=test",
             timeout=0.03,
             max_bytes=300_000,
@@ -277,7 +286,7 @@ async def test_empty_async_resolver_is_recognized_provider_availability_failure(
     resolver = _Resolver(addresses=())
 
     with pytest.raises(socket.gaierror) as raised:
-        await research_gate._fetch_google_news_rss_ipv4(
+        await research_gate._fetch_google_news_rss_dual_stack(
             "https://news.google.com/rss/search?q=test",
             timeout=0.2,
             max_bytes=300_000,
@@ -297,7 +306,7 @@ async def test_multi_address_connect_tls_write_share_remaining_total_deadline() 
     before = time.monotonic()
 
     with pytest.raises(TimeoutError):
-        await research_gate._fetch_google_news_rss_ipv4(
+        await research_gate._fetch_google_news_rss_dual_stack(
             "https://news.google.com/rss/search?q=test",
             timeout=0.05,
             max_bytes=300_000,
@@ -332,7 +341,7 @@ async def test_slow_body_read_is_cancelled_and_closes_response_session_connector
     connectors, sessions, connector_factory, session_factory = _transport_factories(response)
 
     with pytest.raises(TimeoutError):
-        await research_gate._fetch_google_news_rss_ipv4(
+        await research_gate._fetch_google_news_rss_dual_stack(
             "https://news.google.com/rss/search?q=test",
             timeout=0.03,
             max_bytes=300_000,
@@ -364,7 +373,7 @@ async def test_external_cancellation_closes_response_session_connector_without_t
     )
     connectors, sessions, connector_factory, session_factory = _transport_factories(response)
     task = asyncio.create_task(
-        research_gate._fetch_google_news_rss_ipv4(
+        research_gate._fetch_google_news_rss_dual_stack(
             "https://news.google.com/rss/search?q=test",
             timeout=1.0,
             max_bytes=300_000,
@@ -388,7 +397,7 @@ async def test_external_cancellation_closes_response_session_connector_without_t
 
 
 @pytest.mark.asyncio
-async def test_generic_web_search_work_is_bounded_and_waiters_cancel_cleanly() -> None:
+async def test_generic_web_search_work_is_bounded_while_dual_stack_dns_races() -> None:
     blocker = asyncio.Event()
     counters = {"active": 0, "peak": 0}
 
@@ -397,7 +406,7 @@ async def test_generic_web_search_work_is_bounded_and_waiters_cancel_cleanly() -
 
     tasks = [
         asyncio.create_task(
-            research_gate._fetch_google_news_rss_ipv4(
+            research_gate._fetch_google_news_rss_dual_stack(
                 "https://news.google.com/rss/search?q=test",
                 timeout=1.0,
                 max_bytes=300_000,
@@ -406,13 +415,14 @@ async def test_generic_web_search_work_is_bounded_and_waiters_cancel_cleanly() -
         )
         for _ in range(8)
     ]
+    expected_dns_work = research_gate._GENERIC_WEB_SEARCH_MAX_CONCURRENCY * 2
     for _ in range(50):
-        if counters["active"] == research_gate._GENERIC_WEB_SEARCH_MAX_CONCURRENCY:
+        if counters["active"] == expected_dns_work:
             break
         await asyncio.sleep(0.005)
 
     snapshot = research_gate._generic_web_search_work_snapshot_for_tests()
-    assert counters["peak"] == research_gate._GENERIC_WEB_SEARCH_MAX_CONCURRENCY
+    assert counters["peak"] == expected_dns_work
     assert snapshot.active == research_gate._GENERIC_WEB_SEARCH_MAX_CONCURRENCY
     assert snapshot.peak == research_gate._GENERIC_WEB_SEARCH_MAX_CONCURRENCY
 
@@ -446,7 +456,7 @@ async def test_google_and_duckduckgo_transport_emit_distinct_provider_labels(
         _transport_factories(duck_response)
     )
 
-    await research_gate._fetch_google_news_rss_ipv4(
+    await research_gate._fetch_google_news_rss_dual_stack(
         "https://news.google.com/rss/search?q=private-google-query",
         timeout=0.5,
         max_bytes=300_000,
@@ -454,7 +464,7 @@ async def test_google_and_duckduckgo_transport_emit_distinct_provider_labels(
         connector_factory=google_connector_factory,
         session_factory=google_session_factory,
     )
-    await research_gate._fetch_duckduckgo_lite_ipv4(
+    await research_gate._fetch_duckduckgo_lite_dual_stack(
         "https://lite.duckduckgo.com/lite/?q=private-duck-query",
         timeout=0.5,
         max_bytes=300_000,
@@ -483,7 +493,7 @@ async def test_canonical_host_is_pinned_without_redirects_and_body_is_bounded() 
     response = _Response()
     connectors, sessions, connector_factory, session_factory = _transport_factories(response)
 
-    raw = await research_gate._fetch_google_news_rss_ipv4(
+    raw = await research_gate._fetch_google_news_rss_dual_stack(
         "https://news.google.com/rss/search?q=test",
         timeout=0.5,
         max_bytes=300_000,
@@ -495,15 +505,16 @@ async def test_canonical_host_is_pinned_without_redirects_and_body_is_bounded() 
     assert raw == _RSS
     assert connectors[0].kwargs == {
         "resolver": connectors[0].kwargs["resolver"],
-        "family": socket.AF_INET,
+        "family": socket.AF_UNSPEC,
         "use_dns_cache": False,
         "force_close": True,
         "limit": 1,
         "limit_per_host": 1,
-        "happy_eyeballs_delay": None,
+        "happy_eyeballs_delay": 0.25,
+        "interleave": 1,
     }
     pinned = connectors[0].kwargs["resolver"]
-    answers = await pinned.resolve("news.google.com", 443, socket.AF_INET)
+    answers = await pinned.resolve("news.google.com", 443, socket.AF_UNSPEC)
     assert answers == [
         {
             "hostname": "news.google.com",
@@ -536,7 +547,7 @@ async def test_duckduckgo_202_is_success_and_body_remains_parseable(
     response = _Response(body=_DUCK_HTML, status=202, reason="Accepted")
     connectors, sessions, connector_factory, session_factory = _transport_factories(response)
 
-    raw = await research_gate._fetch_duckduckgo_lite_ipv4(
+    raw = await research_gate._fetch_duckduckgo_lite_dual_stack(
         "https://lite.duckduckgo.com/lite/?q=current+evidence",
         timeout=0.5,
         max_bytes=300_000,
@@ -548,7 +559,7 @@ async def test_duckduckgo_202_is_success_and_body_remains_parseable(
     async def fetch(*_args, **_kwargs) -> bytes:
         return raw
 
-    monkeypatch.setattr(research_gate, "_fetch_duckduckgo_lite_ipv4", fetch)
+    monkeypatch.setattr(research_gate, "_fetch_duckduckgo_lite_dual_stack", fetch)
     evidence = await research_gate._duckduckgo_lite_search(
         research_gate.ResearchQuery(
             query="current evidence",
@@ -573,7 +584,7 @@ async def test_redirect_is_refused_with_existing_http_error_taxonomy() -> None:
     connectors, sessions, connector_factory, session_factory = _transport_factories(response)
 
     with pytest.raises(urllib.error.HTTPError) as raised:
-        await research_gate._fetch_google_news_rss_ipv4(
+        await research_gate._fetch_google_news_rss_dual_stack(
             "https://news.google.com/rss/search?q=test",
             timeout=0.5,
             max_bytes=300_000,
@@ -595,7 +606,7 @@ async def test_oversized_body_is_rejected_at_exact_cap_and_all_resources_close()
     connectors, sessions, connector_factory, session_factory = _transport_factories(response)
 
     with pytest.raises(ValueError, match="10-byte limit"):
-        await research_gate._fetch_google_news_rss_ipv4(
+        await research_gate._fetch_google_news_rss_dual_stack(
             "https://news.google.com/rss/search?q=test",
             timeout=0.5,
             max_bytes=10,
@@ -622,7 +633,7 @@ async def test_duckduckgo_search_uses_cancellable_bounded_ipv4_transport(
 
     monkeypatch.setattr(
         research_gate,
-        "_fetch_duckduckgo_lite_ipv4",
+        "_fetch_duckduckgo_lite_dual_stack",
         fetch,
         raising=False,
     )

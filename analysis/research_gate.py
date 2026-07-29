@@ -49,7 +49,7 @@ from config import cfg
 from utils.bounded_https import (
     BoundedHTTPSAttemptTelemetry,
     _validated_global_ipv4_addresses as _shared_validated_global_ipv4_addresses,
-    fetch_bounded_https_ipv4,
+    fetch_bounded_https_dual_stack,
 )
 from utils.logger import get_logger
 from utils.research_gaps import research_gap_query_intent, research_questions_for_skip
@@ -3587,7 +3587,7 @@ def _validated_global_ipv4_addresses(
     )
 
 
-async def _fetch_bounded_https_ipv4(
+async def _fetch_bounded_https_dual_stack(
     url: str,
     *,
     canonical_host: str,
@@ -3599,7 +3599,7 @@ async def _fetch_bounded_https_ipv4(
     connector_factory: Callable[..., Any] = aiohttp.TCPConnector,
     session_factory: Callable[..., Any] = aiohttp.ClientSession,
 ) -> bytes:
-    return await fetch_bounded_https_ipv4(
+    return await fetch_bounded_https_dual_stack(
         url,
         canonical_host=canonical_host,
         provider_name=provider_name,
@@ -3614,7 +3614,7 @@ async def _fetch_bounded_https_ipv4(
     )
 
 
-async def _fetch_google_news_rss_ipv4(
+async def _fetch_google_news_rss_dual_stack(
     url: str,
     *,
     timeout: float,
@@ -3623,7 +3623,7 @@ async def _fetch_google_news_rss_ipv4(
     connector_factory: Callable[..., Any] = aiohttp.TCPConnector,
     session_factory: Callable[..., Any] = aiohttp.ClientSession,
 ) -> bytes:
-    return await _fetch_bounded_https_ipv4(
+    return await _fetch_bounded_https_dual_stack(
         url,
         canonical_host="news.google.com",
         provider_name="Google News RSS",
@@ -3636,7 +3636,7 @@ async def _fetch_google_news_rss_ipv4(
     )
 
 
-async def _fetch_duckduckgo_lite_ipv4(
+async def _fetch_duckduckgo_lite_dual_stack(
     url: str,
     *,
     timeout: float,
@@ -3645,7 +3645,7 @@ async def _fetch_duckduckgo_lite_ipv4(
     connector_factory: Callable[..., Any] = aiohttp.TCPConnector,
     session_factory: Callable[..., Any] = aiohttp.ClientSession,
 ) -> bytes:
-    return await _fetch_bounded_https_ipv4(
+    return await _fetch_bounded_https_dual_stack(
         url,
         canonical_host="lite.duckduckgo.com",
         provider_name="DuckDuckGo Lite",
@@ -3668,7 +3668,7 @@ async def _rss_search(
         {"q": query.query, "hl": "en-US", "gl": "US", "ceid": "US:en"}
     )
     url = f"https://news.google.com/rss/search?{params}"
-    raw = await _fetch_google_news_rss_ipv4(
+    raw = await _fetch_google_news_rss_dual_stack(
         url,
         timeout=timeout,
         max_bytes=300_000,
@@ -3773,7 +3773,7 @@ async def _duckduckgo_lite_search(
 ) -> list[ResearchEvidence]:
     params = urllib.parse.urlencode({"q": query.query})
     url = f"https://lite.duckduckgo.com/lite/?{params}"
-    response = await _fetch_duckduckgo_lite_ipv4(
+    response = await _fetch_duckduckgo_lite_dual_stack(
         url,
         timeout=timeout,
         max_bytes=300_000,
