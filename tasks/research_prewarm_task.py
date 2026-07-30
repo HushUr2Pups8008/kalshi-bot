@@ -18,8 +18,10 @@ from typing import Any, Awaitable, Callable, Iterable
 
 from analysis.research_gate import (
     DirectFetcher,
+    PrewarmPhaseTimeouts,
     ResearchAdjudicator,
     SearchProvider,
+    _PREWARM_PHASE_TIMEOUTS_CAPABILITY,
     default_direct_fetcher,
     default_search_provider,
     market_has_research_source_path,
@@ -47,8 +49,7 @@ ResearchPrewarmMarketResultSink = Callable[
     ["ResearchPrewarmResult", Any],
     Awaitable[None],
 ]
-# Decision-grade research can issue seven required queries plus one counter query.
-# Seven 1.5s gaps plus the observed 0.6s healthy request leaves 0.9s in its 12s budget.
+# Serialize provider starts across prewarm task instances.
 _RESEARCH_PREWARM_PROVIDER_MIN_START_INTERVAL_SECONDS = 1.5
 
 
@@ -152,6 +153,9 @@ class ResearchPrewarmTask:
         adjudicator: ResearchAdjudicator | None = None,
         max_queries: int = 6,
         research_timeout_seconds: float = 12.0,
+        initial_adjudication_timeout_seconds: float = 20.0,
+        counter_query_timeout_seconds: float = 5.0,
+        counter_adjudication_timeout_seconds: float = 20.0,
         max_concurrency: int = 1,
         target_cooldown_seconds: float = 0.0,
         result_sink: ResearchPrewarmResultSink | None = None,
@@ -164,6 +168,11 @@ class ResearchPrewarmTask:
         self.adjudicator = adjudicator
         self.max_queries = int(max_queries)
         self.research_timeout_seconds = float(research_timeout_seconds)
+        self.prewarm_phase_timeouts = PrewarmPhaseTimeouts(
+            initial_adjudication_seconds=initial_adjudication_timeout_seconds,
+            counter_query_seconds=counter_query_timeout_seconds,
+            counter_adjudication_seconds=counter_adjudication_timeout_seconds,
+        )
         self.max_concurrency = max(1, int(max_concurrency))
         self.target_cooldown_seconds = max(0.0, float(target_cooldown_seconds))
         self._last_attempted_by_ticker: dict[str, float] = {}
@@ -256,6 +265,10 @@ class ResearchPrewarmTask:
                 dossier_store=self.store,
                 max_queries=self.max_queries,
                 research_timeout_seconds=self.research_timeout_seconds,
+                prewarm_phase_timeouts=self.prewarm_phase_timeouts,
+                _prewarm_phase_timeouts_capability=(
+                    _PREWARM_PHASE_TIMEOUTS_CAPABILITY
+                ),
                 require_decision_grade=True,
             )
             if getattr(verdict, "research_persisted", False) is not True:

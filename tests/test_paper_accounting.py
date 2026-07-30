@@ -12,6 +12,7 @@ import pytest
 
 from config import BotConfig
 import scripts.migrate_paper_accounting_schema as migration_module
+import trading.paper_accounting as paper_accounting_module
 from scripts.migrate_paper_accounting_schema import (
     apply_paper_accounting_schema,
     open_readonly,
@@ -947,6 +948,35 @@ def test_handlers_reject_wrong_phase_and_partial_records() -> None:
     with pytest.raises(PaperAccountingAdmissionError, match="invalid settlement record"):
         handlers.dispatch_settlement(partial)
     assert calls == []
+
+
+def test_sqlite_handlers_persist_exact_entry_and_settlement(tmp_path: Path) -> None:
+    db = tmp_path / "paper.db"
+    _create_gross_v1_database(db)
+    conn = _connect(db)
+    try:
+        _install_accounting(conn)
+        _seed_trade(conn)
+        handlers = paper_accounting_module.sqlite_paper_accounting_handlers(conn)
+        entry = _entry_record()
+
+        handlers.dispatch_entry(entry)
+
+        stored_entry = conn.execute(
+            "SELECT * FROM paper_trade_accounting WHERE entry_request_id='req-1'"
+        ).fetchone()
+        assert PaperAccountingRecord.from_database_row(stored_entry) == entry
+
+        _seed_settlement_observation(conn)
+        settled = _settled_record(entry)
+        handlers.dispatch_settlement(settled)
+
+        stored_settlement = conn.execute(
+            "SELECT * FROM paper_trade_accounting WHERE entry_request_id='req-1'"
+        ).fetchone()
+        assert PaperAccountingRecord.from_database_row(stored_settlement) == settled
+    finally:
+        conn.close()
 
 
 def test_admission_requires_schema_both_handlers_request_and_pinned_schedule(

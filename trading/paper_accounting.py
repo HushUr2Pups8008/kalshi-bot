@@ -1,13 +1,12 @@
 """Exact, default-off paper-accounting persistence contract.
 
-This module defines schema and record boundaries only. It does not wire entry
-or settlement handlers into :mod:`trading.paper_trader` and never changes the
-legacy gross bankroll.
+This module defines schema, record, and explicit SQLite handler boundaries. It
+never enables fee-net admission or changes the legacy gross bankroll by itself.
 """
 
 from __future__ import annotations
 
-from dataclasses import InitVar, dataclass
+from dataclasses import InitVar, dataclass, replace
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import hashlib
@@ -79,7 +78,7 @@ PaperAccountingHandler = Callable[["PaperAccountingRecord"], None]
 
 @dataclass(frozen=True)
 class PaperAccountingHandlers:
-    """Versioned pure-handler registry for future runtime wiring."""
+    """Versioned handler registry for explicit runtime wiring."""
 
     entry: Mapping[int, PaperAccountingHandler]
     settlement: Mapping[int, PaperAccountingHandler]
@@ -494,6 +493,90 @@ class PaperAccountingRecord:
             fee_net_pnl=_parse_optional_decimal_text("fee_net_pnl_dollars", value("fee_net_pnl_dollars")),
             recorded_at=_parse_datetime_text("recorded_at", value("recorded_at")),
         )
+
+
+_SETTLEMENT_VALUE_COLUMNS = (
+    "settlement_observation_sha256",
+    "settled_at",
+    "settlement_fee_dollars",
+    "settlement_refund_dollars",
+    "gross_settlement_payout_dollars",
+    "net_settlement_payout_dollars",
+    "fee_net_pnl_dollars",
+)
+
+
+def sqlite_paper_accounting_handlers(
+    conn: sqlite3.Connection,
+) -> PaperAccountingHandlers:
+    """Return version-one handlers that participate in the caller transaction.
+
+    The handlers intentionally never start or commit a transaction. Entry callers
+    must insert the parent ``paper_trades`` row first; settlement callers must
+    have inserted the authoritative observation first. This preserves one atomic
+    transaction across trade state, fee accounting, bankroll, and outbox writes.
+    """
+
+    if not isinstance(conn, sqlite3.Connection):
+        raise TypeError("conn must be sqlite3.Connection")
+
+    def _insert_entry(record: PaperAccountingRecord) -> None:
+        values = record.to_database_values()
+        columns = ",".join(values)
+        placeholders = ",".join("?" for _ in values)
+        try:
+            conn.execute(
+                f"INSERT INTO paper_trade_accounting ({columns}) VALUES ({placeholders})",
+                tuple(values.values()),
+            )
+        except sqlite3.DatabaseError as exc:
+            raise PaperAccountingAdmissionError(
+                "fee-net paper entry persistence failed"
+            ) from exc
+
+    def _complete_settlement(record: PaperAccountingRecord) -> None:
+        values = record.to_database_values()
+        row = conn.execute(
+            "SELECT * FROM paper_trade_accounting WHERE trade_id=?",
+            (record.trade_id,),
+        ).fetchone()
+        if row is None:
+            raise PaperAccountingAdmissionError(
+                "fee-net paper settlement has no matching entry"
+            )
+        existing = PaperAccountingRecord.from_database_row(row)
+        expected_entry = replace(
+            record,
+            settlement_observation_sha256=None,
+            settled_at=None,
+            settlement_fee=None,
+            settlement_refund=None,
+            gross_settlement_payout=None,
+            net_settlement_payout=None,
+            fee_net_pnl=None,
+        )
+        if existing != expected_entry:
+            raise PaperAccountingAdmissionError(
+                "fee-net paper settlement entry fields do not match persisted entry"
+            )
+        assignments = ",".join(f"{column}=?" for column in _SETTLEMENT_VALUE_COLUMNS)
+        cursor = conn.execute(
+            "UPDATE paper_trade_accounting SET "
+            + assignments
+            + " WHERE trade_id=? AND settlement_observation_sha256 IS NULL "
+            + "AND settled_at IS NULL",
+            tuple(values[column] for column in _SETTLEMENT_VALUE_COLUMNS)
+            + (record.trade_id,),
+        )
+        if cursor.rowcount != 1:
+            raise PaperAccountingAdmissionError(
+                "fee-net paper settlement did not complete exactly one entry"
+            )
+
+    return PaperAccountingHandlers(
+        entry={PAPER_ACCOUNTING_VERSION: _insert_entry},
+        settlement={PAPER_ACCOUNTING_VERSION: _complete_settlement},
+    )
 
 
 _TABLE_STATEMENTS: tuple[tuple[str, str], ...] = (

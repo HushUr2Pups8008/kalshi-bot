@@ -19,6 +19,29 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.25] - 2026-07-30
+
+### Added
+
+- **Bounded decision-grade prewarm phases.** Offline research prewarm retains
+  its 12-second evidence-collection deadline, then receives independently
+  bounded adjudication, counter-search, and counter-adjudication windows.
+  The extended profile requires the task's private capability and cannot alter
+  foreground or live research deadlines.
+
+### Fixed
+
+- **Fee-net paper settlement safety.** Fee-marked canonical and legacy paper
+  settlements now quarantine when an attributable receipt is unavailable,
+  preventing a gross settlement write from being represented as fee-net P&L.
+  Fee-net accounting remains default-off pending an attributable receipt and
+  allocation contract.
+
+### Verification
+
+- `CI=1 .venv/bin/python -m pytest tests/test_paper_trader.py tests/test_executor.py tests/test_paper_canonical_settlement.py tests/test_paper_accounting.py tests/polymarket/test_paper_trader.py tests/polymarket/test_candidate_adapter.py tests/polymarket/test_paper_runtime.py tests/test_authoritative_settlement_clients.py tests/test_settlement_economics.py tests/test_settlement_observation.py tests/test_paper_settlement_schema.py tests/test_legacy_settlement_cutover.py tests/test_settlement_outbox_task.py tests/polymarket/test_settlement_reconciler.py tests/test_fees.py tests/test_sizing_bankroll_guard.py tests/test_research_gate.py tests/test_research_prewarm_task.py tests/test_research_paper_admission.py -q` (`1179 passed`)
+- `ruff check analysis/research_gate.py tasks/research_prewarm_task.py trading/paper_accounting.py trading/paper_trader.py trading/executor.py polymarket/paper_trader.py`
+
 ## [0.33.24] - 2026-07-28
 
 ### Added

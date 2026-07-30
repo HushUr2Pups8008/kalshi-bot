@@ -1465,6 +1465,89 @@ class TestPaperExecutionAsync:
         paper.record_trade.assert_called_once_with(analysis)
         paper.get_notional_bankroll.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_execute_paper_derives_fee_net_request_id_from_lifecycle(self, monkeypatch):
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+        monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", True)
+        monkeypatch.setattr(_cfg_module.cfg, "paper_cohort_id", "active-test")
+
+        rest = MagicMock()
+        paper = MagicMock()
+        paper.record_trade_result.return_value = SimpleNamespace(
+            trade_id="paper-entry-1",
+            created=True,
+        )
+        paper.get_notional_bankroll.return_value = 499.25
+        paper.portfolio.open_positions.return_value = []
+        paper.portfolio.is_concentration_ok.return_value = True
+        paper.portfolio.exposure.return_value = 0.0
+        executor = TradeExecutor(rest, paper)
+        analysis = _make_analysis(edge=0.05, estimated_prob=0.55)
+        analysis.signal_meta = {"lifecycle_id": "lc-" + "a" * 32}
+        terms = FinalExecutionTerms(price_cents=50, contracts=1, cost_dollars=0.50)
+
+        with patch("trading.executor.trade_log"):
+            trade_id = await executor._execute_paper(analysis, execution_plan=terms)
+
+        assert trade_id == "paper-entry-1"
+        paper.record_trade_result.assert_called_once_with(
+            analysis,
+            entry_request_id="paper-entry:v1:active-test:lc-" + "a" * 32,
+            execution_terms=terms,
+        )
+
+    @pytest.mark.asyncio
+    async def test_execute_paper_rejects_missing_fee_net_lifecycle(self, monkeypatch):
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+        monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", True)
+        monkeypatch.setattr(_cfg_module.cfg, "paper_cohort_id", "active-test")
+
+        rest = MagicMock()
+        paper = MagicMock()
+        paper.get_notional_bankroll.return_value = 500.0
+        paper.portfolio.open_positions.return_value = []
+        paper.portfolio.is_concentration_ok.return_value = True
+        paper.portfolio.exposure.return_value = 0.0
+        executor = TradeExecutor(rest, paper)
+        analysis = _make_analysis(edge=0.05, estimated_prob=0.55)
+        analysis.signal_meta = {}
+
+        with patch("trading.executor.trade_log"):
+            trade_id = await executor._execute_paper(analysis)
+
+        assert trade_id is None
+        paper.record_trade.assert_not_called()
+        paper.record_trade_result.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_execute_paper_hides_idempotent_fee_net_replay_from_source_stats(self, monkeypatch):
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+        monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", True)
+        monkeypatch.setattr(_cfg_module.cfg, "paper_cohort_id", "active-test")
+
+        rest = MagicMock()
+        paper = MagicMock()
+        paper.record_trade_result.return_value = SimpleNamespace(
+            trade_id="existing-paper-entry",
+            created=False,
+        )
+        paper.get_notional_bankroll.return_value = 499.25
+        paper.portfolio.open_positions.return_value = []
+        paper.portfolio.is_concentration_ok.return_value = True
+        paper.portfolio.exposure.return_value = 0.0
+        executor = TradeExecutor(rest, paper)
+        analysis = _make_analysis(edge=0.05, estimated_prob=0.55)
+        analysis.signal_meta = {"lifecycle_id": "lc-" + "b" * 32}
+
+        with patch("trading.executor.trade_log"):
+            trade_id = await executor._execute_paper(analysis)
+
+        assert trade_id == ""
+        paper.record_trade_result.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # Coverage-focused tests — fill gaps identified in the 2026-04-23 baseline

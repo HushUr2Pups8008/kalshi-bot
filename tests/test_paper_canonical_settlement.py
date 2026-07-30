@@ -10,7 +10,9 @@ from decimal import Decimal
 import inspect
 import json
 from pathlib import Path
+import sqlite3
 import threading
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -22,6 +24,7 @@ from trading.paper_accounting import (
     PaperAccountingAdmissionError,
     PaperAccountingHandlers,
 )
+from trading.executor import TradeExecutor
 from trading.portfolio import Portfolio, Position
 from trading.settlement import (
     MarketOutcome,
@@ -132,13 +135,19 @@ def _record_trade(
     return _record_analysis(trader, analysis, trade_id=trade_id)
 
 
-def _record_analysis(trader, analysis, *, trade_id: str) -> str:
+def _record_analysis(
+    trader,
+    analysis,
+    *,
+    trade_id: str,
+    entry_request_id: str | None = None,
+) -> str:
     assert len(trade_id) == 12
     with (
         patch("trading.paper_trader.uuid.uuid4", return_value=trade_id),
         patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}),
     ):
-        return trader.record_trade(analysis)
+        return trader.record_trade(analysis, entry_request_id=entry_request_id)
 
 
 def test_fresh_database_installs_disabled_accounting_beside_unchanged_gross_v1(
@@ -155,6 +164,7 @@ def test_fresh_database_installs_disabled_accounting_beside_unchanged_gross_v1(
         """
     ).fetchone()
     assert tuple(meta) == (1, PAPER_ACCOUNTING_VERSION)
+    assert trader._paper_accounting_handlers is not None
 
 
 def test_false_mode_keeps_gross_entry_and_leaves_accounting_table_empty(
@@ -193,7 +203,7 @@ def test_false_mode_existing_database_does_not_auto_install_accounting_schema(
     assert settlement_schema_contract_matches(reopened._conn) is True
 
 
-def test_enabled_accounting_fails_closed_before_gross_entry_until_task10(
+def test_enabled_accounting_dispatches_complete_entry_before_commit(
     trader_factory,
     monkeypatch,
 ):
@@ -205,13 +215,10 @@ def test_enabled_accounting_fails_closed_before_gross_entry_until_task10(
         True,
     )
 
-    with pytest.raises(PaperAccountingAdmissionError, match="both entry and settlement"):
-        trader_factory("accounting-enabled")
-
-    noop = lambda _record: None
+    entries = []
     handlers = PaperAccountingHandlers(
-        entry={PAPER_ACCOUNTING_VERSION: noop},
-        settlement={PAPER_ACCOUNTING_VERSION: noop},
+        entry={PAPER_ACCOUNTING_VERSION: entries.append},
+        settlement={PAPER_ACCOUNTING_VERSION: lambda _record: None},
     )
     trader = trader_factory(
         "accounting-enabled",
@@ -220,23 +227,885 @@ def test_enabled_accounting_fails_closed_before_gross_entry_until_task10(
     analysis = _make_mock_analysis(ticker="KX-ACCT-ENABLED")
     analysis.venue = Venue.KALSHI.value
     analysis.market.venue = Venue.KALSHI.value
+    analysis.capped_dollars = 11.0
     before_bankroll = trader.get_notional_bankroll()
-    before_positions = trader.portfolio.open_positions()
 
     with pytest.raises(PaperAccountingAdmissionError, match="entry_request_id"):
         trader.record_trade(analysis)
-    with pytest.raises(PaperAccountingAdmissionError, match="execution is not installed"):
-        trader.record_trade(analysis, entry_request_id="candidate-stable-request-1")
 
-    assert trader.get_notional_bankroll() == before_bankroll
-    assert trader.portfolio.open_positions() == before_positions
+    trade_id = _record_analysis(
+        trader,
+        analysis,
+        trade_id="acctenabled1",
+        entry_request_id="candidate-stable-request-1",
+    )
+
+    assert trade_id == "acctenabled1"
+    assert len(entries) == 1
+    record = entries[0]
+    assert record.entry_request_id == "candidate-stable-request-1"
+    assert record.trade_id == trade_id
+    assert record.order_id == "paper-order:candidate-stable-request-1"
+    assert record.fill_id == "paper-fill:candidate-stable-request-1:0"
+    assert record.gross_entry_debit > 0
+    assert record.net_entry_debit > record.gross_entry_debit
+    assert trader.get_notional_bankroll() == pytest.approx(
+        before_bankroll - float(record.net_entry_debit)
+    )
+    assert trader._conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 1
+
+
+def test_enabled_accounting_installs_connection_bound_sqlite_handlers(
+    trader_factory,
+    monkeypatch,
+):
+    seeded = trader_factory("accounting-auto-handlers")
+    seeded._conn.close()
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "enable_fee_net_paper_accounting",
+        True,
+    )
+
+    trader = trader_factory("accounting-auto-handlers")
+    analysis = _make_mock_analysis(ticker="KX-ACCT-AUTO")
+    analysis.venue = Venue.KALSHI.value
+    analysis.market.venue = Venue.KALSHI.value
+    analysis.capped_dollars = 11.0
+
+    trade_id = _record_analysis(
+        trader,
+        analysis,
+        trade_id="acctenabled2",
+        entry_request_id="candidate-stable-request-2",
+    )
+
+    assert trade_id == "acctenabled2"
+    row = trader._conn.execute(
+        "SELECT * FROM paper_trade_accounting WHERE trade_id=?",
+        (trade_id,),
+    ).fetchone()
+    assert row is not None
+    assert row["entry_request_id"] == "candidate-stable-request-2"
+
+
+def test_fee_net_parent_marker_quarantines_nonpersisting_entry_handler(
+    trader_factory,
+    monkeypatch,
+):
+    seeded = trader_factory("accounting-parent-marker")
+    seeded._conn.close()
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", True)
+    entries = []
+    handlers = PaperAccountingHandlers(
+        entry={PAPER_ACCOUNTING_VERSION: entries.append},
+        settlement={PAPER_ACCOUNTING_VERSION: lambda _record: None},
+    )
+    trader = trader_factory(
+        "accounting-parent-marker",
+        paper_accounting_handlers=handlers,
+    )
+    market_ref = MarketRef(
+        Venue.KALSHI,
+        "KX-ACCT-PARENT-MARKER",
+        "KX-ACCT-PARENT-MARKER",
+    )
+    analysis = _make_mock_analysis(ticker=market_ref.alias, capped_dollars=11.0)
+    analysis.venue = market_ref.venue.value
+    analysis.market.venue = market_ref.venue.value
+    analysis.market.market_id = market_ref.alias
+    analysis.market.venue_market_id = market_ref.venue_market_id
+
+    trade_id = _record_analysis(
+        trader,
+        analysis,
+        trade_id="acctmarker01",
+        entry_request_id="paper-entry:v1:active-test:lc-" + "k" * 32,
+    )
+
+    assert [record.trade_id for record in entries] == [trade_id]
+    assert trader._conn.execute(
+        "SELECT COUNT(*) FROM paper_trade_accounting"
+    ).fetchone()[0] == 0
+    marker = trader._conn.execute(
+        "SELECT fee_net_accounting_version FROM paper_trades WHERE trade_id=?",
+        (trade_id,),
+    ).fetchone()
+    assert marker["fee_net_accounting_version"] == PAPER_ACCOUNTING_VERSION
+    with pytest.raises(
+        sqlite3.IntegrityError,
+        match="fee_net_accounting_version is immutable",
+    ):
+        trader._conn.execute(
+            """
+            UPDATE paper_trades
+            SET fee_net_accounting_version=NULL
+            WHERE trade_id=?
+            """,
+            (trade_id,),
+        )
+    trader._conn.rollback()
+    assert trader._conn.execute(
+        "SELECT fee_net_accounting_version FROM paper_trades WHERE trade_id=?",
+        (trade_id,),
+    ).fetchone()["fee_net_accounting_version"] == PAPER_ACCOUNTING_VERSION
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
+    before = _financial_snapshot(trader)
+    observation = _observation(market_ref, MarketOutcome.YES)
+
+    assert _resolve(trader, observation) is False
+
+    _assert_quarantined_without_financial_change(trader, observation, before)
+    quarantine = trader._conn.execute(
+        "SELECT reason_code, details_json FROM paper_settlement_quarantine"
+    ).fetchone()
+    assert quarantine["reason_code"] == "fee_net_settlement_evidence_unavailable"
+    assert json.loads(quarantine["details_json"]) == {"trade_ids": [trade_id]}
+
+
+def test_fee_net_parent_marker_rejects_non_immutable_trigger(
+    trader_factory,
+):
+    import trading.paper_trader as paper_trader_module
+
+    seeded = trader_factory("accounting-parent-marker-trigger")
+    trigger_name = paper_trader_module._FEE_NET_ACCOUNTING_MARKER_TRIGGER_NAME
+    seeded._conn.execute(f"DROP TRIGGER {trigger_name}")
+    seeded._conn.execute(
+        f"""
+        CREATE TRIGGER {trigger_name}
+        BEFORE UPDATE OF fee_net_accounting_version ON paper_trades
+        WHEN NEW.fee_net_accounting_version IS NOT OLD.fee_net_accounting_version
+        BEGIN
+            SELECT 'fee_net_accounting_version is immutable';
+        END
+        """
+    )
+    seeded._conn.commit()
+    seeded._conn.close()
+
+    with pytest.raises(
+        PaperAccountingAdmissionError,
+        match="marker immutability trigger does not match contract",
+    ):
+        trader_factory("accounting-parent-marker-trigger")
+
+
+def test_fee_net_entry_rolls_back_if_handler_replaces_parent_marker(
+    trader_factory,
+    monkeypatch,
+):
+    seeded = trader_factory("accounting-parent-marker-replace")
+    seeded._conn.close()
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", True)
+
+    def replace_parent_without_marker(record):
+        columns = [
+            str(row["name"])
+            for row in trader._conn.execute("PRAGMA table_info(paper_trades)")
+        ]
+        quoted_columns = ", ".join(f'"{column}"' for column in columns)
+        selected_columns = ", ".join(
+            "NULL"
+            if column == "fee_net_accounting_version"
+            else f'"{column}"'
+            for column in columns
+        )
+        trader._conn.execute(
+            f"""
+            INSERT OR REPLACE INTO paper_trades ({quoted_columns})
+            SELECT {selected_columns}
+            FROM paper_trades
+            WHERE trade_id=?
+            """,
+            (record.trade_id,),
+        )
+
+    handlers = PaperAccountingHandlers(
+        entry={PAPER_ACCOUNTING_VERSION: replace_parent_without_marker},
+        settlement={PAPER_ACCOUNTING_VERSION: lambda _record: None},
+    )
+    trader = trader_factory(
+        "accounting-parent-marker-replace",
+        paper_accounting_handlers=handlers,
+    )
+    analysis = _make_mock_analysis(ticker="KX-ACCT-PARENT-REPLACE", capped_dollars=11.0)
+    analysis.venue = Venue.KALSHI.value
+    analysis.market.venue = Venue.KALSHI.value
+    analysis.market.market_id = analysis.market.ticker
+    analysis.market.venue_market_id = analysis.market.ticker
+    before = _financial_snapshot(trader)
+
+    with pytest.raises(
+        PaperAccountingAdmissionError,
+        match="parent marker changed during accounting dispatch",
+    ):
+        _record_analysis(
+            trader,
+            analysis,
+            trade_id="acctreplace1",
+            entry_request_id="paper-entry:v1:active-test:lc-" + "r" * 32,
+        )
+
+    assert _financial_snapshot(trader) == before
     assert trader._conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 0
     assert trader._conn.execute(
         "SELECT COUNT(*) FROM paper_trade_accounting"
     ).fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("transaction_control", ("commit", "sql", "clear_authorizer"))
+def test_fee_net_entry_rejects_handler_transaction_control_before_parent_rollback(
+    trader_factory,
+    monkeypatch,
+    transaction_control,
+):
+    seeded = trader_factory("accounting-parent-marker-commit")
+    seeded._conn.close()
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", True)
+
+    def replace_parent_without_marker_and_control_transaction(record):
+        columns = [
+            str(row["name"])
+            for row in trader._conn.execute("PRAGMA table_info(paper_trades)")
+        ]
+        quoted_columns = ", ".join(f'"{column}"' for column in columns)
+        selected_columns = ", ".join(
+            "NULL"
+            if column == "fee_net_accounting_version"
+            else f'"{column}"'
+            for column in columns
+        )
+        trader._conn.execute(
+            f"""
+            INSERT OR REPLACE INTO paper_trades ({quoted_columns})
+            SELECT {selected_columns}
+            FROM paper_trades
+            WHERE trade_id=?
+            """,
+            (record.trade_id,),
+        )
+        if transaction_control == "commit":
+            trader._conn.commit()
+        elif transaction_control == "sql":
+            trader._conn.execute("COMMIT")
+        else:
+            trader._conn.set_authorizer(None)
+            trader._conn.commit()
+
+    handlers = PaperAccountingHandlers(
+        entry={
+            PAPER_ACCOUNTING_VERSION: replace_parent_without_marker_and_control_transaction,
+        },
+        settlement={PAPER_ACCOUNTING_VERSION: lambda _record: None},
+    )
+    trader = trader_factory(
+        "accounting-parent-marker-commit",
+        paper_accounting_handlers=handlers,
+    )
+    analysis = _make_mock_analysis(ticker="KX-ACCT-PARENT-COMMIT", capped_dollars=11.0)
+    analysis.venue = Venue.KALSHI.value
+    analysis.market.venue = Venue.KALSHI.value
+    analysis.market.market_id = analysis.market.ticker
+    analysis.market.venue_market_id = analysis.market.ticker
+    before = _financial_snapshot(trader)
+
+    with pytest.raises(PaperAccountingAdmissionError):
+        _record_analysis(
+            trader,
+            analysis,
+            trade_id="acctcommit01",
+            entry_request_id="paper-entry:v1:active-test:lc-" + "s" * 32,
+        )
+
+    assert _financial_snapshot(trader) == before
+    assert trader._conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 0
     assert trader._conn.execute(
-        "SELECT COUNT(*) FROM paper_settlement_outbox"
+        "SELECT COUNT(*) FROM paper_trade_accounting"
     ).fetchone()[0] == 0
+    db_path = trader.db_path
+    trader._conn.close()
+    with sqlite3.connect(f"{db_path.as_uri()}?mode=ro", uri=True) as reader:
+        assert reader.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 0
+
+
+def test_fee_net_entry_rejects_unguarded_sqlite_connection(
+    trader_factory,
+    monkeypatch,
+):
+    seeded = trader_factory("accounting-unguarded-connection")
+    seeded._conn.close()
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", True)
+    trader = trader_factory("accounting-unguarded-connection")
+    original_connection = trader._conn
+    replacement_connection = sqlite3.connect(trader.db_path)
+    replacement_connection.row_factory = sqlite3.Row
+    replacement_connection.execute("PRAGMA foreign_keys=ON")
+    original_connection.close()
+    trader._conn = replacement_connection
+
+    def replace_parent_without_marker_and_commit(record):
+        columns = [
+            str(row["name"])
+            for row in trader._conn.execute("PRAGMA table_info(paper_trades)")
+        ]
+        quoted_columns = ", ".join(f'"{column}"' for column in columns)
+        selected_columns = ", ".join(
+            "NULL"
+            if column == "fee_net_accounting_version"
+            else f'"{column}"'
+            for column in columns
+        )
+        trader._conn.execute(
+            f"""
+            INSERT OR REPLACE INTO paper_trades ({quoted_columns})
+            SELECT {selected_columns}
+            FROM paper_trades
+            WHERE trade_id=?
+            """,
+            (record.trade_id,),
+        )
+        trader._conn.set_authorizer(None)
+        trader._conn.commit()
+
+    trader._paper_accounting_handlers = PaperAccountingHandlers(
+        entry={
+            PAPER_ACCOUNTING_VERSION: replace_parent_without_marker_and_commit,
+        },
+        settlement={PAPER_ACCOUNTING_VERSION: lambda _record: None},
+    )
+    analysis = _make_mock_analysis(ticker="KX-ACCT-UNGUARDED", capped_dollars=11.0)
+    analysis.venue = Venue.KALSHI.value
+    analysis.market.venue = Venue.KALSHI.value
+    analysis.market.market_id = analysis.market.ticker
+    analysis.market.venue_market_id = analysis.market.ticker
+    before = _financial_snapshot(trader)
+
+    with pytest.raises(
+        PaperAccountingAdmissionError,
+        match="guarded SQLite connection",
+    ):
+        _record_analysis(
+            trader,
+            analysis,
+            trade_id="acctguard001",
+            entry_request_id="paper-entry:v1:active-test:lc-" + "u" * 32,
+        )
+
+    assert _financial_snapshot(trader) == before
+    assert trader._conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 0
+
+
+def test_fee_net_entry_preserves_existing_connection_authorizer(
+    trader_factory,
+    monkeypatch,
+):
+    seeded = trader_factory("accounting-authorizer")
+    seeded._conn.close()
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", True)
+    trader = trader_factory("accounting-authorizer")
+    observed_actions: list[int] = []
+
+    def existing_authorizer(action_code, _arg1, _arg2, _database, _trigger):
+        observed_actions.append(action_code)
+        return sqlite3.SQLITE_OK
+
+    trader._conn.set_authorizer(existing_authorizer)
+    analysis = _make_mock_analysis(ticker="KX-ACCT-AUTHORIZER", capped_dollars=11.0)
+    analysis.venue = Venue.KALSHI.value
+    analysis.market.venue = Venue.KALSHI.value
+    analysis.market.market_id = analysis.market.ticker
+    analysis.market.venue_market_id = analysis.market.ticker
+
+    _record_analysis(
+        trader,
+        analysis,
+        trade_id="acctauth0001",
+        entry_request_id="paper-entry:v1:active-test:lc-" + "a" * 32,
+    )
+    assert observed_actions
+    observed_actions.clear()
+    trader._conn.execute("SELECT value FROM bot_state WHERE key='notional_bankroll'")
+
+    assert observed_actions
+
+
+def test_runtime_cli_rejects_injected_fee_net_handlers_before_opening_database(
+    monkeypatch,
+    tmp_path: Path,
+):
+    import trading.paper_trader as paper_trader_module
+
+    handlers = PaperAccountingHandlers(
+        entry={PAPER_ACCOUNTING_VERSION: lambda _record: None},
+        settlement={PAPER_ACCOUNTING_VERSION: lambda _record: None},
+    )
+
+    with patch(
+        "trading.paper_trader.sqlite3.connect",
+        side_effect=AssertionError("SQLite opened"),
+    ):
+        with pytest.raises(ValueError, match="custom paper accounting handlers"):
+            paper_trader_module.PaperTrader(
+                db_path=tmp_path / "injected-handler.db",
+                startup_context="cli",
+                paper_accounting_handlers=handlers,
+                paper_cohort_storage_root=tmp_path,
+            )
+
+
+def test_fee_net_entry_retry_is_idempotent_without_second_debit_or_log(
+    trader_factory,
+    monkeypatch,
+):
+    seeded = trader_factory("accounting-entry-retry")
+    seeded._conn.close()
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", True)
+    trader = trader_factory("accounting-entry-retry")
+    analysis = _make_mock_analysis(ticker="KX-ACCT-RETRY", capped_dollars=12.0)
+    analysis.venue = Venue.KALSHI.value
+    analysis.market.venue = Venue.KALSHI.value
+    entry_request_id = "paper-entry:v1:active-test:lc-" + "a" * 32
+
+    first_trade_id = _record_analysis(
+        trader,
+        analysis,
+        trade_id="acctretry001",
+        entry_request_id=entry_request_id,
+    )
+    bankroll_after_first = trader.get_notional_bankroll()
+
+    with (
+        patch("trading.paper_trader.uuid.uuid4", return_value="acctretry002"),
+        patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}),
+    ):
+        replay = trader.record_trade_result(
+            analysis,
+            entry_request_id=entry_request_id,
+        )
+
+    assert replay.trade_id == first_trade_id
+    assert replay.created is False
+    assert trader.get_notional_bankroll() == pytest.approx(bankroll_after_first)
+    assert trader._conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 1
+    assert trader._conn.execute(
+        "SELECT COUNT(*) FROM paper_trade_accounting"
+    ).fetchone()[0] == 1
+    assert [position.trade_id for position in trader.portfolio.open_positions()] == [
+        first_trade_id
+    ]
+    import trading.paper_trader as paper_trader_module
+
+    paper_trader_module.trade_log.log_paper_trade.assert_called_once()
+
+
+def test_fee_net_entry_rejects_reused_identity_with_changed_terms(
+    trader_factory,
+    monkeypatch,
+):
+    seeded = trader_factory("accounting-entry-conflict")
+    seeded._conn.close()
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", True)
+    trader = trader_factory("accounting-entry-conflict")
+    analysis = _make_mock_analysis(ticker="KX-ACCT-CONFLICT", capped_dollars=12.0)
+    analysis.venue = Venue.KALSHI.value
+    analysis.market.venue = Venue.KALSHI.value
+    entry_request_id = "paper-entry:v1:active-test:lc-" + "b" * 32
+
+    first_trade_id = _record_analysis(
+        trader,
+        analysis,
+        trade_id="acctconflict",
+        entry_request_id=entry_request_id,
+    )
+    before_bankroll = trader.get_notional_bankroll()
+    analysis.executed_price_cents += 1
+
+    with pytest.raises(
+        PaperAccountingAdmissionError,
+        match="immutable execution intent",
+    ):
+        _record_analysis(
+            trader,
+            analysis,
+            trade_id="acctconflic2",
+            entry_request_id=entry_request_id,
+        )
+
+    assert trader.get_notional_bankroll() == pytest.approx(before_bankroll)
+    assert trader._conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 1
+    assert trader._conn.execute(
+        "SELECT COUNT(*) FROM paper_trade_accounting"
+    ).fetchone()[0] == 1
+    assert [position.trade_id for position in trader.portfolio.open_positions()] == [
+        first_trade_id
+    ]
+
+
+def test_fee_net_entry_requires_active_cohort_outside_test_context(
+    trader_factory,
+    monkeypatch,
+):
+    seeded = trader_factory("accounting-entry-cohort-gate")
+    seeded._conn.close()
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", True)
+    trader = trader_factory("accounting-entry-cohort-gate")
+    trader._startup_context = "runtime"
+
+    with pytest.raises(
+        PaperAccountingAdmissionError,
+        match="manifest-bound active paper cohort",
+    ):
+        trader._require_fee_net_active_cohort(
+            "paper-entry:v1:active-test:lc-" + "i" * 32,
+        )
+
+    assert trader._conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 0
+    assert trader._conn.execute(
+        "SELECT COUNT(*) FROM paper_trade_accounting"
+    ).fetchone()[0] == 0
+
+
+def test_fee_net_runtime_entry_requires_matching_active_cohort_identity(
+    trader_factory,
+    monkeypatch,
+):
+    seeded = trader_factory("accounting-entry-active-cohort")
+    seeded._conn.close()
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", True)
+    monkeypatch.setattr(_cfg_module.cfg, "paper_cohort_id", "active-test")
+    trader = trader_factory("accounting-entry-active-cohort")
+    trader._startup_context = "runtime"
+    trader._paper_cohort_binding = SimpleNamespace(
+        cohort_type="active",
+        cohort=SimpleNamespace(cohort_id="active-test"),
+    )
+    analysis = _make_mock_analysis(ticker="KX-ACCT-ACTIVE-COHORT")
+    analysis.venue = Venue.KALSHI.value
+    analysis.market.venue = Venue.KALSHI.value
+    analysis.capped_dollars = 11.0
+
+    with pytest.raises(
+        PaperAccountingAdmissionError,
+        match="identity does not match its active cohort",
+    ):
+        trader._require_fee_net_active_cohort(
+            "paper-entry:v1:other-cohort:lc-" + "j" * 32,
+        )
+
+    trader._require_fee_net_active_cohort(
+        "paper-entry:v1:active-test:lc-" + "j" * 32,
+    )
+
+    assert trader._conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 0
+    assert trader._conn.execute(
+        "SELECT COUNT(*) FROM paper_trade_accounting"
+    ).fetchone()[0] == 0
+
+
+def test_fee_net_runtime_entry_stays_blocked_after_post_init_flag_change(
+    trader_factory,
+    monkeypatch,
+):
+    trader = trader_factory("accounting-runtime-entry-block")
+    trader._startup_context = "runtime"
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", True)
+    analysis = _make_mock_analysis(ticker="KX-ACCT-RUNTIME-BLOCK", capped_dollars=11.0)
+    analysis.venue = Venue.KALSHI.value
+    analysis.market.venue = Venue.KALSHI.value
+    before = _financial_snapshot(trader)
+
+    with pytest.raises(
+        PaperAccountingAdmissionError,
+        match="authoritative settlement fee evidence",
+    ):
+        _record_analysis(
+            trader,
+            analysis,
+            trade_id="acctblock001",
+            entry_request_id="paper-entry:v1:active-test:lc-" + "j" * 32,
+        )
+
+    assert _financial_snapshot(trader) == before
+    assert trader._conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 0
+    assert trader._conn.execute(
+        "SELECT COUNT(*) FROM paper_trade_accounting"
+    ).fetchone()[0] == 0
+
+
+def test_fee_net_runtime_startup_stays_blocked_until_receipt_settlement_exists(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", True)
+    from trading.paper_trader import PaperTrader
+
+    db_path = tmp_path / "paper-trades.db"
+    with pytest.raises(
+        PaperAccountingAdmissionError,
+        match="authoritative settlement fee evidence",
+    ):
+        PaperTrader(
+            db_path=db_path,
+            startup_context="runtime",
+        )
+    assert not db_path.exists()
+
+
+def test_fee_net_entry_handler_failure_rolls_back_parent_trade_and_bankroll(
+    trader_factory,
+    monkeypatch,
+):
+    seeded = trader_factory("accounting-entry-rollback")
+    seeded._conn.close()
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", True)
+    observed_parent_row_counts = []
+
+    def fail_after_parent_insert(_record):
+        observed_parent_row_counts.append(
+            trader._conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0]
+        )
+        raise RuntimeError("injected entry handler failure")
+
+    handlers = PaperAccountingHandlers(
+        entry={PAPER_ACCOUNTING_VERSION: fail_after_parent_insert},
+        settlement={PAPER_ACCOUNTING_VERSION: lambda _record: None},
+    )
+    trader = trader_factory(
+        "accounting-entry-rollback",
+        paper_accounting_handlers=handlers,
+    )
+    analysis = _make_mock_analysis(ticker="KX-ACCT-ROLLBACK", capped_dollars=12.0)
+    analysis.venue = Venue.KALSHI.value
+    analysis.market.venue = Venue.KALSHI.value
+    before_bankroll = trader.get_notional_bankroll()
+
+    trade_id = _record_analysis(
+        trader,
+        analysis,
+        trade_id="acctrollback",
+        entry_request_id="paper-entry:v1:active-test:lc-" + "c" * 32,
+    )
+
+    assert trade_id == ""
+    assert observed_parent_row_counts == [1]
+    assert trader.get_notional_bankroll() == pytest.approx(before_bankroll)
+    assert trader._conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 0
+    assert trader._conn.execute(
+        "SELECT COUNT(*) FROM paper_trade_accounting"
+    ).fetchone()[0] == 0
+    assert trader.portfolio.open_positions() == []
+
+
+def test_executor_persists_lifecycle_key_and_hides_fee_net_replay(
+    trader_factory,
+    monkeypatch,
+):
+    seeded = trader_factory("accounting-executor-path")
+    seeded._conn.close()
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", True)
+    monkeypatch.setattr(_cfg_module.cfg, "paper_cohort_id", "active-test")
+    trader = trader_factory("accounting-executor-path")
+    executor = TradeExecutor(MagicMock(), trader)
+    analysis = _make_mock_analysis(ticker="KX-ACCT-EXECUTOR", capped_dollars=12.0)
+    analysis.venue = Venue.KALSHI.value
+    analysis.market.venue = Venue.KALSHI.value
+    analysis.signal_meta = {"lifecycle_id": "lc-" + "d" * 32}
+
+    with (
+        patch("trading.paper_trader.uuid.uuid4", return_value="acctexecutor"),
+        patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}),
+    ):
+        first_trade_id = asyncio.run(executor._execute_paper(analysis))
+    replay_trade_id = asyncio.run(executor._execute_paper(analysis))
+
+    assert first_trade_id == "acctexecutor"
+    assert replay_trade_id == ""
+    row = trader._conn.execute(
+        """
+        SELECT entry_request_id, trade_id
+        FROM paper_trade_accounting
+        """
+    ).fetchone()
+    assert tuple(row) == (
+        "paper-entry:v1:active-test:lc-" + "d" * 32,
+        first_trade_id,
+    )
+    assert trader._conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 1
+
+
+def test_fee_net_entry_survives_disabled_restart_without_new_ledger_rows(
+    trader_factory,
+    monkeypatch,
+):
+    seeded = trader_factory("accounting-disabled-restart")
+    seeded._conn.close()
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", True)
+    enabled = trader_factory("accounting-disabled-restart")
+    fee_net_analysis = _make_mock_analysis(
+        ticker="KX-ACCT-RESTART-FEE",
+        capped_dollars=12.0,
+    )
+    fee_net_analysis.venue = Venue.KALSHI.value
+    fee_net_analysis.market.venue = Venue.KALSHI.value
+    fee_net_trade_id = _record_analysis(
+        enabled,
+        fee_net_analysis,
+        trade_id="acctrestart1",
+        entry_request_id="paper-entry:v1:active-test:lc-" + "e" * 32,
+    )
+    enabled._conn.close()
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
+
+    restarted = trader_factory("accounting-disabled-restart")
+    gross_analysis = _make_mock_analysis(
+        ticker="KX-ACCT-RESTART-GROSS",
+        capped_dollars=12.0,
+    )
+    gross_analysis.venue = Venue.KALSHI.value
+    gross_analysis.market.venue = Venue.KALSHI.value
+    gross_trade_id = _record_analysis(
+        restarted,
+        gross_analysis,
+        trade_id="acctrestart2",
+        entry_request_id="paper-entry:v1:active-test:lc-" + "f" * 32,
+    )
+
+    assert fee_net_trade_id == "acctrestart1"
+    assert gross_trade_id == "acctrestart2"
+    accounting_rows = restarted._conn.execute(
+        "SELECT trade_id FROM paper_trade_accounting ORDER BY trade_id"
+    ).fetchall()
+    assert [row["trade_id"] for row in accounting_rows] == [fee_net_trade_id]
+    assert restarted._paper_accounting_handlers is not None
+
+
+def test_fee_net_entry_quarantines_after_disabled_restart_without_gross_settlement(
+    trader_factory,
+    monkeypatch,
+):
+    seeded = trader_factory("accounting-settlement-disabled-restart")
+    seeded._conn.close()
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", True)
+    enabled = trader_factory("accounting-settlement-disabled-restart")
+    market_ref = MarketRef(
+        Venue.KALSHI,
+        "KX-ACCT-SETTLE-FEE",
+        "KX-ACCT-SETTLE-FEE",
+    )
+    analysis = _make_mock_analysis(
+        ticker=market_ref.alias,
+        capped_dollars=12.0,
+    )
+    analysis.venue = market_ref.venue.value
+    analysis.market.venue = market_ref.venue.value
+    analysis.market.market_id = market_ref.alias
+    analysis.market.venue_market_id = market_ref.venue_market_id
+    fee_net_trade_id = _record_analysis(
+        enabled,
+        analysis,
+        trade_id="acctfee00001",
+        entry_request_id="paper-entry:v1:active-test:lc-" + "f" * 32,
+    )
+    enabled._conn.close()
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
+
+    restarted = trader_factory("accounting-settlement-disabled-restart")
+    gross_analysis = _make_mock_analysis(
+        ticker=market_ref.alias,
+        capped_dollars=10.0,
+    )
+    gross_analysis.venue = market_ref.venue.value
+    gross_analysis.market.venue = market_ref.venue.value
+    gross_analysis.market.market_id = market_ref.alias
+    gross_analysis.market.venue_market_id = market_ref.venue_market_id
+    gross_trade_id = _record_analysis(
+        restarted,
+        gross_analysis,
+        trade_id="acctfee00002",
+    )
+    before = _financial_snapshot(restarted)
+    observation = _observation(market_ref, MarketOutcome.YES)
+
+    assert _resolve(restarted, observation) is False
+
+    _assert_quarantined_without_financial_change(restarted, observation, before)
+    assert {row[0] for row in before["trades"]} == {
+        fee_net_trade_id,
+        gross_trade_id,
+    }
+    accounting = restarted._conn.execute(
+        """
+        SELECT settlement_observation_sha256, settled_at, settlement_fee_dollars,
+               settlement_refund_dollars, gross_settlement_payout_dollars,
+               net_settlement_payout_dollars, fee_net_pnl_dollars
+        FROM paper_trade_accounting
+        WHERE trade_id=?
+        """,
+        (fee_net_trade_id,),
+    ).fetchone()
+    assert tuple(accounting) == (None, None, None, None, None, None, None)
+    quarantine = restarted._conn.execute(
+        """
+        SELECT reason_code, details_json
+        FROM paper_settlement_quarantine
+        """
+    ).fetchone()
+    assert quarantine["reason_code"] == "fee_net_settlement_evidence_unavailable"
+    assert json.loads(quarantine["details_json"]) == {"trade_ids": [fee_net_trade_id]}
+
+
+def test_fee_net_entry_blocks_legacy_gross_settlement_after_disabled_restart(
+    trader_factory,
+    monkeypatch,
+):
+    seeded = trader_factory("accounting-legacy-settlement-disabled-restart")
+    seeded._conn.close()
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", True)
+    enabled = trader_factory("accounting-legacy-settlement-disabled-restart")
+    market_ref = MarketRef(
+        Venue.KALSHI,
+        "KX-ACCT-LEGACY-FEE",
+        "KX-ACCT-LEGACY-FEE",
+    )
+    analysis = _make_mock_analysis(
+        ticker=market_ref.alias,
+        capped_dollars=12.0,
+    )
+    analysis.venue = market_ref.venue.value
+    analysis.market.venue = market_ref.venue.value
+    analysis.market.market_id = market_ref.alias
+    analysis.market.venue_market_id = market_ref.venue_market_id
+    fee_net_trade_id = _record_analysis(
+        enabled,
+        analysis,
+        trade_id="acctfee00003",
+        entry_request_id="paper-entry:v1:active-test:lc-" + "g" * 32,
+    )
+    enabled._conn.close()
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
+
+    restarted = trader_factory("accounting-legacy-settlement-disabled-restart")
+    before = _financial_snapshot(restarted)
+
+    with pytest.raises(
+        PaperAccountingAdmissionError,
+        match="fee-net paper settlements require authoritative fee evidence",
+    ):
+        asyncio.run(restarted.resolve_market(market_ref.alias, True))
+
+    assert _financial_snapshot(restarted) == before
+    accounting = restarted._conn.execute(
+        """
+        SELECT settlement_observation_sha256, settled_at, settlement_fee_dollars,
+               settlement_refund_dollars, gross_settlement_payout_dollars,
+               net_settlement_payout_dollars, fee_net_pnl_dollars
+        FROM paper_trade_accounting
+        WHERE trade_id=?
+        """,
+        (fee_net_trade_id,),
+    ).fetchone()
+    assert tuple(accounting) == (None, None, None, None, None, None, None)
 
 
 def test_constructor_closes_connection_when_foreign_key_setup_fails(

@@ -11,6 +11,7 @@ Live mode: tighter checks, live balance verified, source credibility applied.
 
 import asyncio
 import copy
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -38,12 +39,30 @@ log = get_logger("executor")
 # Read from cfg at call time so .env changes take effect without code edits.
 
 _UNVERIFIED_ORDER_IDS = frozenset({"unknown", "none", "null"})
+_PAPER_ENTRY_COHORT_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}$")
+_PAPER_ENTRY_LIFECYCLE_RE = re.compile(r"lc-[0-9a-f]{32}$")
 
 
 def _is_verified_order_id(order_id: object) -> bool:
     return (
         isinstance(order_id, str) and bool(order_id.strip()) and order_id.strip().lower() not in _UNVERIFIED_ORDER_IDS
     )
+
+
+def _fee_net_paper_entry_request_id(analysis: SignalAnalysis) -> str | None:
+    """Build the retry-stable fee-net entry key from durable execution lineage."""
+
+    signal_meta = getattr(analysis, "signal_meta", None)
+    lifecycle_id = signal_meta.get("lifecycle_id") if isinstance(signal_meta, dict) else None
+    cohort_id = getattr(cfg, "paper_cohort_id", None)
+    if (
+        not isinstance(lifecycle_id, str)
+        or _PAPER_ENTRY_LIFECYCLE_RE.fullmatch(lifecycle_id) is None
+        or not isinstance(cohort_id, str)
+        or _PAPER_ENTRY_COHORT_RE.fullmatch(cohort_id) is None
+    ):
+        return None
+    return f"paper-entry:v1:{cohort_id}:{lifecycle_id}"
 
 
 def classify_skip_category(reason: str | None) -> str:
@@ -733,10 +752,35 @@ class TradeExecutor:
         *,
         execution_plan: FinalExecutionTerms | None = None,
     ) -> Optional[str]:
+        entry_request_id: str | None = None
+        fee_net_accounting = bool(cfg.enable_fee_net_paper_accounting)
+        if fee_net_accounting:
+            entry_request_id = _fee_net_paper_entry_request_id(analysis)
+            if entry_request_id is None:
+                log.error(
+                    "[PAPER] Skipping fee-net paper entry for %s: missing or invalid lifecycle identity",
+                    analysis.market.ticker,
+                )
+                return None
+
         # record_trade() and the bankroll read both hit SQLite synchronously.
         # Batch them in one to_thread call so neither blocks the event loop.
         def _record() -> tuple[str, float]:
-            if execution_plan is None:
+            if fee_net_accounting:
+                assert entry_request_id is not None
+                if execution_plan is None:
+                    result = self._paper.record_trade_result(
+                        analysis,
+                        entry_request_id=entry_request_id,
+                    )
+                else:
+                    result = self._paper.record_trade_result(
+                        analysis,
+                        entry_request_id=entry_request_id,
+                        execution_terms=execution_plan,
+                    )
+                trade_id = result.trade_id if result.created else ""
+            elif execution_plan is None:
                 trade_id = self._paper.record_trade(analysis)
             else:
                 trade_id = self._paper.record_trade(
@@ -747,6 +791,13 @@ class TradeExecutor:
             return trade_id, bankroll
 
         trade_id, bankroll = await asyncio.to_thread(_record)
+        if not trade_id:
+            if fee_net_accounting:
+                log.debug(
+                    "[PAPER] Fee-net entry replayed or rejected for %s",
+                    analysis.market.ticker,
+                )
+            return trade_id
         log.info(
             "[PAPER] %s | %s %s | edge=%+.3f | $%.2f | notional=$%.2f",
             trade_id,
