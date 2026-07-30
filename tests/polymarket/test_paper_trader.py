@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -10,7 +11,7 @@ from analysis import SignalAnalysis
 from feeds import NewsItem
 from polymarket.models import PolymarketMarket
 from polymarket.paper_trader import PolymarketPaperTrader
-from trading.paper_trader import PaperTrader
+from trading.paper_trader import PaperTrader, PaperTradeWriteResult
 from trading.venue import Venue
 
 
@@ -90,3 +91,26 @@ def test_record_trade_fails_closed_without_executed_price(paper_trader, caplog):
     assert "executed_price_unavailable" in caplog.text
     row_count = paper_trader._conn.execute("SELECT count(*) FROM paper_trades").fetchone()[0]
     assert row_count == 0
+
+
+def test_record_trade_result_delegates_fee_net_identity_to_shared_trader():
+    shared_trader = MagicMock()
+    shared_trader.record_trade_result.return_value = PaperTradeWriteResult(
+        "paper-entry",
+        created=True,
+    )
+    trader = PolymarketPaperTrader(shared_trader)
+    analysis = _analysis()
+
+    result = trader.record_trade_result(
+        analysis,
+        entry_request_id="paper-entry:v1:active-test:lc-" + "a" * 32,
+    )
+
+    assert result == PaperTradeWriteResult("paper-entry", created=True)
+    assert analysis.venue == Venue.POLYMARKET_US.value
+    shared_trader.record_trade_result.assert_called_once_with(
+        analysis,
+        entry_request_id="paper-entry:v1:active-test:lc-" + "a" * 32,
+        execution_terms=None,
+    )

@@ -36,9 +36,21 @@ from analysis.match_feedback import matcher_weights_status
 from kalshi.public_market_data import is_safe_kalshi_identifier
 from tasks.stats.source_credibility import SourceCredibility
 from config import cfg, DATA_DIR
-from trading.fees import FeeUnscorableError, fee_schedule_at
+from trading.fees import (
+    DIRECT_ACCOUNT_PRECISION,
+    INITIAL_ORDER_FEE_ACCUMULATOR,
+    FeeContext,
+    FeeRole,
+    FeeScheduleId,
+    FeeUnscorableError,
+    fee_coefficient_for,
+    fee_schedule_at,
+    fee_type_for_schedule,
+    quote_fee,
+)
 from trading.execution_terms import FinalExecutionTerms, final_execution_terms
 from trading.paper_cohorts import (
+    PAPER_COHORT_KIND_ACTIVE,
     assert_initialized_paper_cohort_schema,
     immutable_paper_database_block_reason,
     mark_paper_cohort_database_initialized,
@@ -51,9 +63,11 @@ from trading.paper_accounting import (
     PAPER_ACCOUNTING_VERSION,
     PaperAccountingAdmissionError,
     PaperAccountingHandlers,
+    PaperAccountingRecord,
     initialize_fresh_paper_accounting_schema,
     paper_accounting_schema_contract_matches,
     require_paper_accounting_admission,
+    sqlite_paper_accounting_handlers,
 )
 from trading.portfolio import Portfolio, Position
 from trading.profit_evidence import independent_realized_profit_evidence_available
@@ -82,6 +96,99 @@ from utils.logger import get_logger, trade_log, TRADE_LOG_FILE
 log = get_logger("paper_trader")
 
 DB_PATH = DATA_DIR / "paper_trades.db"
+
+
+class _FeeNetHandlerTransactionControlError(RuntimeError):
+    pass
+
+
+class _FeeNetHandlerTransactionGuard:
+    __slots__ = ("blocked", "_delegate")
+
+    def __init__(self, delegate=None) -> None:
+        self.blocked = False
+        self._delegate = delegate
+
+    def authorize(
+        self,
+        action_code: int,
+        _arg1: str | None,
+        _arg2: str | None,
+        _database: str | None,
+        _trigger: str | None,
+    ) -> int:
+        if action_code in {sqlite3.SQLITE_TRANSACTION, sqlite3.SQLITE_SAVEPOINT}:
+            self.blocked = True
+            return sqlite3.SQLITE_DENY
+        if self._delegate is not None:
+            return self._delegate(
+                action_code,
+                _arg1,
+                _arg2,
+                _database,
+                _trigger,
+            )
+        return sqlite3.SQLITE_OK
+
+    def reject(self) -> None:
+        self.blocked = True
+        raise _FeeNetHandlerTransactionControlError(
+            "fee-net accounting callback transaction control is forbidden"
+        )
+
+
+class _FeeNetAccountingConnection(sqlite3.Connection):
+    _fee_net_handler_guard: _FeeNetHandlerTransactionGuard | None = None
+    _fee_net_external_authorizer = None
+
+    def _activate_fee_net_handler_guard(
+        self,
+        guard: _FeeNetHandlerTransactionGuard,
+    ) -> None:
+        if self._fee_net_handler_guard is not None:
+            raise RuntimeError("fee-net accounting callback guard is already active")
+        self._fee_net_handler_guard = guard
+        try:
+            sqlite3.Connection.set_authorizer(self, guard.authorize)
+        except BaseException:
+            self._fee_net_handler_guard = None
+            raise
+
+    def _deactivate_fee_net_handler_guard(self) -> None:
+        try:
+            sqlite3.Connection.set_authorizer(self, self._fee_net_external_authorizer)
+        finally:
+            self._fee_net_handler_guard = None
+
+    def _reject_fee_net_handler_transaction_control(self) -> None:
+        if self._fee_net_handler_guard is not None:
+            self._fee_net_handler_guard.reject()
+
+    def commit(self) -> None:
+        self._reject_fee_net_handler_transaction_control()
+        super().commit()
+
+    def rollback(self) -> None:
+        self._reject_fee_net_handler_transaction_control()
+        super().rollback()
+
+    def close(self) -> None:
+        self._reject_fee_net_handler_transaction_control()
+        super().close()
+
+    def executescript(self, sql_script: str):
+        self._reject_fee_net_handler_transaction_control()
+        return super().executescript(sql_script)
+
+    def set_authorizer(self, authorizer):
+        self._reject_fee_net_handler_transaction_control()
+        self._fee_net_external_authorizer = authorizer
+        return sqlite3.Connection.set_authorizer(self, authorizer)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self._reject_fee_net_handler_transaction_control()
+        return super().__exit__(exc_type, exc_value, traceback)
+
 
 _ACTIVE_COHORT_LIVE_TRANSITION_BLOCK = (
     "active paper cohort remains isolated from live trading"
@@ -207,7 +314,8 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     price_method            TEXT DEFAULT 'none',
     price_retrieved_at      TEXT,
     raw_payload_hash        TEXT,
-    p0_contract_version     INTEGER DEFAULT 1
+    p0_contract_version     INTEGER DEFAULT 1,
+    fee_net_accounting_version INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS bot_state (
@@ -253,6 +361,14 @@ class _StartupStateSnapshot:
     bankroll_inserted: bool
 
 
+@dataclasses.dataclass(frozen=True)
+class PaperTradeWriteResult:
+    """Paper entry outcome, including whether this call created a new trade."""
+
+    trade_id: str
+    created: bool
+
+
 # P-6 / P0-PROV-019: forward-only additive provenance columns. Added to
 # pre-existing DBs at PaperTrader init via idempotent ALTER TABLE so the
 # CREATE-TABLE-IF-NOT-EXISTS schema and live schema converge over time.
@@ -266,6 +382,21 @@ _P0_PROVENANCE_COLUMNS: tuple[tuple[str, str], ...] = (
 
 _VENUE_COLUMNS: tuple[tuple[str, str], ...] = (
     ("venue", "TEXT NOT NULL DEFAULT 'kalshi'"),
+)
+
+_FEE_NET_ACCOUNTING_MARKER_TRIGGER_NAME = (
+    "immutable_paper_trade_fee_net_accounting_version"
+)
+_FEE_NET_ACCOUNTING_MARKER_TRIGGER_SQL = f"""
+CREATE TRIGGER {_FEE_NET_ACCOUNTING_MARKER_TRIGGER_NAME}
+BEFORE UPDATE OF fee_net_accounting_version ON paper_trades
+WHEN NEW.fee_net_accounting_version IS NOT OLD.fee_net_accounting_version
+BEGIN
+    SELECT RAISE(ABORT, 'fee_net_accounting_version is immutable');
+END
+"""
+_FEE_NET_ACCOUNTING_MARKER_TRIGGER_NORMALIZED_SQL = " ".join(
+    _FEE_NET_ACCOUNTING_MARKER_TRIGGER_SQL.lower().split()
 )
 
 _SETTLEMENT_SCHEMA_SENTINEL_COLUMNS = frozenset(
@@ -480,6 +611,14 @@ class PaperTrader:
         )
         self._startup_context = startup_context
         self._validate_startup_context()
+        if (
+            paper_accounting_handlers is not None
+            and self._startup_context in {"runtime", "cli"}
+        ):
+            raise ValueError(
+                "runtime/CLI rejects custom paper accounting handlers; use built-in wiring"
+            )
+        self._require_fee_net_runtime_settlement_capability()
         topology_block = paper_runtime_database_topology_block_reason(self._db_path)
         if topology_block is not None:
             raise RuntimeError(f"immutable paper cohort database is blocked: {topology_block}")
@@ -536,6 +675,7 @@ class PaperTrader:
             else None
         )
         self._paper_cohort_binding = paper_cohort_binding
+        self._require_fee_net_manifest_context()
         self._live_transition_block_reason = (
             _LEGACY_PENDING_COHORT_LIVE_TRANSITION_BLOCK
             if getattr(paper_cohort_binding, "cohort_type", None) == "legacy_pending"
@@ -550,7 +690,12 @@ class PaperTrader:
         self._paper_accounting_handlers = paper_accounting_handlers
         self._calibration_task = calibration_task
         self._enforce_runtime_guards()
-        self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False, timeout=30.0)
+        self._conn = sqlite3.connect(
+            str(self._db_path),
+            check_same_thread=False,
+            timeout=30.0,
+            factory=_FeeNetAccountingConnection,
+        )
         try:
             self._conn.row_factory = sqlite3.Row
             enable_and_verify_foreign_keys(self._conn)
@@ -601,9 +746,15 @@ class PaperTrader:
                     commit=False,
                 )
         self._migrate_db()
+        self._ensure_fee_net_accounting_marker_immutability()
         self._paper_accounting_schema_present = (
             paper_accounting_schema_contract_matches(self._conn)
         )
+        if (
+            self._paper_accounting_schema_present
+            and self._paper_accounting_handlers is None
+        ):
+            self._paper_accounting_handlers = sqlite_paper_accounting_handlers(self._conn)
         self._validate_paper_accounting_startup()
         self.credibility = SourceCredibility(self._db_path)
         self.portfolio = Portfolio()
@@ -647,6 +798,28 @@ class PaperTrader:
             raise PaperAccountingAdmissionError(
                 "fee-net paper accounting requires both entry and settlement "
                 f"handlers for version {PAPER_ACCOUNTING_VERSION}"
+            )
+        self._require_fee_net_runtime_settlement_capability()
+
+    def _require_fee_net_runtime_settlement_capability(self) -> None:
+        if (
+            config_module.cfg.enable_fee_net_paper_accounting
+            and self._startup_context in {"runtime", "cli"}
+        ):
+            raise PaperAccountingAdmissionError(
+                "fee-net paper accounting remains disabled until authoritative "
+                "settlement fee evidence can complete settlement atomically"
+            )
+
+    def _require_fee_net_manifest_context(self) -> None:
+        if (
+            config_module.cfg.enable_fee_net_paper_accounting
+            and self._paper_cohort_binding is not None
+            and self._startup_context not in {"runtime", "cli"}
+        ):
+            raise PaperAccountingAdmissionError(
+                "fee-net paper accounting rejects non-runtime context for a "
+                "manifest-bound cohort"
             )
 
     def _ensure_p0_cohort_sentinel(self) -> None:
@@ -835,6 +1008,10 @@ class PaperTrader:
             # historical rows (and non-LLM signals) have no captured decision
             # and join lossily / not at all.
             ("llm_capture_row_id",      "TEXT"),
+            # Fee-net entry is a different financial contract from gross paper
+            # accounting. The immutable parent marker prevents a non-persisting
+            # custom handler from later falling through to gross settlement.
+            ("fee_net_accounting_version", "INTEGER"),
         ]
         for col, col_type in new_cols:
             if col not in cols and self._ensure_paper_trades_column(col, col_type, cols):
@@ -951,6 +1128,30 @@ class PaperTrader:
                 return False
             log.warning("DB migration failed for column %s: %s", col, exc)
             return False
+
+    def _ensure_fee_net_accounting_marker_immutability(self) -> None:
+        """Install and verify the parent marker's one-way accounting contract."""
+        if "fee_net_accounting_version" not in self._paper_trades_columns():
+            raise PaperAccountingAdmissionError(
+                "fee-net paper accounting marker column is unavailable"
+            )
+        row = self._conn.execute(
+            """
+            SELECT sql
+            FROM sqlite_schema
+            WHERE type='trigger' AND name=?
+            """,
+            (_FEE_NET_ACCOUNTING_MARKER_TRIGGER_NAME,),
+        ).fetchone()
+        if row is None:
+            self._conn.execute(_FEE_NET_ACCOUNTING_MARKER_TRIGGER_SQL)
+            self._conn.commit()
+            return
+        sql = " ".join(str(row["sql"] or "").lower().split())
+        if sql != _FEE_NET_ACCOUNTING_MARKER_TRIGGER_NORMALIZED_SQL:
+            raise PaperAccountingAdmissionError(
+                "fee-net paper accounting marker immutability trigger does not match contract"
+            )
 
     # ── State management ──────────────────────────────────────────────────────
 
@@ -1154,14 +1355,23 @@ class PaperTrader:
         entry_request_id: str | None = None,
         execution_terms: FinalExecutionTerms | None = None,
     ) -> str:
-        if config_module.cfg.enable_fee_net_paper_accounting:
-            self._require_fee_net_entry_contract(analysis, entry_request_id)
-            raise PaperAccountingAdmissionError(
-                "fee-net paper entry execution is not installed"
-            )
+        return self.record_trade_result(
+            analysis,
+            entry_request_id=entry_request_id,
+            execution_terms=execution_terms,
+        ).trade_id
+
+    def record_trade_result(
+        self,
+        analysis: SignalAnalysis,
+        *,
+        entry_request_id: str | None = None,
+        execution_terms: FinalExecutionTerms | None = None,
+    ) -> PaperTradeWriteResult:
         with self._transaction_lock:
             return self._record_trade_locked(
                 analysis,
+                entry_request_id=entry_request_id,
                 execution_terms=execution_terms,
             )
 
@@ -1169,7 +1379,10 @@ class PaperTrader:
         self,
         analysis: SignalAnalysis,
         entry_request_id: str | None,
-    ) -> None:
+        *,
+        filled_at: datetime,
+    ) -> FeeScheduleId:
+        self._require_fee_net_active_cohort(entry_request_id)
         venue_value = (
             getattr(analysis, "venue", None)
             or getattr(analysis.market, "venue", None)
@@ -1179,7 +1392,7 @@ class PaperTrader:
             venue = normalize_venue(venue_value)
             schedule_id = fee_schedule_at(
                 venue=venue,
-                timestamp=datetime.now(timezone.utc),
+                timestamp=filled_at,
             )
         except (ValueError, FeeUnscorableError) as exc:
             raise PaperAccountingAdmissionError(
@@ -1191,13 +1404,219 @@ class PaperTrader:
             entry_request_id,
             schedule_id,
         )
+        return schedule_id
+
+    def _require_fee_net_active_cohort(self, entry_request_id: str | None) -> None:
+        if self._startup_context not in {"runtime", "cli"}:
+            return
+        binding = self._paper_cohort_binding
+        if getattr(binding, "cohort_type", None) != PAPER_COHORT_KIND_ACTIVE:
+            raise PaperAccountingAdmissionError(
+                "fee-net paper entry requires a manifest-bound active paper cohort"
+            )
+        bound_cohort_id = str(binding.cohort.cohort_id)
+        configured_cohort_id = str(
+            getattr(config_module.cfg, "paper_cohort_id", "") or ""
+        ).strip()
+        if configured_cohort_id != bound_cohort_id:
+            raise PaperAccountingAdmissionError(
+                "fee-net paper entry cohort does not match its active manifest binding"
+            )
+        expected_prefix = f"paper-entry:v1:{bound_cohort_id}:"
+        if not isinstance(entry_request_id, str) or not entry_request_id.startswith(
+            expected_prefix
+        ):
+            raise PaperAccountingAdmissionError(
+                "fee-net paper entry identity does not match its active cohort"
+            )
+
+    def _require_fee_net_parent_marker(self, trade_id: str) -> None:
+        row = self._conn.execute(
+            """
+            SELECT fee_net_accounting_version
+            FROM paper_trades
+            WHERE trade_id=?
+            """,
+            (trade_id,),
+        ).fetchone()
+        if (
+            row is None
+            or row["fee_net_accounting_version"] != PAPER_ACCOUNTING_VERSION
+        ):
+            raise PaperAccountingAdmissionError(
+                "fee-net paper entry parent marker changed during accounting dispatch"
+            )
+
+    def _dispatch_fee_net_entry(self, record: PaperAccountingRecord) -> None:
+        assert self._paper_accounting_handlers is not None
+        connection = self._conn
+        if not isinstance(connection, _FeeNetAccountingConnection):
+            raise PaperAccountingAdmissionError(
+                "fee-net accounting requires a guarded SQLite connection"
+            )
+        guard = _FeeNetHandlerTransactionGuard(connection._fee_net_external_authorizer)
+        connection._activate_fee_net_handler_guard(guard)
+        try:
+            self._paper_accounting_handlers.dispatch_entry(record)
+            if guard.blocked:
+                raise PaperAccountingAdmissionError(
+                    "fee-net accounting callback transaction control is forbidden"
+                )
+        except (sqlite3.DatabaseError, _FeeNetHandlerTransactionControlError) as exc:
+            if guard.blocked:
+                raise PaperAccountingAdmissionError(
+                    "fee-net accounting callback transaction control is forbidden"
+                ) from exc
+            raise
+        finally:
+            connection._deactivate_fee_net_handler_guard()
+        if not connection.in_transaction:
+            raise PaperAccountingAdmissionError(
+                "fee-net accounting callback ended its parent transaction"
+            )
+
+    @staticmethod
+    def _build_fee_net_entry_record(
+        *,
+        entry_request_id: str,
+        trade_id: str,
+        venue: str,
+        terms: FinalExecutionTerms,
+        schedule_id: FeeScheduleId,
+        filled_at: datetime,
+    ) -> PaperAccountingRecord:
+        """Build the one synthetic paper taker fill from final execution terms."""
+
+        normalized_venue = normalize_venue(venue)
+        if normalized_venue is not schedule_id.venue:
+            raise PaperAccountingAdmissionError(
+                "fee-net paper entry venue does not match the pinned fee schedule"
+            )
+        quantity = Decimal(str(terms.contracts))
+        price = Decimal(terms.price_cents) / Decimal("100")
+        signed_revenue = -(quantity * price)
+        order_id = f"paper-order:{entry_request_id}"
+        account_precision = (
+            DIRECT_ACCOUNT_PRECISION if normalized_venue is Venue.KALSHI else None
+        )
+        account_precision_mode = (
+            "direct" if normalized_venue is Venue.KALSHI else "not_applicable"
+        )
+        context = FeeContext(
+            schedule_id=schedule_id,
+            role=FeeRole.TAKER,
+            quantity=quantity,
+            price=price,
+            signed_revenue=signed_revenue,
+            order_id=order_id,
+            accumulator=INITIAL_ORDER_FEE_ACCUMULATOR,
+            multiplier=Decimal("1"),
+            coefficient=fee_coefficient_for(schedule_id, FeeRole.TAKER),
+            account_precision=account_precision,
+            timestamp=filled_at,
+        )
+        try:
+            quote = quote_fee(context)
+        except FeeUnscorableError as exc:
+            raise PaperAccountingAdmissionError(
+                "fee-net paper entry cannot quote the pinned fee schedule"
+            ) from exc
+        gross_entry_debit = abs(signed_revenue)
+        return PaperAccountingRecord(
+            accounting_version=PAPER_ACCOUNTING_VERSION,
+            entry_request_id=entry_request_id,
+            trade_id=trade_id,
+            order_id=order_id,
+            fill_id=f"paper-fill:{entry_request_id}:0",
+            filled_at=filled_at,
+            schedule_id=schedule_id,
+            role=FeeRole.TAKER,
+            quantity=quantity,
+            price=price,
+            signed_revenue=signed_revenue,
+            multiplier=Decimal("1"),
+            fee_type=fee_type_for_schedule(schedule_id),
+            fee_multiplier_provenance_sha256=schedule_id.artifact_sha256,
+            fee_multiplier_effective_at=schedule_id.effective_from,
+            coefficient=context.coefficient,
+            account_precision=account_precision,
+            account_precision_mode=account_precision_mode,
+            quote=quote,
+            gross_entry_debit=gross_entry_debit,
+            net_entry_debit=gross_entry_debit + quote.net_fee,
+            recorded_at=filled_at,
+        )
+
+    def _existing_fee_net_entry(
+        self,
+        entry_request_id: str,
+    ) -> sqlite3.Row | None:
+        return self._conn.execute(
+            """
+            SELECT
+                accounting.trade_id,
+                accounting.venue AS accounting_venue,
+                accounting.fill_quantity,
+                accounting.fill_price_dollars,
+                trade.ticker,
+                trade.venue AS trade_venue,
+                trade.venue_market_id,
+                trade.side,
+                trade.identity_status
+            FROM paper_trade_accounting AS accounting
+            JOIN paper_trades AS trade ON trade.trade_id = accounting.trade_id
+            WHERE accounting.entry_request_id=?
+            """,
+            (entry_request_id,),
+        ).fetchone()
+
+    @staticmethod
+    def _validate_fee_net_replay_intent(
+        row: sqlite3.Row,
+        *,
+        ticker: str,
+        venue: str,
+        venue_market_id: str,
+        side: str,
+        terms: FinalExecutionTerms,
+    ) -> str:
+        try:
+            existing_quantity = Decimal(str(row["fill_quantity"]))
+            existing_price = Decimal(str(row["fill_price_dollars"]))
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise PaperAccountingAdmissionError(
+                "existing fee-net entry has invalid immutable execution intent"
+            ) from exc
+        expected_quantity = Decimal(str(terms.contracts))
+        expected_price = Decimal(terms.price_cents) / Decimal("100")
+        immutable_match = (
+            str(row["ticker"]) == ticker
+            and str(row["accounting_venue"]) == venue
+            and str(row["trade_venue"]) == venue
+            and str(row["venue_market_id"]) == venue_market_id
+            and str(row["identity_status"]) == "mapped"
+            and str(row["side"]).lower() == side
+            and existing_quantity == expected_quantity
+            and existing_price == expected_price
+        )
+        if not immutable_match:
+            raise PaperAccountingAdmissionError(
+                "fee-net entry_request_id conflicts with immutable execution intent"
+            )
+        trade_id = str(row["trade_id"] or "").strip()
+        if not trade_id:
+            raise PaperAccountingAdmissionError(
+                "existing fee-net entry is missing its immutable trade identity"
+            )
+        return trade_id
 
     def _record_trade_locked(
         self,
         analysis: SignalAnalysis,
         *,
+        entry_request_id: str | None = None,
         execution_terms: FinalExecutionTerms | None = None,
-    ) -> str:
+    ) -> PaperTradeWriteResult:
         # P-6 / LD-2 / CR-C: fail-closed when price_available=False. Past the
         # executor gate so an unavailable market here means an upstream
         # contract violation; persist nothing and emit a structured warning
@@ -1214,7 +1633,7 @@ class PaperTrader:
                 getattr(analysis.market, "ticker", "<unknown>"),
                 getattr(analysis.market, "price_available", None),
             )
-            return ""
+            return PaperTradeWriteResult("", created=False)
 
         # P-6 / LD-10 / DT-1b: paper fill uses executed_price_cents. Each side
         # already holds its own executable ask; midpoint synthesis
@@ -1227,7 +1646,7 @@ class PaperTrader:
                 getattr(analysis.market, "ticker", "<unknown>"),
                 getattr(analysis.market, "price_available", None),
             )
-            return ""
+            return PaperTradeWriteResult("", created=False)
 
         def _venue_string(value: Any) -> str | None:
             if isinstance(value, str):
@@ -1256,7 +1675,7 @@ class PaperTrader:
                     "schema is incomplete",
                     getattr(analysis.market, "ticker", "<unknown>"),
                 )
-                return ""
+                return PaperTradeWriteResult("", created=False)
             try:
                 normalized_venue = normalize_venue(venue)
             except ValueError:
@@ -1265,7 +1684,7 @@ class PaperTrader:
                     getattr(analysis.market, "ticker", "<unknown>"),
                     venue,
                 )
-                return ""
+                return PaperTradeWriteResult("", created=False)
             venue = normalized_venue.value
             if normalized_venue is Venue.KALSHI:
                 venue_market_id = str(
@@ -1289,7 +1708,7 @@ class PaperTrader:
                     getattr(analysis.market, "ticker", "<unknown>"),
                     venue,
                 )
-                return ""
+                return PaperTradeWriteResult("", created=False)
 
         capped_dollars = float(analysis.capped_dollars)
         if capped_dollars <= 0:
@@ -1299,9 +1718,8 @@ class PaperTrader:
                 getattr(analysis.market, "ticker", "<unknown>"),
                 capped_dollars,
             )
-            return ""
+            return PaperTradeWriteResult("", created=False)
 
-        trade_id    = str(uuid.uuid4())[:12]
         try:
             derived_terms = final_execution_terms(
                 capped_dollars=capped_dollars,
@@ -1312,15 +1730,16 @@ class PaperTrader:
                 "[PAPER] Skipping record_trade for %s: invalid final execution terms",
                 getattr(analysis.market, "ticker", "<unknown>"),
             )
-            return ""
+            return PaperTradeWriteResult("", created=False)
         if execution_terms is not None and execution_terms != derived_terms:
             log.error(
                 "[PAPER] Skipping record_trade for %s: final execution terms do not match analysis",
                 getattr(analysis.market, "ticker", "<unknown>"),
             )
-            return ""
+            return PaperTradeWriteResult("", created=False)
         terms = execution_terms or derived_terms
         price_cents = terms.price_cents
+        side = str(analysis.side).lower()
         # kelly_contracts: what Kelly sizes for this trade. Retained as a stored
         # column for analytics (and the §7e flat-vs-Kelly history pre-cutover).
         kelly_contracts = derived_terms.contracts
@@ -1330,6 +1749,23 @@ class PaperTrader:
         # floor in contracts_from_dollars. Both modes now use kelly_contracts.
         contracts = terms.contracts
         cost_dollars = contracts * price_cents / 100.0
+        fee_net_accounting = bool(config_module.cfg.enable_fee_net_paper_accounting)
+        if fee_net_accounting:
+            self._require_fee_net_runtime_settlement_capability()
+            self._require_fee_net_manifest_context()
+        if fee_net_accounting and not isinstance(entry_request_id, str):
+            raise PaperAccountingAdmissionError(
+                "fee-net paper entry requires entry_request_id"
+            )
+        if fee_net_accounting and not canonical_identity:
+            raise PaperAccountingAdmissionError(
+                "fee-net paper entry requires canonical settlement identity"
+            )
+        filled_at = datetime.now(timezone.utc)
+        trade_ts = filled_at.isoformat()
+        trade_id = str(uuid.uuid4())[:12]
+        fee_net_entry: PaperAccountingRecord | None = None
+        entry_debit_dollars = cost_dollars
         if cost_dollars > capped_dollars:
             log.warning(
                 "[PAPER] Skipping record_trade for %s: contract cost $%.2f "
@@ -1338,20 +1774,20 @@ class PaperTrader:
                 cost_dollars,
                 capped_dollars,
             )
-            return ""
+            return PaperTradeWriteResult("", created=False)
 
         bankroll_before = self.get_notional_bankroll()
         sizing_bankroll = self.get_effective_sizing_bankroll()
-        if cost_dollars > sizing_bankroll:
+        if not fee_net_accounting and entry_debit_dollars > sizing_bankroll:
             log.warning(
-                "[PAPER] Skipping record_trade for %s: contract cost $%.2f "
+                "[PAPER] Skipping record_trade for %s: entry debit $%.2f "
                 "exceeds effective sizing bankroll $%.2f",
                 getattr(analysis.market, "ticker", "<unknown>"),
-                cost_dollars,
+                entry_debit_dollars,
                 sizing_bankroll,
             )
-            return ""
-        bankroll_after = bankroll_before - cost_dollars
+            return PaperTradeWriteResult("", created=False)
+        bankroll_after = bankroll_before - entry_debit_dollars
         if not canonical_identity:
             bankroll_after = self._debit_bankroll(cost_dollars)
 
@@ -1393,7 +1829,6 @@ class PaperTrader:
                     _ticker,
                 )
 
-        side = str(analysis.side).lower()
         # Persist the executable edge for the side actually traded. Production
         # analysis.edge is already chosen-side, while older replay/test paths may
         # still carry YES-side edge, so derive from probability + entry price.
@@ -1450,7 +1885,6 @@ class PaperTrader:
         except Exception:  # noqa: BLE001 — additive join key, never block a trade
             llm_capture_row_id = None
 
-        trade_ts = datetime.now(timezone.utc).isoformat()
         remaining_values = (
             analysis.market.title,
             side,
@@ -1494,6 +1928,7 @@ class PaperTrader:
         if canonical_identity:
             columns = """
                 (trade_id, ts, ticker, venue, venue_market_id, identity_status,
+                 fee_net_accounting_version,
                  market_title, side, contracts, price_cents, cost_dollars,
                  estimated_prob, entry_price_cents, edge, kelly_dollars,
                  capped_dollars, signal_headline, signal_source, keywords_matched,
@@ -1510,6 +1945,50 @@ class PaperTrader:
             try:
                 self._conn.execute("BEGIN IMMEDIATE")
                 transaction_started = True
+                if fee_net_accounting:
+                    assert entry_request_id is not None
+                    existing_entry = self._existing_fee_net_entry(entry_request_id)
+                    if existing_entry is not None:
+                        existing_trade_id = self._validate_fee_net_replay_intent(
+                            existing_entry,
+                            ticker=str(analysis.market.ticker),
+                            venue=venue,
+                            venue_market_id=str(venue_market_id),
+                            side=side,
+                            terms=terms,
+                        )
+                        self._conn.rollback()
+                        transaction_started = False
+                        return PaperTradeWriteResult(
+                            existing_trade_id,
+                            created=False,
+                        )
+                    fee_net_schedule = self._require_fee_net_entry_contract(
+                        analysis,
+                        entry_request_id,
+                        filled_at=filled_at,
+                    )
+                    fee_net_entry = self._build_fee_net_entry_record(
+                        entry_request_id=entry_request_id,
+                        trade_id=trade_id,
+                        venue=venue,
+                        terms=terms,
+                        schedule_id=fee_net_schedule,
+                        filled_at=filled_at,
+                    )
+                    entry_debit_dollars = float(fee_net_entry.net_entry_debit)
+                    sizing_bankroll = self.get_effective_sizing_bankroll()
+                    if entry_debit_dollars > sizing_bankroll:
+                        self._conn.rollback()
+                        transaction_started = False
+                        log.warning(
+                            "[PAPER] Skipping fee-net record_trade for %s: entry "
+                            "debit $%.2f exceeds effective sizing bankroll $%.2f",
+                            getattr(analysis.market, "ticker", "<unknown>"),
+                            entry_debit_dollars,
+                            sizing_bankroll,
+                        )
+                        return PaperTradeWriteResult("", created=False)
                 settled_identity = self._conn.execute(
                     """
                     SELECT 1
@@ -1530,18 +2009,18 @@ class PaperTrader:
                 if bankroll_row is None:
                     raise RuntimeError("notional_bankroll state is missing")
                 bankroll_before = float(bankroll_row[0])
-                if cost_dollars > bankroll_before:
+                if entry_debit_dollars > bankroll_before:
                     self._conn.rollback()
                     transaction_started = False
                     log.warning(
-                        "[PAPER] Skipping canonical record_trade for %s: contract "
-                        "cost $%.2f exceeds current notional bankroll $%.2f",
+                        "[PAPER] Skipping canonical record_trade for %s: entry "
+                        "debit $%.2f exceeds current notional bankroll $%.2f",
                         getattr(analysis.market, "ticker", "<unknown>"),
-                        cost_dollars,
+                        entry_debit_dollars,
                         bankroll_before,
                     )
-                    return ""
-                bankroll_after = bankroll_before - cost_dollars
+                    return PaperTradeWriteResult("", created=False)
+                bankroll_after = bankroll_before - entry_debit_dollars
                 canonical_remaining_values = (
                     *remaining_values[:15],
                     bankroll_before,
@@ -1555,6 +2034,7 @@ class PaperTrader:
                     venue,
                     venue_market_id,
                     "mapped",
+                    PAPER_ACCOUNTING_VERSION if fee_net_entry is not None else None,
                     *canonical_remaining_values,
                 )
                 placeholders = ",".join("?" for _value in insert_values)
@@ -1562,6 +2042,9 @@ class PaperTrader:
                     f"INSERT INTO paper_trades {columns} VALUES ({placeholders})",
                     insert_values,
                 )
+                if fee_net_entry is not None:
+                    self._dispatch_fee_net_entry(fee_net_entry)
+                    self._require_fee_net_parent_marker(trade_id)
                 bankroll_cursor = self._conn.execute(
                     "UPDATE bot_state SET value=? WHERE key='notional_bankroll'",
                     (str(round(bankroll_after, 4)),),
@@ -1569,6 +2052,10 @@ class PaperTrader:
                 if bankroll_cursor.rowcount != 1:
                     raise RuntimeError("notional_bankroll update did not affect one row")
                 self._conn.commit()
+            except PaperAccountingAdmissionError:
+                if transaction_started:
+                    self._conn.rollback()
+                raise
             except Exception:  # noqa: BLE001 - canonical entry must fail closed
                 if transaction_started:
                     self._conn.rollback()
@@ -1576,7 +2063,7 @@ class PaperTrader:
                     "[PAPER] Canonical trade entry failed for %s",
                     getattr(analysis.market, "ticker", "<unknown>"),
                 )
-                return ""
+                return PaperTradeWriteResult("", created=False)
         else:
             columns = """
                 (trade_id, ts, ticker, venue, market_title, side, contracts,
@@ -1657,7 +2144,7 @@ class PaperTrader:
         )
         log.info("        Reasoning: %s", analysis.reasoning[:120])
 
-        return trade_id
+        return PaperTradeWriteResult(trade_id, created=True)
 
     def resolve_observation(self, observation: SettlementObservation) -> bool:
         """Apply one canonical observation without wiring runtime callers."""
@@ -1740,6 +2227,13 @@ class PaperTrader:
             if not trades:
                 self._conn.rollback()
                 return False
+
+            fee_net_trade_ids = self._fee_net_accounting_trade_ids(trades)
+            if fee_net_trade_ids:
+                raise _SettlementQuarantineRequired(
+                    "fee_net_settlement_evidence_unavailable",
+                    {"trade_ids": fee_net_trade_ids},
+                )
 
             outcomes, total_payout_cents = self._canonical_trade_outcomes(
                 trades,
@@ -1908,6 +2402,42 @@ class PaperTrader:
             ),
         ).fetchall()
 
+    def _fee_net_accounting_trade_ids(
+        self,
+        trades: Iterable[sqlite3.Row],
+    ) -> list[str]:
+        trade_rows = tuple(trades)
+        trade_ids = tuple(str(row["trade_id"]) for row in trade_rows)
+        if not trade_ids:
+            return []
+        fee_net_trade_ids = {
+            str(row["trade_id"])
+            for row in trade_rows
+            if "fee_net_accounting_version" in row.keys()
+            and row["fee_net_accounting_version"] is not None
+        }
+        table_exists = self._conn.execute(
+            """
+            SELECT 1 FROM sqlite_schema
+            WHERE type='table' AND name='paper_trade_accounting'
+            """
+        ).fetchone()
+        if table_exists is None:
+            return sorted(fee_net_trade_ids)
+        placeholders = ",".join("?" for _ in trade_ids)
+        try:
+            rows = self._conn.execute(
+                "SELECT trade_id FROM paper_trade_accounting "
+                f"WHERE trade_id IN ({placeholders})",
+                trade_ids,
+            ).fetchall()
+        except sqlite3.DatabaseError:
+            # A partial accounting artifact cannot prove these candidates are
+            # gross-only. Quarantine the whole market rather than settle it.
+            return sorted(set(trade_ids))
+        fee_net_trade_ids.update(str(row["trade_id"]) for row in rows)
+        return sorted(fee_net_trade_ids)
+
     def _canonical_open_row_set_sha256(
         self,
         rows: Iterable[sqlite3.Row],
@@ -1918,6 +2448,7 @@ class PaperTrader:
             "venue",
             "venue_market_id",
             "identity_status",
+            "fee_net_accounting_version",
             "side",
             "contracts",
             "price_cents",
@@ -2343,6 +2874,13 @@ class PaperTrader:
                 return []
             if self.settlement_schema_present:
                 self._require_legacy_alias_unique(trades, ticker=ticker)
+            fee_net_trade_ids = self._fee_net_accounting_trade_ids(trades)
+            if fee_net_trade_ids:
+                raise PaperAccountingAdmissionError(
+                    "fee-net paper settlements require authoritative fee evidence; "
+                    "legacy gross resolver is blocked for "
+                    + ", ".join(fee_net_trade_ids)
+                )
 
             # Pre-calculate all outcomes before any DB writes.
             outcomes: list[tuple] = []

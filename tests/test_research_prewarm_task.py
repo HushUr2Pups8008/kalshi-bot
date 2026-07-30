@@ -10,6 +10,7 @@ import weakref
 import pytest
 
 from analysis.research_gate import (
+    PrewarmPhaseTimeouts,
     ResearchEvidence,
     ResearchQuery,
     ResearchStatus,
@@ -212,9 +213,6 @@ async def test_prewarm_process_market_persists_research_run_and_evidence(
         later - earlier >= 0.014
         for earlier, later in zip(provider_starts, provider_starts[1:])
     )
-    # Seven required-intent starts plus the post-adjudication counter query.
-    production_margin = 12.0 - (7 * 1.5 + 0.6)
-    assert production_margin == pytest.approx(0.9)
     with sqlite3.connect(db_path) as conn:
         dossier = conn.execute(
             """
@@ -252,6 +250,14 @@ async def test_prewarm_passes_decision_grade_required_without_live_promotion(tmp
     assert result.status == ResearchStatus.DECISION_GRADE_CANDIDATE.value
     assert calls[0][2]["live_mode"] is False
     assert calls[0][2]["require_decision_grade"] is True
+    assert calls[0][2]["prewarm_phase_timeouts"] == PrewarmPhaseTimeouts(
+        initial_adjudication_seconds=20.0,
+        counter_query_seconds=5.0,
+        counter_adjudication_seconds=20.0,
+    )
+    assert calls[0][2]["_prewarm_phase_timeouts_capability"] is (
+        research_prewarm_task_module._PREWARM_PHASE_TIMEOUTS_CAPABILITY
+    )
 
 
 @pytest.mark.asyncio

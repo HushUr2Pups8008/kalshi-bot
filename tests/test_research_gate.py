@@ -11,6 +11,7 @@ import pytest
 
 from analysis.generic_search_circuit import GenericSearchUnavailable
 from analysis.research_gate import (
+    PrewarmPhaseTimeouts,
     ResearchEvidence,
     ResearchQuery,
     ResearchStatus,
@@ -5044,6 +5045,232 @@ async def test_strict_research_gate_runs_side_aware_counter_search_before_candid
         item.source_url: item.supports_direction
         for item in verdict.evidence
     }["https://apnews.com/not-final"] == "no"
+
+
+@pytest.mark.asyncio
+async def test_prewarm_phase_timeouts_allow_evidence_ready_adjudication_and_counter_review():
+    fresh = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    news = SimpleNamespace(
+        headline="Agreement signed before deadline",
+        source="research_prewarm",
+    )
+    market = SimpleNamespace(
+        ticker="KXCEASEFIRE-26JUL01",
+        title="Will a ceasefire agreement be signed by July 1?",
+        rules_primary="The market resolves Yes if an agreement is signed by the deadline.",
+        rules_secondary="Official public announcements decide the market.",
+        settlement_sources=(),
+        contract_terms_url="https://kalshi.com/markets/KXCEASEFIRE-26JUL01",
+    )
+    seen_queries: list[ResearchQuery] = []
+
+    async def direct_fetcher(_url, _source_class, _claim_type):
+        return None
+
+    async def search_provider(query):
+        seen_queries.append(query)
+        if query.query_intent == "official_resolution":
+            await asyncio.sleep(0.01)
+            return [
+                ResearchEvidence(
+                    source_class="official_primary",
+                    source_name="Official source",
+                    source_url="https://agency.gov/signed",
+                    title="Agreement notice",
+                    snippet="Official notice says the agreement was signed before the deadline.",
+                    claim_type=query.query_intent,
+                    retrieved_at=fresh,
+                )
+            ]
+        if query.query_intent == "supporting":
+            await asyncio.sleep(0.01)
+            return [
+                ResearchEvidence(
+                    source_class="reputable_secondary",
+                    source_name="Reuters",
+                    source_url="https://reuters.com/signed",
+                    title="Agreement signed",
+                    snippet="Reuters independently reports the agreement was signed.",
+                    claim_type=query.query_intent,
+                    retrieved_at=fresh,
+                )
+            ]
+        if query.query_intent == "rules":
+            await asyncio.sleep(0.01)
+            return [
+                ResearchEvidence(
+                    source_class="rules_source",
+                    source_name="Kalshi",
+                    source_url="https://kalshi.com/markets/KXCEASEFIRE-26JUL01",
+                    title="Contract rules",
+                    snippet="Rules require a signed agreement, not ratification.",
+                    claim_type=query.query_intent,
+                    retrieved_at=fresh,
+                )
+            ]
+        if (
+            query.query_intent == "disconfirming"
+            and "evidence against YES" in query.query
+            and "NO case" in query.query
+        ):
+            await asyncio.sleep(0.02)
+            return [
+                ResearchEvidence(
+                    source_class="reputable_secondary",
+                    source_name="AP",
+                    source_url="https://apnews.com/not-final",
+                    title="Not final",
+                    snippet="AP reports opponents say the agreement is not final unless ratified.",
+                    claim_type=query.query_intent,
+                    retrieved_at=fresh,
+                )
+            ]
+        await asyncio.sleep(0.01)
+        return []
+
+    adjudicator_calls = 0
+
+    async def adjudicator(*, evidence, **_kwargs):
+        nonlocal adjudicator_calls
+        adjudicator_calls += 1
+        await asyncio.sleep(0.04)
+        assessments = [
+            {
+                "source_url": "https://agency.gov/signed",
+                "supports_direction": "yes",
+                "supports_confidence": 0.9,
+            },
+            {
+                "source_url": "https://reuters.com/signed",
+                "supports_direction": "yes",
+                "supports_confidence": 0.8,
+            },
+        ]
+        if any(item.source_url == "https://apnews.com/not-final" for item in evidence):
+            assessments.append(
+                {
+                    "source_url": "https://apnews.com/not-final",
+                    "supports_direction": "no",
+                    "supports_confidence": 0.35,
+                }
+            )
+        return {
+            "direction": "yes",
+            "estimated_probability_yes": 0.68,
+            "confidence": 0.82,
+            "reason": (
+                "Trade YES because the official notice says the agreement was signed "
+                "before July 1 and Reuters independently confirms signing. Market YES "
+                "ask is 55c versus 68% probability, leaving positive edge after costs. "
+                "Counter evidence is AP ratification risk. This would prove wrong if "
+                "ratification is required."
+            ),
+            "evidence_assessments": assessments,
+            "counterclaims": ["AP says ratification could still be required."],
+            "open_questions": ["Would ratification be required instead of signing?"],
+        }
+
+    verdict = await asyncio.wait_for(
+        run_research_gate(
+            news,
+            market,
+            model_direction="neutral",
+            model_confidence=0.5,
+            model_reason="No keyword hit.",
+            yes_ask=0.55,
+            no_ask=0.47,
+            live_mode=False,
+            search_provider=search_provider,
+            direct_fetcher=direct_fetcher,
+            adjudicator=adjudicator,
+            require_decision_grade=True,
+            research_timeout_seconds=0.08,
+            prewarm_phase_timeouts=PrewarmPhaseTimeouts(
+                initial_adjudication_seconds=0.12,
+                counter_query_seconds=0.08,
+                counter_adjudication_seconds=0.12,
+            ),
+            _prewarm_phase_timeouts_capability=(
+                research_gate_module._PREWARM_PHASE_TIMEOUTS_CAPABILITY
+            ),
+        ),
+        timeout=1.0,
+    )
+
+    assert adjudicator_calls == 2
+    assert any(
+        query.query_intent == "disconfirming"
+        and "evidence against YES" in query.query
+        for query in seen_queries
+    )
+    assert verdict.status == ResearchStatus.DECISION_GRADE_CANDIDATE
+    assert {
+        item.source_url: item.supports_direction
+        for item in verdict.evidence
+    }["https://apnews.com/not-final"] == "no"
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("initial_adjudication_seconds", 0.0),
+        ("counter_query_seconds", float("inf")),
+        ("counter_adjudication_seconds", float("nan")),
+    ],
+)
+def test_prewarm_phase_timeouts_reject_nonpositive_or_nonfinite_values(
+    field_name,
+    value,
+):
+    values = {
+        "initial_adjudication_seconds": 20.0,
+        "counter_query_seconds": 5.0,
+        "counter_adjudication_seconds": 20.0,
+    }
+    values[field_name] = value
+
+    with pytest.raises(ValueError, match=field_name):
+        PrewarmPhaseTimeouts(**values)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source", "live_mode", "require_decision_grade"),
+    [
+        ("Reuters", False, True),
+        ("research_prewarm", True, True),
+        ("research_prewarm", False, False),
+        ("research_prewarm", False, True),
+    ],
+)
+async def test_prewarm_phase_timeouts_reject_non_prewarm_gate_contexts(
+    source,
+    live_mode,
+    require_decision_grade,
+):
+    async def unexpected_provider(_query):
+        raise AssertionError("profile validation must happen before collection")
+
+    with pytest.raises(ValueError, match="offline decision-grade research_prewarm"):
+        await run_research_gate(
+            SimpleNamespace(headline="Evidence ready", source=source),
+            SimpleNamespace(
+                ticker="KXPROFILEBOUNDARY-26JUL13",
+                title="Will the profile-boundary event resolve yes?",
+                rules_primary="Reliable reporting determines the market.",
+                rules_secondary="",
+                settlement_sources=(),
+            ),
+            model_direction="neutral",
+            model_confidence=0.5,
+            model_reason="No keywords.",
+            yes_ask=0.51,
+            no_ask=0.51,
+            live_mode=live_mode,
+            search_provider=unexpected_provider,
+            require_decision_grade=require_decision_grade,
+            prewarm_phase_timeouts=PrewarmPhaseTimeouts(),
+        )
 
 
 def test_crude_oil_query_pack_uses_contract_reporting_window():
@@ -10809,7 +11036,10 @@ async def test_run_research_gate_times_out_hung_search_provider(tmp_path):
 
     verdict = await asyncio.wait_for(
         run_research_gate(
-            SimpleNamespace(headline="Iran crude output rises sharply", source="Reuters"),
+            SimpleNamespace(
+                headline="Iran crude output rises sharply",
+                source="research_prewarm",
+            ),
             market,
             model_direction="neutral",
             model_confidence=0.5,
@@ -10840,6 +11070,131 @@ async def test_run_research_gate_times_out_hung_search_provider(tmp_path):
     snapshot = await store.get_dossier_snapshot(market.ticker)
     assert snapshot is not None
     assert snapshot.last_contract_fingerprint == _contract_fingerprint(market)
+
+
+@pytest.mark.asyncio
+async def test_prewarm_phase_timeouts_keep_no_evidence_collection_capped():
+    async def hung_search(_query):
+        await asyncio.sleep(60)
+        return []
+
+    started = asyncio.get_running_loop().time()
+    verdict = await asyncio.wait_for(
+        run_research_gate(
+            SimpleNamespace(
+                headline="Iran crude output rises sharply",
+                source="research_prewarm",
+            ),
+            SimpleNamespace(
+                ticker="KXIRANCRUDE-26JUL13-T3.8",
+                title="Will Iran crude oil production be at least 3.8M bpd?",
+                rules_primary="OPEC MOMR secondary sources decide the market.",
+                rules_secondary="Later revisions ignored.",
+                settlement_sources=(),
+            ),
+            model_direction="neutral",
+            model_confidence=0.5,
+            model_reason="No keywords.",
+            yes_ask=0.51,
+            no_ask=0.51,
+            live_mode=False,
+            search_provider=hung_search,
+            adjudicator=_fake_adjudicator,
+            research_timeout_seconds=0.05,
+            require_decision_grade=True,
+            prewarm_phase_timeouts=PrewarmPhaseTimeouts(
+                initial_adjudication_seconds=1.0,
+                counter_query_seconds=1.0,
+                counter_adjudication_seconds=1.0,
+            ),
+            _prewarm_phase_timeouts_capability=(
+                research_gate_module._PREWARM_PHASE_TIMEOUTS_CAPABILITY
+            ),
+        ),
+        timeout=1.0,
+    )
+    elapsed = asyncio.get_running_loop().time() - started
+
+    assert verdict.status == ResearchStatus.CONTINUE_RESEARCHING
+    assert verdict.skip_reason == "research_timeout"
+    assert verdict.research_timeout_stage == "provider_fanout"
+    assert elapsed < 0.15
+
+
+@pytest.mark.asyncio
+async def test_prewarm_phase_timeout_diagnostic_uses_active_adjudication_budget(
+    monkeypatch,
+    tmp_path,
+):
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    captured: list[dict[str, object]] = []
+    original_capture = research_gate_module.capture_timeout_replay_snapshot
+
+    def capture_timeout_replay_snapshot(**kwargs):
+        captured.append(kwargs)
+        return original_capture(**kwargs)
+
+    monkeypatch.setattr(
+        research_gate_module,
+        "capture_timeout_replay_snapshot",
+        capture_timeout_replay_snapshot,
+    )
+
+    async def search_provider(_query):
+        return [
+            ResearchEvidence(
+                source_class="reputable_secondary",
+                source_name="Reuters",
+                source_url="https://reuters.com/adjudication-timeout",
+                title="Evidence ready for adjudication",
+                snippet="Evidence is present before the adjudication phase.",
+                claim_type="supporting",
+            )
+        ]
+
+    async def slow_adjudicator(**_kwargs):
+        await asyncio.sleep(60)
+        return {}
+
+    verdict = await asyncio.wait_for(
+        run_research_gate(
+            SimpleNamespace(headline="Evidence ready", source="research_prewarm"),
+            SimpleNamespace(
+                ticker="KXADJUDICATION-26JUL13",
+                title="Will the evidence-ready event resolve yes?",
+                rules_primary="Reliable reporting determines the market.",
+                rules_secondary="",
+                settlement_sources=(),
+            ),
+            model_direction="neutral",
+            model_confidence=0.5,
+            model_reason="No keywords.",
+            yes_ask=0.51,
+            no_ask=0.51,
+            live_mode=False,
+            search_provider=search_provider,
+            adjudicator=slow_adjudicator,
+            dossier_store=store,
+            research_timeout_seconds=0.05,
+            require_decision_grade=True,
+            prewarm_phase_timeouts=PrewarmPhaseTimeouts(
+                initial_adjudication_seconds=0.02,
+                counter_query_seconds=1.0,
+                counter_adjudication_seconds=1.0,
+            ),
+            _prewarm_phase_timeouts_capability=(
+                research_gate_module._PREWARM_PHASE_TIMEOUTS_CAPABILITY
+            ),
+        ),
+        timeout=1.0,
+    )
+
+    assert verdict.status == ResearchStatus.CONTINUE_RESEARCHING
+    assert verdict.skip_reason == "research_timeout"
+    assert verdict.research_timeout_stage == "adjudication"
+    assert captured[-1]["configured_timeout_seconds"] == pytest.approx(0.02)
+    assert 0.0 <= captured[-1]["remaining_budget_seconds"] <= 0.02
 
 
 @pytest.mark.asyncio

@@ -75,7 +75,12 @@ def _shared_memory_connect(name: str):
     keeper = _REAL_SQLITE_CONNECT(db_uri, uri=True, check_same_thread=False)
 
     def _connect(*args, **kwargs):
-        conn = _REAL_SQLITE_CONNECT(db_uri, uri=True, check_same_thread=False)
+        conn = _REAL_SQLITE_CONNECT(
+            db_uri,
+            uri=True,
+            check_same_thread=False,
+            factory=kwargs.get("factory", sqlite3.Connection),
+        )
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -518,6 +523,109 @@ def test_provisioned_active_cohort_blocks_immutable_legacy_database(
                 paper_cohort_storage_root=tmp_path,
             )
     assert hashlib.sha256(legacy_path.read_bytes()).hexdigest() == legacy_hash
+
+
+def test_fee_net_test_context_cannot_target_manifest_bound_cohort(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+
+    from trading.paper_accounting import PaperAccountingAdmissionError
+    from trading.paper_cohorts import (
+        initialize_active_paper_cohort_manifest,
+        resolve_runtime_paper_cohort,
+    )
+    from trading.paper_trader import PaperTrader
+
+    legacy_path = tmp_path / "paper_trades.db"
+    _initialized_settled_legacy_db(legacy_path)
+    cohort = resolve_runtime_paper_cohort(
+        "active-test-context-block",
+        legacy_starting_bankroll=500.0,
+        active_starting_bankroll=125.0,
+        db_root=tmp_path,
+    )
+    initialize_active_paper_cohort_manifest(
+        cohort,
+        max_days_to_close=14.0,
+        legacy_db_path=legacy_path,
+        legacy_starting_bankroll=500.0,
+    )
+    active_hash = hashlib.sha256(cohort.db_path.read_bytes()).hexdigest()
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", True)
+
+    with pytest.raises(
+        PaperAccountingAdmissionError,
+        match="non-runtime context for a manifest-bound cohort",
+    ):
+        PaperTrader(
+            db_path=cohort.db_path,
+            startup_context="test",
+            paper_cohort_storage_root=tmp_path,
+        )
+
+    assert hashlib.sha256(cohort.db_path.read_bytes()).hexdigest() == active_hash
+
+
+def test_fee_net_post_init_flag_change_rejects_manifest_bound_test_context(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
+
+    from trading.paper_accounting import PaperAccountingAdmissionError
+    from trading.paper_cohorts import (
+        initialize_active_paper_cohort_manifest,
+        resolve_runtime_paper_cohort,
+    )
+    from trading.paper_trader import PaperTrader
+
+    legacy_path = tmp_path / "paper_trades.db"
+    _initialized_settled_legacy_db(legacy_path)
+    cohort = resolve_runtime_paper_cohort(
+        "active-post-init-context-block",
+        legacy_starting_bankroll=500.0,
+        active_starting_bankroll=125.0,
+        db_root=tmp_path,
+    )
+    initialize_active_paper_cohort_manifest(
+        cohort,
+        max_days_to_close=14.0,
+        legacy_db_path=legacy_path,
+        legacy_starting_bankroll=500.0,
+    )
+    with patch("trading.paper_trader.SourceCredibility") as mock_cred:
+        mock_cred.return_value.get_multiplier.return_value = 1.0
+        trader = PaperTrader(
+            db_path=cohort.db_path,
+            startup_context="test",
+            paper_cohort_storage_root=tmp_path,
+        )
+    analysis = _make_mock_analysis(ticker="KX-POST-INIT-CONTEXT")
+    analysis.venue = "kalshi"
+    analysis.market.venue = "kalshi"
+    analysis.market.market_id = analysis.market.ticker
+    analysis.market.venue_market_id = analysis.market.ticker
+    before_bankroll = trader.get_notional_bankroll()
+    before_count = trader._conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0]
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", True)
+
+    with pytest.raises(
+        PaperAccountingAdmissionError,
+        match="non-runtime context for a manifest-bound cohort",
+    ):
+        trader.record_trade(
+            analysis,
+            entry_request_id="paper-entry:v1:active-post-init-context-block:lc-" + "p" * 32,
+        )
+
+    assert trader.get_notional_bankroll() == pytest.approx(before_bankroll)
+    assert trader._conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == before_count
+    trader._conn.close()
 
 
 @pytest.mark.skipif(os.name == "nt", reason="requires POSIX symlink permissions")

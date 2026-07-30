@@ -154,8 +154,13 @@ def _shared_memory_connect(name: str):
     db_uri = f"file:{name}-{uuid.uuid4().hex}?mode=memory&cache=shared"
     keeper = _REAL_SQLITE_CONNECT(db_uri, uri=True, check_same_thread=False)
 
-    def _connect(*_args, **_kwargs):
-        conn = _REAL_SQLITE_CONNECT(db_uri, uri=True, check_same_thread=False)
+    def _connect(*_args, **kwargs):
+        conn = _REAL_SQLITE_CONNECT(
+            db_uri,
+            uri=True,
+            check_same_thread=False,
+            factory=kwargs.get("factory", sqlite3.Connection),
+        )
         conn.row_factory = sqlite3.Row
         return conn
 

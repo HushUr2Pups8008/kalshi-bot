@@ -292,6 +292,29 @@ class ResearchStatus(str, Enum):
     RESEARCH_ADJUDICATOR_ERROR = "research_adjudicator_error"
 
 
+@dataclass(frozen=True)
+class PrewarmPhaseTimeouts:
+    """Opt-in post-collection budgets for offline research prewarm."""
+
+    initial_adjudication_seconds: float = 20.0
+    counter_query_seconds: float = 5.0
+    counter_adjudication_seconds: float = 20.0
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "initial_adjudication_seconds",
+            "counter_query_seconds",
+            "counter_adjudication_seconds",
+        ):
+            value = float(getattr(self, field_name))
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{field_name} must be finite and positive")
+            object.__setattr__(self, field_name, value)
+
+
+_PREWARM_PHASE_TIMEOUTS_CAPABILITY = object()
+
+
 _DECISION_EVIDENCE_CLOCK_SKEW_SECONDS = 300.0
 
 
@@ -6284,9 +6307,21 @@ async def run_research_gate(
     dossier_store: DossierStore | None = None,
     max_queries: int = 6,
     research_timeout_seconds: float = 12.0,
+    prewarm_phase_timeouts: PrewarmPhaseTimeouts | None = None,
+    _prewarm_phase_timeouts_capability: object | None = None,
     cache_only: bool = False,
     require_decision_grade: bool = False,
 ) -> ResearchVerdict:
+    if prewarm_phase_timeouts is not None and (
+        live_mode
+        or not require_decision_grade
+        or _clean(getattr(news, "source", "")).lower() != "research_prewarm"
+        or _prewarm_phase_timeouts_capability
+        is not _PREWARM_PHASE_TIMEOUTS_CAPABILITY
+    ):
+        raise ValueError(
+            "prewarm phase timeouts require offline decision-grade research_prewarm"
+        )
     queries = _select_research_queries(
         build_research_queries(news, market),
         max_queries=max_queries,
@@ -6301,6 +6336,7 @@ async def run_research_gate(
     captured_timeout_snapshot: ResearchTimeoutReplaySnapshot | None = None
     loop = asyncio.get_running_loop()
     deadline = loop.time() + max(0.001, float(research_timeout_seconds))
+    active_timeout_seconds = float(research_timeout_seconds)
     provider_errors: list[Exception] = []
     generic_search_circuit_events: list[GenericSearchCircuitEvent] = []
     generic_search_circuit_event_collector_token = (
@@ -6309,6 +6345,11 @@ async def run_research_gate(
 
     def remaining_budget() -> float:
         return max(0.0, deadline - loop.time())
+
+    def begin_phase_timeout(timeout_seconds: float) -> None:
+        nonlocal active_timeout_seconds, deadline
+        active_timeout_seconds = timeout_seconds
+        deadline = loop.time() + timeout_seconds
 
     def timeout_verdict(
         evidence: list[ResearchEvidence],
@@ -6325,7 +6366,7 @@ async def run_research_gate(
                     market_ticker=ticker,
                     contract_fingerprint=contract_fingerprint,
                     timeout_stage=stage,
-                    configured_timeout_seconds=research_timeout_seconds,
+                    configured_timeout_seconds=active_timeout_seconds,
                     remaining_budget_seconds=remaining_budget(),
                     observed_market_price=observed_market_price,
                     yes_ask=yes_ask,
@@ -6565,6 +6606,8 @@ async def run_research_gate(
             )
         return verdict
     provider_non_pending_evidence: list[ResearchEvidence] = []
+    provider = search_provider or default_search_provider
+    collection_budget_exhausted = False
     if (
         _has_sufficient_dossier_evidence(usable_cached_evidence, contract_fingerprint)
         and not (
@@ -6582,6 +6625,9 @@ async def run_research_gate(
                 continue
             remaining = remaining_budget()
             if remaining <= 0:
+                if prewarm_phase_timeouts is not None and evidence:
+                    collection_budget_exhausted = True
+                    break
                 return await finalize_verdict(
                     timeout_verdict(
                         evidence,
@@ -6596,6 +6642,9 @@ async def run_research_gate(
                 )
             except TimeoutError:
                 if remaining_budget() <= 0.001:
+                    if prewarm_phase_timeouts is not None and evidence:
+                        collection_budget_exhausted = True
+                        break
                     return await finalize_verdict(
                         timeout_verdict(
                             evidence,
@@ -6618,47 +6667,54 @@ async def run_research_gate(
             evidence.append(item)
             fresh_evidence.append(item)
 
-        for query in _structured_direct_source_queries(market, queries):
-            remaining = remaining_budget()
-            if remaining <= 0:
-                return await finalize_verdict(
-                    timeout_verdict(
-                        evidence,
-                        "Research timed out before structured direct-source extraction completed.",
-                        stage="structured_official",
-                    )
-                )
-            try:
-                structured_items = await asyncio.wait_for(
-                    asyncio.to_thread(_structured_official_search, query),
-                    timeout=remaining,
-                )
-            except TimeoutError:
-                if remaining_budget() <= 0.001:
+        if not collection_budget_exhausted:
+            for query in _structured_direct_source_queries(market, queries):
+                remaining = remaining_budget()
+                if remaining <= 0:
+                    if prewarm_phase_timeouts is not None and evidence:
+                        collection_budget_exhausted = True
+                        break
                     return await finalize_verdict(
                         timeout_verdict(
                             evidence,
-                            "Research structured direct-source extraction timed out.",
+                            "Research timed out before structured direct-source extraction completed.",
                             stage="structured_official",
                         )
                     )
-                direct_fetch_failures.append(
-                    f"{query.source_class}:{query.query}:structured_timeout"
-                )
-                continue
-            except Exception as exc:
-                direct_fetch_failures.append(
-                    f"{query.source_class}:{query.query}:structured:{exc}"
-                )
-                continue
-            for item in structured_items:
-                identity = _evidence_identity(item)
-                if identity in existing:
+                try:
+                    structured_items = await asyncio.wait_for(
+                        asyncio.to_thread(_structured_official_search, query),
+                        timeout=remaining,
+                    )
+                except TimeoutError:
+                    if remaining_budget() <= 0.001:
+                        if prewarm_phase_timeouts is not None and evidence:
+                            collection_budget_exhausted = True
+                            break
+                        return await finalize_verdict(
+                            timeout_verdict(
+                                evidence,
+                                "Research structured direct-source extraction timed out.",
+                                stage="structured_official",
+                            )
+                        )
+                    direct_fetch_failures.append(
+                        f"{query.source_class}:{query.query}:structured_timeout"
+                    )
                     continue
-                existing.add(identity)
-                item = replace(item, contract_fingerprint=contract_fingerprint)
-                evidence.append(item)
-                fresh_evidence.append(item)
+                except Exception as exc:
+                    direct_fetch_failures.append(
+                        f"{query.source_class}:{query.query}:structured:{exc}"
+                    )
+                    continue
+                for item in structured_items:
+                    identity = _evidence_identity(item)
+                    if identity in existing:
+                        continue
+                    existing.add(identity)
+                    item = replace(item, contract_fingerprint=contract_fingerprint)
+                    evidence.append(item)
+                    fresh_evidence.append(item)
 
         direct_domains = {
             _domain_from_url(item.source_url)
@@ -6688,46 +6744,53 @@ async def run_research_gate(
                 )
             )
         ]
-        provider = search_provider or default_search_provider
-        remaining = remaining_budget()
-        if remaining <= 0:
-            return await finalize_verdict(
-                timeout_verdict(
-                    evidence,
-                    "Research timed out before search providers completed.",
-                    stage="provider_fanout",
-                )
-            )
-        try:
-            evidence_nested = await asyncio.wait_for(
-                asyncio.gather(
-                    *(provider(query) for query in provider_queries),
-                    return_exceptions=True,
-                ),
-                timeout=remaining,
-            )
-        except TimeoutError:
-            return await finalize_verdict(
-                timeout_verdict(
-                    evidence,
-                    "Research search providers timed out before enough evidence was retrieved.",
-                    stage="provider_fanout",
-                )
-            )
-        for result in evidence_nested:
-            if isinstance(result, Exception):
-                provider_errors.append(result)
-                continue
-            for item in result:
-                if not _is_official_data_pending_evidence(item):
-                    provider_non_pending_evidence.append(item)
-                identity = _evidence_identity(item)
-                if identity in existing:
-                    continue
-                existing.add(identity)
-                item = replace(item, contract_fingerprint=contract_fingerprint)
-                evidence.append(item)
-                fresh_evidence.append(item)
+        if not collection_budget_exhausted:
+            remaining = remaining_budget()
+            if remaining <= 0:
+                if prewarm_phase_timeouts is not None and evidence:
+                    collection_budget_exhausted = True
+                else:
+                    return await finalize_verdict(
+                        timeout_verdict(
+                            evidence,
+                            "Research timed out before search providers completed.",
+                            stage="provider_fanout",
+                        )
+                    )
+            if not collection_budget_exhausted:
+                try:
+                    evidence_nested = await asyncio.wait_for(
+                        asyncio.gather(
+                            *(provider(query) for query in provider_queries),
+                            return_exceptions=True,
+                        ),
+                        timeout=remaining,
+                    )
+                except TimeoutError:
+                    if prewarm_phase_timeouts is None or not evidence:
+                        return await finalize_verdict(
+                            timeout_verdict(
+                                evidence,
+                                "Research search providers timed out before enough evidence was retrieved.",
+                                stage="provider_fanout",
+                            )
+                        )
+                    collection_budget_exhausted = True
+                else:
+                    for result in evidence_nested:
+                        if isinstance(result, Exception):
+                            provider_errors.append(result)
+                            continue
+                        for item in result:
+                            if not _is_official_data_pending_evidence(item):
+                                provider_non_pending_evidence.append(item)
+                            identity = _evidence_identity(item)
+                            if identity in existing:
+                                continue
+                            existing.add(identity)
+                            item = replace(item, contract_fingerprint=contract_fingerprint)
+                            evidence.append(item)
+                            fresh_evidence.append(item)
     if require_decision_grade and evidence:
         evidence = _apply_structured_indicator_evidence(evidence, market)
     if (
@@ -6799,6 +6862,11 @@ async def run_research_gate(
         adjudicate = adjudicator or default_ollama_adjudicator
         remaining = remaining_budget()
         if deterministic_signal is None:
+            if prewarm_phase_timeouts is not None:
+                begin_phase_timeout(
+                    prewarm_phase_timeouts.initial_adjudication_seconds
+                )
+                remaining = remaining_budget()
             if remaining <= 0:
                 return await finalize_verdict(
                     timeout_verdict(
@@ -6872,6 +6940,10 @@ async def run_research_gate(
                     counter_query = _side_aware_counter_query(market, model_direction)
                     if counter_query.query not in {query.query for query in queries}:
                         queries.append(counter_query)
+                        if prewarm_phase_timeouts is not None:
+                            begin_phase_timeout(
+                                prewarm_phase_timeouts.counter_query_seconds
+                            )
                         remaining = remaining_budget()
                         if remaining > 0:
                             try:
@@ -6902,6 +6974,10 @@ async def run_research_gate(
                                 fresh_evidence.append(item)
                                 added_counter_evidence = True
                             if added_counter_evidence:
+                                if prewarm_phase_timeouts is not None:
+                                    begin_phase_timeout(
+                                        prewarm_phase_timeouts.counter_adjudication_seconds
+                                    )
                                 remaining = remaining_budget()
                                 if remaining <= 0:
                                     return await finalize_verdict(
