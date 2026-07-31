@@ -458,6 +458,44 @@ async def test_execution_orderbook_failure_fails_closed_at_g7():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("executed_price_cents", [None, 0])
+async def test_invalid_executed_price_skips_orderbook_and_fails_closed_at_g7(
+    executed_price_cents: int | None,
+):
+    provider_calls: list[SignalAnalysis] = []
+
+    async def execution_liquidity_provider(analysis: SignalAnalysis) -> ExecutableLiquidity:
+        provider_calls.append(analysis)
+        raise AssertionError("orderbook provider must not run for invalid executed price")
+
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+    analysis = _analysis(market=_market(liquidity_dollars=Decimal("0")))
+    analysis.executed_price_cents = executed_price_cents
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(),
+        logger=logger,
+        execution_liquidity_provider=execution_liquidity_provider,
+        is_paper_mode=True,
+    )
+
+    result = await task.process_fast_lane_result(analysis)
+
+    assert result.ready is False
+    assert result.trade_blocked_reason == "G7_zero_liquidity"
+    assert result.enqueued is False
+    assert result.candidate is None
+    assert queue.empty()
+    assert provider_calls == []
+    assert logger.skipped_records[0]["signal_meta"]["g7_execution_liquidity"] == {
+        "source": "kalshi_orderbook",
+        "status": "unavailable",
+        "reason": "invalid_executed_price",
+    }
+
+
+@pytest.mark.asyncio
 async def test_execution_orderbook_provider_is_not_called_after_preliminary_rejection():
     provider_calls: list[SignalAnalysis] = []
 

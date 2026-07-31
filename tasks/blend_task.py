@@ -516,6 +516,16 @@ class BlendTask:
         provider = self._execution_liquidity_provider
         if provider is None:
             return None
+        if not self._has_valid_executed_price_cents(analysis.executed_price_cents):
+            self._set_execution_liquidity_meta(
+                analysis,
+                {
+                    "source": "kalshi_orderbook",
+                    "status": "unavailable",
+                    "reason": "invalid_executed_price",
+                },
+            )
+            return None
         try:
             result = provider(analysis)
             liquidity = await result if inspect.isawaitable(result) else result
@@ -560,15 +570,19 @@ class BlendTask:
         if liquidity.side != analysis.side:
             raise ValueError("execution liquidity side does not match analysis")
         executed_price_cents = analysis.executed_price_cents
-        if (
-            isinstance(executed_price_cents, bool)
-            or not isinstance(executed_price_cents, int)
-            or not 0 < executed_price_cents < 100
-        ):
+        if not BlendTask._has_valid_executed_price_cents(executed_price_cents):
             raise ValueError("executed price must be an integer between 1 and 99 cents")
         expected_limit = Decimal(executed_price_cents) / Decimal("100")
         if liquidity.limit_price != expected_limit:
             raise ValueError("execution liquidity limit does not match analysis")
+
+    @staticmethod
+    def _has_valid_executed_price_cents(executed_price_cents: object) -> bool:
+        return (
+            not isinstance(executed_price_cents, bool)
+            and isinstance(executed_price_cents, int)
+            and 0 < executed_price_cents < 100
+        )
 
     @staticmethod
     def _set_execution_liquidity_meta(
