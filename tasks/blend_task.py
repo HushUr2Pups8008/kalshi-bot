@@ -293,6 +293,8 @@ class BlendTask:
         fast_lane_result: SignalAnalysis,
     ) -> BlendTaskResult:
         """Evaluate one fast-lane result and enqueue only if readiness passes."""
+        if not self._has_valid_executed_price_cents(fast_lane_result.executed_price_cents):
+            return await self._invalid_executed_price_result(fast_lane_result)
         market = fast_lane_result.market
         ticker = market.ticker
         dossier, structural_prior, recent_records = await self._read_lane_context(ticker)
@@ -507,6 +509,63 @@ class BlendTask:
             trade_blocked_reason=None,
             candidate=candidate,
             enqueued=True,
+        )
+
+    async def _invalid_executed_price_result(
+        self,
+        fast_lane_result: SignalAnalysis,
+    ) -> BlendTaskResult:
+        """Return a terminal result without running lane, readiness, or G7 work."""
+        reason = "invalid_executed_price"
+        blend_result = BlendResult(
+            blended_p=fast_lane_result.estimated_probability,
+            blended_confidence=fast_lane_result.confidence,
+            disagreement_score=0.0,
+            blend_mode="dominant_lane",
+            readiness_gate_min_edge_override=None,
+            trade_blocked_reason=reason,
+            fast_lane_p=fast_lane_result.estimated_probability,
+            fast_lane_confidence=fast_lane_result.confidence,
+            accumulation_p=None,
+            accumulation_confidence=None,
+            structural_p=None,
+            structural_confidence=None,
+        )
+        readiness = ReadinessDecision(
+            passed=False,
+            failure_reasons=(reason,),
+            trade_blocked_reason=reason,
+            readiness_gate_min_edge_override=None,
+            scaled_confidence=0.0,
+            regime_confidence=0.0,
+            fail_safe_active=False,
+            applied_conditions=(),
+        )
+        market = fast_lane_result.market
+        venue = (
+            _venue_string(
+                getattr(fast_lane_result, "venue", None)
+                or getattr(market, "venue", None)
+                or getattr(market, "report_venue", None)
+            )
+            or "kalshi"
+        )
+        await self._emit_skipped(
+            ticker=market.ticker,
+            blend_result=blend_result,
+            readiness=readiness,
+            trade_blocked_reason=reason,
+            fast_lane_result=fast_lane_result,
+            venue=venue,
+            g7_mark_snapshot=None,
+        )
+        return BlendTaskResult(
+            market_ticker=market.ticker,
+            blend_result=blend_result,
+            readiness_decision=readiness,
+            trade_blocked_reason=reason,
+            candidate=None,
+            enqueued=False,
         )
 
     async def _execution_liquidity_for(
@@ -1025,16 +1084,20 @@ class BlendTask:
             )
             else "keyword"
         )
-        # F-11 P1-A: SignalAnalysis.market_yes_price was deleted; the canonical
-        # post-P0 source of the executed-side entry price is executed_price_cents.
-        # market_price is in float cents for the legacy edge math.
-        market_price = float(fast_lane_result.executed_price_cents or 0)
-        blended_p = blend_result.blended_p
-        edge = blended_p - market_price / 100.0
-        if readiness.readiness_gate_min_edge_override is not None:
-            min_edge_threshold = readiness.readiness_gate_min_edge_override
+        executed_price_cents = fast_lane_result.executed_price_cents
+        if self._has_valid_executed_price_cents(executed_price_cents):
+            market_price = float(executed_price_cents)
+            blended_p = blend_result.blended_p
+            edge = blended_p - market_price / 100.0
+            if readiness.readiness_gate_min_edge_override is not None:
+                min_edge_threshold = readiness.readiness_gate_min_edge_override
+            else:
+                min_edge_threshold = PAPER_MIN_EDGE if self._is_paper_mode else cfg.min_edge
         else:
-            min_edge_threshold = PAPER_MIN_EDGE if self._is_paper_mode else cfg.min_edge
+            blended_p = None
+            market_price = None
+            edge = None
+            min_edge_threshold = None
         skipped_kwargs: dict[str, Any] = {
             "reason": trade_blocked_reason,
             "ticker": ticker,
