@@ -444,6 +444,32 @@ def test_runtime_paper_cohort_attestation_confirms_current_pending_binding(
     assert "runtime binding attested" in capsys.readouterr().out
 
 
+def test_runtime_paper_cohort_attestation_accepts_relative_main_argument(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "data"
+    receipt_path = tmp_path / "logs" / "state" / "runtime_paper_cohort_attestation.json"
+    _write_runtime_pending_attestation(data_dir, receipt_path)
+    now = datetime(2026, 7, 30, 12, 0, 10, tzinfo=UTC)
+    process = _bot_proc(
+        command=(
+            "/opt/homebrew/opt/python@3.14/bin/python "
+            "main.py"
+        )
+    )
+
+    summary = summarize_runtime_paper_cohort_attestation(
+        data_dir,
+        receipt_path,
+        rows=[process],
+        main_path=MAIN_PATH,
+        now=now,
+        now_epoch=now.timestamp(),
+    )
+
+    assert summary["status"] == "attested"
+
+
 def test_runtime_paper_cohort_attestation_rejects_pid_mismatch(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     receipt_path = tmp_path / "logs" / "state" / "runtime_paper_cohort_attestation.json"

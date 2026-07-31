@@ -591,13 +591,17 @@ def _attested_main_process(
     pid: int,
     main_path: Path,
 ) -> ProcessInfo | None:
-    expected_suffix = f" {main_path}"
     for process in rows:
         if process.pid != pid:
             continue
         if process.command.startswith("/usr/bin/caffeinate "):
             continue
-        if process.command.endswith(expected_suffix):
+        command_tokens = process.command.split()
+        if len(command_tokens) < 2:
+            continue
+        if Path(command_tokens[-1]).name != main_path.name:
+            continue
+        if any(Path(token).name.lower().startswith("python") for token in command_tokens[:-1]):
             return process
     return None
 
