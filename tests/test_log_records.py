@@ -1376,6 +1376,36 @@ def test_logger_rounds_optional_floats_to_four_decimals():
         _cleanup(tmp)
 
 
+def test_invalid_executed_price_skip_omits_unavailable_price_and_edge_fields(
+    tmp_path: Path,
+):
+    log_file = tmp_path / "trades.jsonl"
+    logger = TradeLogger(log_file)
+
+    logger.log_skipped(
+        reason="invalid_executed_price",
+        ticker="KXINVALIDPRICE-1",
+        model_probability=0.73125,
+        market_price=None,
+        edge=None,
+        min_edge_threshold=None,
+    )
+
+    record = json.loads(log_file.read_text(encoding="utf-8").strip())
+
+    assert record["type"] == "SKIPPED"
+    assert record["reason"] == "invalid_executed_price"
+    assert record["model_probability"] == 0.7312
+    for key in (
+        "market_price",
+        "edge",
+        "min_edge_threshold",
+        "signed_diff",
+        "absolute_diff",
+    ):
+        assert key not in record
+
+
 def test_trade_logger_records_kalshi_cold_cache_event_schema():
     tmp = make_tmp_dir("kalshi_cold_cache_event")
     try:
