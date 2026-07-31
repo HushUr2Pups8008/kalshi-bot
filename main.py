@@ -141,6 +141,10 @@ from trading.paper_cohorts import (
     validate_active_paper_cohort_manifest,
     validate_legacy_pending_paper_cohort_manifest,
 )
+from trading.runtime_paper_cohort_attestation import (
+    build_runtime_paper_cohort_attestation,
+    write_runtime_paper_cohort_attestation,
+)
 from trading.paper_trader import PaperTrader
 from trading.profit_evidence import independent_realized_profit_evidence_available
 from trading.settlement import (
@@ -170,6 +174,7 @@ from utils.runtime_overrides import (
     is_source_disabled,
     set_global_reader,
 )
+from utils.output_paths import STATE_ROOT
 from utils.research_prewarm_targets import (
     RESEARCH_PREWARM_EVENT_TYPES,
     record_targets_kalshi_research_prewarm,
@@ -206,7 +211,11 @@ def _configured_paper_cohort_kind() -> str:
 def _runtime_paper_cohort_from_config(
     *,
     db_root: Path = DATA_DIR,
-) -> tuple[PaperCohort, tuple[PaperCohort, ...], str | None]:
+    return_binding: bool = False,
+) -> (
+    tuple[PaperCohort, tuple[PaperCohort, ...], str | None]
+    | tuple[PaperCohort, tuple[PaperCohort, ...], str | None, object | None]
+):
     """Resolve one writable runtime account and validate its immutable binding."""
 
     cohort_id = getattr(cfg, "paper_cohort_id", LEGACY_PAPER_COHORT_ID)
@@ -227,10 +236,11 @@ def _runtime_paper_cohort_from_config(
         provisioned_block = provisioned_paper_cohort_block_reason(db_root)
         if provisioned_block is not None:
             raise RuntimeError(f"legacy paper runtime is blocked: {provisioned_block}")
-        return runtime_cohort, (runtime_cohort,), None
+        result = runtime_cohort, (runtime_cohort,), None
+        return (*result, None) if return_binding else result
 
     if cohort_kind == "legacy_pending":
-        validate_legacy_pending_paper_cohort_manifest(
+        binding = validate_legacy_pending_paper_cohort_manifest(
             runtime_cohort,
             max_days_to_close=getattr(
                 cfg,
@@ -240,13 +250,14 @@ def _runtime_paper_cohort_from_config(
             legacy_db_path=runtime_cohort.storage_root / "paper_trades.db",
             legacy_starting_bankroll=None,
         )
-        return (
+        result = (
             runtime_cohort,
             discover_legacy_pending_paper_risk_cohorts(db_root),
             _LEGACY_PENDING_COHORT_LIVE_TRANSITION_BLOCK,
         )
+        return (*result, binding) if return_binding else result
 
-    validate_active_paper_cohort_manifest(
+    binding = validate_active_paper_cohort_manifest(
         runtime_cohort,
         max_days_to_close=getattr(
             cfg,
@@ -256,13 +267,17 @@ def _runtime_paper_cohort_from_config(
         legacy_db_path=runtime_cohort.storage_root / "paper_trades.db",
         legacy_starting_bankroll=None,
     )
-    return (
+    result = (
         runtime_cohort,
         discover_paper_risk_cohorts(db_root),
         _ACTIVE_COHORT_LIVE_TRANSITION_BLOCK,
     )
+    return (*result, binding) if return_binding else result
 
 _BOT_RUNTIME_LOCK = DATA_DIR / "bot_runtime.lock"
+_RUNTIME_PAPER_COHORT_ATTESTATION_PATH = (
+    STATE_ROOT / "runtime_paper_cohort_attestation.json"
+)
 
 # Monotonic counter used as PriorityQueue tiebreaker so NewsItem objects
 # are never compared against each other (dataclasses without __lt__ would raise).
@@ -1037,14 +1052,16 @@ class TradingBot:
             self.paper_cohort,
             self._paper_risk_cohorts,
             _live_transition_block_reason,
-        ) = _runtime_paper_cohort_from_config()
+            paper_cohort_binding,
+        ) = _runtime_paper_cohort_from_config(return_binding=True)
+        runtime_cohort_kind = _configured_paper_cohort_kind()
         trade_log.bind_runtime_context(
             cohort_id=self.paper_cohort.cohort_id,
-            cohort_kind=_configured_paper_cohort_kind(),
+            cohort_kind=runtime_cohort_kind,
         )
         shadow_trade_log.bind_runtime_context(
             cohort_id=self.paper_cohort.cohort_id,
-            cohort_kind=_configured_paper_cohort_kind(),
+            cohort_kind=runtime_cohort_kind,
         )
         self.paper         = PaperTrader(
             db_path=self.paper_cohort.db_path,
@@ -1054,6 +1071,14 @@ class TradingBot:
             cohort_id=self.paper_cohort.cohort_id,
             live_transition_block_reason=_live_transition_block_reason,
             paper_cohort_storage_root=self.paper_cohort.storage_root,
+        )
+        write_runtime_paper_cohort_attestation(
+            build_runtime_paper_cohort_attestation(
+                self.paper_cohort,
+                cohort_kind=runtime_cohort_kind,
+                binding=paper_cohort_binding,
+            ),
+            _RUNTIME_PAPER_COHORT_ATTESTATION_PATH,
         )
         self._settlement_outbox_task: SettlementOutboxTask | None = None
         self.executor      = TradeExecutor(self.rest, self.paper)
