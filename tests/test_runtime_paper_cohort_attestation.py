@@ -157,6 +157,47 @@ def test_reader_rejects_symlink_receipt(tmp_path: Path) -> None:
         )
 
 
+def test_writer_rejects_ancestor_directory_symlink(tmp_path: Path) -> None:
+    storage_root = tmp_path / "data"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    linked_logs = tmp_path / "logs"
+    try:
+        linked_logs.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlinks unavailable: {exc}")
+    receipt_path = linked_logs / "state" / "runtime_paper_cohort_attestation.json"
+
+    with pytest.raises(RuntimePaperCohortAttestationError, match="symlink"):
+        write_runtime_paper_cohort_attestation(
+            _receipt_for_pending_cohort(storage_root),
+            receipt_path,
+        )
+
+    assert not (outside / "state" / receipt_path.name).exists()
+
+
+def test_reader_rejects_ancestor_directory_symlink(tmp_path: Path) -> None:
+    storage_root = tmp_path / "data"
+    outside = tmp_path / "outside"
+    receipt_path = outside / "state" / "runtime_paper_cohort_attestation.json"
+    write_runtime_paper_cohort_attestation(
+        _receipt_for_pending_cohort(storage_root),
+        receipt_path,
+    )
+    linked_logs = tmp_path / "logs"
+    try:
+        linked_logs.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlinks unavailable: {exc}")
+
+    with pytest.raises(RuntimePaperCohortAttestationError, match="symlink"):
+        read_runtime_paper_cohort_attestation(
+            linked_logs / "state" / receipt_path.name,
+            storage_root=storage_root,
+        )
+
+
 def test_reader_rejects_storage_root_relative_escape(tmp_path: Path) -> None:
     storage_root = tmp_path / "data"
     receipt_path = tmp_path / "runtime_paper_cohort_attestation.json"
@@ -185,4 +226,30 @@ def test_reader_rejects_receipt_for_different_pid(tmp_path: Path) -> None:
             receipt_path,
             storage_root=storage_root,
             expected_pid=12346,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("schema_version", True),
+        ("cohort_id", 12345),
+        ("db_path_relative_to_storage_root", False),
+    ],
+)
+def test_reader_rejects_type_corrupt_payload_values(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    storage_root = tmp_path / "data"
+    receipt_path = tmp_path / "runtime_paper_cohort_attestation.json"
+    payload = _receipt_for_pending_cohort(storage_root).to_payload()
+    payload[field] = value
+    receipt_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(RuntimePaperCohortAttestationError):
+        read_runtime_paper_cohort_attestation(
+            receipt_path,
+            storage_root=storage_root,
         )

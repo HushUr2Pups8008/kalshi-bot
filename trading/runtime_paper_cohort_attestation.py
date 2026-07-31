@@ -245,13 +245,22 @@ def _validated_attestation(
 ) -> RuntimePaperCohortAttestation:
     if not isinstance(receipt, RuntimePaperCohortAttestation):
         raise RuntimePaperCohortAttestationError("receipt has an invalid type")
-    if receipt.schema_version != RUNTIME_PAPER_COHORT_ATTESTATION_SCHEMA_VERSION:
+    if (
+        type(receipt.schema_version) is not int
+        or receipt.schema_version != RUNTIME_PAPER_COHORT_ATTESTATION_SCHEMA_VERSION
+    ):
         raise RuntimePaperCohortAttestationError("receipt schema version is unsupported")
     _validated_pid(receipt.pid)
     _validated_started_utc(receipt.started_utc)
-    if not _COHORT_ID_PATTERN.fullmatch(receipt.cohort_id):
+    if not isinstance(receipt.cohort_id, str) or not _COHORT_ID_PATTERN.fullmatch(
+        receipt.cohort_id
+    ):
         raise RuntimePaperCohortAttestationError("receipt cohort ID is invalid")
     _validated_cohort_kind(receipt.cohort_kind)
+    if not isinstance(receipt.db_path_relative_to_storage_root, str):
+        raise RuntimePaperCohortAttestationError(
+            "receipt database path must be a safe relative path"
+        )
     relative = Path(receipt.db_path_relative_to_storage_root)
     if (
         not receipt.db_path_relative_to_storage_root
@@ -284,7 +293,9 @@ def _validated_attestation(
 
 
 def _ensure_safe_parent(parent: Path) -> None:
+    _reject_symlink_ancestors(parent)
     parent.mkdir(parents=True, exist_ok=True)
+    _reject_symlink_ancestors(parent)
     try:
         mode = parent.lstat().st_mode
     except OSError as exc:
@@ -298,6 +309,7 @@ def _ensure_safe_parent(parent: Path) -> None:
 
 
 def _reject_unsafe_existing_target(path: Path) -> None:
+    _reject_symlink_ancestors(path)
     try:
         mode = path.lstat().st_mode
     except FileNotFoundError:
@@ -308,6 +320,29 @@ def _reject_unsafe_existing_target(path: Path) -> None:
         raise RuntimePaperCohortAttestationError("receipt path must not be a symlink")
     if not stat.S_ISREG(mode):
         raise RuntimePaperCohortAttestationError("receipt path must be a regular file")
+
+
+def _reject_symlink_ancestors(path: Path) -> None:
+    """Reject a path whose existing lexical component is a symlink."""
+
+    current = Path(path)
+    while True:
+        try:
+            mode = current.lstat().st_mode
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise RuntimePaperCohortAttestationError(
+                "receipt path ancestor is unavailable"
+            ) from exc
+        else:
+            if stat.S_ISLNK(mode):
+                raise RuntimePaperCohortAttestationError(
+                    "receipt path must not contain a symlink"
+                )
+        if current.parent == current:
+            return
+        current = current.parent
 
 
 def _write_all(fd: int, payload: bytes) -> None:
