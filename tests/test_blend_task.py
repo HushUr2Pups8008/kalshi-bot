@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -28,6 +29,7 @@ from tasks.trade_readiness_gate import ReadinessDecision, evaluate_readiness
 from tasks.evidence_store import DossierState, EvidenceRecord, StructuralPriorRecord
 from trading.g7_skip_evidence import G7SkipEvidenceStore, read_g7_skip_evidence_records
 from trading.orderbook import ExecutableLiquidity
+from utils.logger import TradeLogger
 
 
 class FakeStore:
@@ -455,6 +457,144 @@ async def test_execution_orderbook_failure_fails_closed_at_g7():
         "status": "unavailable",
         "reason": "RuntimeError",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "executed_price_cents",
+    [None, False, True, -1, 0, 100, 101],
+    ids=["none", "false", "true", "negative", "zero", "hundred", "over_hundred"],
+)
+async def test_invalid_executed_price_stops_before_blend_readiness_and_g7(
+    executed_price_cents: object,
+):
+    provider_calls: list[SignalAnalysis] = []
+
+    async def execution_liquidity_provider(analysis: SignalAnalysis) -> ExecutableLiquidity:
+        provider_calls.append(analysis)
+        raise AssertionError("orderbook provider must not run for invalid executed price")
+
+    def blender(*_args, **_kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("blender must not run for invalid executed price")
+
+    def readiness_evaluator(*_args, **_kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("readiness must not run for invalid executed price")
+
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+    analysis = _analysis(market=_market(liquidity_dollars=Decimal("0")))
+    analysis.executed_price_cents = executed_price_cents
+    store = FakeStore()
+    task = BlendTask(
+        trading_queue=queue,
+        store=store,
+        logger=logger,
+        blender=blender,
+        readiness_evaluator=readiness_evaluator,
+        execution_liquidity_provider=execution_liquidity_provider,
+        is_paper_mode=True,
+    )
+
+    result = await task.process_fast_lane_result(analysis)
+
+    assert result.ready is False
+    assert result.trade_blocked_reason == "invalid_executed_price"
+    assert result.readiness_decision.failure_reasons == ("invalid_executed_price",)
+    assert result.enqueued is False
+    assert result.candidate is None
+    assert queue.empty()
+    assert provider_calls == []
+    assert store.calls == []
+    assert logger.records == []
+    assert logger.gate_summary_records == []
+    assert logger.skipped_records == [
+        {
+            "reason": "invalid_executed_price",
+            "ticker": analysis.market.ticker,
+            "side": analysis.side,
+            "headline": None,
+            "source": None,
+            "method": "keyword",
+            "llm_direction": None,
+            "llm_magnitude": None,
+            "model_probability": None,
+            "market_price": None,
+            "edge": None,
+            "min_edge_threshold": None,
+            "venue": "kalshi",
+            "recency_score": None,
+            "recency_threshold": None,
+            "recency_distance": None,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_invalid_executed_price_persists_skip_without_fabricated_price_fields(
+    tmp_path: Path,
+):
+    log_path = tmp_path / "trades.jsonl"
+    analysis = _analysis(market=_market(liquidity_dollars=Decimal("0")))
+    analysis.executed_price_cents = 0
+    task = BlendTask(
+        trading_queue=asyncio.Queue(),
+        store=FakeStore(),
+        logger=TradeLogger(log_path),
+        is_paper_mode=True,
+    )
+
+    result = await task.process_fast_lane_result(analysis)
+
+    assert result.trade_blocked_reason == "invalid_executed_price"
+    records = [
+        json.loads(line)
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert record["type"] == "SKIPPED"
+    assert record["reason"] == "invalid_executed_price"
+    for key in (
+        "market_price",
+        "edge",
+        "min_edge_threshold",
+        "signed_diff",
+        "absolute_diff",
+    ):
+        assert key not in record
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("executed_price_cents", [None, 0])
+async def test_invalid_executed_price_preserves_downstream_unavailable_taxonomy(
+    executed_price_cents: int | None,
+):
+    provider_calls: list[SignalAnalysis] = []
+
+    async def execution_liquidity_provider(analysis: SignalAnalysis) -> ExecutableLiquidity:
+        provider_calls.append(analysis)
+        raise AssertionError("orderbook provider must not run for invalid executed price")
+
+    analysis = _analysis(market=_market(liquidity_dollars=Decimal("0")))
+    analysis.executed_price_cents = executed_price_cents
+    task = BlendTask(
+        trading_queue=asyncio.Queue(),
+        store=FakeStore(),
+        logger=SpyLogger(),
+        execution_liquidity_provider=execution_liquidity_provider,
+        is_paper_mode=True,
+    )
+
+    execution_liquidity = await task._execution_liquidity_for(analysis)
+
+    assert execution_liquidity is None
+    assert provider_calls == []
+    assert analysis.signal_meta == {"g7_execution_liquidity": {
+        "source": "kalshi_orderbook",
+        "status": "unavailable",
+        "reason": "invalid_executed_price",
+    }}
 
 
 @pytest.mark.asyncio

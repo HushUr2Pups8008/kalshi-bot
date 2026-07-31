@@ -19,6 +19,24 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.29] - 2026-07-31
+
+### Fixed
+
+- **Invalid execution-price terminal.** A missing, boolean, zero, or endpoint
+  selected execution price now emits an explicit `invalid_executed_price` skip
+  before lane reads, blending, readiness, G7, candidate creation, or enqueue.
+  The skip persists no fabricated market price, edge, threshold, or derived
+  price-difference fields.
+- **G7 unavailable provenance.** Direct execution-liquidity evaluation now
+  classifies an invalid selected price as unavailable
+  `invalid_executed_price`, without querying the order book or weakening G7.
+
+### Verification
+
+- `CI=1 .venv/bin/python -m pytest tests/test_log_records.py tests/test_blend_task.py -q` (`145 passed`)
+- `ruff check tasks/blend_task.py tests/test_blend_task.py tests/test_log_records.py`
+
 ## [0.33.28] - 2026-07-31
 
 ### Added
