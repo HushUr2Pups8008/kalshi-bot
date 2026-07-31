@@ -19,6 +19,7 @@ from scripts.migrate_paper_settlement_schema import (
     open_readonly,
     plan_settlement_schema,
 )
+from trading.legacy_settlement_receipts import build_legacy_settlement_receipt
 from trading.paper_trader import PaperTrader, _DDL
 from trading.settlement import (
     MarketOutcome,
@@ -189,6 +190,43 @@ def _migrate(path: Path) -> None:
         plan,
         reviewed_plan_fingerprint=plan.fingerprint,
     )
+
+
+def test_legacy_receipt_apply_supports_settlement_v1_schema_without_fee_column(
+    tmp_path,
+):
+    db = tmp_path / "legacy-receipt-v1.db"
+    _create_legacy_db(db)
+    _migrate(db)
+    with sqlite3.connect(db) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(paper_trades)")}
+        assert "fee_net_accounting_version" not in columns
+        conn.execute(
+            "CREATE TABLE bot_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        conn.execute(
+            "INSERT INTO bot_state (key, value) VALUES ('notional_bankroll', '100')"
+        )
+        conn.execute(
+            """
+            INSERT INTO paper_trades (
+                trade_id, ticker, venue, venue_market_id, identity_status,
+                side, contracts, price_cents, cost_dollars, ts
+            ) VALUES ('legacy-receipt-v1', 'KX-t1', 'kalshi', 'KX-t1', 'mapped',
+                      'yes', 1, 40, 0.4, '2026-07-13T12:00:00+00:00')
+            """
+        )
+
+    receipt = build_legacy_settlement_receipt("legacy-receipt-v1", BASE_OBSERVATION)
+    with SettlementStore(db) as store:
+        result = store.apply_legacy_directional_receipt(
+            receipt,
+            applied_at=NOW + timedelta(minutes=1),
+        )
+        check = store.conservation(now=NOW + timedelta(minutes=2))
+
+    assert result.applied is True
+    assert check.ok is True
 
 
 def _tables(path: Path) -> set[str]:

@@ -37,13 +37,13 @@ def _legacy_root(path: Path) -> None:
                 market_title, side, contracts, price_cents, cost_dollars,
                 estimated_prob, entry_price_cents, edge, kelly_dollars,
                 capped_dollars, signal_headline, signal_source, keywords_matched,
-                reasoning, fee_net_accounting_version
+                reasoning
             ) VALUES (
                 'legacy-trade-1', '2026-07-30T12:00:00+00:00',
                 'legacy-exact-market', 'polymarket_us', '42', 'mapped',
                 'Legacy exact market', 'yes', 2, 40, 0.80,
                 0.61, 40, 0.21, 1.0, 1.0, 'legacy signal', 'legacy:test',
-                '[]', 'legacy receipt fixture', NULL
+                '[]', 'legacy receipt fixture'
             )
             """
         )
@@ -120,13 +120,13 @@ def _insert_second_market_lot(path: Path) -> None:
                 market_title, side, contracts, price_cents, cost_dollars,
                 estimated_prob, entry_price_cents, edge, kelly_dollars,
                 capped_dollars, signal_headline, signal_source, keywords_matched,
-                reasoning, fee_net_accounting_version
+                reasoning
             ) VALUES (
                 'legacy-trade-2', '2026-07-30T12:01:00+00:00',
                 'legacy-exact-market', 'polymarket_us', '42', 'mapped',
                 'Legacy exact market', 'no', 1, 60, 0.60,
                 0.39, 60, 0.21, 1.0, 1.0, 'legacy signal', 'legacy:test',
-                '[]', 'legacy receipt fixture', NULL
+                '[]', 'legacy receipt fixture'
             )
             """
         )

@@ -1145,7 +1145,7 @@ def _legacy_receipt_trade_row(
                resolved, resolved_yes, terminal_state,
                settlement_observation_sha256, settled_at, resolved_ts,
                gross_payout_cents, gross_pnl_cents, pnl_dollars, contracts,
-               price_cents, cost_dollars, side, fee_net_accounting_version,
+               price_cents, cost_dollars, side,
                ts AS entry_ts
         FROM paper_trades WHERE trade_id=?
         """,
@@ -1180,10 +1180,6 @@ def _validate_unresolved_legacy_trade(
         )
     ):
         raise LegacyReceiptApplicationError("legacy receipt trade is not unresolved")
-    if trade["fee_net_accounting_version"] is not None:
-        raise LegacyReceiptApplicationError(
-            "legacy receipt trade has fee-net accounting"
-        )
     try:
         _validate_legacy_receipt_entry_timing(trade, observation)
         _legacy_directional_outcome(trade, observation)
@@ -1322,7 +1318,6 @@ def _validate_applied_legacy_receipt_application(
         or trade["identity_status"] != "mapped"
         or trade["settlement_observation_sha256"]
         != observation.observation_sha256
-        or trade["fee_net_accounting_version"] is not None
     ):
         raise LegacyReceiptApplicationError(
             "legacy receipt application trade linkage is invalid"
@@ -1620,7 +1615,7 @@ class SettlementStore:
                        resolved, resolved_yes, terminal_state,
                        settlement_observation_sha256, settled_at, resolved_ts,
                        gross_payout_cents, gross_pnl_cents, pnl_dollars, contracts,
-                       price_cents, cost_dollars, side, fee_net_accounting_version,
+                       price_cents, cost_dollars, side,
                        ts AS entry_ts
                 FROM paper_trades WHERE trade_id=?
                 """,
@@ -1662,7 +1657,7 @@ class SettlementStore:
                   AND resolved_ts IS NULL AND gross_payout_cents IS NULL
                   AND gross_pnl_cents IS NULL AND pnl_dollars IS NULL
                   AND identity_status='mapped' AND venue=? AND venue_market_id=?
-                  AND ticker=? AND fee_net_accounting_version IS NULL
+                  AND ticker=?
                 """,
                 (
                     outcome.resolved_yes,
@@ -2267,7 +2262,6 @@ class SettlementStore:
                        gross_pnl_cents, resolved, resolved_yes,
                        identity_status, terminal_state,
                        settlement_observation_sha256, settled_at, resolved_ts,
-                       fee_net_accounting_version,
                        ts AS entry_ts, estimated_prob, entry_price_cents,
                        signal_source, series_ticker, llm_magnitude,
                        llm_confidence, keywords_matched, fast_lane_p,
