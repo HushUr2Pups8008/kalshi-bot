@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -28,6 +29,7 @@ from tasks.trade_readiness_gate import ReadinessDecision, evaluate_readiness
 from tasks.evidence_store import DossierState, EvidenceRecord, StructuralPriorRecord
 from trading.g7_skip_evidence import G7SkipEvidenceStore, read_g7_skip_evidence_records
 from trading.orderbook import ExecutableLiquidity
+from utils.logger import TradeLogger
 
 
 class FakeStore:
@@ -525,6 +527,42 @@ async def test_invalid_executed_price_stops_before_blend_readiness_and_g7(
             "recency_distance": None,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_invalid_executed_price_persists_skip_without_fabricated_price_fields(
+    tmp_path: Path,
+):
+    log_path = tmp_path / "trades.jsonl"
+    analysis = _analysis(market=_market(liquidity_dollars=Decimal("0")))
+    analysis.executed_price_cents = 0
+    task = BlendTask(
+        trading_queue=asyncio.Queue(),
+        store=FakeStore(),
+        logger=TradeLogger(log_path),
+        is_paper_mode=True,
+    )
+
+    result = await task.process_fast_lane_result(analysis)
+
+    assert result.trade_blocked_reason == "invalid_executed_price"
+    records = [
+        json.loads(line)
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert record["type"] == "SKIPPED"
+    assert record["reason"] == "invalid_executed_price"
+    for key in (
+        "market_price",
+        "edge",
+        "min_edge_threshold",
+        "signed_diff",
+        "absolute_diff",
+    ):
+        assert key not in record
 
 
 @pytest.mark.asyncio
