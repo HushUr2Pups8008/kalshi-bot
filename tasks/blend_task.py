@@ -27,6 +27,10 @@ from polymarket.domain_key import pm_domain_key
 from tasks import evidence_store
 from tasks.capital_guard_shadow_capture import CapitalGuardShadowCaptureEnvelope
 from tasks.evidence_store import DossierState, EvidenceRecord, StructuralPriorRecord
+from tasks.g7_skip_evidence_capture import (
+    G7SkipEvidenceCaptureEnvelope,
+    decision_time_at_or_after_execution_observation,
+)
 from tasks.trade_readiness_gate import (
     G1_CONFIDENCE_THRESHOLD,
     G1_FAILSAFE_CONFIDENCE_THRESHOLD,
@@ -46,6 +50,18 @@ _READINESS_LIQUIDITY_UNSET = object()
 
 
 def _log_capital_guard_capture_diagnostic_noexcept(
+    message: str,
+    *args: object,
+) -> None:
+    try:
+        log.warning(message, *args)
+    except _PROCESS_CONTROL_EXCEPTIONS:
+        raise
+    except BaseException:
+        return
+
+
+def _log_g7_skip_evidence_capture_diagnostic_noexcept(
     message: str,
     *args: object,
 ) -> None:
@@ -225,6 +241,10 @@ class CapitalGuardCaptureSinkLike(Protocol):
     async def capture(self, envelope: CapitalGuardShadowCaptureEnvelope) -> object: ...
 
 
+class G7SkipEvidenceCaptureSinkLike(Protocol):
+    async def capture(self, envelope: G7SkipEvidenceCaptureEnvelope) -> object: ...
+
+
 class BlendTask:
     """Read lane context, blend, gate, log, and enqueue approved candidates."""
 
@@ -245,6 +265,7 @@ class BlendTask:
         now: Callable[[], datetime] | None = None,
         calibration: CalibrationLike | None = None,
         capital_guard_capture_sink: CapitalGuardCaptureSinkLike | None = None,
+        g7_skip_evidence_capture_sink: G7SkipEvidenceCaptureSinkLike | None = None,
         execution_liquidity_provider: ExecutionLiquidityProvider | None = None,
     ) -> None:
         self._trading_queue = trading_queue
@@ -256,6 +277,7 @@ class BlendTask:
         self._open_exposure_drawdown_provider = open_exposure_drawdown_provider
         self._calibration = calibration
         self._capital_guard_capture_sink = capital_guard_capture_sink
+        self._g7_skip_evidence_capture_sink = g7_skip_evidence_capture_sink
         self._execution_liquidity_provider = execution_liquidity_provider
         self._is_paper_mode = cfg.is_paper_trading if is_paper_mode is None else is_paper_mode
         self._now = now if now is not None else lambda: datetime.now(UTC)
@@ -431,6 +453,16 @@ class BlendTask:
                 decision_at=decision_at,
                 default_min_edge=default_min_edge,
             )
+            await self._capture_g7_skip_evidence(
+                fast_lane_result=fast_lane_result,
+                readiness=readiness,
+                readiness_input=readiness_input,
+                trade_blocked_reason=trade_blocked_reason,
+                venue=venue,
+                market_family=series_prefix,
+                lifecycle_id=lifecycle_id,
+                decision_at=decision_at,
+            )
             return BlendTaskResult(
                 market_ticker=ticker,
                 blend_result=blend_result,
@@ -594,6 +626,55 @@ class BlendTask:
         except BaseException as exc:
             _log_capital_guard_capture_diagnostic_noexcept(
                 "capital guard shadow capture failed for %s: %s",
+                fast_lane_result.market.ticker,
+                exc,
+            )
+
+    async def _capture_g7_skip_evidence(
+        self,
+        *,
+        fast_lane_result: SignalAnalysis,
+        readiness: ReadinessDecision,
+        readiness_input: dict[str, Any],
+        trade_blocked_reason: str,
+        venue: str,
+        market_family: str,
+        lifecycle_id: str | None,
+        decision_at: datetime,
+    ) -> None:
+        sink = self._g7_skip_evidence_capture_sink
+        non_drawdown_g7_failures = tuple(
+            reason
+            for reason in readiness.failure_reasons
+            if reason.startswith("G7_") and reason != "G7_open_exposure_drawdown"
+        )
+        if sink is None or trade_blocked_reason not in non_drawdown_g7_failures:
+            return
+        envelope = G7SkipEvidenceCaptureEnvelope(
+            analysis=fast_lane_result,
+            readiness_decision=readiness,
+            readiness_input=readiness_input,
+            trade_blocked_reason=trade_blocked_reason,
+            venue=venue,
+            market_family=market_family,
+            lifecycle_id=lifecycle_id,
+            decision_at=decision_time_at_or_after_execution_observation(
+                decision_at,
+                fast_lane_result,
+            ),
+        )
+        try:
+            await sink.capture(envelope)
+        except _PROCESS_CONTROL_EXCEPTIONS:
+            raise
+        except asyncio.CancelledError:
+            _log_g7_skip_evidence_capture_diagnostic_noexcept(
+                "G7 skip evidence capture cancelled for %s",
+                fast_lane_result.market.ticker,
+            )
+        except BaseException as exc:
+            _log_g7_skip_evidence_capture_diagnostic_noexcept(
+                "G7 skip evidence capture failed for %s: %s",
                 fast_lane_result.market.ticker,
                 exc,
             )

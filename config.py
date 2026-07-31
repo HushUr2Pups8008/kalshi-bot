@@ -1226,6 +1226,12 @@ class BotConfig:
             "false",
         )
     )
+    enable_g7_skip_evidence_capture: bool = field(
+        default_factory=lambda: _parse_bool_env(
+            "ENABLE_G7_SKIP_EVIDENCE_CAPTURE",
+            "false",
+        )
+    )
 
     # Polymarket US credentials and endpoints. Disabled until explicitly enabled.
     polymarket_us_enabled: bool = field(

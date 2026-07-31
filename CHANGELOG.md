@@ -19,6 +19,31 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.28] - 2026-07-31
+
+### Added
+
+- **Default-off G7 skip receipts.** Final, binding non-drawdown G7 blocks can
+  now opt in to a separate append-only `data/g7_skip_evidence.db` receipt. The
+  receipt preserves only decision-time gate facts and already-computed
+  executable-liquidity provenance; it never refetches a book or enters trade,
+  settlement, capital, feedback, or P&L paths.
+- **Read-only diagnostics.** `g7_skip_evidence_replay.py` classifies observed,
+  unavailable, and not-queried liquidity evidence, while `botcheck` reports
+  the opt-in flag and isolated-store integrity without creating a database.
+
+### Fixed
+
+- **G7 provenance semantics.** Provider failures are persisted as unavailable
+  evidence rather than observed zero depth. Receipts require a binding G7
+  reason, validate immutable schema and payload hashes, and keep the final
+  decision timestamp no earlier than an observed book timestamp.
+
+### Verification
+
+- `CI=1 .venv/bin/python -m pytest tests/test_g7_skip_evidence.py tests/test_g7_skip_evidence_capture.py tests/test_g7_skip_evidence_runtime_surface.py tests/test_g7_skip_evidence_replay.py tests/test_blend_task.py tests/test_main_pipeline.py tests/test_botcheck.py tests/test_capital_guard_shadow_runtime_surface.py -q` (`416 passed, 13 xfailed`)
+- `ruff check config.py main.py tasks/blend_task.py tasks/g7_skip_evidence_capture.py trading/g7_skip_evidence.py scripts/g7_skip_evidence_replay.py scripts/botcheck.py ...`
+
 ## [0.33.27] - 2026-07-31
 
 ### Added

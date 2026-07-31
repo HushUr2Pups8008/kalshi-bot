@@ -1,6 +1,6 @@
 import asyncio
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,8 +23,10 @@ from tasks.blend_task import (
     _regime_confidence,
     process_fast_lane_result,
 )
-from tasks.trade_readiness_gate import evaluate_readiness
+from tasks.g7_skip_evidence_capture import G7SkipEvidenceCaptureSink
+from tasks.trade_readiness_gate import ReadinessDecision, evaluate_readiness
 from tasks.evidence_store import DossierState, EvidenceRecord, StructuralPriorRecord
+from trading.g7_skip_evidence import G7SkipEvidenceStore, read_g7_skip_evidence_records
 from trading.orderbook import ExecutableLiquidity
 
 
@@ -98,6 +100,20 @@ class SpyCapitalGuardCaptureSink:
     async def capture(self, envelope):  # noqa: ANN001
         if self.events is not None:
             self.events.append("capture")
+        self.envelopes.append(envelope)
+        if self.failure is not None:
+            raise self.failure
+
+
+class SpyG7SkipEvidenceCaptureSink:
+    def __init__(self, *, failure: BaseException | None = None, events=None) -> None:
+        self.failure = failure
+        self.events = events
+        self.envelopes = []
+
+    async def capture(self, envelope):  # noqa: ANN001
+        if self.events is not None:
+            self.events.append("g7_capture")
         self.envelopes.append(envelope)
         if self.failure is not None:
             raise self.failure
@@ -668,6 +684,156 @@ async def test_capital_guard_capture_runs_after_blend_and_skipped_telemetry():
     assert envelope.decision_at == now
     assert envelope.readiness_decision is result.readiness_decision
     assert envelope.blend_result is result.blend_result
+
+
+@pytest.mark.asyncio
+async def test_g7_skip_evidence_capture_runs_after_skipped_telemetry_without_refetch():
+    events: list[str] = []
+    logger = OrderedCaptureLogger(events)
+    sink = SpyG7SkipEvidenceCaptureSink(events=events)
+    analysis = _analysis(market=_market(liquidity_dollars=Decimal("0")))
+
+    async def unavailable_provider(_analysis: SignalAnalysis):
+        raise RuntimeError("orderbook unavailable")
+
+    result = await BlendTask(
+        trading_queue=asyncio.Queue(),
+        store=FakeStore(),
+        logger=logger,
+        execution_liquidity_provider=unavailable_provider,
+        g7_skip_evidence_capture_sink=sink,
+        is_paper_mode=True,
+    ).process_fast_lane_result(analysis)
+
+    assert result.trade_blocked_reason == "G7_zero_liquidity"
+    assert events == ["blend", "skipped", "g7_capture"]
+    assert len(sink.envelopes) == 1
+    envelope = sink.envelopes[0]
+    assert envelope.analysis is analysis
+    assert envelope.readiness_decision is result.readiness_decision
+    assert envelope.readiness_input["market_liquidity_dollars"] == 0.0
+    assert analysis.signal_meta["g7_execution_liquidity"] == {
+        "source": "kalshi_orderbook",
+        "status": "unavailable",
+        "reason": "RuntimeError",
+    }
+
+
+@pytest.mark.asyncio
+async def test_g7_skip_evidence_capture_ignores_drawdown_only_blocks():
+    sink = SpyG7SkipEvidenceCaptureSink()
+
+    result = await BlendTask(
+        trading_queue=asyncio.Queue(),
+        store=FakeStore(),
+        logger=SpyLogger(),
+        open_exposure_drawdown_provider=lambda: 0.21,
+        g7_skip_evidence_capture_sink=sink,
+        is_paper_mode=True,
+    ).process_fast_lane_result(_analysis())
+
+    assert result.trade_blocked_reason == "G7_open_exposure_drawdown"
+    assert sink.envelopes == []
+
+
+@pytest.mark.asyncio
+async def test_g7_skip_evidence_capture_ignores_nonbinding_g7_failure():
+    sink = SpyG7SkipEvidenceCaptureSink()
+
+    def multi_gate_readiness(_input, _regime_confidence):  # noqa: ANN001
+        return ReadinessDecision(
+            passed=False,
+            failure_reasons=("G1_blended_confidence", "G7_adverse_price_momentum"),
+            trade_blocked_reason="G1_blended_confidence",
+            readiness_gate_min_edge_override=None,
+            scaled_confidence=0.10,
+            regime_confidence=1.0,
+            fail_safe_active=False,
+            applied_conditions=("G1", "G3", "G4", "G7"),
+        )
+
+    result = await BlendTask(
+        trading_queue=asyncio.Queue(),
+        store=FakeStore(),
+        logger=SpyLogger(),
+        g7_skip_evidence_capture_sink=sink,
+        readiness_evaluator=multi_gate_readiness,
+        is_paper_mode=True,
+    ).process_fast_lane_result(_analysis())
+
+    assert result.trade_blocked_reason == "G1_blended_confidence"
+    assert "G7_adverse_price_momentum" in result.readiness_decision.failure_reasons
+    assert sink.envelopes == []
+
+
+@pytest.mark.asyncio
+async def test_g7_skip_evidence_capture_persists_observed_book_after_fetch(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 7, 31, 15, 30, tzinfo=UTC)
+    observed_at = now + timedelta(seconds=1)
+    store = G7SkipEvidenceStore(tmp_path / "g7_skip_evidence.db")
+    store.initialize(applied_at=now)
+
+    async def observed_provider(analysis: SignalAnalysis) -> ExecutableLiquidity:
+        return ExecutableLiquidity(
+            market_ticker=analysis.market.ticker,
+            side="yes",
+            limit_price=Decimal("0.50"),
+            best_price=None,
+            executable_quantity=Decimal("0"),
+            executable_notional=Decimal("0"),
+            as_of=observed_at,
+            raw_payload_hash="a" * 64,
+        )
+
+    result = await BlendTask(
+        trading_queue=asyncio.Queue(),
+        store=FakeStore(),
+        logger=SpyLogger(),
+        execution_liquidity_provider=observed_provider,
+        g7_skip_evidence_capture_sink=G7SkipEvidenceCaptureSink(store, now=lambda: now),
+        is_paper_mode=True,
+        now=lambda: now,
+    ).process_fast_lane_result(_analysis(market=_market(liquidity_dollars=Decimal("0"))))
+
+    assert result.trade_blocked_reason == "G7_zero_liquidity"
+    [record] = read_g7_skip_evidence_records(store.db_path)
+    assert record.liquidity_evidence_status == "observed"
+    assert record.decision_at == observed_at
+    assert record.captured_at == observed_at
+
+
+@pytest.mark.asyncio
+async def test_g7_skip_evidence_capture_failure_cannot_change_decision_or_telemetry():
+    async def unavailable_provider(_analysis: SignalAnalysis):
+        raise RuntimeError("orderbook unavailable")
+
+    baseline_logger = SpyLogger()
+    baseline = await BlendTask(
+        trading_queue=asyncio.Queue(),
+        store=FakeStore(),
+        logger=baseline_logger,
+        execution_liquidity_provider=unavailable_provider,
+        is_paper_mode=True,
+    ).process_fast_lane_result(_analysis(market=_market(liquidity_dollars=Decimal("0"))))
+    logger = SpyLogger()
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    actual = await BlendTask(
+        trading_queue=queue,
+        store=FakeStore(),
+        logger=logger,
+        execution_liquidity_provider=unavailable_provider,
+        g7_skip_evidence_capture_sink=SpyG7SkipEvidenceCaptureSink(
+            failure=RuntimeError("sqlite locked")
+        ),
+        is_paper_mode=True,
+    ).process_fast_lane_result(_analysis(market=_market(liquidity_dollars=Decimal("0"))))
+
+    assert actual == baseline
+    assert queue.empty()
+    assert logger.records == baseline_logger.records
+    assert logger.skipped_records == baseline_logger.skipped_records
 
 
 @pytest.mark.asyncio
