@@ -132,6 +132,25 @@ def _insert_second_market_lot(path: Path) -> None:
         )
 
 
+def _apply_legacy_receipt(
+    store: SettlementStore,
+    receipt,
+    *,
+    applied_at: datetime,
+):
+    return store._apply_legacy_directional_receipt(
+        receipt,
+        applied_at=applied_at,
+        transaction_precondition=lambda _conn: None,
+        before_mutation=lambda _conn: None,
+    )
+
+
+def test_legacy_receipt_mutator_is_private_to_root_reconciler() -> None:
+    assert not hasattr(SettlementStore, "apply_legacy_directional_receipt")
+    assert hasattr(SettlementStore, "_apply_legacy_directional_receipt")
+
+
 def test_apply_legacy_directional_receipt_is_archival_and_conserves(
     tmp_path: Path,
 ) -> None:
@@ -140,7 +159,8 @@ def test_apply_legacy_directional_receipt_is_archival_and_conserves(
     receipt = _receipt()
 
     with SettlementStore(db_path) as store:
-        result = store.apply_legacy_directional_receipt(
+        result = _apply_legacy_receipt(
+            store,
             receipt,
             applied_at=APPLIED_AT,
         )
@@ -196,10 +216,10 @@ def test_exact_replay_is_idempotent_without_rewriting_receipt(tmp_path: Path) ->
     receipt = _receipt()
 
     with SettlementStore(db_path) as store:
-        first = store.apply_legacy_directional_receipt(receipt, applied_at=APPLIED_AT)
+        first = _apply_legacy_receipt(store, receipt, applied_at=APPLIED_AT)
     before = _database_fingerprint(db_path)
     with SettlementStore(db_path) as store:
-        replay = store.apply_legacy_directional_receipt(receipt, applied_at=APPLIED_AT)
+        replay = _apply_legacy_receipt(store, receipt, applied_at=APPLIED_AT)
         check = store.conservation(now=APPLIED_AT + timedelta(minutes=1))
     after = _database_fingerprint(db_path)
 
@@ -217,7 +237,7 @@ def test_no_outcome_is_gross_only_and_leaves_bankroll_unchanged(tmp_path: Path) 
     receipt = _receipt(outcome=MarketOutcome.NO)
 
     with SettlementStore(db_path) as store:
-        result = store.apply_legacy_directional_receipt(receipt, applied_at=APPLIED_AT)
+        result = _apply_legacy_receipt(store, receipt, applied_at=APPLIED_AT)
         check = store.conservation(now=APPLIED_AT + timedelta(minutes=1))
 
     with sqlite3.connect(db_path) as conn:
@@ -245,7 +265,7 @@ def test_archival_receipt_is_excluded_from_profit_attested_evidence(
     db_path = tmp_path / "legacy-paper.db"
     _legacy_root(db_path)
     with SettlementStore(db_path) as store:
-        store.apply_legacy_directional_receipt(_receipt(), applied_at=APPLIED_AT)
+        _apply_legacy_receipt(store, _receipt(), applied_at=APPLIED_AT)
 
     summary = summarize_paper_expectancy(db_path)
 
@@ -263,7 +283,8 @@ def test_naive_application_time_rejects_before_creating_schema(tmp_path: Path) -
 
     with SettlementStore(db_path) as store:
         with pytest.raises(LegacyReceiptApplicationError, match="application time"):
-            store.apply_legacy_directional_receipt(
+            _apply_legacy_receipt(
+                store,
                 _receipt(),
                 applied_at=APPLIED_AT.replace(tzinfo=None),
             )
@@ -278,7 +299,8 @@ def test_identity_mismatch_rolls_back_companion_schema_and_rows(tmp_path: Path) 
 
     with SettlementStore(db_path) as store:
         with pytest.raises(LegacyReceiptApplicationError, match="trade identity"):
-            store.apply_legacy_directional_receipt(
+            _apply_legacy_receipt(
+                store,
                 _receipt(alias="wrong-market-alias"),
                 applied_at=APPLIED_AT,
             )
@@ -296,7 +318,7 @@ def test_second_market_lot_rejects_ambiguous_receipt_without_mutation(
 
     with SettlementStore(db_path) as store:
         with pytest.raises(LegacyReceiptApplicationError, match="exactly one trade"):
-            store.apply_legacy_directional_receipt(_receipt(), applied_at=APPLIED_AT)
+            _apply_legacy_receipt(store, _receipt(), applied_at=APPLIED_AT)
 
     assert _database_fingerprint(db_path) == before
 
@@ -308,7 +330,7 @@ def test_archival_receipt_conservation_rejects_later_second_market_lot(
     _legacy_root(db_path)
     receipt = _receipt()
     with SettlementStore(db_path) as store:
-        store.apply_legacy_directional_receipt(receipt, applied_at=APPLIED_AT)
+        _apply_legacy_receipt(store, receipt, applied_at=APPLIED_AT)
     _insert_second_market_lot(db_path)
 
     with SettlementStore(db_path) as store:
@@ -329,7 +351,7 @@ def test_observation_effective_before_trade_entry_rolls_back(tmp_path: Path) -> 
 
     with SettlementStore(db_path) as store:
         with pytest.raises(LegacyReceiptApplicationError, match="predates trade entry"):
-            store.apply_legacy_directional_receipt(stale_receipt, applied_at=APPLIED_AT)
+            _apply_legacy_receipt(store, stale_receipt, applied_at=APPLIED_AT)
 
     assert _database_fingerprint(db_path) == before
 
@@ -338,12 +360,13 @@ def test_conflicting_replay_rejects_without_mutating_prior_receipt(tmp_path: Pat
     db_path = tmp_path / "legacy-paper.db"
     _legacy_root(db_path)
     with SettlementStore(db_path) as store:
-        store.apply_legacy_directional_receipt(_receipt(), applied_at=APPLIED_AT)
+        _apply_legacy_receipt(store, _receipt(), applied_at=APPLIED_AT)
     before = _database_fingerprint(db_path)
 
     with SettlementStore(db_path) as store:
         with pytest.raises(LegacyReceiptApplicationError, match="conflicts"):
-            store.apply_legacy_directional_receipt(
+            _apply_legacy_receipt(
+                store,
                 _receipt(outcome=MarketOutcome.NO),
                 applied_at=APPLIED_AT,
             )
@@ -371,7 +394,7 @@ def test_trade_update_failure_rolls_back_observation_and_receipt_schema(
 
     with SettlementStore(db_path) as store:
         with pytest.raises(LegacyReceiptApplicationError, match="transaction failed"):
-            store.apply_legacy_directional_receipt(_receipt(), applied_at=APPLIED_AT)
+            _apply_legacy_receipt(store, _receipt(), applied_at=APPLIED_AT)
 
     assert _database_fingerprint(db_path) == before
 
@@ -380,7 +403,7 @@ def test_archival_receipt_application_is_immutable(tmp_path: Path) -> None:
     db_path = tmp_path / "legacy-paper.db"
     _legacy_root(db_path)
     with SettlementStore(db_path) as store:
-        store.apply_legacy_directional_receipt(_receipt(), applied_at=APPLIED_AT)
+        _apply_legacy_receipt(store, _receipt(), applied_at=APPLIED_AT)
     before = _database_fingerprint(db_path)
 
     with sqlite3.connect(db_path) as conn:
@@ -402,7 +425,7 @@ def test_archival_receipt_with_normal_outbox_fails_as_unlinked(tmp_path: Path) -
     _legacy_root(db_path)
     receipt = _receipt()
     with SettlementStore(db_path) as store:
-        store.apply_legacy_directional_receipt(receipt, applied_at=APPLIED_AT)
+        _apply_legacy_receipt(store, receipt, applied_at=APPLIED_AT)
     with sqlite3.connect(db_path) as conn:
         conn.execute(
             """
@@ -453,7 +476,7 @@ def test_apply_rolls_back_when_trigger_creates_normal_outbox(tmp_path: Path) -> 
 
     with SettlementStore(db_path) as store:
         with pytest.raises(LegacyReceiptApplicationError, match="normal outbox"):
-            store.apply_legacy_directional_receipt(receipt, applied_at=APPLIED_AT)
+            _apply_legacy_receipt(store, receipt, applied_at=APPLIED_AT)
 
     assert _database_fingerprint(db_path) == before
 
@@ -483,7 +506,7 @@ def test_apply_rolls_back_on_new_conservation_failure(
     monkeypatch.setattr(SettlementStore, "conservation", inject_post_apply_failure)
     with SettlementStore(db_path) as store:
         with pytest.raises(LegacyReceiptApplicationError, match="conservation postcondition"):
-            store.apply_legacy_directional_receipt(_receipt(), applied_at=APPLIED_AT)
+            _apply_legacy_receipt(store, _receipt(), applied_at=APPLIED_AT)
 
     assert calls == 2
     assert _database_fingerprint(db_path) == before

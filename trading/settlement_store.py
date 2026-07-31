@@ -1494,23 +1494,26 @@ class SettlementStore:
     def close(self) -> None:
         self._conn.close()
 
-    def apply_legacy_directional_receipt(
+    def _apply_legacy_directional_receipt(
         self,
         receipt: LegacySettlementReceipt,
         *,
         applied_at: datetime,
-        transaction_precondition: Callable[[sqlite3.Connection], None] | None = None,
-        before_mutation: Callable[[sqlite3.Connection], None] | None = None,
+        transaction_precondition: Callable[[sqlite3.Connection], None],
+        before_mutation: Callable[[sqlite3.Connection], None],
     ) -> LegacyReceiptApplyResult:
-        """Apply one reviewed directional legacy receipt without normal delivery.
+        """Private primitive used only by the root-restricted reconciler.
 
-        Optional callbacks run while this method owns the SQLite writer lock. They
-        let an operator boundary attest and back up the exact pre-apply database
-        without leaving a check-to-write interval.
+        Both callbacks are mandatory. They attest and back up the exact pre-apply
+        database while this method owns its SQLite writer lock.
         """
 
         if not isinstance(receipt, LegacySettlementReceipt):
             raise LegacyReceiptApplicationError("legacy receipt is invalid")
+        if not callable(transaction_precondition) or not callable(before_mutation):
+            raise LegacyReceiptApplicationError(
+                "legacy receipt application requires attestation and backup callbacks"
+            )
         try:
             _require_aware(applied_at, "applied_at")
         except ValueError as exc:
@@ -1538,15 +1541,13 @@ class SettlementStore:
 
         try:
             self._conn.execute("BEGIN IMMEDIATE")
-            if transaction_precondition is not None:
-                transaction_precondition(self._conn)
+            transaction_precondition(self._conn)
             if not canonical_entry_schema_ready(self._conn):
                 raise LegacyReceiptApplicationError(
                     "legacy receipt target lacks the canonical settlement schema"
                 )
             baseline_conservation = self.conservation(now=applied_at)
-            if before_mutation is not None:
-                before_mutation(self._conn)
+            before_mutation(self._conn)
             initialize_legacy_receipt_application_schema(self._conn)
             existing_application = self._conn.execute(
                 f"""

@@ -951,7 +951,7 @@ async def apply_legacy_receipt_reconciliation(
 
             try:
                 with SettlementStore(root) as store:
-                    result = store.apply_legacy_directional_receipt(
+                    result = store._apply_legacy_directional_receipt(
                         receipt,
                         applied_at=application_time,
                         transaction_precondition=attest_preimage,
