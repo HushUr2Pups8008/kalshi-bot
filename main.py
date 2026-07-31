@@ -142,6 +142,7 @@ from trading.paper_cohorts import (
     validate_legacy_pending_paper_cohort_manifest,
 )
 from trading.runtime_paper_cohort_attestation import (
+    RuntimePaperCohortAttestationError,
     build_runtime_paper_cohort_attestation,
     write_runtime_paper_cohort_attestation,
 )
@@ -1072,14 +1073,17 @@ class TradingBot:
             live_transition_block_reason=_live_transition_block_reason,
             paper_cohort_storage_root=self.paper_cohort.storage_root,
         )
-        write_runtime_paper_cohort_attestation(
-            build_runtime_paper_cohort_attestation(
-                self.paper_cohort,
-                cohort_kind=runtime_cohort_kind,
-                binding=paper_cohort_binding,
-            ),
-            _RUNTIME_PAPER_COHORT_ATTESTATION_PATH,
-        )
+        try:
+            write_runtime_paper_cohort_attestation(
+                build_runtime_paper_cohort_attestation(
+                    self.paper_cohort,
+                    cohort_kind=runtime_cohort_kind,
+                    binding=paper_cohort_binding,
+                ),
+                _RUNTIME_PAPER_COHORT_ATTESTATION_PATH,
+            )
+        except (OSError, RuntimePaperCohortAttestationError):
+            log.exception("runtime_paper_cohort_attestation=unavailable")
         self._settlement_outbox_task: SettlementOutboxTask | None = None
         self.executor      = TradeExecutor(self.rest, self.paper)
         # Wire live loss limit shutdown: executor calls this when the session loss

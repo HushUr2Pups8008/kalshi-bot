@@ -432,6 +432,7 @@ def test_runtime_paper_cohort_attestation_confirms_current_pending_binding(
         data_dir,
         receipt_path,
         rows=[_bot_proc()],
+        launchd_pid=74105,
         main_path=MAIN_PATH,
         now=now,
         now_epoch=now.timestamp(),
@@ -462,12 +463,58 @@ def test_runtime_paper_cohort_attestation_accepts_relative_main_argument(
         data_dir,
         receipt_path,
         rows=[process],
+        launchd_pid=process.pid,
         main_path=MAIN_PATH,
         now=now,
         now_epoch=now.timestamp(),
     )
 
     assert summary["status"] == "attested"
+
+
+def test_runtime_paper_cohort_attestation_accepts_launchd_managed_child(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "data"
+    receipt_path = tmp_path / "logs" / "state" / "runtime_paper_cohort_attestation.json"
+    _write_runtime_pending_attestation(data_dir, receipt_path)
+    now = datetime(2026, 7, 30, 12, 0, 10, tzinfo=UTC)
+    wrapper = _caff_proc(pid=74107, ppid=74105)
+
+    summary = summarize_runtime_paper_cohort_attestation(
+        data_dir,
+        receipt_path,
+        rows=[_bot_proc(), wrapper],
+        launchd_pid=wrapper.pid,
+        main_path=MAIN_PATH,
+        now=now,
+        now_epoch=now.timestamp(),
+    )
+
+    assert summary["status"] == "attested"
+
+
+def test_runtime_paper_cohort_attestation_rejects_unmanaged_main_process(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "data"
+    receipt_path = tmp_path / "logs" / "state" / "runtime_paper_cohort_attestation.json"
+    _write_runtime_pending_attestation(data_dir, receipt_path)
+    now = datetime(2026, 7, 30, 12, 0, 10, tzinfo=UTC)
+    unrelated_wrapper = _caff_proc(pid=74000, ppid=1)
+
+    summary = summarize_runtime_paper_cohort_attestation(
+        data_dir,
+        receipt_path,
+        rows=[_bot_proc(), unrelated_wrapper],
+        launchd_pid=unrelated_wrapper.pid,
+        main_path=MAIN_PATH,
+        now=now,
+        now_epoch=now.timestamp(),
+    )
+
+    assert summary["status"] == "unverified"
+    assert "launchd" in str(summary["detail"])
 
 
 def test_runtime_paper_cohort_attestation_rejects_pid_mismatch(tmp_path: Path) -> None:
@@ -480,6 +527,7 @@ def test_runtime_paper_cohort_attestation_rejects_pid_mismatch(tmp_path: Path) -
         data_dir,
         receipt_path,
         rows=[_bot_proc(pid=74106)],
+        launchd_pid=74106,
         main_path=MAIN_PATH,
         now=now,
         now_epoch=now.timestamp(),
@@ -505,6 +553,7 @@ def test_runtime_paper_cohort_attestation_rejects_stale_process_binding(
         data_dir,
         receipt_path,
         rows=[_bot_proc()],
+        launchd_pid=74105,
         main_path=MAIN_PATH,
         now=now,
         now_epoch=now.timestamp(),
@@ -525,6 +574,7 @@ def test_runtime_paper_cohort_attestation_rejects_malformed_receipt(tmp_path: Pa
         data_dir,
         receipt_path,
         rows=[_bot_proc()],
+        launchd_pid=74105,
         main_path=MAIN_PATH,
         now=now,
         now_epoch=now.timestamp(),
@@ -550,6 +600,7 @@ def test_runtime_paper_cohort_attestation_rejects_symlink_receipt(tmp_path: Path
         data_dir,
         receipt_path,
         rows=[_bot_proc()],
+        launchd_pid=74105,
         main_path=MAIN_PATH,
         now=now,
         now_epoch=now.timestamp(),
@@ -574,6 +625,7 @@ def test_runtime_paper_cohort_attestation_rejects_manifest_identity_mismatch(
         data_dir,
         receipt_path,
         rows=[_bot_proc()],
+        launchd_pid=74105,
         main_path=MAIN_PATH,
         now=now,
         now_epoch=now.timestamp(),

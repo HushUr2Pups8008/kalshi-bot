@@ -391,6 +391,70 @@ def test_trading_bot_writes_manifest_bound_attestation_after_paper_trader(
     receipt_writer.assert_called_once()
 
 
+def test_trading_bot_continues_when_runtime_cohort_attestation_is_unavailable(
+    monkeypatch,
+    tmp_path: Path,
+    caplog,
+):
+    class StopAfterAttestationFailure(RuntimeError):
+        pass
+
+    cohort = PaperCohort(
+        cohort_id="legacy-pending-20260729",
+        db_path=(
+            tmp_path
+            / "legacy_pending_paper_cohorts"
+            / "legacy-pending-20260729"
+            / "paper_trades.db"
+        ),
+        starting_bankroll=125.0,
+        writable=True,
+        storage_root=tmp_path,
+    )
+    binding = SimpleNamespace(
+        cohort=cohort,
+        cohort_type="legacy_pending",
+        cohort_identity="a" * 32,
+        manifest_sha256="b" * 64,
+    )
+    monkeypatch.setattr(
+        main,
+        "_runtime_paper_cohort_from_config",
+        lambda *, return_binding=False: (
+            (cohort, (cohort,), "pending block", binding)
+            if return_binding
+            else (cohort, (cohort,), "pending block")
+        ),
+    )
+    monkeypatch.setattr(main, "_configured_paper_cohort_kind", lambda: "legacy_pending")
+    for dependency in (
+        "KalshiRestClient",
+        "KalshiWebSocketClient",
+        "MarketMatcher",
+        "CalibrationTask",
+    ):
+        monkeypatch.setattr(main, dependency, MagicMock())
+    monkeypatch.setattr(main, "PaperTrader", MagicMock())
+    receipt_writer = MagicMock(side_effect=OSError("receipt storage unavailable"))
+    monkeypatch.setattr(
+        main,
+        "write_runtime_paper_cohort_attestation",
+        receipt_writer,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main,
+        "TradeExecutor",
+        MagicMock(side_effect=StopAfterAttestationFailure),
+    )
+
+    with pytest.raises(StopAfterAttestationFailure):
+        main.TradingBot()
+
+    receipt_writer.assert_called_once()
+    assert "runtime_paper_cohort_attestation=unavailable" in caplog.text
+
+
 def test_pending_g7_snapshot_is_scoped_to_pending_runtime_db_not_legacy_baseline(
     legacy_pending_runtime,
 ):

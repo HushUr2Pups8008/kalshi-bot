@@ -512,14 +512,15 @@ def summarize_runtime_paper_cohort_attestation(
     receipt_path: Path,
     *,
     rows: list[ProcessInfo],
+    launchd_pid: int | None,
     main_path: Path,
     now: datetime,
     now_epoch: float,
 ) -> dict[str, object]:
     """Validate a nonsecret startup receipt against the live Python process.
 
-    The LaunchAgent PID may name its caffeinate wrapper, so this deliberately
-    looks up the receipt PID among the real `main.py` processes instead.
+    The LaunchAgent PID may name a wrapper, so the receipt PID must be a real
+    `main.py` process in that process tree before its binding is attested.
     """
 
     path = Path(receipt_path)
@@ -555,6 +556,16 @@ def summarize_runtime_paper_cohort_attestation(
             "path": path,
             "status": "unverified",
             "detail": "attestation PID does not match a current main.py process",
+        }
+    if not _launchd_manages_attested_process(
+        rows,
+        launchd_pid=launchd_pid,
+        attested_pid=receipt.pid,
+    ):
+        return {
+            "path": path,
+            "status": "unverified",
+            "detail": "launchd PID does not manage the attested main.py process",
         }
     process_started_utc = process_start_utc(runtime_process, now_epoch)
     if receipt.started_utc < process_started_utc - timedelta(seconds=5):
@@ -604,6 +615,35 @@ def _attested_main_process(
         if any(Path(token).name.lower().startswith("python") for token in command_tokens[:-1]):
             return process
     return None
+
+
+def _launchd_manages_attested_process(
+    rows: list[ProcessInfo],
+    *,
+    launchd_pid: int | None,
+    attested_pid: int,
+) -> bool:
+    if launchd_pid is None:
+        return False
+    parent_by_pid = {process.pid: process.ppid for process in rows}
+
+    def has_ancestor(pid: int, ancestor_pid: int) -> bool:
+        seen: set[int] = set()
+        current_pid = pid
+        while current_pid not in seen:
+            if current_pid == ancestor_pid:
+                return True
+            seen.add(current_pid)
+            parent_pid = parent_by_pid.get(current_pid)
+            if parent_pid is None:
+                return False
+            current_pid = parent_pid
+        return False
+
+    return has_ancestor(attested_pid, launchd_pid) or has_ancestor(
+        launchd_pid,
+        attested_pid,
+    )
 
 
 def _attested_cohort_database_path(
@@ -2500,6 +2540,7 @@ def main() -> int:
         args.home / "data",
         args.runtime_paper_cohort_attestation,
         rows=rows,
+        launchd_pid=wrapper_pid,
         main_path=args.main,
         now=now,
         now_epoch=now_epoch,
