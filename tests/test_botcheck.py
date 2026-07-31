@@ -8,12 +8,14 @@ the ~/.zshrc shell helpers:
     print_caffeinate_section() → botcaff()
 """
 
+import hashlib
 import json
 import sqlite3
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -33,8 +35,13 @@ from scripts.botcheck import (
     print_signal_flow_section,
     session_duration,
     summarize_live_submission_holds,
+    summarize_runtime_paper_cohort_attestation,
     summarize_research_dossiers,
     summarize_signal_flow,
+)
+from trading.runtime_paper_cohort_attestation import (
+    build_runtime_paper_cohort_attestation,
+    write_runtime_paper_cohort_attestation,
 )
 from tests._helpers import write_jsonl
 
@@ -110,6 +117,46 @@ def _write_pending_paper_cohort_topology(
         encoding="utf-8",
     )
     return cohort_id, database_path, legacy_database_path, snapshot_path, manifest_path
+
+
+def _write_runtime_pending_attestation(
+    data_dir: Path,
+    receipt_path: Path,
+    *,
+    pid: int = 74105,
+    started_utc: datetime = datetime(2026, 7, 30, 12, 0, tzinfo=UTC),
+) -> tuple[str, Path, Path]:
+    cohort_id, database_path, _, _, manifest_path = _write_pending_paper_cohort_topology(
+        data_dir
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["cohort_identity"] = "a" * 32
+    manifest_path.write_text(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    cohort = SimpleNamespace(
+        cohort_id=cohort_id,
+        db_path=database_path,
+        storage_root=data_dir,
+    )
+    binding = SimpleNamespace(
+        cohort=cohort,
+        cohort_type="legacy_pending",
+        cohort_identity=manifest["cohort_identity"],
+        manifest_sha256=hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+    )
+    write_runtime_paper_cohort_attestation(
+        build_runtime_paper_cohort_attestation(
+            cohort,
+            cohort_kind="legacy_pending",
+            binding=binding,
+            pid=pid,
+            started_utc=started_utc,
+        ),
+        receipt_path,
+    )
+    return cohort_id, database_path, manifest_path
 
 
 # ---------------------------------------------------------------------------
@@ -367,6 +414,225 @@ def test_pending_cohort_manifest_reports_invalid_utf8_manifest(tmp_path):
 
     assert summary["status"] == "invalid"
     assert "manifest" in str(summary["detail"])
+
+
+def test_runtime_paper_cohort_attestation_confirms_current_pending_binding(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    data_dir = tmp_path / "data"
+    receipt_path = tmp_path / "logs" / "state" / "runtime_paper_cohort_attestation.json"
+    cohort_id, database_path, _ = _write_runtime_pending_attestation(
+        data_dir,
+        receipt_path,
+    )
+    now = datetime(2026, 7, 30, 12, 0, 10, tzinfo=UTC)
+
+    summary = summarize_runtime_paper_cohort_attestation(
+        data_dir,
+        receipt_path,
+        rows=[_bot_proc()],
+        launchd_pid=74105,
+        main_path=MAIN_PATH,
+        now=now,
+        now_epoch=now.timestamp(),
+    )
+
+    assert summary["status"] == "attested"
+    assert summary["cohort_id"] == cohort_id
+    assert summary["database_path"] == database_path
+    botcheck.print_runtime_paper_cohort_attestation_section(summary)
+    assert "runtime binding attested" in capsys.readouterr().out
+
+
+def test_runtime_paper_cohort_attestation_accepts_relative_main_argument(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "data"
+    receipt_path = tmp_path / "logs" / "state" / "runtime_paper_cohort_attestation.json"
+    _write_runtime_pending_attestation(data_dir, receipt_path)
+    now = datetime(2026, 7, 30, 12, 0, 10, tzinfo=UTC)
+    process = _bot_proc(
+        command=(
+            "/opt/homebrew/opt/python@3.14/bin/python "
+            "main.py"
+        )
+    )
+
+    summary = summarize_runtime_paper_cohort_attestation(
+        data_dir,
+        receipt_path,
+        rows=[process],
+        launchd_pid=process.pid,
+        main_path=MAIN_PATH,
+        now=now,
+        now_epoch=now.timestamp(),
+    )
+
+    assert summary["status"] == "attested"
+
+
+def test_runtime_paper_cohort_attestation_accepts_launchd_managed_child(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "data"
+    receipt_path = tmp_path / "logs" / "state" / "runtime_paper_cohort_attestation.json"
+    _write_runtime_pending_attestation(data_dir, receipt_path)
+    now = datetime(2026, 7, 30, 12, 0, 10, tzinfo=UTC)
+    wrapper = _caff_proc(pid=74107, ppid=74105)
+
+    summary = summarize_runtime_paper_cohort_attestation(
+        data_dir,
+        receipt_path,
+        rows=[_bot_proc(), wrapper],
+        launchd_pid=wrapper.pid,
+        main_path=MAIN_PATH,
+        now=now,
+        now_epoch=now.timestamp(),
+    )
+
+    assert summary["status"] == "attested"
+
+
+def test_runtime_paper_cohort_attestation_rejects_unmanaged_main_process(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "data"
+    receipt_path = tmp_path / "logs" / "state" / "runtime_paper_cohort_attestation.json"
+    _write_runtime_pending_attestation(data_dir, receipt_path)
+    now = datetime(2026, 7, 30, 12, 0, 10, tzinfo=UTC)
+    unrelated_wrapper = _caff_proc(pid=74000, ppid=1)
+
+    summary = summarize_runtime_paper_cohort_attestation(
+        data_dir,
+        receipt_path,
+        rows=[_bot_proc(), unrelated_wrapper],
+        launchd_pid=unrelated_wrapper.pid,
+        main_path=MAIN_PATH,
+        now=now,
+        now_epoch=now.timestamp(),
+    )
+
+    assert summary["status"] == "unverified"
+    assert "launchd" in str(summary["detail"])
+
+
+def test_runtime_paper_cohort_attestation_rejects_pid_mismatch(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    receipt_path = tmp_path / "logs" / "state" / "runtime_paper_cohort_attestation.json"
+    _write_runtime_pending_attestation(data_dir, receipt_path, pid=74105)
+    now = datetime(2026, 7, 30, 12, 0, 10, tzinfo=UTC)
+
+    summary = summarize_runtime_paper_cohort_attestation(
+        data_dir,
+        receipt_path,
+        rows=[_bot_proc(pid=74106)],
+        launchd_pid=74106,
+        main_path=MAIN_PATH,
+        now=now,
+        now_epoch=now.timestamp(),
+    )
+
+    assert summary["status"] == "unverified"
+    assert "PID" in str(summary["detail"])
+
+
+def test_runtime_paper_cohort_attestation_rejects_stale_process_binding(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "data"
+    receipt_path = tmp_path / "logs" / "state" / "runtime_paper_cohort_attestation.json"
+    _write_runtime_pending_attestation(
+        data_dir,
+        receipt_path,
+        started_utc=datetime(2026, 7, 30, 11, 0, tzinfo=UTC),
+    )
+    now = datetime(2026, 7, 30, 12, 0, 10, tzinfo=UTC)
+
+    summary = summarize_runtime_paper_cohort_attestation(
+        data_dir,
+        receipt_path,
+        rows=[_bot_proc()],
+        launchd_pid=74105,
+        main_path=MAIN_PATH,
+        now=now,
+        now_epoch=now.timestamp(),
+    )
+
+    assert summary["status"] == "unverified"
+    assert "predates" in str(summary["detail"])
+
+
+def test_runtime_paper_cohort_attestation_rejects_malformed_receipt(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    receipt_path = tmp_path / "logs" / "state" / "runtime_paper_cohort_attestation.json"
+    receipt_path.parent.mkdir(parents=True)
+    receipt_path.write_text("{malformed", encoding="utf-8")
+    now = datetime(2026, 7, 30, 12, 0, 10, tzinfo=UTC)
+
+    summary = summarize_runtime_paper_cohort_attestation(
+        data_dir,
+        receipt_path,
+        rows=[_bot_proc()],
+        launchd_pid=74105,
+        main_path=MAIN_PATH,
+        now=now,
+        now_epoch=now.timestamp(),
+    )
+
+    assert summary["status"] == "unverified"
+    assert "malformed" in str(summary["detail"])
+
+
+def test_runtime_paper_cohort_attestation_rejects_symlink_receipt(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    actual_path = tmp_path / "actual.json"
+    _write_runtime_pending_attestation(data_dir, actual_path)
+    receipt_path = tmp_path / "logs" / "state" / "runtime_paper_cohort_attestation.json"
+    receipt_path.parent.mkdir(parents=True)
+    try:
+        receipt_path.symlink_to(actual_path)
+    except OSError as exc:
+        pytest.skip(f"symlinks unavailable: {exc}")
+    now = datetime(2026, 7, 30, 12, 0, 10, tzinfo=UTC)
+
+    summary = summarize_runtime_paper_cohort_attestation(
+        data_dir,
+        receipt_path,
+        rows=[_bot_proc()],
+        launchd_pid=74105,
+        main_path=MAIN_PATH,
+        now=now,
+        now_epoch=now.timestamp(),
+    )
+
+    assert summary["status"] == "unverified"
+    assert "symlink" in str(summary["detail"])
+
+
+def test_runtime_paper_cohort_attestation_rejects_manifest_identity_mismatch(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "data"
+    receipt_path = tmp_path / "logs" / "state" / "runtime_paper_cohort_attestation.json"
+    _, _, manifest_path = _write_runtime_pending_attestation(data_dir, receipt_path)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["cohort_identity"] = "c" * 32
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    now = datetime(2026, 7, 30, 12, 0, 10, tzinfo=UTC)
+
+    summary = summarize_runtime_paper_cohort_attestation(
+        data_dir,
+        receipt_path,
+        rows=[_bot_proc()],
+        launchd_pid=74105,
+        main_path=MAIN_PATH,
+        now=now,
+        now_epoch=now.timestamp(),
+    )
+
+    assert summary["status"] == "unverified"
+    assert "identity" in str(summary["detail"])
 
 
 def test_pending_cohort_manifest_reports_invalid_symlink_root(tmp_path):

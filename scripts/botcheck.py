@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import json
 import os
 import re
@@ -50,6 +51,11 @@ from utils.research_evidence_quality import research_evidence_temporally_valid
 from scripts.research_activation_status import evaluate_activation_profile
 from trading.capital_guard_shadow import (
     capital_guard_shadow_schema_contract_matches,
+)
+from trading.runtime_paper_cohort_attestation import (
+    RuntimePaperCohortAttestation,
+    RuntimePaperCohortAttestationError,
+    read_runtime_paper_cohort_attestation,
 )
 from trading.settlement_store import settlement_schema_contract_matches
 
@@ -499,6 +505,208 @@ def summarize_pending_paper_cohorts(data_dir: Path) -> dict[str, object]:
         "status": "present_unverified" if cohorts else "empty",
         "cohorts": tuple(cohorts),
     }
+
+
+def summarize_runtime_paper_cohort_attestation(
+    data_dir: Path,
+    receipt_path: Path,
+    *,
+    rows: list[ProcessInfo],
+    launchd_pid: int | None,
+    main_path: Path,
+    now: datetime,
+    now_epoch: float,
+) -> dict[str, object]:
+    """Validate a nonsecret startup receipt against the live Python process.
+
+    The LaunchAgent PID may name a wrapper, so the receipt PID must be a real
+    `main.py` process in that process tree before its binding is attested.
+    """
+
+    path = Path(receipt_path)
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return {
+            "path": path,
+            "status": "absent",
+            "detail": "runtime cohort attestation is absent",
+        }
+    except OSError:
+        return {
+            "path": path,
+            "status": "unverified",
+            "detail": "runtime cohort attestation is unavailable",
+        }
+    try:
+        receipt = read_runtime_paper_cohort_attestation(
+            path,
+            storage_root=data_dir,
+        )
+    except RuntimePaperCohortAttestationError as exc:
+        return {"path": path, "status": "unverified", "detail": str(exc)}
+
+    runtime_process = _attested_main_process(
+        rows,
+        pid=receipt.pid,
+        main_path=main_path,
+    )
+    if runtime_process is None:
+        return {
+            "path": path,
+            "status": "unverified",
+            "detail": "attestation PID does not match a current main.py process",
+        }
+    if not _launchd_manages_attested_process(
+        rows,
+        launchd_pid=launchd_pid,
+        attested_pid=receipt.pid,
+    ):
+        return {
+            "path": path,
+            "status": "unverified",
+            "detail": "launchd PID does not manage the attested main.py process",
+        }
+    process_started_utc = process_start_utc(runtime_process, now_epoch)
+    if receipt.started_utc < process_started_utc - timedelta(seconds=5):
+        return {
+            "path": path,
+            "status": "unverified",
+            "detail": "attestation predates the current main.py process",
+        }
+    if receipt.started_utc > now + timedelta(seconds=5):
+        return {
+            "path": path,
+            "status": "unverified",
+            "detail": "attestation start time is in the future",
+        }
+
+    try:
+        database_path = _attested_cohort_database_path(data_dir, receipt)
+    except RuntimePaperCohortAttestationError as exc:
+        return {"path": path, "status": "unverified", "detail": str(exc)}
+    return {
+        "path": path,
+        "status": "attested",
+        "detail": "runtime binding attested",
+        "pid": receipt.pid,
+        "cohort_id": receipt.cohort_id,
+        "cohort_kind": receipt.cohort_kind,
+        "database_path": database_path,
+    }
+
+
+def _attested_main_process(
+    rows: list[ProcessInfo],
+    *,
+    pid: int,
+    main_path: Path,
+) -> ProcessInfo | None:
+    for process in rows:
+        if process.pid != pid:
+            continue
+        if process.command.startswith("/usr/bin/caffeinate "):
+            continue
+        command_tokens = process.command.split()
+        if len(command_tokens) < 2:
+            continue
+        if Path(command_tokens[-1]).name != main_path.name:
+            continue
+        if any(Path(token).name.lower().startswith("python") for token in command_tokens[:-1]):
+            return process
+    return None
+
+
+def _launchd_manages_attested_process(
+    rows: list[ProcessInfo],
+    *,
+    launchd_pid: int | None,
+    attested_pid: int,
+) -> bool:
+    if launchd_pid is None:
+        return False
+    parent_by_pid = {process.pid: process.ppid for process in rows}
+
+    def has_ancestor(pid: int, ancestor_pid: int) -> bool:
+        seen: set[int] = set()
+        current_pid = pid
+        while current_pid not in seen:
+            if current_pid == ancestor_pid:
+                return True
+            seen.add(current_pid)
+            parent_pid = parent_by_pid.get(current_pid)
+            if parent_pid is None:
+                return False
+            current_pid = parent_pid
+        return False
+
+    return has_ancestor(attested_pid, launchd_pid) or has_ancestor(
+        launchd_pid,
+        attested_pid,
+    )
+
+
+def _attested_cohort_database_path(
+    data_dir: Path,
+    receipt: RuntimePaperCohortAttestation,
+) -> Path:
+    if receipt.cohort_kind == "legacy":
+        if receipt.manifest_bound or receipt.db_path_relative_to_storage_root != "paper_trades.db":
+            raise RuntimePaperCohortAttestationError(
+                "legacy attestation database path is invalid"
+            )
+        return data_dir / "paper_trades.db"
+
+    if receipt.cohort_kind == "legacy_pending":
+        cohort_root = data_dir / PENDING_PAPER_COHORTS_DIRNAME
+    elif receipt.cohort_kind == "active":
+        cohort_root = data_dir / "paper_cohorts"
+    else:
+        raise RuntimePaperCohortAttestationError("attestation cohort kind is invalid")
+    expected_database_path = cohort_root / receipt.cohort_id / "paper_trades.db"
+    if (
+        Path(receipt.db_path_relative_to_storage_root)
+        != expected_database_path.relative_to(data_dir)
+    ):
+        raise RuntimePaperCohortAttestationError(
+            "attestation database path does not match its cohort manifest"
+        )
+
+    manifest_path = expected_database_path.parent / PENDING_PAPER_COHORT_MANIFEST_FILENAME
+    try:
+        mode = manifest_path.lstat().st_mode
+    except OSError as exc:
+        raise RuntimePaperCohortAttestationError(
+            "attestation cohort manifest is unavailable"
+        ) from exc
+    if stat.S_ISLNK(mode) or not stat.S_ISREG(mode):
+        raise RuntimePaperCohortAttestationError(
+            "attestation cohort manifest is not a regular file"
+        )
+    try:
+        raw_manifest = manifest_path.read_bytes()
+        manifest = json.loads(raw_manifest.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimePaperCohortAttestationError(
+            "attestation cohort manifest is malformed"
+        ) from exc
+    if not isinstance(manifest, dict):
+        raise RuntimePaperCohortAttestationError(
+            "attestation cohort manifest is malformed"
+        )
+    if (
+        manifest.get("cohort_id") != receipt.cohort_id
+        or manifest.get("cohort_type") != receipt.cohort_kind
+        or manifest.get("cohort_identity") != receipt.cohort_identity
+    ):
+        raise RuntimePaperCohortAttestationError(
+            "attestation cohort manifest identity does not match"
+        )
+    if hashlib.sha256(raw_manifest).hexdigest() != receipt.manifest_sha256:
+        raise RuntimePaperCohortAttestationError(
+            "attestation cohort manifest SHA-256 does not match"
+        )
+    return expected_database_path
 
 
 def summarize_live_submission_holds(path: Path) -> LiveSubmissionHoldStats:
@@ -2016,6 +2224,20 @@ def print_pending_paper_cohort_section(summary: dict[str, object]) -> None:
     print()
 
 
+def print_runtime_paper_cohort_attestation_section(summary: dict[str, object]) -> None:
+    print("=== Runtime paper cohort binding ===")
+    print(f"Receipt    : {summary.get('path', 'n/a')}")
+    if summary.get("status") == "attested":
+        print(f"PID        : {summary.get('pid', 'n/a')}")
+        print(f"Cohort     : {summary.get('cohort_id', 'n/a')}")
+        print(f"Kind       : {summary.get('cohort_kind', 'n/a')}")
+        print(f"Database   : {summary.get('database_path', 'n/a')}")
+        print("Result     : runtime binding attested")
+    else:
+        print(f"Result     : {summary.get('detail', 'runtime binding remains unverified')}")
+    print()
+
+
 def print_live_submission_hold_section(stats: LiveSubmissionHoldStats) -> None:
     print("=== Live submission reservations ===")
     print(f"State file : {stats.path}")
@@ -2266,6 +2488,15 @@ def _default_live_submission_hold_path(repo_root: Path) -> Path:
     return output_root / "state" / "live_submission" / LIVE_SUBMISSION_HOLD_FILENAME
 
 
+def _default_runtime_paper_cohort_attestation_path(repo_root: Path) -> Path:
+    output_root = Path(
+        os.environ.get("KALSHI_OUTPUT_ROOT")
+        or os.environ.get("KALSHI_LOG_ROOT")
+        or repo_root / "logs"
+    ).expanduser()
+    return output_root / "state" / "runtime_paper_cohort_attestation.json"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     default_home = _default_repo_root()
@@ -2279,6 +2510,11 @@ def main() -> int:
         "--live-submission-hold",
         type=Path,
         default=_default_live_submission_hold_path(default_home),
+    )
+    parser.add_argument(
+        "--runtime-paper-cohort-attestation",
+        type=Path,
+        default=_default_runtime_paper_cohort_attestation_path(default_home),
     )
     parser.add_argument("--signal-window-hours", type=float, default=24.0)
     args = parser.parse_args()
@@ -2300,6 +2536,15 @@ def main() -> int:
         window_hours=args.signal_window_hours,
     )
     pending_paper_cohorts = summarize_pending_paper_cohorts(args.home / "data")
+    runtime_paper_cohort_attestation = summarize_runtime_paper_cohort_attestation(
+        args.home / "data",
+        args.runtime_paper_cohort_attestation,
+        rows=rows,
+        launchd_pid=wrapper_pid,
+        main_path=args.main,
+        now=now,
+        now_epoch=now_epoch,
+    )
     live_submission_holds = summarize_live_submission_holds(args.live_submission_hold)
     research_dossiers = summarize_research_dossiers(default_home, now=now)
 
@@ -2309,6 +2554,7 @@ def main() -> int:
     print_last_boot(args.log, sessions, now, current_proc=current_proc, now_epoch=now_epoch)
     print_signal_flow_section(signal_flow, now=now)
     print_pending_paper_cohort_section(pending_paper_cohorts)
+    print_runtime_paper_cohort_attestation_section(runtime_paper_cohort_attestation)
     print_live_submission_hold_section(live_submission_holds)
     print_research_gate_section(
         default_home,

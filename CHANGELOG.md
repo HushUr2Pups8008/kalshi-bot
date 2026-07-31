@@ -19,6 +19,27 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.26] - 2026-07-30
+
+### Added
+
+- **Runtime paper-cohort attestation.** Successful runtime startup now writes
+  an atomic, nonsecret receipt binding the active process to its validated
+  paper-cohort identity. `botcheck` verifies that receipt against the current
+  `main.py` PID and provisioned manifest without opening a paper database.
+
+### Fixed
+
+- **Fail-closed receipt validation.** Runtime attestation rejects symlinked or
+  malformed receipt paths, unsafe relative paths, stale process bindings, and
+  manifest identity or hash mismatches. This adds observability only; it does
+  not change paper admission, sizing, or live-trading policy.
+
+### Verification
+
+- `CI=1 .venv/bin/python -m pytest tests/test_runtime_paper_cohort_attestation.py tests/test_main_startup.py tests/test_botcheck.py tests/test_paper_cohorts.py -q` (`216 passed`)
+- `ruff check main.py scripts/botcheck.py trading/runtime_paper_cohort_attestation.py tests/test_main_startup.py tests/test_botcheck.py tests/test_runtime_paper_cohort_attestation.py`
+
 ## [0.33.25] - 2026-07-30
 
 ### Added
