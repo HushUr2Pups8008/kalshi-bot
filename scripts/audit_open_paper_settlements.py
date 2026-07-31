@@ -31,6 +31,9 @@ from trading.authoritative_settlement_source import (  # noqa: E402
     DEFAULT_AUTHORITATIVE_SETTLEMENT_TIMEOUT_SECONDS,
     AuthoritativeSettlementSource,
 )
+from trading.legacy_settlement_receipts import (  # noqa: E402
+    build_legacy_settlement_receipt,
+)
 from trading.settlement import SettlementDriftError, SettlementObservation  # noqa: E402
 from trading.venue import MarketRef, Venue  # noqa: E402
 
@@ -97,6 +100,7 @@ class SettlementAuditRow:
     effective_at: str | None = None
     payload_sha256: str | None = None
     observation_sha256: str | None = None
+    receipt_bundle: dict[str, object] | None = None
     error_type: str | None = None
     error_detail: str | None = None
     persisted_terminal_fields: tuple[str, ...] = ()
@@ -168,6 +172,7 @@ class _MarketAudit:
     effective_at: str | None = None
     payload_sha256: str | None = None
     observation_sha256: str | None = None
+    observation: SettlementObservation | None = None
     error_type: str | None = None
     error_detail: str | None = None
 
@@ -484,6 +489,7 @@ async def _audit_market(
         effective_at=observation.effective_at.isoformat(),
         payload_sha256=observation.payload_sha256,
         observation_sha256=observation.observation_sha256,
+        observation=observation,
     )
 
 
@@ -496,6 +502,12 @@ def _row_from_market_audit(
     status = audit.status
     if status == "pending_receipt" and row.snapshot_close_at is not None and row.snapshot_close_at <= now:
         status = "expired_snapshot_pending_receipt"
+    receipt_bundle = None
+    if audit.observation is not None and row.trade_id is not None:
+        receipt_bundle = build_legacy_settlement_receipt(
+            row.trade_id,
+            audit.observation,
+        ).to_dict()
     return SettlementAuditRow(
         trade_id=row.trade_id,
         ticker=row.ticker,
@@ -512,6 +524,7 @@ def _row_from_market_audit(
         effective_at=audit.effective_at,
         payload_sha256=audit.payload_sha256,
         observation_sha256=audit.observation_sha256,
+        receipt_bundle=receipt_bundle,
         error_type=audit.error_type,
         error_detail=audit.error_detail,
         persisted_terminal_fields=row.persisted_terminal_fields,
