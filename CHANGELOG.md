@@ -19,6 +19,33 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.27] - 2026-07-31
+
+### Added
+
+- **Operator-reviewed legacy settlement receipts.** Read-only open-paper audits
+  now emit versioned, canonical receipt bundles for authoritative terminal
+  legacy rows. The bundles preserve the complete observation semantics needed
+  for later inspection without granting runtime settlement authority.
+
+### Fixed
+
+- **Fail-closed archival reconciliation.** A new one-shot CLI can reconcile
+  exactly one reviewed legacy root row only with an externally supplied audit
+  report file hash, reviewed snapshot/root hashes, fresh matching source
+  evidence, runtime quiescence, and an SQLite writer-lock re-attestation. It
+  rejects symlinked/hard-linked artifacts and conflicting or stale state.
+- **Durable preimage and accounting isolation.** The guarded write creates an
+  integrity-checked, fsynced, no-clobber backup before mutation, verifies the
+  immutable receipt application and conservation postconditions, and creates
+  no normal feedback outbox or fee-net profit evidence. This is a default-off
+  archival path, not a live-trading or repeatable-profit claim.
+
+### Verification
+
+- `CI=1 .venv/bin/python -m pytest tests/test_open_paper_settlement_audit.py tests/test_legacy_settlement_receipts.py tests/test_legacy_settlement_receipt_reconciler.py tests/test_paper_canonical_settlement.py tests/test_paper_cohorts.py tests/test_settlement_outbox_task.py tests/test_profit_evidence_report.py -q` (`207 passed`)
+- `ruff check trading/legacy_settlement_receipts.py trading/settlement_store.py scripts/reconcile_legacy_paper_receipts.py tests/test_open_paper_settlement_audit.py tests/test_legacy_settlement_receipts.py tests/test_legacy_settlement_receipt_reconciler.py`
+
 ## [0.33.26] - 2026-07-30
 
 ### Added

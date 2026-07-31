@@ -15,6 +15,7 @@ from scripts.audit_open_paper_settlements import (
     PaperSettlementAuditSnapshotError,
     audit_database as _audit_database,
 )
+from trading.legacy_settlement_receipts import LegacySettlementReceipt
 from trading.settlement import (
     MarketOutcome,
     SettlementDriftError,
@@ -249,6 +250,21 @@ async def test_audit_groups_duplicate_lots_emits_receipt_provenance_and_never_wr
         assert row.effective_at == observation.effective_at.isoformat()
         assert row.payload_sha256 == observation.payload_sha256
         assert row.observation_sha256 == observation.observation_sha256
+        assert row.receipt_bundle is not None
+        assert row.receipt_bundle["schema_version"] == 1
+        assert row.receipt_bundle["trade_id"] == row.trade_id
+        assert row.receipt_bundle["venue"] == "polymarket_us"
+        assert row.receipt_bundle["venue_market_id"] == "42"
+        assert row.receipt_bundle["alias"] == "exact-market"
+        assert row.receipt_bundle["canonical_payload_json"] == (
+            observation.canonical_payload_json
+        )
+        assert row.receipt_bundle["observation_sha256"] == (
+            observation.observation_sha256
+        )
+        receipt = LegacySettlementReceipt.from_dict(row.receipt_bundle)
+        assert receipt.trade_id == row.trade_id
+        assert receipt.observation == observation
     payload = json.loads(report.to_json())
     assert payload["read_only"] is True
     assert payload["resolution_applied"] is False
@@ -307,6 +323,7 @@ async def test_audit_never_treats_expired_snapshot_close_as_a_terminal_receipt(
     assert row.outcome is None
     assert row.source_id is None
     assert row.payload_sha256 is None
+    assert row.receipt_bundle is None
     assert _db_state(db) == [("expired", 0, None)]
 
 

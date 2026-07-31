@@ -191,6 +191,23 @@ def _migrate(path: Path) -> None:
     )
 
 
+def test_settlement_v1_conservation_does_not_require_fee_accounting_column(
+    tmp_path,
+):
+    db = tmp_path / "legacy-receipt-v1.db"
+    _create_legacy_db(db)
+    _migrate(db)
+    _seed_valid_accounting(db)
+    with sqlite3.connect(db) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(paper_trades)")}
+        assert "fee_net_accounting_version" not in columns
+
+    with SettlementStore(db) as store:
+        check = store.conservation(now=NOW)
+
+    assert check.ok is True
+
+
 def _tables(path: Path) -> set[str]:
     conn = sqlite3.connect(path)
     try:
