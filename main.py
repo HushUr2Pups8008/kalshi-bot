@@ -1015,6 +1015,23 @@ def _build_capital_guard_shadow_capture_sink(
     return CapitalGuardShadowCaptureSink(store)
 
 
+def _build_g7_skip_evidence_capture_sink(
+    enabled: bool,
+    *,
+    db_path: os.PathLike[str] | str | None = None,
+) -> object | None:
+    """Build diagnostic G7 evidence storage only after explicit opt-in."""
+    if not enabled:
+        return None
+    from tasks.g7_skip_evidence_capture import G7SkipEvidenceCaptureSink
+    from trading.g7_skip_evidence import G7SkipEvidenceStore
+
+    path = DATA_DIR / "g7_skip_evidence.db" if db_path is None else db_path
+    store = G7SkipEvidenceStore(db_path=path)
+    store.initialize(applied_at=datetime.now(timezone.utc))
+    return G7SkipEvidenceCaptureSink(store)
+
+
 CAPITAL_GUARD_SHADOW_SETTLEMENT_COLLECTION_INTERVAL_SECONDS = 300.0
 
 
@@ -1143,6 +1160,9 @@ class TradingBot:
                 cfg.enable_capital_guard_shadow_capture
             )
         )
+        self._g7_skip_evidence_capture_sink = _build_g7_skip_evidence_capture_sink(
+            cfg.enable_g7_skip_evidence_capture
+        )
         self._blend_task = BlendTask(
             trading_queue=self._trading_queue,
             calibration=self._calibration_task,
@@ -1151,6 +1171,7 @@ class TradingBot:
                 self.paper
             ),
             capital_guard_capture_sink=self._capital_guard_shadow_capture_sink,
+            g7_skip_evidence_capture_sink=self._g7_skip_evidence_capture_sink,
         )
         self._research_paper_admission_bridge = ResearchPaperAdmissionBridge(
             research_store=default_research_dossier_store(),
@@ -3192,6 +3213,11 @@ class TradingBot:
             capital_guard_capture_sink=getattr(
                 self,
                 "_capital_guard_shadow_capture_sink",
+                None,
+            ),
+            g7_skip_evidence_capture_sink=getattr(
+                self,
+                "_g7_skip_evidence_capture_sink",
                 None,
             ),
         )

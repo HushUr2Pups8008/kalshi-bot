@@ -1253,6 +1253,63 @@ def _open_sqlite_snapshot(db_path: Path) -> Iterator[sqlite3.Connection]:
             conn.close()
 
 
+def print_g7_skip_evidence_status(
+    repo_root: Path,
+    *,
+    current_proc: ProcessInfo | None = None,
+) -> None:
+    """Print default-off G7 evidence state without initializing its store."""
+    flag_name = "ENABLE_G7_SKIP_EVIDENCE_CAPTURE"
+    if current_proc is not None:
+        runtime_value, runtime_readable = _running_process_env_value(
+            current_proc,
+            flag_name,
+        )
+        if not runtime_readable:
+            print("g7_skip_evidence: unknown (runtime-process-env-unreadable)")
+            return
+        if runtime_value is not None:
+            enabled_value, source = runtime_value, "runtime-process-env"
+        else:
+            fallback = _read_env_file_value(repo_root / ".env", flag_name)
+            enabled_value = fallback or "false"
+            source = ".env fallback" if fallback else "default fallback"
+    else:
+        enabled_value, source = _research_env_value(repo_root, flag_name, "false")
+
+    enabled = _env_bool(enabled_value)
+    state = ("configured-" if source.endswith(" fallback") else "") + (
+        "on" if enabled else "off"
+    )
+    prefix = f"g7_skip_evidence: {state} ({source})"
+    if not enabled:
+        print(prefix)
+        return
+
+    db_path = repo_root / "data" / "g7_skip_evidence.db"
+    if not db_path.is_file():
+        print(f"{prefix} db=missing")
+        return
+
+    from trading.g7_skip_evidence import read_g7_skip_evidence_snapshot
+
+    snapshot = read_g7_skip_evidence_snapshot(db_path)
+    status_counts = ",".join(
+        f"{status}:{count}" for status, count in snapshot.receipt_counts_by_status
+    ) or "none"
+    schema = "ok" if snapshot.schema_valid else "invalid"
+    latest_capture = (
+        snapshot.latest_captured_at.isoformat()
+        if snapshot.latest_captured_at is not None
+        else "n/a"
+    )
+    print(
+        f"{prefix} integrity={snapshot.integrity_check} schema={schema} "
+        f"rows={snapshot.record_count} statuses={status_counts} "
+        f"last_capture={latest_capture} diagnostic_only=true"
+    )
+
+
 def print_canonical_settlement_status(repo_root: Path) -> None:
     enabled_value, source = _research_env_value(
         repo_root,
@@ -2565,6 +2622,7 @@ def main() -> int:
     )
     print_weather_shadow_status(args.home, current_proc=current_proc)
     print_capital_guard_shadow_status(args.home, current_proc=current_proc)
+    print_g7_skip_evidence_status(args.home, current_proc=current_proc)
     print_canonical_settlement_status(args.home)
     print_kalshi_drift_section(now=now)
     print_history(sessions=sessions, current_proc=current_proc, now=now)
