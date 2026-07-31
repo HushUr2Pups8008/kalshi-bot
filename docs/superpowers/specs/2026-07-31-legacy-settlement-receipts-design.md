@@ -50,17 +50,27 @@ therefore inspectable but never trusted just because it is locally stored.
 
 `scripts/reconcile_legacy_paper_receipts.py` defaults to plan-only. It requires
 both `--allow-network` and `--write` before it can alter a database. Apply also
-requires the exact legacy root path, an explicit trade ID, the reviewed
-snapshot SHA-256, the current root SHA-256, and the current open-row
-fingerprint.
+requires the exact legacy root path, an explicit trade ID, the complete
+hash-attested read-only audit report, an externally supplied SHA-256 of the
+complete report file, the reviewed snapshot SHA-256, the current root SHA-256,
+and the current open-row fingerprint. The report, snapshot, and root are
+rehash-validated at plan time, apply time, and again before mutation. Symlinked
+or hard-linked artifacts, including paths that traverse a symlinked parent, are
+rejected.
 
 Before mutation the command requires runtime quiescence through the project
-runtime lock, creates a backup adjacent to the root, reads the source record
-again through `AuthoritativeSettlementSource`, and requires the fresh
-observation hash to equal the reviewed receipt. It applies exactly one
-directional market observation in one immediate SQLite transaction. Pending,
-void, duplicate, conflicting, identity-drifted, source-drifted, or
-fingerprint-drifted records fail without changing the root.
+runtime lock, reads the source record again through
+`AuthoritativeSettlementSource`, and requires the fresh observation hash to
+equal the reviewed receipt. It then acquires the immediate SQLite writer lock,
+re-attests the immutable root identity, root hash, and open-row fingerprint
+through that locked connection, and creates a durable no-clobber preimage
+backup from a sibling read-only connection. The backup is integrity-checked,
+fsynced, published without overwrite, and semantically checked against the
+reviewed target before any database mutation. It applies exactly one
+directional market observation in that same writer transaction and rejects any
+new conservation failure, normal outbox link, or receipt inconsistency before
+commit. Pending, void, duplicate, conflicting, identity-drifted,
+source-drifted, or fingerprint-drifted records fail without changing the root.
 
 ## Persistence and Isolation
 
@@ -84,8 +94,9 @@ the backup remains for operator inspection.
 - Audit tests prove full receipt serialization is stable and read-only.
 - Applier tests cover plan-only gating, root/snapshot/open-row drift, re-fetch
   mismatch, terminal identity mismatch, duplicate/idempotent receipt handling,
-  conflicting receipt rejection, void rejection, lock handling, backup, and
-  one-market atomic rollback.
+  conflicting receipt rejection, void rejection, strict report parsing,
+  writer-lock handling, durable backup publication, normal-outbox prevention,
+  conservation postconditions, and one-market atomic rollback.
 - Cohort tests prove later root settlement preserves the pending manifest.
 - Outbox and profit-report tests prove archival legacy results never enter
   feedback consumers or fee-net/repeatable-profit readiness.

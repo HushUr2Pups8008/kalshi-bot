@@ -15,6 +15,11 @@ from functools import lru_cache
 from pathlib import Path
 
 from trading.legacy_settlement_cutover import validate_legacy_settlement_cutover
+from trading.legacy_settlement_receipts import (
+    LEGACY_SETTLEMENT_RECEIPT_SCHEMA_VERSION,
+    LegacySettlementReceipt,
+    LegacySettlementReceiptError,
+)
 from trading.settlement import (
     MarketOutcome,
     SettlementObservation,
@@ -200,6 +205,49 @@ _APPEND_ONLY_TABLES = (
     "paper_settlement_outbox",
     "paper_settlement_outbox_requirements",
     "paper_settlement_consumer_receipts",
+)
+
+_LEGACY_RECEIPT_APPLICATION_TABLE = "paper_legacy_settlement_receipt_applications"
+_LEGACY_RECEIPT_APPLICATION_UPDATE_TRIGGER = (
+    "immutable_paper_legacy_settlement_receipt_applications_update"
+)
+_LEGACY_RECEIPT_APPLICATION_DELETE_TRIGGER = (
+    "immutable_paper_legacy_settlement_receipt_applications_delete"
+)
+_LEGACY_RECEIPT_APPLICATION_TABLE_SQL = f"""
+CREATE TABLE {_LEGACY_RECEIPT_APPLICATION_TABLE} (
+    trade_id TEXT PRIMARY KEY REFERENCES paper_trades(trade_id),
+    observation_sha256 TEXT NOT NULL UNIQUE REFERENCES
+        paper_settlement_observations(observation_sha256),
+    receipt_schema_version INTEGER NOT NULL CHECK (
+        receipt_schema_version = {LEGACY_SETTLEMENT_RECEIPT_SCHEMA_VERSION}
+    ),
+    receipt_json TEXT NOT NULL,
+    receipt_sha256 TEXT NOT NULL UNIQUE,
+    applied_at TEXT NOT NULL
+)
+"""
+_LEGACY_RECEIPT_APPLICATION_TRIGGER_SQL = (
+    (
+        _LEGACY_RECEIPT_APPLICATION_UPDATE_TRIGGER,
+        f"""
+        CREATE TRIGGER {_LEGACY_RECEIPT_APPLICATION_UPDATE_TRIGGER}
+        BEFORE UPDATE ON {_LEGACY_RECEIPT_APPLICATION_TABLE}
+        BEGIN
+            SELECT RAISE(ABORT, 'legacy settlement receipt applications are immutable');
+        END
+        """,
+    ),
+    (
+        _LEGACY_RECEIPT_APPLICATION_DELETE_TRIGGER,
+        f"""
+        CREATE TRIGGER {_LEGACY_RECEIPT_APPLICATION_DELETE_TRIGGER}
+        BEFORE DELETE ON {_LEGACY_RECEIPT_APPLICATION_TABLE}
+        BEGIN
+            SELECT RAISE(ABORT, 'legacy settlement receipt applications are immutable');
+        END
+        """,
+    ),
 )
 
 
@@ -458,6 +506,35 @@ class PaperTradeSettledOutboxContract:
     payload_json: str
     created_at: str
     requirements: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class LegacyReceiptApplyResult:
+    """Result of one explicit, archival-only legacy receipt application."""
+
+    applied: bool
+    trade_id: str
+    observation_sha256: str
+    gross_payout_cents: str
+    gross_pnl_cents: str
+
+
+class LegacyReceiptApplicationError(RuntimeError):
+    """Raised when a legacy receipt cannot be safely applied."""
+
+
+@dataclass(frozen=True)
+class _LegacyReceiptApplication:
+    receipt: LegacySettlementReceipt
+    applied_at: datetime
+
+
+@dataclass(frozen=True)
+class _LegacyDirectionalOutcome:
+    resolved_yes: int
+    terminal_state: str
+    gross_payout_cents: Decimal
+    gross_pnl_cents: Decimal
 
 
 def settlement_keyword_directions() -> dict[str, str]:
@@ -887,6 +964,501 @@ def initialize_fresh_settlement_schema(
     )
 
 
+def initialize_legacy_receipt_application_schema(conn: sqlite3.Connection) -> None:
+    """Install the archival-only receipt table during an explicit offline apply."""
+
+    if not _sqlite_schema_object_exists(conn, _LEGACY_RECEIPT_APPLICATION_TABLE):
+        conn.execute(_LEGACY_RECEIPT_APPLICATION_TABLE_SQL)
+    for name, statement in _LEGACY_RECEIPT_APPLICATION_TRIGGER_SQL:
+        if not _sqlite_schema_object_exists(conn, name):
+            conn.execute(statement)
+    if not _legacy_receipt_application_schema_matches(conn):
+        raise LegacyReceiptApplicationError(
+            "legacy receipt application schema does not match the durable contract"
+        )
+
+
+def _sqlite_schema_object_exists(conn: sqlite3.Connection, name: str) -> bool:
+    row = conn.execute(
+        "SELECT COUNT(*) FROM sqlite_schema WHERE name=?",
+        (name,),
+    ).fetchone()
+    return row is not None and int(row[0]) == 1
+
+
+def _legacy_receipt_application_schema_signature(conn: sqlite3.Connection) -> str:
+    objects: dict[str, object] = {}
+    targets = {
+        _LEGACY_RECEIPT_APPLICATION_TABLE: "table",
+        **{
+            name: "trigger" for name, _statement in _LEGACY_RECEIPT_APPLICATION_TRIGGER_SQL
+        },
+    }
+    for name, expected_type in targets.items():
+        rows = conn.execute(
+            """
+            SELECT type, name, tbl_name, sql
+            FROM sqlite_schema
+            WHERE name=?
+            """,
+            (name,),
+        ).fetchall()
+        if len(rows) != 1:
+            objects[name] = {"object_count": len(rows)}
+            continue
+        row = rows[0]
+        object_type = str(row[0])
+        details: dict[str, object] = {
+            "type": object_type,
+            "table": str(row[2]),
+            "sql": _normalize_schema_sql(row[3]),
+        }
+        if object_type == expected_type == "table":
+            details["columns"] = _table_columns(conn, name)
+            details["foreign_keys"] = _table_foreign_keys(conn, name)
+        objects[name] = details
+    encoded = json.dumps(
+        objects,
+        allow_nan=False,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+@lru_cache(maxsize=1)
+def _expected_legacy_receipt_application_schema_signature() -> str:
+    conn = _SQLITE_CONNECT(":memory:")
+    try:
+        enable_and_verify_foreign_keys(conn)
+        conn.execute("CREATE TABLE paper_trades (trade_id TEXT PRIMARY KEY)")
+        conn.execute(
+            """
+            CREATE TABLE paper_settlement_observations (
+                observation_sha256 TEXT PRIMARY KEY
+            )
+            """
+        )
+        conn.execute(_LEGACY_RECEIPT_APPLICATION_TABLE_SQL)
+        for _name, statement in _LEGACY_RECEIPT_APPLICATION_TRIGGER_SQL:
+            conn.execute(statement)
+        return _legacy_receipt_application_schema_signature(conn)
+    finally:
+        conn.close()
+
+
+def _legacy_receipt_application_schema_matches(conn: sqlite3.Connection) -> bool:
+    try:
+        return (
+            _legacy_receipt_application_schema_signature(conn)
+            == _expected_legacy_receipt_application_schema_signature()
+        )
+    except sqlite3.DatabaseError:
+        return False
+
+
+def _load_legacy_receipt_application(
+    row: Mapping[str, object],
+) -> _LegacyReceiptApplication:
+    try:
+        schema_version = row["receipt_schema_version"]
+        if (
+            type(schema_version) is not int
+            or schema_version != LEGACY_SETTLEMENT_RECEIPT_SCHEMA_VERSION
+        ):
+            raise ValueError("stored receipt schema version is invalid")
+        receipt_json = row["receipt_json"]
+        if not isinstance(receipt_json, str):
+            raise ValueError("stored receipt JSON is invalid")
+        payload = json.loads(receipt_json)
+        if not isinstance(payload, dict):
+            raise ValueError("stored receipt JSON must be an object")
+        receipt = LegacySettlementReceipt.from_dict(payload)
+        if receipt.schema_version != schema_version:
+            raise ValueError("stored receipt schema version does not match payload")
+        if receipt_json != receipt.canonical_json():
+            raise ValueError("stored receipt JSON is not canonical")
+        if row["trade_id"] != receipt.trade_id:
+            raise ValueError("stored receipt trade linkage is invalid")
+        if row["observation_sha256"] != receipt.observation.observation_sha256:
+            raise ValueError("stored receipt observation linkage is invalid")
+        if row["receipt_sha256"] != receipt.receipt_sha256:
+            raise ValueError("stored receipt hash is invalid")
+        applied_at = _parse_datetime(row["applied_at"])
+        if row["applied_at"] != applied_at.isoformat():
+            raise ValueError("stored receipt application time is not canonical")
+        if receipt.observation.observed_at > applied_at:
+            raise ValueError("stored receipt application precedes observation")
+    except (KeyError, TypeError, ValueError, LegacySettlementReceiptError) as exc:
+        raise LegacyReceiptApplicationError(
+            "stored legacy receipt application is invalid"
+        ) from exc
+    return _LegacyReceiptApplication(receipt=receipt, applied_at=applied_at)
+
+
+def _load_stored_observation(
+    conn: sqlite3.Connection,
+    observation_sha256: str,
+) -> tuple[SettlementObservation, datetime]:
+    row = conn.execute(
+        """
+        SELECT observation_sha256, venue, venue_market_id, alias, outcome,
+               authoritative_outcome_json, canonical_payload_json,
+               payload_sha256, observed_at, effective_at, applied_at,
+               rules_version, source_id, supersedes_observation_sha256,
+               refund_cents_per_contract, refunds_entry_fee
+        FROM paper_settlement_observations
+        WHERE observation_sha256=?
+        """,
+        (observation_sha256,),
+    ).fetchone()
+    if row is None:
+        raise LegacyReceiptApplicationError(
+            "stored legacy receipt observation is missing"
+        )
+    try:
+        observed_at = _parse_datetime(row["observed_at"])
+        effective_at = _parse_datetime(row["effective_at"])
+        applied_at = _parse_datetime(row["applied_at"])
+        if not effective_at <= observed_at <= applied_at:
+            raise ValueError("stored observation timestamps are invalid")
+        observation = _reconstruct_observation(
+            row,
+            observed_at=observed_at,
+            effective_at=effective_at,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise LegacyReceiptApplicationError(
+            "stored legacy receipt observation is invalid"
+        ) from exc
+    return observation, applied_at
+
+
+def _legacy_receipt_trade_row(
+    conn: sqlite3.Connection,
+    trade_id: str,
+) -> sqlite3.Row | None:
+    return conn.execute(
+        """
+        SELECT trade_id, ticker, venue, venue_market_id, identity_status,
+               resolved, resolved_yes, terminal_state,
+               settlement_observation_sha256, settled_at, resolved_ts,
+               gross_payout_cents, gross_pnl_cents, pnl_dollars, contracts,
+               price_cents, cost_dollars, side, fee_net_accounting_version,
+               ts AS entry_ts
+        FROM paper_trades WHERE trade_id=?
+        """,
+        (trade_id,),
+    ).fetchone()
+
+
+def _validate_unresolved_legacy_trade(
+    trade: Mapping[str, object],
+    receipt: LegacySettlementReceipt,
+) -> None:
+    observation = receipt.observation
+    if (
+        trade["trade_id"] != receipt.trade_id
+        or trade["ticker"] != observation.market_ref.alias
+        or trade["venue"] != observation.market_ref.venue.value
+        or trade["venue_market_id"] != observation.market_ref.venue_market_id
+        or trade["identity_status"] != "mapped"
+    ):
+        raise LegacyReceiptApplicationError("legacy receipt trade identity is invalid")
+    if trade["resolved"] != 0 or any(
+        trade[name] is not None
+        for name in (
+            "resolved_yes",
+            "terminal_state",
+            "settlement_observation_sha256",
+            "settled_at",
+            "resolved_ts",
+            "gross_payout_cents",
+            "gross_pnl_cents",
+            "pnl_dollars",
+        )
+    ):
+        raise LegacyReceiptApplicationError("legacy receipt trade is not unresolved")
+    if trade["fee_net_accounting_version"] is not None:
+        raise LegacyReceiptApplicationError(
+            "legacy receipt trade has fee-net accounting"
+        )
+    try:
+        _validate_legacy_receipt_entry_timing(trade, observation)
+        _legacy_directional_outcome(trade, observation)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise LegacyReceiptApplicationError(
+            str(exc)
+        ) from exc
+
+
+def _legacy_directional_outcome(
+    trade: Mapping[str, object],
+    observation: SettlementObservation,
+) -> _LegacyDirectionalOutcome:
+    if observation.outcome not in {MarketOutcome.YES, MarketOutcome.NO}:
+        raise ValueError("legacy receipt outcome must be directional")
+    side = trade["side"]
+    if side not in {"yes", "no"}:
+        raise ValueError("legacy receipt trade side is invalid")
+    contracts = _parse_legacy_decimal(trade["contracts"])
+    price_cents = _parse_legacy_decimal(trade["price_cents"])
+    cost_cents = _parse_legacy_decimal(trade["cost_dollars"]) * Decimal("100")
+    if contracts <= 0 or contracts != contracts.to_integral_value():
+        raise ValueError("legacy receipt contracts are invalid")
+    if (
+        price_cents < 1
+        or price_cents > 99
+        or price_cents != price_cents.to_integral_value()
+    ):
+        raise ValueError("legacy receipt price is invalid")
+    if cost_cents != contracts * price_cents:
+        raise ValueError("legacy receipt entry cost is invalid")
+    gross_payout_cents = (
+        contracts * Decimal("100")
+        if side == observation.outcome.value
+        else Decimal("0")
+    )
+    gross_pnl_cents = gross_payout_cents - cost_cents
+    return _LegacyDirectionalOutcome(
+        resolved_yes=int(observation.outcome is MarketOutcome.YES),
+        terminal_state="won" if side == observation.outcome.value else "lost",
+        gross_payout_cents=gross_payout_cents,
+        gross_pnl_cents=gross_pnl_cents,
+    )
+
+
+def _validate_legacy_receipt_entry_timing(
+    trade: Mapping[str, object],
+    observation: SettlementObservation,
+) -> None:
+    try:
+        entry_at = _parse_datetime(trade["entry_ts"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("legacy receipt trade entry time is invalid") from exc
+    if entry_at > observation.effective_at:
+        raise ValueError("legacy receipt observation predates trade entry")
+
+
+def _insert_legacy_receipt_observation(
+    conn: sqlite3.Connection,
+    observation: SettlementObservation,
+    *,
+    bankroll_before_cents: Decimal,
+    gross_payout_cents: Decimal,
+    bankroll_after_cents: Decimal,
+    applied_at: str,
+) -> None:
+    if (
+        observation.outcome not in {MarketOutcome.YES, MarketOutcome.NO}
+        or observation.void_refund is not None
+        or observation.supersedes_observation_sha256 is not None
+    ):
+        raise LegacyReceiptApplicationError(
+            "legacy receipt observation is not archival directional evidence"
+        )
+    applied_at_value = _parse_datetime(applied_at)
+    if observation.observed_at > applied_at_value:
+        raise LegacyReceiptApplicationError(
+            "legacy receipt observation application time is invalid"
+        )
+    conn.execute(
+        """
+        INSERT INTO paper_settlement_observations (
+            observation_sha256, venue, venue_market_id, alias, outcome,
+            authoritative_outcome_json, canonical_payload_json,
+            payload_sha256, observed_at, effective_at, rules_version, source_id,
+            refund_cents_per_contract, refunds_entry_fee,
+            supersedes_observation_sha256, applied_trade_count,
+            bankroll_before_cents, gross_payout_cents, bankroll_after_cents,
+            applied_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            observation.observation_sha256,
+            observation.market_ref.venue.value,
+            observation.market_ref.venue_market_id,
+            observation.market_ref.alias,
+            observation.outcome.value,
+            observation.authoritative_outcome_json,
+            observation.canonical_payload_json,
+            observation.payload_sha256,
+            observation.observed_at.isoformat(),
+            observation.effective_at.isoformat(),
+            observation.rules_version,
+            observation.source_id,
+            None,
+            None,
+            None,
+            1,
+            _settlement_decimal_text(bankroll_before_cents),
+            _settlement_decimal_text(gross_payout_cents),
+            _settlement_decimal_text(bankroll_after_cents),
+            applied_at,
+        ),
+    )
+
+
+def _validate_applied_legacy_receipt_application(
+    conn: sqlite3.Connection,
+    application: _LegacyReceiptApplication,
+    *,
+    observation: SettlementObservation,
+    observation_applied_at: datetime,
+    trade: Mapping[str, object],
+    require_no_outbox: bool = True,
+) -> _LegacyDirectionalOutcome:
+    receipt = application.receipt
+    if receipt.observation != observation or application.applied_at != observation_applied_at:
+        raise LegacyReceiptApplicationError(
+            "legacy receipt application does not match its observation"
+        )
+    if (
+        trade["trade_id"] != receipt.trade_id
+        or trade["ticker"] != observation.market_ref.alias
+        or trade["venue"] != observation.market_ref.venue.value
+        or trade["venue_market_id"] != observation.market_ref.venue_market_id
+        or trade["identity_status"] != "mapped"
+        or trade["settlement_observation_sha256"]
+        != observation.observation_sha256
+        or trade["fee_net_accounting_version"] is not None
+    ):
+        raise LegacyReceiptApplicationError(
+            "legacy receipt application trade linkage is invalid"
+        )
+    try:
+        _validate_legacy_receipt_market_is_exclusive(
+            conn,
+            observation,
+            receipt.trade_id,
+        )
+        _validate_legacy_receipt_entry_timing(trade, observation)
+        outcome = _legacy_directional_outcome(trade, observation)
+        settled_at = _parse_datetime(trade["settled_at"])
+        resolved_at = _parse_datetime(trade["resolved_ts"])
+        gross_payout_cents = _parse_decimal(trade["gross_payout_cents"])
+        gross_pnl_cents = _parse_decimal(trade["gross_pnl_cents"])
+        pnl_dollars = _parse_legacy_decimal(trade["pnl_dollars"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise LegacyReceiptApplicationError(
+            "legacy receipt application trade values are invalid"
+        ) from exc
+    if (
+        trade["resolved"] != 1
+        or trade["resolved_yes"] != outcome.resolved_yes
+        or trade["terminal_state"] != outcome.terminal_state
+        or settled_at != application.applied_at
+        or resolved_at != application.applied_at
+        or gross_payout_cents != outcome.gross_payout_cents
+        or gross_pnl_cents != outcome.gross_pnl_cents
+        or pnl_dollars * Decimal("100") != outcome.gross_pnl_cents
+    ):
+        raise LegacyReceiptApplicationError(
+            "legacy receipt application trade outcome is invalid"
+        )
+    if require_no_outbox and _legacy_receipt_outbox_exists(
+        conn,
+        observation.observation_sha256,
+        receipt.trade_id,
+    ):
+        raise LegacyReceiptApplicationError(
+            "legacy receipt application must not have a normal outbox"
+        )
+    return outcome
+
+
+def _validate_legacy_receipt_market_is_exclusive(
+    conn: sqlite3.Connection,
+    observation: SettlementObservation,
+    trade_id: str,
+) -> None:
+    trade_rows = conn.execute(
+        """
+        SELECT trade_id FROM paper_trades
+        WHERE venue=? AND venue_market_id=?
+        ORDER BY trade_id
+        """,
+        (
+            observation.market_ref.venue.value,
+            observation.market_ref.venue_market_id,
+        ),
+    ).fetchall()
+    if [str(row["trade_id"]) for row in trade_rows] != [trade_id]:
+        raise LegacyReceiptApplicationError(
+            "legacy receipt application market does not identify one trade"
+        )
+    observation_rows = conn.execute(
+        """
+        SELECT observation_sha256 FROM paper_settlement_observations
+        WHERE venue=? AND venue_market_id=?
+        ORDER BY observation_sha256
+        """,
+        (
+            observation.market_ref.venue.value,
+            observation.market_ref.venue_market_id,
+        ),
+    ).fetchall()
+    if [str(row["observation_sha256"]) for row in observation_rows] != [
+        observation.observation_sha256
+    ]:
+        raise LegacyReceiptApplicationError(
+            "legacy receipt application market has unexpected observations"
+        )
+
+
+def _legacy_receipt_outbox_exists(
+    conn: sqlite3.Connection,
+    observation_sha256: str,
+    trade_id: str,
+) -> bool:
+    return (
+        conn.execute(
+            """
+            SELECT 1 FROM paper_settlement_outbox
+            WHERE observation_sha256=? AND trade_id=?
+            """,
+            (observation_sha256, trade_id),
+        ).fetchone()
+        is not None
+    )
+
+
+def _validate_existing_legacy_receipt_application(
+    conn: sqlite3.Connection,
+    row: Mapping[str, object],
+    receipt: LegacySettlementReceipt,
+    *,
+    applied_at: datetime,
+) -> LegacyReceiptApplyResult:
+    application = _load_legacy_receipt_application(row)
+    if application.receipt != receipt or application.applied_at != applied_at:
+        raise LegacyReceiptApplicationError(
+            "legacy receipt conflicts with an existing application"
+        )
+    observation, observation_applied_at = _load_stored_observation(
+        conn,
+        application.receipt.observation.observation_sha256,
+    )
+    trade = _legacy_receipt_trade_row(conn, receipt.trade_id)
+    if trade is None:
+        raise LegacyReceiptApplicationError("legacy receipt application trade is missing")
+    outcome = _validate_applied_legacy_receipt_application(
+        conn,
+        application,
+        observation=observation,
+        observation_applied_at=observation_applied_at,
+        trade=trade,
+    )
+    return LegacyReceiptApplyResult(
+        applied=False,
+        trade_id=receipt.trade_id,
+        observation_sha256=observation.observation_sha256,
+        gross_payout_cents=_settlement_decimal_text(outcome.gross_payout_cents),
+        gross_pnl_cents=_settlement_decimal_text(outcome.gross_pnl_cents),
+    )
+
+
 class SettlementStore:
     """Connection-scoped, unwired access to durable settlement state."""
 
@@ -926,6 +1498,268 @@ class SettlementStore:
 
     def close(self) -> None:
         self._conn.close()
+
+    def apply_legacy_directional_receipt(
+        self,
+        receipt: LegacySettlementReceipt,
+        *,
+        applied_at: datetime,
+        transaction_precondition: Callable[[sqlite3.Connection], None] | None = None,
+        before_mutation: Callable[[sqlite3.Connection], None] | None = None,
+    ) -> LegacyReceiptApplyResult:
+        """Apply one reviewed directional legacy receipt without normal delivery.
+
+        Optional callbacks run while this method owns the SQLite writer lock. They
+        let an operator boundary attest and back up the exact pre-apply database
+        without leaving a check-to-write interval.
+        """
+
+        if not isinstance(receipt, LegacySettlementReceipt):
+            raise LegacyReceiptApplicationError("legacy receipt is invalid")
+        try:
+            _require_aware(applied_at, "applied_at")
+        except ValueError as exc:
+            raise LegacyReceiptApplicationError(
+                "legacy receipt application time is invalid"
+            ) from exc
+        observation = receipt.observation
+        if observation.outcome not in {MarketOutcome.YES, MarketOutcome.NO}:
+            raise LegacyReceiptApplicationError(
+                "legacy receipt outcome must be directional"
+            )
+        if observation.void_refund is not None:
+            raise LegacyReceiptApplicationError(
+                "legacy directional receipt cannot include a void refund"
+            )
+        if observation.supersedes_observation_sha256 is not None:
+            raise LegacyReceiptApplicationError(
+                "legacy receipt supersession is not supported"
+            )
+        applied_at = applied_at.astimezone(timezone.utc)
+        if observation.observed_at > applied_at:
+            raise LegacyReceiptApplicationError(
+                "legacy receipt application precedes the observation"
+            )
+
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            if transaction_precondition is not None:
+                transaction_precondition(self._conn)
+            if not canonical_entry_schema_ready(self._conn):
+                raise LegacyReceiptApplicationError(
+                    "legacy receipt target lacks the canonical settlement schema"
+                )
+            baseline_conservation = self.conservation(now=applied_at)
+            if before_mutation is not None:
+                before_mutation(self._conn)
+            initialize_legacy_receipt_application_schema(self._conn)
+            existing_application = self._conn.execute(
+                f"""
+                SELECT trade_id, observation_sha256, receipt_schema_version,
+                       receipt_json, receipt_sha256, applied_at
+                FROM {_LEGACY_RECEIPT_APPLICATION_TABLE}
+                WHERE trade_id=? OR observation_sha256=? OR receipt_sha256=?
+                """,
+                (
+                    receipt.trade_id,
+                    observation.observation_sha256,
+                    receipt.receipt_sha256,
+                ),
+            ).fetchone()
+            if existing_application is not None:
+                result = _validate_existing_legacy_receipt_application(
+                    self._conn,
+                    existing_application,
+                    receipt,
+                    applied_at=applied_at,
+                )
+                postcondition = self.conservation(now=applied_at)
+                new_failures = set(postcondition.failures) - set(
+                    baseline_conservation.failures
+                )
+                if new_failures:
+                    raise LegacyReceiptApplicationError(
+                        "legacy receipt application violates conservation postcondition"
+                    )
+                self._conn.rollback()
+                return result
+
+            same_market_rows = self._conn.execute(
+                """
+                SELECT trade_id FROM paper_trades
+                WHERE venue=? AND venue_market_id=?
+                ORDER BY trade_id
+                """,
+                (
+                    observation.market_ref.venue.value,
+                    observation.market_ref.venue_market_id,
+                ),
+            ).fetchall()
+            if [str(row["trade_id"]) for row in same_market_rows] != [receipt.trade_id]:
+                raise LegacyReceiptApplicationError(
+                    "legacy receipt market does not identify exactly one trade"
+                )
+            prior_observation = self._conn.execute(
+                """
+                SELECT observation_sha256
+                FROM paper_settlement_observations
+                WHERE venue=? AND venue_market_id=?
+                """,
+                (
+                    observation.market_ref.venue.value,
+                    observation.market_ref.venue_market_id,
+                ),
+            ).fetchone()
+            if prior_observation is not None:
+                raise LegacyReceiptApplicationError(
+                    "legacy receipt market already has a canonical observation"
+                )
+            trade = self._conn.execute(
+                """
+                SELECT trade_id, ticker, venue, venue_market_id, identity_status,
+                       resolved, resolved_yes, terminal_state,
+                       settlement_observation_sha256, settled_at, resolved_ts,
+                       gross_payout_cents, gross_pnl_cents, pnl_dollars, contracts,
+                       price_cents, cost_dollars, side, fee_net_accounting_version,
+                       ts AS entry_ts
+                FROM paper_trades WHERE trade_id=?
+                """,
+                (receipt.trade_id,),
+            ).fetchone()
+            if trade is None:
+                raise LegacyReceiptApplicationError("legacy receipt trade is missing")
+            _validate_unresolved_legacy_trade(trade, receipt)
+            outcome = _legacy_directional_outcome(trade, observation)
+            bankroll_row = self._conn.execute(
+                "SELECT value FROM bot_state WHERE key='notional_bankroll'"
+            ).fetchone()
+            if bankroll_row is None:
+                raise LegacyReceiptApplicationError(
+                    "legacy receipt target has no notional bankroll"
+                )
+            bankroll_before_cents = _parse_legacy_decimal(
+                bankroll_row["value"]
+            ) * Decimal("100")
+            bankroll_after_cents = bankroll_before_cents + outcome.gross_payout_cents
+            applied_at_text = applied_at.isoformat()
+            _insert_legacy_receipt_observation(
+                self._conn,
+                observation,
+                bankroll_before_cents=bankroll_before_cents,
+                gross_payout_cents=outcome.gross_payout_cents,
+                bankroll_after_cents=bankroll_after_cents,
+                applied_at=applied_at_text,
+            )
+            cursor = self._conn.execute(
+                """
+                UPDATE paper_trades
+                SET resolved=1, resolved_yes=?, pnl_dollars=?, resolved_ts=?,
+                    terminal_state=?, settlement_observation_sha256=?,
+                    settled_at=?, gross_payout_cents=?, gross_pnl_cents=?
+                WHERE trade_id=? AND resolved=0 AND resolved_yes IS NULL
+                  AND terminal_state IS NULL
+                  AND settlement_observation_sha256 IS NULL AND settled_at IS NULL
+                  AND resolved_ts IS NULL AND gross_payout_cents IS NULL
+                  AND gross_pnl_cents IS NULL AND pnl_dollars IS NULL
+                  AND identity_status='mapped' AND venue=? AND venue_market_id=?
+                  AND ticker=? AND fee_net_accounting_version IS NULL
+                """,
+                (
+                    outcome.resolved_yes,
+                    float(outcome.gross_pnl_cents / Decimal("100")),
+                    applied_at_text,
+                    outcome.terminal_state,
+                    observation.observation_sha256,
+                    applied_at_text,
+                    _settlement_decimal_text(outcome.gross_payout_cents),
+                    _settlement_decimal_text(outcome.gross_pnl_cents),
+                    receipt.trade_id,
+                    observation.market_ref.venue.value,
+                    observation.market_ref.venue_market_id,
+                    observation.market_ref.alias,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise LegacyReceiptApplicationError(
+                    "legacy receipt trade changed during application"
+                )
+            bankroll_cursor = self._conn.execute(
+                """
+                UPDATE bot_state SET value=?
+                WHERE key='notional_bankroll' AND value=?
+                """,
+                (
+                    _settlement_decimal_text(
+                        bankroll_after_cents / Decimal("100")
+                    ),
+                    bankroll_row["value"],
+                ),
+            )
+            if bankroll_cursor.rowcount != 1:
+                raise LegacyReceiptApplicationError(
+                    "legacy receipt bankroll changed during application"
+                )
+            self._conn.execute(
+                f"""
+                INSERT INTO {_LEGACY_RECEIPT_APPLICATION_TABLE} (
+                    trade_id, observation_sha256, receipt_schema_version,
+                    receipt_json, receipt_sha256, applied_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    receipt.trade_id,
+                    observation.observation_sha256,
+                    receipt.schema_version,
+                    receipt.canonical_json(),
+                    receipt.receipt_sha256,
+                    applied_at_text,
+                ),
+            )
+            applied_application = self._conn.execute(
+                f"""
+                SELECT trade_id, observation_sha256, receipt_schema_version,
+                       receipt_json, receipt_sha256, applied_at
+                FROM {_LEGACY_RECEIPT_APPLICATION_TABLE}
+                WHERE trade_id=?
+                """,
+                (receipt.trade_id,),
+            ).fetchone()
+            if applied_application is None:
+                raise LegacyReceiptApplicationError(
+                    "legacy receipt application record is missing"
+                )
+            _validate_existing_legacy_receipt_application(
+                self._conn,
+                applied_application,
+                receipt,
+                applied_at=applied_at,
+            )
+            postcondition = self.conservation(now=applied_at)
+            new_failures = set(postcondition.failures) - set(
+                baseline_conservation.failures
+            )
+            if new_failures:
+                raise LegacyReceiptApplicationError(
+                    "legacy receipt application violates conservation postcondition"
+                )
+            self._conn.commit()
+        except LegacyReceiptApplicationError:
+            if self._conn.in_transaction:
+                self._conn.rollback()
+            raise
+        except Exception as exc:
+            if self._conn.in_transaction:
+                self._conn.rollback()
+            raise LegacyReceiptApplicationError(
+                "legacy receipt transaction failed"
+            ) from exc
+        return LegacyReceiptApplyResult(
+            applied=True,
+            trade_id=receipt.trade_id,
+            observation_sha256=observation.observation_sha256,
+            gross_payout_cents=_settlement_decimal_text(outcome.gross_payout_cents),
+            gross_pnl_cents=_settlement_decimal_text(outcome.gross_pnl_cents),
+        )
 
     def pending_requirements(self) -> tuple[PendingRequirement, ...]:
         rows = self._conn.execute(
@@ -1343,6 +2177,45 @@ class SettlementStore:
         expected_outbox_inputs: dict[
             tuple[str, str], tuple[SettlementObservation, dict[str, object], str]
         ] = {}
+        legacy_receipt_candidates: dict[
+            tuple[str, str], _LegacyReceiptApplication
+        ] = {}
+        checked_legacy_receipt_links: set[tuple[str, str]] = set()
+        valid_legacy_receipt_links: set[tuple[str, str]] = set()
+        invalid_legacy_receipt_applications = 0
+        if _sqlite_schema_object_exists(self._conn, _LEGACY_RECEIPT_APPLICATION_TABLE):
+            if not _legacy_receipt_application_schema_matches(self._conn):
+                failures.append("legacy_receipt_application_schema")
+                invalid_legacy_receipt_applications += 1
+            else:
+                application_rows = self._conn.execute(
+                    f"""
+                    SELECT trade_id, observation_sha256, receipt_schema_version,
+                           receipt_json, receipt_sha256, applied_at
+                    FROM {_LEGACY_RECEIPT_APPLICATION_TABLE}
+                    ORDER BY observation_sha256, trade_id
+                    """
+                ).fetchall()
+                for application_row in application_rows:
+                    link = (
+                        str(application_row["observation_sha256"]),
+                        str(application_row["trade_id"]),
+                    )
+                    try:
+                        application = _load_legacy_receipt_application(application_row)
+                    except LegacyReceiptApplicationError:
+                        failures.append(
+                            f"legacy_receipt_application:{link[0]}:{link[1]}"
+                        )
+                        invalid_legacy_receipt_applications += 1
+                    else:
+                        if link in legacy_receipt_candidates:
+                            failures.append(
+                                f"legacy_receipt_application_duplicate:{link[0]}:{link[1]}"
+                            )
+                            invalid_legacy_receipt_applications += 1
+                        else:
+                            legacy_receipt_candidates[link] = application
         for observation in observations:
             observation_id = observation["observation_sha256"]
             identity_valid = _valid_market_identity(
@@ -1392,7 +2265,9 @@ class SettlementStore:
                        contracts, price_cents, cost_dollars, pnl_dollars,
                        gross_payout_cents,
                        gross_pnl_cents, resolved, resolved_yes,
-                       identity_status, terminal_state, settled_at, resolved_ts,
+                       identity_status, terminal_state,
+                       settlement_observation_sha256, settled_at, resolved_ts,
+                       fee_net_accounting_version,
                        ts AS entry_ts, estimated_prob, entry_price_cents,
                        signal_source, series_ticker, llm_magnitude,
                        llm_confidence, keywords_matched, fast_lane_p,
@@ -1525,7 +2400,38 @@ class SettlementStore:
                         if canonical_observation.outcome is MarketOutcome.VOID
                         else row["terminal_state"] == "won"
                     )
-                    expected_outbox_inputs[(observation_id, row["trade_id"])] = (
+                    link = (observation_id, str(row["trade_id"]))
+                    application = legacy_receipt_candidates.get(link)
+                    if application is not None:
+                        checked_legacy_receipt_links.add(link)
+                        try:
+                            _validate_applied_legacy_receipt_application(
+                                self._conn,
+                                application,
+                                observation=canonical_observation,
+                                observation_applied_at=reconstructed_entry[1],
+                                trade=row,
+                                require_no_outbox=False,
+                            )
+                        except LegacyReceiptApplicationError:
+                            failures.append(
+                                f"legacy_receipt_application:{link[0]}:{link[1]}"
+                            )
+                            invalid_legacy_receipt_applications += 1
+                        else:
+                            if _legacy_receipt_outbox_exists(
+                                self._conn,
+                                link[0],
+                                link[1],
+                            ):
+                                failures.append(
+                                    f"legacy_receipt_application_outbox:{link[0]}:{link[1]}"
+                                )
+                                invalid_legacy_receipt_applications += 1
+                            else:
+                                valid_legacy_receipt_links.add(link)
+                            continue
+                    expected_outbox_inputs[link] = (
                         canonical_observation,
                         trade_event,
                         str(observation["applied_at"]),
@@ -1599,6 +2505,12 @@ class SettlementStore:
 
         for observation_id in sorted(invalid_supersessions):
             failures.append(f"observation_supersession:{observation_id}")
+
+        for link in sorted(
+            set(legacy_receipt_candidates) - checked_legacy_receipt_links
+        ):
+            failures.append(f"legacy_receipt_application_orphan:{link[0]}:{link[1]}")
+            invalid_legacy_receipt_applications += 1
 
         outboxes = self._conn.execute(
             """
@@ -1700,6 +2612,13 @@ class SettlementStore:
         metrics["invalid_linked_trade_financials"] = invalid_trade_financials
         metrics["invalid_linked_trade_outcomes"] = invalid_trade_outcomes
         metrics["invalid_linked_trade_timestamps"] = invalid_trade_timestamps
+        metrics["legacy_receipt_applications"] = len(legacy_receipt_candidates)
+        metrics["valid_legacy_receipt_applications"] = len(
+            valid_legacy_receipt_links
+        )
+        metrics["invalid_legacy_receipt_applications"] = (
+            invalid_legacy_receipt_applications
+        )
         metrics["settlement_outboxes"] = len(outboxes)
         metrics["invalid_settlement_outboxes"] = invalid_settlement_outboxes
         metrics["invalid_settlement_outbox_requirements"] = (

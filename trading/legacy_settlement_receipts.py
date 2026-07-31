@@ -6,6 +6,8 @@ do not apply a settlement or authorize any database mutation by themselves.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -75,6 +77,19 @@ class LegacySettlementReceipt:
                 observation.supersedes_observation_sha256
             ),
         }
+
+    def canonical_json(self) -> str:
+        return json.dumps(
+            self.to_dict(),
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+
+    @property
+    def receipt_sha256(self) -> str:
+        return hashlib.sha256(self.canonical_json().encode("utf-8")).hexdigest()
 
     @classmethod
     def from_dict(cls, value: Mapping[str, object]) -> "LegacySettlementReceipt":

@@ -69,7 +69,8 @@
 
 - Create: `scripts/reconcile_legacy_paper_receipts.py`
 - Test: `tests/test_legacy_settlement_receipts.py`
-- Consumes: receipt bundle, root/snapshot hashes, one trade ID, source adapter
+- Consumes: hash-attested audit report, its externally supplied file hash,
+  root/snapshot hashes, one trade ID, source adapter
 - Produces: plan JSON by default; guarded apply only with explicit flags.
 
 - [ ] **Step 1: Write the failing test**
@@ -80,9 +81,10 @@
   Run the legacy receipt tests and expect missing command or missing guard
   failures.
 - [ ] **Step 3: Write minimal implementation**
-  Add parser validation, plan mode, project lock acquisition, backup creation,
-  one exact `AuthoritativeSettlementSource` re-fetch, and delegation to the
-  transaction applier. Keep network disabled unless `--allow-network` is set.
+  Add parser validation, report-file hash validation, plan mode, project lock
+  acquisition, writer-lock-bound backup creation, one exact
+  `AuthoritativeSettlementSource` re-fetch, and delegation to the transaction
+  applier. Keep network disabled unless `--allow-network` is set.
 - [ ] **Step 4: Run test to verify it passes**
   Re-run the focused legacy receipt suite and check write behavior by hash.
 - [ ] **Step 5: Commit**
