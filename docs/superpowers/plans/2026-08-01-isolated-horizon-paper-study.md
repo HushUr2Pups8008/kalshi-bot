@@ -179,19 +179,26 @@ launchd, pytest.
   binding; `routing_prohibited=true`; duplicate same ID/same hash idempotency;
   duplicate same ID/different hash abort; input/admission uniqueness; lock
   collision; atomic state-transaction-before-JSONL-mirror persistence; restart
-  regeneration of a missing mirror line; invalid JSON/hash abort; and ambiguous
-  execution recovery abort. Assert the authoritative
+  regeneration of a missing mirror line; two committed rows for the same mirror
+  file with both lines missing must rebuild byte-identically in ascending
+  `journal_sequence` order; invalid JSON/hash abort; and ambiguous execution
+  recovery abort. Assert the authoritative
   `artifact_payload_journal` stores canonical payload, record type/ID/hash,
   manifest hash, and exact derived mirror path for all six record types, while
   the four domain tables remain typed indexes/claims into its journal sequence.
   Cover rejection of a generic/typed index mismatch, duplicate hash under a
-  second ID, wrong mirror path, and a changed canonical payload. Cover
+  second ID, wrong mirror path, and a changed canonical payload. Cover both
+  orphan directions at startup: a typed index/claim whose non-null
+  journal-sequence field resolves to no generic journal row, and a generic
+  journal row for a typed record kind with no matching typed index/claim. Both
+  must abort startup without replay or repair. Cover
   sidecar-free `DELETE` journaling plus preservation and post-write revalidation
   of the Task 2 `study_state.db` application ID and
   `horizon_study_bootstrap` metadata/preimage. Use a fake
-  `StudyLedgerExecutionLookup` to prove missing, zero, multiple, or mismatched
-  study-ledger links abort recovery with no new claim, receipt, or position;
-  the artifact store must not open a ledger path directly.
+  `StudyLedgerExecutionLookup` to prove a raised exception, explicit
+  unavailable result, zero, multiple, or mismatched study-ledger links abort
+  recovery with no new execution claim, execution receipt, ledger row, or
+  simulated position; the artifact store must not open a ledger path directly.
 
 - [ ] **Step 2: Run the focused test and verify failure.**
   ```bash
@@ -204,6 +211,13 @@ launchd, pytest.
   design, exclusive `runtime.lock`, canonical JSON serializer, state-first
   sidecar-free SQLite `DELETE`-journal transaction, `O_APPEND` plus `fsync`
   audit mirror, and deterministic mirror reconstruction from committed state.
+  Before any startup mirror repair or recovery, reconcile generic journal rows
+  and typed indexes/claims in both directions; an orphan in either direction is
+  fatal. Rebuild multiple missing lines for one mirror only in ascending
+  `journal_sequence` order. Treat a raised or explicitly unavailable
+  `StudyLedgerExecutionLookup` result, or zero, multiple, or mismatched links,
+  exactly as a failed execution recovery, without creating a new claim, receipt,
+  ledger row, or simulated position.
   Before every migration/write, preserve and after every close revalidate the
   Task 2 bootstrap application ID, metadata row, manifest preimage, and absence
   of SQLite sidecars. Accept only the injected read-only

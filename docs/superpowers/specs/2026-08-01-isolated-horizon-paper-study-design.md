@@ -294,9 +294,10 @@ read-only mode and returns a deterministic tuple of links for that exact
 caller-provided database path and never opens `data/paper_trades.db` or another
 primary path. Task 3 receives
 only this narrow protocol, not a ledger connection or a write callback. During
-execution recovery, an unavailable lookup, zero links, multiple links, or a
-single link whose study ID/admission ID does not match the claim is a fatal
-abort. It must not create another claim, ledger row, or simulated position.
+execution recovery, a raised lookup error, an explicit unavailable result, zero
+links, multiple links, or a single link whose study ID/admission ID does not
+match the claim is a fatal abort. It must not create a new execution claim,
+execution receipt, ledger row, or simulated position.
 
 `trading/horizon_paper_study_accounting.py` owns modeled study accounting. It
 does not invoke `PaperAccountingHandlers`, the fee-net runtime flag, existing
@@ -370,6 +371,14 @@ the same `(record_type, record_id)` and canonical hash is idempotent and emits
 no second mirror line. The same key with a different hash, the same hash with
 another key, a typed-index mismatch, or a changed canonical payload is fatal.
 
+Before any startup mirror repair or execution recovery, the store performs
+bidirectional reconciliation for every typed record kind. A typed index/claim
+with a non-null journal-sequence field that does not resolve to exactly one
+matching generic journal row is a typed-to-journal orphan. A generic journal
+row for a typed record kind with no matching typed index/claim is a
+journal-to-typed orphan. Either orphan direction is fatal: startup must not
+silently replay, repair, claim, or execute from dead state.
+
 Before any state migration or write, the artifact store runs full manifest
 validation, captures the Task 2 `study_state.db` application ID and exact
 `horizon_study_bootstrap` metadata/preimage binding, and verifies that no
@@ -386,10 +395,14 @@ available. Before every transaction it validates schema, manifest hash, record
 hash, ID, and path confinement. It writes one canonical JSON audit line with
 `O_APPEND` and `fsync` only after the authoritative state commit. If a restart
 sees a committed journal row without its mirror line, it reconstructs the
-identical line from `canonical_payload_json`. If the same ID has another hash,
-an invalid/extra mirror line, a typed-index mismatch, an orphaned execution
-claim, or any invalid/multiple study-ledger lookup result, startup aborts and
-never records another simulated position.
+identical line from `canonical_payload_json`. When reconstruction restores
+two or more rows for the same mirror file, it emits their canonical lines
+strictly in ascending `journal_sequence` order and reproduces that file
+byte-identically. If the same ID has another hash, an invalid/extra mirror line,
+a typed-index mismatch, either generic/typed orphan direction, an orphaned
+execution claim, or any raised, unavailable, invalid, or multiple
+study-ledger lookup result, startup aborts and never records another simulated
+position.
 
 An input is deduplicated by canonical source identity and content hashes. An
 admission is deduplicated by the five-part `admission_id`. Primary and study
