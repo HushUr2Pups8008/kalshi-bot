@@ -1,0 +1,288 @@
+{
+  "schema_version": 1,
+  "protocol_id": "market-source-hint-shadow-cohort-v1",
+  "status": "locked",
+  "declared_at_utc": "2026-07-31T00:00:00Z",
+  "approval_ref": "operator authorization in current session, 2026-07-31",
+  "cohort_window": {
+    "start_utc": "2026-08-01T00:00:00Z",
+    "end_utc": "2027-01-31T00:00:00Z",
+    "prospective_only": true
+  },
+  "scope": {
+    "mode": "shadow_capture_only",
+    "venue": "kalshi",
+    "feature": "market_source_hints",
+    "paper_or_live_order_effect": "none",
+    "runtime_consumption": "forbidden",
+    "automatic_promotion": false
+  },
+  "arms": {
+    "comparison_unit": "offline_deduplicated_intake",
+    "source_hint": {
+      "arm_id": "source_hint",
+      "capture_selector": "validated_site_scoped_source_hint",
+      "require_nonempty_source_hint_domain": true,
+      "require_source_hint_query": true,
+      "ordinary_query_fallback": "forbidden"
+    },
+    "ordinary": {
+      "arm_id": "ordinary",
+      "capture_selector": "ordinary_retrieval_without_source_hint",
+      "source_hint_usage": "forbidden",
+      "require_ordinary_retrieval_plan": true
+    }
+  },
+  "intake_freeze": {
+    "intake_timestamp_field": "captured_at",
+    "intake_timestamp_timezone": "UTC",
+    "intake_timestamp_rule": "first_valid_capture",
+    "article_identity_fields": [
+      "item_source",
+      "item_id",
+      "item_url",
+      "headline",
+      "published_at"
+    ],
+    "article_identity_algorithm": "sha256(item_source|item_id|item_url|headline|published_at)",
+    "dedup_key_algorithm": "sha256(ticker|article_identity_sha256)",
+    "missing_published_at_token": "<null>",
+    "dedup_scope": "protocol_window",
+    "same_arm_duplicate_policy": "first_valid_capture_wins",
+    "cross_arm_duplicate_policy": "exclude_from_both_comparative_arms",
+    "freeze_arm_stratum_and_split_at_first_intake": true,
+    "late_or_backfilled_record_policy": "exclude_from_promotion_cohort"
+  },
+  "matching": {
+    "method": "exact_stratified_1_to_1_without_replacement",
+    "strata": [
+      "venue",
+      "market_series",
+      "market_family",
+      "market_side",
+      "market_price_bucket_10_cents",
+      "estimated_edge_bucket_2_cents",
+      "intake_week_utc"
+    ],
+    "match_within_same_time_split": true,
+    "freeze_before_outcome_join": true,
+    "unmatched_record_policy": "exclude_from_comparative_metrics"
+  },
+  "evaluation_split": {
+    "basis": "frozen_intake_at_utc",
+    "base_time_split": "70_30",
+    "base_training_fraction": 0.7,
+    "base_holdout_fraction": 0.3,
+    "training_fraction_maximum": 0.7,
+    "holdout_fraction_minimum": 0.3,
+    "holdout_selection": "latest_accepted_intakes",
+    "holdout_is_pure": true,
+    "no_training_or_threshold_selection_from_holdout": true,
+    "bursty_definition": {
+      "unit": "UTC_ISO_week",
+      "trigger": "any_arm_has_one_week_with_more_than_25_percent_of_accepted_intakes"
+    },
+    "bursty_override": {
+      "last_two_complete_utc_weeks_are_pure_holdout": true,
+      "extend_holdout_earlier_to_reach_minimum_fraction": true,
+      "missing_two_complete_utc_weeks_verdict": "not_promotable"
+    },
+    "empty_holdout_verdict": "not_promotable"
+  },
+  "provenance": {
+    "capture_record_sources": {
+      "source_hint": "market_source_hint_shadow_observations",
+      "ordinary": "operator_declared_ordinary_shadow_capture"
+    },
+    "record_mode": "append_only_shadow_capture",
+    "offline_adapter_schema_version": 1,
+    "runtime_capture_schema_field_required": false,
+    "require_known_offline_adapter_schema": true,
+    "required_shared_capture_fields": [
+      "observation_id",
+      "captured_at",
+      "ticker",
+      "market_title",
+      "feed_url",
+      "item_id",
+      "headline",
+      "item_url",
+      "item_source",
+      "published_at"
+    ],
+    "source_hint_arm_required_capture_fields": [
+      "source_hint_query",
+      "source_hint_domain"
+    ],
+    "ordinary_arm_required_capture_fields": [
+      "ordinary_retrieval_query",
+      "ordinary_retrieval_plan_sha256"
+    ],
+    "required_offline_capture_fields": [
+      "capture_schema_version",
+      "article_identity_sha256",
+      "dedup_key",
+      "cohort_arm",
+      "intake_at_utc",
+      "matching_stratum_key",
+      "evaluation_split",
+      "capture_record_sha256"
+    ],
+    "require_capture_article_identity": true,
+    "require_capture_record_hash": true,
+    "runtime_behavioral_lineage": {
+      "normal_lifecycle_id": "not_required_at_capture",
+      "research_lifecycle_id": "not_required_at_capture",
+      "research_dossier_id": "not_required_at_capture",
+      "decision_id": "not_required_at_capture",
+      "trade_id": "not_required_at_capture",
+      "settlement_id": "not_required_at_capture",
+      "runtime_linking": "forbidden"
+    },
+    "offline_evaluation_join": {
+      "required_for_promotion": true,
+      "mode": "offline_read_only",
+      "required_join_fields": [
+        "capture_record_sha256",
+        "venue",
+        "market_series",
+        "market_family",
+        "market_side",
+        "market_price_cents",
+        "quote_at_utc",
+        "decision_at_utc",
+        "estimated_probability",
+        "estimated_edge_fraction",
+        "estimated_edge_cents",
+        "valuation_snapshot_sha256",
+        "lifecycle_id",
+        "research_lifecycle_id",
+        "research_dossier_id",
+        "decision_id",
+        "terminal_record_id",
+        "trade_id",
+        "settlement_id",
+        "settlement_source_match",
+        "resolved_fee_net_pnl_dollars"
+      ],
+      "required_stages": [
+        "research",
+        "decision",
+        "terminal",
+        "trade",
+        "resolved"
+      ],
+      "missing_join_action": "not_promotable_when_coverage_below_threshold"
+    }
+  },
+  "acceptance": {
+    "minimum_counts": {
+      "per_arm_full_cohort": {
+        "intakes": 200,
+        "research": 50,
+        "terminal": 25,
+        "trades": 20,
+        "resolved": 12,
+        "utc_weeks": 4,
+        "market_series": 2
+      },
+      "per_arm_holdout": {
+        "intakes": 60,
+        "research": 15,
+        "terminal": 8,
+        "trades": 6,
+        "resolved": 4,
+        "utc_weeks": 2,
+        "market_series": 2
+      }
+    },
+    "matching_coverage": {
+      "minimum_matched_intake_fraction_per_arm": 0.95,
+      "scope": "each_arm_and_time_split",
+      "below_threshold_verdict": "not_promotable"
+    },
+    "lineage_coverage": {
+      "minimum_capture_lineage_fraction": 0.95,
+      "minimum_offline_evaluation_join_fraction": 0.95,
+      "denominator": "deduplicated_accepted_records_in_each_arm_and_split",
+      "unknown_or_missing_schema_counts_as_uncovered": true,
+      "missing_lineage_in_scored_record_verdict": "not_promotable"
+    },
+    "research_and_counter_evidence": {
+      "scope": "matched_pure_holdout_research",
+      "comparison": "source_hint_rate_minus_ordinary_rate",
+      "research_completion_rate_minimum_difference_pp": -5.0,
+      "counter_evidence_complete_rate_minimum_difference_pp": -5.0,
+      "minimum_counter_evidence_items_per_completed_research": 1,
+      "require_explicit_disconfirming_evidence": true
+    },
+    "decision_grade": {
+      "scope": "matched_pure_holdout_research",
+      "status": "decision_grade_candidate",
+      "comparison": "source_hint_rate_minus_ordinary_rate",
+      "minimum_difference_pp": 5.0,
+      "require_price_and_edge_criteria": true
+    },
+    "price_and_edge": {
+      "scope": "decision_grade_candidates_and_trades",
+      "market_price_cents_minimum": 1,
+      "market_price_cents_maximum": 99,
+      "minimum_estimated_edge_fraction": 0.02,
+      "require_frozen_quote_timestamp": true,
+      "require_quote_at_or_before_decision": true,
+      "require_price_probability_and_edge_from_same_snapshot": true,
+      "require_positive_edge_for_selected_side": true
+    },
+    "settlement_source_match": {
+      "scope": "source_hint_arm_joined_records",
+      "required_value": true,
+      "minimum_true_fraction": 0.9,
+      "unknown_or_non_boolean_counts_as_unmatched": true
+    },
+    "pnl": {
+      "scope": "matched_pure_holdout_resolved_trades",
+      "basis": "fee_net_realized_pnl_dollars",
+      "require_nonnegative_source_hint_mean_pnl": true,
+      "incremental_comparison": "source_hint_mean_pnl_minus_ordinary_mean_pnl",
+      "bootstrap": {
+        "method": "clustered_by_ticker",
+        "iterations": 10000,
+        "seed": 20260731,
+        "confidence_level": 0.95,
+        "lower_bound_dollars": 0,
+        "require_lower_bound_strictly_positive": true
+      },
+      "maximum_chronological_drawdown_fraction": 0.2,
+      "maximum_ticker_resolved_pnl_magnitude_fraction": 0.25,
+      "ticker_concentration_denominator": "sum_absolute_resolved_fee_net_pnl_dollars",
+      "enforce_drawdown_and_concentration_per_arm": true
+    }
+  },
+  "hard_no_promotion": {
+    "conditions": [
+      "unknown_or_missing_capture_schema",
+      "missing_required_capture_lineage",
+      "missing_or_invalid_capture_or_article_identity",
+      "unresolved_dedup_or_frozen_intake_timestamp_violation",
+      "matched_intake_fraction_below_0.95",
+      "source_hint_or_ordinary_arm_separation_violation",
+      "runtime_consumption_or_behavioral_linking_violation",
+      "offline_evaluation_join_coverage_below_0.95",
+      "missing_lineage_in_any_scored_record",
+      "empty_holdout",
+      "holdout_leakage",
+      "uncomputable_required_statistic"
+    ]
+  },
+  "verdicts": {
+    "precedence": [
+      "not_promotable",
+      "continue_shadow",
+      "promotion_eligible"
+    ],
+    "not_promotable": "hard_no_promotion_condition_or_final_acceptance_failure",
+    "continue_shadow": "integrity_passes_but_minimum_counts_or_final_evaluation_are_incomplete",
+    "promotion_eligible": "all_locked_acceptance_requirements_pass_without_automatic_promotion"
+  },
+  "protocol_hash": "55273089d562020d96e4ba0c084fffa4f46435840df2692a8e922b6f73c0a388"
+}

@@ -1564,6 +1564,47 @@ class BotConfig:
     market_source_hints_emit_records: bool = field(
         default_factory=lambda: _parse_bool_env("MARKET_SOURCE_HINTS_EMIT_RECORDS", "false")
     )
+    # Dedicated, non-behavioral source-hint retrieval evidence capture. This
+    # does not enable the legacy source-hint query path or any intake route.
+    enable_market_source_hint_shadow_capture: bool = field(
+        default_factory=lambda: _parse_bool_env(
+            "ENABLE_MARKET_SOURCE_HINT_SHADOW_CAPTURE", "false"
+        )
+    )
+    market_source_hint_shadow_capture_interval_seconds: float = field(
+        default_factory=lambda: float(
+            os.getenv("MARKET_SOURCE_HINT_SHADOW_CAPTURE_INTERVAL_SECONDS", "900")
+        )
+    )
+    market_source_hint_shadow_capture_max_markets: int = field(
+        default_factory=lambda: int(
+            os.getenv("MARKET_SOURCE_HINT_SHADOW_CAPTURE_MAX_MARKETS", "5")
+        )
+    )
+    market_source_hint_shadow_capture_max_queries_per_market: int = field(
+        default_factory=lambda: int(
+            os.getenv(
+                "MARKET_SOURCE_HINT_SHADOW_CAPTURE_MAX_QUERIES_PER_MARKET", "2"
+            )
+        )
+    )
+    market_source_hint_shadow_capture_max_records_per_cycle: int = field(
+        default_factory=lambda: int(
+            os.getenv(
+                "MARKET_SOURCE_HINT_SHADOW_CAPTURE_MAX_RECORDS_PER_CYCLE", "20"
+            )
+        )
+    )
+    market_source_hint_shadow_capture_concurrency: int = field(
+        default_factory=lambda: int(
+            os.getenv("MARKET_SOURCE_HINT_SHADOW_CAPTURE_CONCURRENCY", "2")
+        )
+    )
+    market_source_hint_shadow_capture_timeout_seconds: float = field(
+        default_factory=lambda: float(
+            os.getenv("MARKET_SOURCE_HINT_SHADOW_CAPTURE_TIMEOUT_SECONDS", "20")
+        )
+    )
     generic_search_circuit_mode: str = field(
         default_factory=lambda: os.getenv(
             "GENERIC_SEARCH_CIRCUIT_MODE", "shadow"
