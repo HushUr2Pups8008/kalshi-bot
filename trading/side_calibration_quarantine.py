@@ -441,7 +441,7 @@ def _has_unique_capture_id_constraint(connection: sqlite3.Connection) -> bool:
     """Require the fresh-schema identity constraint before writing metadata."""
     indexes = connection.execute("PRAGMA index_list(capture_attempts)").fetchall()
     for index in indexes:
-        if not index[2]:
+        if not index[2] or index[4]:
             continue
         columns = [
             column[2]

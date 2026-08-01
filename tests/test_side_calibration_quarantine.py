@@ -119,6 +119,37 @@ def test_initialize_rejects_unversioned_v1_attempt_schema(tmp_path):
         ).fetchone() is None
 
 
+def test_initialize_rejects_partial_unique_capture_id_index(tmp_path):
+    path = tmp_path / "quarantine.db"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE capture_attempts (
+                attempt_id INTEGER PRIMARY KEY,
+                capture_id TEXT NOT NULL,
+                payload_sha256 TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                unscorable_reason TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE UNIQUE INDEX capture_attempts_capture_id_partial
+            ON capture_attempts(capture_id) WHERE capture_id <> ''
+            """
+        )
+
+    with pytest.raises(SideCalibrationQuarantineError, match="unique capture_id"):
+        SideCalibrationQuarantineStore(path)
+
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT value FROM schema_metadata WHERE key = 'schema_version'"
+        ).fetchone() is None
+
+
 def test_incomplete_capture_is_recorded_as_attempt_not_candidate(tmp_path):
     store = SideCalibrationQuarantineStore(tmp_path / "quarantine.db")
 
