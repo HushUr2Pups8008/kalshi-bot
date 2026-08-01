@@ -567,6 +567,46 @@ def test_snapshot_refuses_existing_destination_and_malformed_evidence(tmp_path):
     assert not unsafe_path.exists()
 
 
+def test_snapshot_rejects_unsafe_destination_forms(tmp_path):
+    evidence = _modern_replay_evidence()
+
+    with pytest.raises(ValueError, match=".jsonl suffix"):
+        materialize_keyword_shadow_snapshot(tmp_path / "snapshot.txt", evidence)
+
+    with pytest.raises(ValueError, match="unsafe snapshot destination parent"):
+        materialize_keyword_shadow_snapshot(tmp_path / "missing" / "snapshot.jsonl", evidence)
+
+    non_directory_parent = tmp_path / "not-a-directory"
+    non_directory_parent.write_text("not a directory", encoding="utf-8")
+    with pytest.raises(ValueError, match="unsafe snapshot destination parent"):
+        materialize_keyword_shadow_snapshot(non_directory_parent / "snapshot.jsonl", evidence)
+
+    real_parent = tmp_path / "real-parent"
+    real_parent.mkdir()
+    symlink_parent = tmp_path / "symlink-parent"
+    try:
+        symlink_parent.symlink_to(real_parent, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlink parent is unavailable on this filesystem: {exc}")
+    with pytest.raises(ValueError, match="unsafe snapshot destination parent"):
+        materialize_keyword_shadow_snapshot(symlink_parent / "snapshot.jsonl", evidence)
+
+
+def test_snapshot_rejects_malformed_filter_metadata_before_creating_file(tmp_path):
+    malformed = _modern_replay_evidence()
+    malformed["filters"] = {
+        "since": ["2026-07-30T00:00:00+00:00"],
+        "until": None,
+        "exclude_test": False,
+    }
+    output_path = tmp_path / "malformed-filters.jsonl"
+
+    with pytest.raises(ValueError, match="malformed snapshot evidence since filter"):
+        materialize_keyword_shadow_snapshot(output_path, malformed)
+
+    assert not output_path.exists()
+
+
 def test_legacy_cli_without_new_options_remains_legacy_and_read_only(monkeypatch, capsys, tmp_path):
     legacy_path = Path(__file__).resolve().parent / "fixtures" / "report_snapshots" / "keyword_misses_sample.jsonl"
     monkeypatch.setattr(
