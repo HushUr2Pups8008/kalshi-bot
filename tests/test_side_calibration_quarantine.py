@@ -74,6 +74,25 @@ def test_conflicting_retry_is_rejected_without_mutating_existing_candidate(tmp_p
     assert store.snapshot().candidate_count == 1
 
 
+def test_schema_rejects_a_second_attempt_for_the_same_capture_id(tmp_path):
+    path = tmp_path / "quarantine.db"
+    store = SideCalibrationQuarantineStore(path)
+    store.append_capture(_complete_capture())
+
+    with sqlite3.connect(path) as connection:
+        with pytest.raises(
+            sqlite3.IntegrityError,
+            match="UNIQUE constraint failed: capture_attempts.capture_id",
+        ):
+            connection.execute(
+                """
+                INSERT INTO capture_attempts(capture_id, payload_sha256, payload_json)
+                VALUES (?, ?, ?)
+                """,
+                ("lifecycle-20260801-001", "b" * 64, "{}"),
+            )
+
+
 def test_incomplete_capture_is_recorded_as_attempt_not_candidate(tmp_path):
     store = SideCalibrationQuarantineStore(tmp_path / "quarantine.db")
 

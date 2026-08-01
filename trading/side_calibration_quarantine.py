@@ -13,7 +13,8 @@ from pathlib import Path
 from typing import Any
 
 
-_SCHEMA_VERSION = 1
+# This isolated store is not deployed; incompatible experimental databases fail closed.
+_SCHEMA_VERSION = 2
 _REQUIRED_DECISION_FACTS = (
     "market_ticker",
     "side",
@@ -203,7 +204,7 @@ class SideCalibrationQuarantineStore:
                 payload_json TEXT NOT NULL,
                 unscorable_reason TEXT,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(capture_id, payload_sha256)
+                UNIQUE(capture_id)
             );
             CREATE TABLE IF NOT EXISTS candidates (
                 candidate_id INTEGER PRIMARY KEY,
