@@ -44,15 +44,24 @@ current invalid-price rejection and paper-admission behavior exactly.
   `test_build_executed_price_skip_provenance_distinguishes_source_faults` and
   `test_build_executed_price_skip_provenance_redacts_untrusted_values` with
   parameterized cases for:
-  - empty selected quote: `executed_price_cents=None`, selected ask `None`,
-    `price_available=False`, expected `source_quote_empty`;
-  - zero selected quote: raw and selected quote `0`, expected
-    `source_quote_zero`;
-  - invalid selected quote: boolean or `101`, expected
-    `source_quote_invalid` and no raw object serialization;
-  - stale selected quote: a valid selected ask with an aware retrieval time
-    older than `MARKET_CACHE_TTL_SECONDS`, combined with an invalid handoff,
-    expected `source_quote_stale`;
+  - missing handoff plus empty selected quote: `executed_price_cents=None`,
+    selected ask `None`, `price_available=False`, expected primary
+    `executed_price_missing`, secondary `source_quote_empty`;
+  - zero handoff plus zero selected quote: raw and selected quote `0`,
+    expected primary `executed_price_zero`, secondary `source_quote_zero`;
+  - invalid handoff plus invalid selected quote: boolean or `101`, expected
+    primary `executed_price_invalid`, secondary `source_quote_invalid`, and no
+    raw object serialization;
+  - fresh valid selected quote plus invalid handoff: selected ask `1` or `99`,
+    aware retrieval time within `MARKET_CACHE_TTL_SECONDS`, expected the same
+    handoff primary with no stale code;
+  - stale valid selected quote plus invalid handoff: selected ask `1` or `99`,
+    aware retrieval time older than `MARKET_CACHE_TTL_SECONDS`, expected the
+    same handoff primary plus secondary `source_quote_stale`;
+  - selected ask boundary fixtures for `100`, negative integer, over-`100`,
+    populated integer with `price_available=False`, boolean, non-integer, and
+    `None`, asserting the exact `source_quote_state` truth table and that
+    availability disagreement does not erase a populated ask;
   - a missing, naive, malformed, future, and valid timestamp, with the exact
     expected timestamp state and no incorrect `fresh` classification.
   Assert the exact key set, fixed enum values, no more than four fault codes,
@@ -79,8 +88,10 @@ current invalid-price rejection and paper-admission behavior exactly.
   Make the constructor total: normalize only allowlisted strings, bounded
   integers, UTC-aware timestamps, and validated hashes. Convert every other
   input to a fixed enum/null, never call external code, and never raise for
-  malformed input. Implement the precedence and capped-age rules from the
-  design exactly.
+  malformed input. Implement the precedence, exact `1..99` executable-range
+  truth table, and capped-age rules from the design exactly. Invalid
+  `executed_price_cents` must remain the primary terminal cause; source age
+  and availability are secondary context only.
 
 - [ ] **Step 4: Run the focused green test.**
 
@@ -135,9 +146,17 @@ current invalid-price rejection and paper-admission behavior exactly.
   the existing invalid-price tests around
   `test_invalid_executed_price_stops_before_blend_readiness_and_g7` and
   `test_invalid_executed_price_persists_skip_without_fabricated_price_fields`.
-  For each empty, zero, invalid, and stale fixture, assert:
-  - expected `primary_fault`, state fields, source timestamp state, and bounded
-    payload;
+  For each empty, zero, invalid, fresh-plus-invalid, stale-plus-invalid,
+  `100`, negative, over-`100`, boolean, non-integer, and
+  populated-but-unavailable selected-ask fixture, assert:
+  - expected `primary_fault`, state fields, source timestamp state, bounded
+    payload, and exact secondary `fault_codes`;
+  - fresh and stale variants with the same invalid handoff preserve the same
+    `executed_price_*` primary fault;
+  - `100` is classified as selected-ask out-of-range invalid, matching the
+    real `0 < cents < 100` terminal guard;
+  - `price_available=False` does not collapse a populated selected ask into
+    `source_quote_empty`;
   - `ready is False`, `candidate is None`, `enqueued is False`, and the queue
     is empty;
   - the fake store, blender, readiness evaluator, execution-liquidity provider,

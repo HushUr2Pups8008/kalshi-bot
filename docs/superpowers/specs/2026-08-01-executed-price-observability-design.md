@@ -4,10 +4,10 @@
 
 Add one bounded, paper-observability-only payload to the existing
 `SKIPPED` record produced when `BlendTask` rejects
-`invalid_executed_price`. The payload must explain whether the rejected
-value corresponds to an empty, zero, invalid, stale, or unknown upstream quote
-without changing the decision that rejected it. It preserves the exact
-rejection and admission behavior.
+`invalid_executed_price`. The payload must explain the rejected handoff scalar
+first, then preserve bounded source-quote context such as emptiness, stale
+age, or malformed metadata without changing the decision that rejected it. It
+preserves the exact rejection and admission behavior.
 
 The implementation is successful only when an invalid price remains unable to
 create a `TradeCandidate`, enter `_trading_queue`, reach the paper executor,
@@ -104,8 +104,8 @@ the existing `SKIPPED` record:
     "schema_version": 1,
     "origin": "research_decision_grade",
     "requested_side": "yes",
-    "primary_fault": "source_quote_empty",
-    "fault_codes": ["source_quote_empty", "source_timestamp_missing"],
+    "primary_fault": "executed_price_missing",
+    "fault_codes": ["executed_price_missing", "source_quote_empty", "source_timestamp_missing"],
     "executed_price_state": "missing",
     "observed_executed_price_cents": null,
     "source_quote_state": "empty",
@@ -131,7 +131,7 @@ listed below, in the listed shape; it must never add dynamic keys.
 | `schema_version` | integer, exactly `1` | Allows an intentional later migration without overloading semantics. |
 | `origin` | `news`, `research_decision_grade`, `fade_tweet`, `price_fade`, `other`, `unknown` | Map known `signal_type` values; never emit arbitrary signal text. |
 | `requested_side` | `yes`, `no`, `unknown` | Map only the raw side value; do not infer a side. |
-| `primary_fault` | `source_quote_stale`, `source_quote_empty`, `source_quote_zero`, `source_quote_invalid`, `executed_price_missing`, `executed_price_zero`, `executed_price_invalid`, `side_unknown`, `unknown` | Deterministic diagnosis, not a new gate reason. |
+| `primary_fault` | `executed_price_missing`, `executed_price_zero`, `executed_price_invalid`, `source_quote_empty`, `source_quote_zero`, `source_quote_invalid`, `side_unknown`, `unknown` | Deterministic diagnosis of the terminal handoff first, not a new gate reason. `source_quote_stale` is observational context only and must never be the primary cause while the handoff scalar itself fails the existing terminal guard. |
 | `fault_codes` | ordered list of 1 to 4 values from the `primary_fault` vocabulary plus `source_timestamp_missing`, `source_timestamp_invalid`, `source_timestamp_future` | Low-cardinality secondary facts; no exception text. |
 | `executed_price_state` | `missing`, `zero`, `out_of_range_integer`, `boolean`, `non_integer`, `unknown` | Describes the raw `SignalAnalysis.executed_price_cents` value. A valid `1..99` integer cannot reach this terminal branch. |
 | `observed_executed_price_cents` | integer in `[-100, 200]` or `null` | Emit only a non-boolean integer in this bounded diagnostic range. Do not stringify or serialize arbitrary objects. |
@@ -159,18 +159,47 @@ change a decision.
 
 1. `side_unknown` when the raw side is neither `yes` nor `no`; no source ask
    is selected.
-2. `source_quote_empty` when the selected ask is `None`, or the market says
-   `price_available` is exactly `False`.
-3. `source_quote_zero` when the selected ask is the integer `0`.
-4. `source_quote_invalid` when the selected ask is a boolean, non-integer,
-   negative integer, or integer above `100`.
-5. `source_quote_stale` when the selected ask is a valid executable integer
-   and its source timestamp is valid but older than the existing
-   `MARKET_CACHE_TTL_SECONDS` at the local observation time.
-6. `executed_price_missing`, `executed_price_zero`, or
-   `executed_price_invalid` when the selected quote is otherwise usable but
-   the handoff scalar is respectively absent, zero, or invalid.
-7. `unknown` for malformed access or an unclassifiable combination.
+2. `executed_price_missing`, `executed_price_zero`, or
+   `executed_price_invalid` whenever `executed_price_cents` fails the existing
+   terminal predicate. This remains the primary cause even if the selected ask
+   is empty, stale, unavailable, or malformed.
+3. `source_quote_empty`, `source_quote_zero`, or `source_quote_invalid` only
+   when the handoff scalar is unavailable for classification or when the
+   constructor is invoked outside the normal invalid-handoff branch in tests.
+4. `unknown` for malformed access or an unclassifiable combination.
+
+`source_quote_stale` is not a valid `primary_fault` for the guarded terminal
+path. If the selected ask is otherwise in the executable range but its source
+timestamp is older than `MARKET_CACHE_TTL_SECONDS`, retain
+`source_quote_stale` only as a secondary `fault_codes` member alongside the
+executed-price primary fault. Freshness context must never mask the invalid
+handoff scalar.
+
+## Selected Ask Truth Table
+
+The selected-side ask is the direct `yes_ask_cents` or `no_ask_cents`
+attribute for the requested side. Its state is observational only and must
+match the same executable-range boundary as the real handoff guard:
+`0 < cents < 100`.
+
+| Selected ask input | `source_quote_state` | Secondary fault code | Notes |
+| --- | --- | --- | --- |
+| side unknown | `not_applicable` | `side_unknown` primary only | No ask selected. |
+| `None` | `empty` | `source_quote_empty` | Absence is distinct from malformed values. |
+| integer `0` | `zero` | `source_quote_zero` | Exact zero boundary. |
+| integer `1..99` | `valid` | none, or `source_quote_stale` if timestamp old | Exact executable range. |
+| integer `100` | `out_of_range_integer` | `source_quote_invalid` | `100` is invalid because the real guard rejects it. |
+| integer `< 0` or `> 100` | `out_of_range_integer` | `source_quote_invalid` | Negative and over-100 values are invalid. |
+| boolean | `boolean` | `source_quote_invalid` | Booleans must never be treated as integers. |
+| non-integer object/string/float | `non_integer` | `source_quote_invalid` | Malformed numeric shapes stay bounded. |
+
+`price_available` is a separate observed fact. When it is exactly `False`,
+emit `market_price_available=false`, but do not let that overwrite a populated
+selected ask. A populated integer ask with `price_available=False` therefore
+keeps its own `source_quote_state` from the table above and may carry an
+additional secondary `source_quote_empty` code only if the selected ask itself
+is absent. Absence, malformed values, and availability disagreement remain
+distinct states.
 
 The constructor must use only direct, guarded attribute reads from the market:
 `yes_ask_cents` or `no_ask_cents`, `price_available`, `price_source`,
@@ -235,8 +264,12 @@ test or runtime input.
 
 Focused tests must prove all of the following before any later rollout:
 
-- Empty, zero, invalid, and stale source-quote fixtures serialize distinct
-  `primary_fault`/state combinations with valid fixed schemas.
+- Empty, zero, invalid, stale, populated-but-unavailable, `100`, negative, and
+  over-`100` source-quote fixtures serialize the expected fixed state
+  combinations with valid schemas.
+- Fresh-plus-invalid and stale-plus-invalid handoff fixtures keep the same
+  `executed_price_*` primary fault while differing only in bounded secondary
+  source timestamp / stale facts.
 - Naive, future, malformed, and missing timestamps never become `fresh` and
   never cause a provider call.
 - The normal terminal result is unchanged: `ready=False`, `candidate=None`,
