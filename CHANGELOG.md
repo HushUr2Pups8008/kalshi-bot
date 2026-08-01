@@ -19,6 +19,21 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.31] - 2026-08-01
+
+### Fixed
+
+- **Confirmation event-window dates.** Prefer the explicit confirmation
+  deadline in the contract text over a stale series date embedded in the
+  ticker when synthesizing pending evidence.
+
+### Verification
+
+- `CI=1 .venv/bin/python -m pytest tests/test_research_gate.py tests/test_research_prewarm_task.py tests/test_research_dossier.py tests/test_research_paper_admission.py tests/test_main_pipeline.py -q` (`624 passed, 13 xfailed`)
+- `CI=1 .venv/bin/python scripts/sync_readme_version.py --check`
+- `.venv/bin/ruff check analysis/research_gate.py tests/test_research_gate.py`
+- Independent adversarial review found no material issue.
+
 ## [0.33.30] - 2026-08-01
 
 ### Added
