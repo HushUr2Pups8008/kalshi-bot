@@ -60,6 +60,7 @@ from trading.runtime_paper_cohort_attestation import (
     read_runtime_paper_cohort_attestation,
 )
 from trading.settlement_store import settlement_schema_contract_matches
+from utils.diagnostics_script_helpers import is_replay_or_test_paper_trade
 
 
 LOG_TS_RE = re.compile(
@@ -162,6 +163,9 @@ class SignalFlowStats:
     latest_research_ts: datetime | None
     live_submission_unknown_count: int = 0
     latest_live_submission_unknown_ts: datetime | None = None
+    paper_trade_admission_rows: int = 0
+    paper_trade_replay_or_test_rows: int = 0
+    paper_trade_replay_or_test_sources: Counter[str] = field(default_factory=Counter)
 
 
 @dataclass(frozen=True)
@@ -287,6 +291,9 @@ def summarize_signal_flow(
     latest_research_ts: datetime | None = None
     live_submission_unknown_count = 0
     latest_live_submission_unknown_ts: datetime | None = None
+    paper_trade_admission_rows = 0
+    paper_trade_replay_or_test_rows = 0
+    paper_trade_replay_or_test_sources: Counter[str] = Counter()
     research_records = 0
     records_kept = 0
 
@@ -301,6 +308,14 @@ def summarize_signal_flow(
         ts = _parse_trade_ts(record.get("ts"))
         if ts is not None and ts < since:
             continue
+        replay_or_test_paper_trade = is_replay_or_test_paper_trade(record)
+        if event_type == "PAPER_TRADE":
+            if replay_or_test_paper_trade:
+                paper_trade_replay_or_test_rows += 1
+                source = str(record.get("signal_source") or record.get("source") or "(unknown)").strip()
+                paper_trade_replay_or_test_sources[source or "(unknown)"] += 1
+            else:
+                paper_trade_admission_rows += 1
         records_kept += 1
         if event_type == LIVE_SUBMISSION_UNKNOWN_EVENT:
             live_submission_unknown_count += 1
@@ -339,6 +354,9 @@ def summarize_signal_flow(
         latest_research_ts=latest_research_ts,
         live_submission_unknown_count=live_submission_unknown_count,
         latest_live_submission_unknown_ts=latest_live_submission_unknown_ts,
+        paper_trade_admission_rows=paper_trade_admission_rows,
+        paper_trade_replay_or_test_rows=paper_trade_replay_or_test_rows,
+        paper_trade_replay_or_test_sources=paper_trade_replay_or_test_sources,
     )
 
 
@@ -2478,7 +2496,20 @@ def print_signal_flow_section(stats: SignalFlowStats, *, now: datetime) -> None:
             latest = stats.latest_ts_by_type.get(event_type)
             age = human_duration((now - latest).total_seconds()) if latest is not None else "n/a"
             latest_text = latest.isoformat() if latest is not None else "n/a"
-            print(f"{event_type:<17}: {count:>5} latest={latest_text} age={age}")
+            if event_type == "PAPER_TRADE":
+                print(f"PAPER_TRADE raw              : {count} latest={latest_text} age={age}")
+            else:
+                print(f"{event_type:<17}: {count:>5} latest={latest_text} age={age}")
+        paper_trade_raw_rows = stats.counts.get("PAPER_TRADE", 0)
+        if paper_trade_raw_rows or stats.paper_trade_replay_or_test_rows:
+            print(f"PAPER_TRADE admissions       : {stats.paper_trade_admission_rows}")
+            print(f"PAPER_TRADE replay/test      : {stats.paper_trade_replay_or_test_rows}")
+            if stats.paper_trade_replay_or_test_sources:
+                source_summary = ", ".join(
+                    f"{source}: {count}"
+                    for source, count in stats.paper_trade_replay_or_test_sources.most_common()
+                )
+                print(f"PAPER_TRADE replay/test srcs : {source_summary}")
     if stats.live_submission_unknown_count:
         latest = stats.latest_live_submission_unknown_ts
         age = human_duration((now - latest).total_seconds()) if latest is not None else "n/a"

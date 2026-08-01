@@ -51,6 +51,7 @@ from scripts.throughput_operator_metrics import (
     summarize_operator_throughput_from_trade_log,
 )
 from tasks.stats import observability_checkpoint
+from utils.diagnostics_script_helpers import is_replay_or_test_paper_trade
 from utils.reporting_helpers import (
     DEFAULT_CURRENT_STATE_WINDOW_HOURS,
     ProgressTracker,
@@ -1423,6 +1424,9 @@ class _RuntimeCohortTradeLog:
     excluded_untagged_records: int
     excluded_other_cohort_records: int
     excluded_malformed_records: int
+    paper_trade_window_raw_rows: int
+    paper_trade_replay_or_test_rows: int
+    paper_trade_replay_or_test_sources: Counter[str]
 
 
 def _materialize_runtime_cohort_trade_log(
@@ -1440,6 +1444,9 @@ def _materialize_runtime_cohort_trade_log(
     excluded_untagged_records = 0
     excluded_other_cohort_records = 0
     excluded_malformed_records = 0
+    paper_trade_window_raw_rows = 0
+    paper_trade_replay_or_test_rows = 0
+    paper_trade_replay_or_test_sources: Counter[str] = Counter()
     fd, temporary_path = tempfile.mkstemp(prefix="daily-review-runtime-cohort-", suffix=".jsonl")
     path = Path(temporary_path)
     try:
@@ -1455,6 +1462,13 @@ def _materialize_runtime_cohort_trade_log(
         # longer windows. Count exclusions separately with the funnel's window and
         # test-record semantics so the report does not misstate this run's scope.
         for record in iter_trade_records(trades_path, since=since, until=until):
+            event_type = str(record.get("type") or "").strip().upper()
+            if event_type == "PAPER_TRADE":
+                paper_trade_window_raw_rows += 1
+                if is_replay_or_test_paper_trade(record):
+                    paper_trade_replay_or_test_rows += 1
+                    source = str(record.get("signal_source") or record.get("source") or "(unknown)").strip()
+                    paper_trade_replay_or_test_sources[source or "(unknown)"] += 1
             if exclude_test and decision_funnel_summary.is_test_record(record):
                 continue
             record_cohort_id = record.get("runtime_paper_cohort_id")
@@ -1473,6 +1487,9 @@ def _materialize_runtime_cohort_trade_log(
         excluded_untagged_records=excluded_untagged_records,
         excluded_other_cohort_records=excluded_other_cohort_records,
         excluded_malformed_records=excluded_malformed_records,
+        paper_trade_window_raw_rows=paper_trade_window_raw_rows,
+        paper_trade_replay_or_test_rows=paper_trade_replay_or_test_rows,
+        paper_trade_replay_or_test_sources=paper_trade_replay_or_test_sources,
     )
 
 
@@ -1517,6 +1534,9 @@ def _build_daily_review_from_paths(
     runtime_paper_cohort_excluded_untagged_records: int | None = None,
     runtime_paper_cohort_excluded_other_cohort_records: int | None = None,
     runtime_paper_cohort_excluded_malformed_records: int | None = None,
+    paper_trade_window_raw_rows: int | None = None,
+    paper_trade_replay_or_test_rows: int | None = None,
+    paper_trade_replay_or_test_sources: Counter[str] | None = None,
 ) -> list[str]:
     _t0 = time.perf_counter()
 
@@ -1562,6 +1582,17 @@ def _build_daily_review_from_paths(
         funnel_stats["runtime_paper_cohort_excluded_untagged_records"] = excluded_untagged_records
         funnel_stats["runtime_paper_cohort_excluded_other_cohort_records"] = excluded_other_cohort_records
         funnel_stats["runtime_paper_cohort_excluded_malformed_records"] = excluded_malformed_records
+    supplied_paper_trade_audit = (
+        paper_trade_window_raw_rows,
+        paper_trade_replay_or_test_rows,
+        paper_trade_replay_or_test_sources,
+    )
+    if any(value is not None for value in supplied_paper_trade_audit):
+        if runtime_paper_cohort_id is None or any(value is None for value in supplied_paper_trade_audit):
+            raise RuntimePaperCohortScopeError("paper-trade audit counts require a complete runtime cohort scope")
+        funnel_stats["paper_trade_window_raw_rows"] = paper_trade_window_raw_rows
+        funnel_stats["paper_trade_replay_or_test_rows"] = paper_trade_replay_or_test_rows
+        funnel_stats["paper_trade_replay_or_test_sources"] = Counter(paper_trade_replay_or_test_sources)
     with stage_timer("signal edge diagnostics", enabled=show_profile):
         edge_stats = signal_edge_diagnostics.summarize(
             trades_path,
@@ -1690,6 +1721,13 @@ def _build_daily_review_from_paths(
     opportunities = edge_stats.get("counts", {}).get("OPPORTUNITY", 0)
     executed = edge_stats.get("counts", {}).get("EXECUTED", 0)
     paper_trades = event_counts.get("PAPER_TRADE", 0)
+    paper_trade_window_raw_rows = int(funnel_stats.get("paper_trade_window_raw_rows", 0) or 0)
+    paper_trade_scope_rows = int(funnel_stats.get("paper_trade_scope_rows", 0) or 0)
+    paper_trade_admission_rows = int(
+        funnel_stats.get("paper_trade_admission_rows", paper_trades) or 0
+    )
+    paper_trade_replay_or_test_rows = int(funnel_stats.get("paper_trade_replay_or_test_rows", 0) or 0)
+    paper_trade_replay_or_test_sources = Counter(funnel_stats.get("paper_trade_replay_or_test_sources") or {})
     below_threshold = skip_breakdown.get("below_threshold", 0)
     zero_edge = skip_breakdown.get("zero_edge", 0)
     duplicate = skip_breakdown.get("duplicate", 0)
@@ -1762,6 +1800,21 @@ def _build_daily_review_from_paths(
             paper_trades=paper_trades,
         )
     )
+    if paper_trade_window_raw_rows or paper_trade_replay_or_test_rows:
+        lines.append("  Paper-trade admission attribution (report window)")
+        lines.append(f"  Raw PAPER_TRADE rows             : {paper_trade_window_raw_rows}")
+        lines.append(f"  Report-scope PAPER_TRADE rows    : {paper_trade_scope_rows}")
+        if runtime_paper_cohort_id is not None:
+            lines.append(f"  Runtime paper admissions         : {paper_trade_admission_rows}")
+        else:
+            lines.append(f"  Non-replay paper admissions      : {paper_trade_admission_rows}")
+        lines.append(f"  Replay/test PAPER_TRADE rows     : {paper_trade_replay_or_test_rows}")
+        if paper_trade_replay_or_test_sources:
+            source_summary = ", ".join(
+                f"{source}: {count}"
+                for source, count in paper_trade_replay_or_test_sources.most_common(top)
+            )
+            lines.append(f"  Replay/test sources              : {source_summary}")
     attribution = funnel_stats.get("same_window_lifecycle_attribution")
     if isinstance(attribution, dict):
         lines.extend(
@@ -2055,7 +2108,7 @@ def _build_daily_review_from_paths(
         "[source: scripts/decision_funnel_summary.py + scripts/paper_performance_drilldown.py]"
     )
     live_orders = event_counts.get("LIVE_ORDER", 0)
-    lines.append(f"  Paper-trade records              : {paper_trades}")
+    lines.append(f"  Paper-trade admission rows       : {paper_trade_admission_rows}")
     lines.append(f"  Live order submissions           : {live_orders}")
     lines.append("  Scope: live order submissions are not fill or P&L evidence.")
     lines.append(f"  Skipped duplicate position       : {duplicate}")
@@ -2480,6 +2533,9 @@ def build_daily_review(
             runtime_paper_cohort_excluded_untagged_records=scoped_trade_log.excluded_untagged_records,
             runtime_paper_cohort_excluded_other_cohort_records=scoped_trade_log.excluded_other_cohort_records,
             runtime_paper_cohort_excluded_malformed_records=scoped_trade_log.excluded_malformed_records,
+            paper_trade_window_raw_rows=scoped_trade_log.paper_trade_window_raw_rows,
+            paper_trade_replay_or_test_rows=scoped_trade_log.paper_trade_replay_or_test_rows,
+            paper_trade_replay_or_test_sources=scoped_trade_log.paper_trade_replay_or_test_sources,
         )
     finally:
         scoped_trade_log.path.unlink(missing_ok=True)

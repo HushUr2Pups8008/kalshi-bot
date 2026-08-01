@@ -223,6 +223,62 @@ def test_summarize_runtime_paper_cohort_scope_excludes_legacy_and_untagged_rows(
     assert "Excluded malformed rows     : 1" in output
 
 
+def test_summarize_separates_paper_trade_replay_and_test_rows_from_runtime_admissions(
+    local_tmp_dir, capsys
+):
+    path = local_tmp_dir / "trades.jsonl"
+    write_jsonl(
+        path,
+        [
+            {
+                "type": "PAPER_TRADE",
+                "source": "Reuters",
+                "runtime_paper_cohort_id": "legacy-pending-20260729",
+                "runtime_paper_cohort_kind": "legacy_pending",
+                "ts": "2026-07-29T00:00:00+00:00",
+            },
+            {
+                "type": "PAPER_TRADE",
+                "signal_source": "paper-trade-roundtrip",
+                "runtime_paper_cohort_id": "legacy-pending-20260729",
+                "runtime_paper_cohort_kind": "legacy_pending",
+                "ts": "2026-07-29T00:01:00+00:00",
+            },
+            {
+                "type": "PAPER_TRADE",
+                "source": "r/test",
+                "ts": "2026-07-29T00:02:00+00:00",
+            },
+        ],
+    )
+
+    stats = summarize(
+        path,
+        since=None,
+        until=None,
+        runtime_paper_cohort_id="legacy-pending-20260729",
+        runtime_paper_cohort_kind="legacy_pending",
+    )
+
+    assert stats["paper_trade_window_raw_rows"] == 3
+    assert stats["paper_trade_scope_rows"] == 2
+    assert stats["paper_trade_admission_rows"] == 1
+    assert stats["paper_trade_replay_or_test_rows"] == 2
+    assert stats["paper_trade_replay_or_test_sources"] == Counter(
+        {"paper-trade-roundtrip": 1, "r/test": 1}
+    )
+    assert stats["runtime_paper_cohort_excluded_untagged_records"] == 1
+    assert stats["event_counts"]["PAPER_TRADE"] == 2
+
+    print_summary(stats, top=5, since=None, until=None)
+    output = capsys.readouterr().out
+    assert "Raw PAPER_TRADE rows          : 3" in output
+    assert "Runtime paper admissions      : 1" in output
+    assert "Paper-trade admission rows   : 1" in output
+    assert "Replay/test PAPER_TRADE rows  : 2" in output
+    assert "paper-trade-roundtrip: 1" in output
+
+
 def test_summarize_runtime_paper_cohort_scope_excludes_cross_cohort_lifecycle_terminals(local_tmp_dir):
     path = local_tmp_dir / "trades.jsonl"
     write_jsonl(
@@ -612,7 +668,7 @@ def test_print_summary_handles_no_observable_funnel_stages(capsys, local_tmp_dir
     assert "Opportunities logged          : 0" in output
     assert "of signals" not in output
     assert "Executor skips               : 0" in output
-    assert "Paper-trade records          : 0" in output
+    assert "Paper-trade admission rows   : 0" in output
     assert "Live order submissions       : 0" in output
     assert "Path Contribution (decision-stage records)" in output
     assert "  (none)" in output

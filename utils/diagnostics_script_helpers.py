@@ -71,3 +71,18 @@ def is_test_record_source_or_signal_source(record: dict[str, Any]) -> bool:
     source = str(record.get("source") or record.get("signal_source") or "").lower()
     ticker = str(record.get("ticker") or "").upper()
     return "r/test" in source or "KXTEST" in ticker
+
+
+def is_replay_or_test_paper_trade(record: dict[str, Any]) -> bool:
+    """Identify reporting-only PAPER_TRADE artifacts without changing runtime behavior."""
+    if str(record.get("type") or "").strip().upper() != "PAPER_TRADE":
+        return False
+    sources = (
+        str(record.get("source") or "").strip().lower(),
+        str(record.get("signal_source") or "").strip().lower(),
+    )
+    return (
+        "paper-trade-roundtrip" in sources
+        or "r/test" in sources
+        or is_test_record_source_or_signal_source(record)
+    )

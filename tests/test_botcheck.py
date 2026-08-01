@@ -8,6 +8,7 @@ the ~/.zshrc shell helpers:
     print_caffeinate_section() → botcaff()
 """
 
+from collections import Counter
 import hashlib
 import json
 import sqlite3
@@ -266,6 +267,39 @@ def test_print_signal_flow_section_surfaces_pipeline_counts(capsys, tmp_path):
     assert "OPPORTUNITY      :     1" in out
     assert "BLEND_DECISION   :     1" in out
     assert "latest=2026-05-10T22:30:00+00:00 age=30m 00s" in out
+
+
+def test_signal_flow_separates_replay_and_test_paper_trade_rows(capsys, tmp_path):
+    trades = tmp_path / "trades.jsonl"
+    now = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
+    write_jsonl(
+        trades,
+        [
+            {"type": "PAPER_TRADE", "source": "Reuters", "ts": "2026-05-10T22:00:00+00:00"},
+            {
+                "type": "PAPER_TRADE",
+                "signal_source": "paper-trade-roundtrip",
+                "ts": "2026-05-10T22:05:00+00:00",
+            },
+            {"type": "PAPER_TRADE", "source": "r/test", "ts": "2026-05-10T22:10:00+00:00"},
+        ],
+    )
+
+    stats = summarize_signal_flow(trades, now=now, window_hours=24)
+
+    assert stats.counts["PAPER_TRADE"] == 3
+    assert stats.paper_trade_admission_rows == 1
+    assert stats.paper_trade_replay_or_test_rows == 2
+    assert stats.paper_trade_replay_or_test_sources == Counter(
+        {"paper-trade-roundtrip": 1, "r/test": 1}
+    )
+
+    print_signal_flow_section(stats, now=now)
+    output = capsys.readouterr().out
+    assert "PAPER_TRADE raw              : 3" in output
+    assert "PAPER_TRADE admissions       : 1" in output
+    assert "PAPER_TRADE replay/test      : 2" in output
+    assert "paper-trade-roundtrip: 1" in output
 
 
 def test_signal_flow_warns_on_recent_unknown_live_submission(capsys, tmp_path):

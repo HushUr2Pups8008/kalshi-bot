@@ -5,6 +5,12 @@ Lines read: 8
 Malformed lines skipped: 0
 Records included: 8
 
+Paper-trade admission attribution
+  Raw PAPER_TRADE rows          : 1
+  Report-scope PAPER_TRADE rows : 1
+  Non-replay paper admissions   : 1
+  Replay/test PAPER_TRADE rows  : 0
+
 Funnel
   Structured records considered : 8
   Pre-signal rejections         : 2
@@ -12,7 +18,7 @@ Funnel
   Opportunities logged          : 1
   No-signal exits               : partially observable via ANALYSIS_REJECTED
   Executor skips               : 1
-  Paper-trade records          : 1
+  Paper-trade admission rows   : 1
   Live submission intents      : 0
   Live order submissions       : 1
 

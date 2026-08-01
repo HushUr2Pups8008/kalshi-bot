@@ -388,6 +388,19 @@ def test_build_daily_review_filters_every_log_reader_to_runtime_cohort(monkeypat
                     "runtime_paper_cohort_id": ["legacy-pending-20260729"],
                     "runtime_paper_cohort_kind": "legacy_pending",
                 },
+                {
+                    "type": "PAPER_TRADE",
+                    "source": "Reuters",
+                    "runtime_paper_cohort_id": "legacy-pending-20260729",
+                    "runtime_paper_cohort_kind": "legacy_pending",
+                },
+                {
+                    "type": "PAPER_TRADE",
+                    "signal_source": "paper-trade-roundtrip",
+                    "runtime_paper_cohort_id": "legacy-pending-20260729",
+                    "runtime_paper_cohort_kind": "legacy_pending",
+                },
+                {"type": "PAPER_TRADE", "source": "r/test"},
             )
         )
         + "\n",
@@ -404,6 +417,9 @@ def test_build_daily_review_filters_every_log_reader_to_runtime_cohort(monkeypat
         captured["excluded_untagged"] = kwargs["runtime_paper_cohort_excluded_untagged_records"]
         captured["excluded_other"] = kwargs["runtime_paper_cohort_excluded_other_cohort_records"]
         captured["excluded_malformed"] = kwargs["runtime_paper_cohort_excluded_malformed_records"]
+        captured["paper_trade_window_raw_rows"] = kwargs["paper_trade_window_raw_rows"]
+        captured["paper_trade_replay_or_test_rows"] = kwargs["paper_trade_replay_or_test_rows"]
+        captured["paper_trade_replay_or_test_sources"] = kwargs["paper_trade_replay_or_test_sources"]
         captured["tier_state_path"] = kwargs["tier_state_path"]
         captured["assignment_shadow_path"] = kwargs["assignment_shadow_path"]
         return ["DAILY REVIEW"]
@@ -435,11 +451,28 @@ def test_build_daily_review_filters_every_log_reader_to_runtime_cohort(monkeypat
             "type": "SIGNAL",
             "runtime_paper_cohort_id": "legacy-pending-20260729",
             "runtime_paper_cohort_kind": "legacy_pending",
-        }
+        },
+        {
+            "type": "PAPER_TRADE",
+            "source": "Reuters",
+            "runtime_paper_cohort_id": "legacy-pending-20260729",
+            "runtime_paper_cohort_kind": "legacy_pending",
+        },
+        {
+            "type": "PAPER_TRADE",
+            "signal_source": "paper-trade-roundtrip",
+            "runtime_paper_cohort_id": "legacy-pending-20260729",
+            "runtime_paper_cohort_kind": "legacy_pending",
+        },
     ]
-    assert captured["excluded_untagged"] == 1
+    assert captured["excluded_untagged"] == 2
     assert captured["excluded_other"] == 1
     assert captured["excluded_malformed"] == 1
+    assert captured["paper_trade_window_raw_rows"] == 3
+    assert captured["paper_trade_replay_or_test_rows"] == 2
+    assert captured["paper_trade_replay_or_test_sources"] == Counter(
+        {"paper-trade-roundtrip": 1, "r/test": 1}
+    )
     assert captured["tier_state_path"] == (
         tmp_path
         / "derived"
@@ -743,6 +776,13 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
             "runtime_paper_cohort_excluded_untagged_records": 7,
             "runtime_paper_cohort_excluded_other_cohort_records": 3,
             "runtime_paper_cohort_excluded_malformed_records": 1,
+            "paper_trade_window_raw_rows": 4,
+            "paper_trade_scope_rows": 2,
+            "paper_trade_admission_rows": 1,
+            "paper_trade_replay_or_test_rows": 3,
+            "paper_trade_replay_or_test_sources": Counter(
+                {"paper-trade-roundtrip": 2, "r/test": 1}
+            ),
             "event_counts": {
                 "MATCH_SUPPRESSION_CANDIDATE": 1,
                 "MATCH_SUPPRESSED": 1,
@@ -1162,7 +1202,7 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
         "runtime_paper_cohort_id": "legacy-pending-20260729",
         "runtime_paper_cohort_kind": "legacy_pending",
     }
-    lines = build_daily_review(**review_kwargs)
+    lines = daily_review._build_daily_review_from_paths(**review_kwargs)
 
     rendered = "\n".join(lines)
 
@@ -1239,7 +1279,7 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     assert "Same-window linkable cohort      : legacy-pending-20260729 (legacy_pending); 3 opportunities" in rendered
     scope_line = next(line for line in rendered.splitlines() if "Funnel scope" in line)
     assert scope_line == (
-        "    Funnel scope                   : cohort-only; excluded untagged=0, other_cohort=0, malformed=0; "
+            "    Funnel scope                   : cohort-only; excluded untagged=7, other_cohort=3, malformed=1; "
         "all structured-log readers and paper DB use this lineage"
     )
     assert "Paper-trade lineage            : unavailable (0/2 event rows linked)" in rendered
@@ -1292,7 +1332,11 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     assert "Reuters: 2" in rendered
     assert "Drilldown: top no-keyword analysis-exit tickers" in rendered
     assert "KXIRAN: 2" in rendered
-    assert "Paper-trade records              : 2" in rendered
+    assert "Paper-trade admission rows       : 1" in rendered
+    assert "Raw PAPER_TRADE rows             : 4" in rendered
+    assert "Runtime paper admissions         : 1" in rendered
+    assert "Replay/test PAPER_TRADE rows     : 3" in rendered
+    assert "paper-trade-roundtrip: 2" in rendered
     assert "Skipped liquidity/near-limit     : 1" in rendered
     assert "Open cost                        : +$12.50" in rendered
     assert "Gross executable bid value       : +$10.50" in rendered
@@ -1306,7 +1350,7 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     assert "0-3d venue=polymarket trades=1 exposure=$12.50" in rendered
 
     parity_errors.append(RuntimeError("unexpected journal reader failure"))
-    unavailable_rendered = "\n".join(build_daily_review(**review_kwargs))
+    unavailable_rendered = "\n".join(daily_review._build_daily_review_from_paths(**review_kwargs))
     assert "Paper-trade journal parity       : ALARM_AMBIGUOUS error=unexpected journal reader failure" in unavailable_rendered
     assert "paper-trade journal/DB parity is unavailable" in unavailable_rendered
 
