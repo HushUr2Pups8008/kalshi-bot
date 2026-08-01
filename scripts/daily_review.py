@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import re
+import sqlite3
 import sys
 import tempfile
 import time
@@ -423,6 +424,142 @@ def _format_same_window_lifecycle_attribution_lines(
     if unattributed:
         rendered = ", ".join(f"{event_type}={count}" for event_type, count in sorted(unattributed.items()))
         lines.append(f"    Unattributed lifecycle events  : {rendered}")
+    return lines
+
+
+def _read_g7_skip_receipt_rows(
+    db_path: Path,
+) -> dict[str, dict[str, str | None]]:
+    if not db_path.exists():
+        return {}
+    try:
+        with sqlite3.connect(
+            f"{db_path.resolve().as_uri()}?mode=ro",
+            uri=True,
+        ) as conn:
+            columns = {
+                str(row[1])
+                for row in conn.execute("PRAGMA table_info(g7_skip_evidence_records)").fetchall()
+            }
+            if "lifecycle_id" not in columns or "trade_blocked_reason" not in columns:
+                return {}
+            runtime_id_expr = (
+                "runtime_paper_cohort_id" if "runtime_paper_cohort_id" in columns else "NULL"
+            )
+            runtime_kind_expr = (
+                "runtime_paper_cohort_kind" if "runtime_paper_cohort_kind" in columns else "NULL"
+            )
+            rows = conn.execute(
+                f"""
+                SELECT lifecycle_id, trade_blocked_reason, {runtime_id_expr}, {runtime_kind_expr}
+                FROM g7_skip_evidence_records
+                """
+            ).fetchall()
+    except sqlite3.DatabaseError:
+        return {}
+    return {
+        str(lifecycle_id): {
+            "trade_blocked_reason": None if trade_blocked_reason is None else str(trade_blocked_reason),
+            "runtime_paper_cohort_id": None if runtime_paper_cohort_id is None else str(runtime_paper_cohort_id),
+            "runtime_paper_cohort_kind": None if runtime_paper_cohort_kind is None else str(runtime_paper_cohort_kind),
+        }
+        for lifecycle_id, trade_blocked_reason, runtime_paper_cohort_id, runtime_paper_cohort_kind in rows
+    }
+
+
+def _read_capital_guard_drawdown_lifecycle_ids(db_path: Path) -> set[str]:
+    if not db_path.exists():
+        return set()
+    try:
+        with sqlite3.connect(
+            f"{db_path.resolve().as_uri()}?mode=ro",
+            uri=True,
+        ) as conn:
+            rows = conn.execute(
+                """
+                SELECT lifecycle_id
+                FROM capital_guard_shadow_capture_attempts
+                WHERE target_failure = 'G7_open_exposure_drawdown'
+                """
+            ).fetchall()
+    except sqlite3.DatabaseError:
+        return set()
+    return {str(lifecycle_id) for (lifecycle_id,) in rows if lifecycle_id is not None}
+
+
+def _summarize_g7_receipt_reconciliation(
+    attribution: dict[str, Any],
+    *,
+    runtime_paper_cohort_id: str | None,
+    runtime_paper_cohort_kind: str | None,
+    g7_skip_evidence_db_path: Path,
+    capital_guard_shadow_db_path: Path,
+) -> dict[str, Any]:
+    details = tuple(attribution.get("g7_skip_lifecycle_details") or ())
+    receipt_rows = _read_g7_skip_receipt_rows(g7_skip_evidence_db_path)
+    drawdown_lifecycle_ids = _read_capital_guard_drawdown_lifecycle_ids(
+        capital_guard_shadow_db_path
+    )
+    matched_non_drawdown: list[str] = []
+    supported_drawdown: list[str] = []
+    unmatched: list[dict[str, Any]] = []
+    for detail in details:
+        if not isinstance(detail, dict):
+            continue
+        lifecycle_id = str(detail.get("lifecycle_id") or "").strip()
+        if not lifecycle_id:
+            continue
+        reasons = tuple(
+            str(reason).strip()
+            for reason in detail.get("reasons") or ()
+            if str(reason).strip()
+        )
+        receipt = receipt_rows.get(lifecycle_id)
+        if (
+            receipt is not None
+            and runtime_paper_cohort_id is not None
+            and runtime_paper_cohort_kind is not None
+            and receipt.get("trade_blocked_reason") != "G7_open_exposure_drawdown"
+            and receipt.get("runtime_paper_cohort_id") == runtime_paper_cohort_id
+            and receipt.get("runtime_paper_cohort_kind") == runtime_paper_cohort_kind
+        ):
+            matched_non_drawdown.append(lifecycle_id)
+        elif lifecycle_id in drawdown_lifecycle_ids:
+            supported_drawdown.append(lifecycle_id)
+        else:
+            unmatched.append(
+                {
+                    "lifecycle_id": lifecycle_id,
+                    "reasons": reasons,
+                }
+            )
+    return {
+        "total_g7_lifecycles": len(details),
+        "matched_non_drawdown_lifecycle_ids": tuple(matched_non_drawdown),
+        "supported_drawdown_lifecycle_ids": tuple(supported_drawdown),
+        "unmatched_lifecycle_details": tuple(unmatched),
+    }
+
+
+def _format_g7_receipt_reconciliation_lines(summary: dict[str, Any]) -> list[str]:
+    total = int(summary.get("total_g7_lifecycles") or 0)
+    if total <= 0:
+        return []
+    matched = tuple(summary.get("matched_non_drawdown_lifecycle_ids") or ())
+    drawdown = tuple(summary.get("supported_drawdown_lifecycle_ids") or ())
+    unmatched = tuple(summary.get("unmatched_lifecycle_details") or ())
+    lines = [
+        "    G7 receipt reconciliation     : non-drawdown receipts require exact lifecycle plus exact active cohort id/kind; drawdown rows are evidence-only support, not cohort receipt parity",
+        f"    Non-drawdown receipt matches  : {len(matched)}/{total}",
+        f"    Drawdown evidence-only support: {len(drawdown)}/{total}",
+        f"    Unmatched G7 lifecycles       : {len(unmatched)}/{total}",
+    ]
+    if unmatched:
+        rendered = ", ".join(
+            f"{detail['lifecycle_id']}[{'+'.join(detail.get('reasons') or ('unknown',))}]"
+            for detail in unmatched
+        )
+        lines.append(f"    Unmatched G7 lifecycle IDs    : {rendered}")
     return lines
 
 
@@ -1375,6 +1512,8 @@ def _build_daily_review_from_paths(
     mark_as_of: datetime | None = None,
     display_trades_path: Path | None = None,
     assignment_shadow_path: Path | None = None,
+    g7_skip_evidence_db_path: Path | None = None,
+    capital_guard_shadow_db_path: Path | None = None,
     runtime_paper_cohort_excluded_untagged_records: int | None = None,
     runtime_paper_cohort_excluded_other_cohort_records: int | None = None,
     runtime_paper_cohort_excluded_malformed_records: int | None = None,
@@ -1641,6 +1780,22 @@ def _build_daily_review_from_paths(
                 excluded_malformed_records=int(
                     funnel_stats.get("runtime_paper_cohort_excluded_malformed_records") or 0
                 ),
+            )
+        )
+        lines.extend(
+            _format_g7_receipt_reconciliation_lines(
+                _summarize_g7_receipt_reconciliation(
+                    attribution,
+                    runtime_paper_cohort_id=funnel_stats.get("runtime_paper_cohort_filter_id"),
+                    runtime_paper_cohort_kind=funnel_stats.get("runtime_paper_cohort_filter_kind"),
+                    g7_skip_evidence_db_path=(
+                        g7_skip_evidence_db_path or REPO_ROOT / "data" / "g7_skip_evidence.db"
+                    ),
+                    capital_guard_shadow_db_path=(
+                        capital_guard_shadow_db_path
+                        or REPO_ROOT / "data" / "capital_guard_shadow.db"
+                    ),
+                )
             )
         )
     lines.extend(_format_match_attribution_lines(funnel_stats, top=top))

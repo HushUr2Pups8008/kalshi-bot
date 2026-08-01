@@ -31,6 +31,8 @@ class G7SkipEvidenceCaptureEnvelope:
     market_family: str | None
     lifecycle_id: str | None
     decision_at: datetime
+    runtime_paper_cohort_id: str | None = None
+    runtime_paper_cohort_kind: str | None = None
 
 
 @dataclass(frozen=True)
@@ -109,6 +111,8 @@ def _record(
         market_ticker=market_ticker,
         intended_side=intended_side,
         market_family=_optional_text(envelope.market_family),
+        runtime_paper_cohort_id=_optional_text(envelope.runtime_paper_cohort_id),
+        runtime_paper_cohort_kind=_optional_text(envelope.runtime_paper_cohort_kind),
         ordered_failures=ordered_failures,
         g7_failures=g7_failures,
         trade_blocked_reason=envelope.trade_blocked_reason,

@@ -56,6 +56,8 @@ def _record(
         market_ticker="KXG7-26JUL31-T50",
         intended_side="yes",
         market_family="KXG7",
+        runtime_paper_cohort_id="legacy-pending-20260729",
+        runtime_paper_cohort_kind="legacy_pending",
         ordered_failures=failures,
         g7_failures=failures,
         trade_blocked_reason=failures[0],

@@ -276,6 +276,54 @@ def test_summarize_runtime_paper_cohort_scope_excludes_cross_cohort_lifecycle_te
     assert attribution["pending_opportunity_lifecycle_count"] == 1
 
 
+def test_summarize_exposes_g7_lifecycle_details_for_reconciliation(local_tmp_dir):
+    path = local_tmp_dir / "trades.jsonl"
+    write_jsonl(
+        path,
+        [
+            {
+                "type": "OPPORTUNITY",
+                "lifecycle_id": "lc-g7",
+                "venue": "kalshi",
+                "ticker": "KXG7",
+                "side": "yes",
+                "runtime_paper_cohort_id": "legacy-pending-20260729",
+                "runtime_paper_cohort_kind": "legacy_pending",
+                "ts": "2026-07-29T00:00:00+00:00",
+            },
+            {
+                "type": "SKIPPED",
+                "lifecycle_id": "lc-g7",
+                "venue": "kalshi",
+                "ticker": "KXG7",
+                "side": "yes",
+                "reason": "G7_adverse_price_momentum",
+                "skip_category": "G7_guard",
+                "runtime_paper_cohort_id": "legacy-pending-20260729",
+                "runtime_paper_cohort_kind": "legacy_pending",
+                "ts": "2026-07-29T00:01:00+00:00",
+            },
+        ],
+    )
+
+    stats = summarize(
+        path,
+        since=None,
+        until=None,
+        runtime_paper_cohort_id="legacy-pending-20260729",
+        runtime_paper_cohort_kind="legacy_pending",
+    )
+
+    assert stats["same_window_lifecycle_attribution"]["g7_skip_lifecycle_count"] == 1
+    assert stats["g7_skip_lifecycle_details"] == (
+        {
+            "lifecycle_id": "lc-g7",
+            "reasons": ("G7_adverse_price_momentum",),
+            "skip_categories": ("G7_guard",),
+        },
+    )
+
+
 def test_summarize_aggregates_skip_reasons(local_tmp_dir):
     path = local_tmp_dir / "trades.jsonl"
     write_jsonl(
@@ -1736,6 +1784,13 @@ def test_summarize_attributes_same_window_lifecycle_terminals_without_execution_
     assert stats["same_window_lifecycle_attribution"] == {
         "opportunity_lifecycle_count": 3,
         "g7_skip_lifecycle_count": 1,
+        "g7_skip_lifecycle_details": (
+            {
+                "lifecycle_id": "lc-g7",
+                "reasons": ("G7_open_exposure_drawdown",),
+                "skip_categories": (),
+            },
+        ),
         "zero_cap_skip_lifecycle_count": 1,
         "other_skip_lifecycle_count": 0,
         "pending_opportunity_lifecycle_count": 1,
