@@ -19,6 +19,15 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.40] - 2026-07-31
+
+### Fixed
+
+- **Executable Kalshi quote admission.** Zero- and 100-cent asks now fail the
+  shared tradeability and side-selection contract before they can produce a
+  false opportunity. The executable-price accessors enforce the same bounds.
+  This tightens fail-closed paper admission; it does not relax any trade gate.
+
 ## [0.33.39] - 2026-07-31
 
 ### Added

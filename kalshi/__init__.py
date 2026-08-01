@@ -121,8 +121,9 @@ class KalshiMarket:
 
     def is_tradeable(self) -> bool:
         """Post-P0 tradeability gate (LD-2). True only when the cents fields
-        are populated, price_available=True, and the spread/complement
-        invariants hold (yes_bid<=yes_ask, no_bid<=no_ask, yes_bid+no_ask<=100).
+        are populated with executable asks, price_available=True, and the
+        spread/complement invariants hold (yes_bid<=yes_ask, no_bid<=no_ask,
+        yes_bid+no_ask<=100).
         Construction-time clients (`_make_post_p0_market` in tests) bypass
         the normalizer's parse-time invariant guard, so we enforce it here
         as well to preserve the post-P0 fail-closed contract."""
@@ -135,6 +136,11 @@ class KalshiMarket:
             or self.no_ask_cents is None
         ):
             return False
+        if not all(
+            self._is_executable_ask_cents(price)
+            for price in (self.yes_ask_cents, self.no_ask_cents)
+        ):
+            return False
         if self.yes_bid_cents > self.yes_ask_cents:
             return False
         if self.no_bid_cents > self.no_ask_cents:
@@ -142,6 +148,14 @@ class KalshiMarket:
         if self.yes_bid_cents + self.no_ask_cents > 100:
             return False
         return True
+
+    @staticmethod
+    def _is_executable_ask_cents(price: object) -> bool:
+        return (
+            not isinstance(price, bool)
+            and isinstance(price, int)
+            and 0 < price < 100
+        )
 
     def executable_yes_price(self) -> int:
         """Returns the executable YES ask cents (LD-2). Raises ValueError
@@ -156,6 +170,11 @@ class KalshiMarket:
             raise ValueError(
                 f"executable_yes_price unavailable for {self.ticker!r}: "
                 f"yes_ask_cents is None"
+            )
+        if not self._is_executable_ask_cents(self.yes_ask_cents):
+            raise ValueError(
+                f"executable_yes_price unavailable for {self.ticker!r}: "
+                f"yes_ask_cents={self.yes_ask_cents!r} is not executable"
             )
         return self.yes_ask_cents
 
@@ -172,6 +191,11 @@ class KalshiMarket:
             raise ValueError(
                 f"executable_no_price unavailable for {self.ticker!r}: "
                 f"no_ask_cents is None"
+            )
+        if not self._is_executable_ask_cents(self.no_ask_cents):
+            raise ValueError(
+                f"executable_no_price unavailable for {self.ticker!r}: "
+                f"no_ask_cents={self.no_ask_cents!r} is not executable"
             )
         return self.no_ask_cents
 
