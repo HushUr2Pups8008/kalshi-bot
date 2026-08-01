@@ -34,6 +34,7 @@ from dataclasses import dataclass, field, is_dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator
+from collections.abc import Mapping
 
 from dotenv import dotenv_values
 
@@ -48,6 +49,7 @@ from utils.research_prewarm_targets import (
     record_targets_kalshi_research_prewarm,
 )
 from utils.research_evidence_quality import research_evidence_temporally_valid
+from scripts.observability import paper_trade_journal_reconcile
 from scripts.research_activation_status import evaluate_activation_profile
 from trading.capital_guard_shadow import (
     capital_guard_shadow_schema_contract_matches,
@@ -2469,6 +2471,66 @@ def print_runtime_paper_cohort_attestation_section(summary: dict[str, object]) -
     print()
 
 
+def summarize_runtime_paper_trade_journal_parity(
+    home: Path,
+    trade_log_root: Path,
+    runtime_paper_cohort_attestation: Mapping[str, object],
+) -> dict[str, object]:
+    """Read current attested cohort parity without letting botcheck fail open."""
+
+    if runtime_paper_cohort_attestation.get("status") != "attested":
+        return {
+            "status": "unavailable",
+            "detail": "runtime paper cohort is not attested",
+        }
+    cohort_id = runtime_paper_cohort_attestation.get("cohort_id")
+    cohort_kind = runtime_paper_cohort_attestation.get("cohort_kind")
+    database_path = runtime_paper_cohort_attestation.get("database_path")
+    if type(cohort_id) is not str or type(cohort_kind) is not str or not isinstance(database_path, Path):
+        return {
+            "status": "unavailable",
+            "detail": "attested runtime paper cohort metadata is incomplete",
+        }
+    try:
+        result = paper_trade_journal_reconcile.reconcile_paper_trade_journal(
+            trade_log_root=trade_log_root,
+            paper_db_path=database_path,
+            repo_root=home,
+            runtime_paper_cohort_id=cohort_id,
+            runtime_paper_cohort_kind=cohort_kind,
+        )
+    except Exception as exc:  # Diagnostic boundary: botcheck must keep reporting.
+        return {
+            "status": "unavailable",
+            "detail": f"{exc.__class__.__name__}: {exc}",
+        }
+    return {"status": "available", "result": result}
+
+
+def print_runtime_paper_trade_journal_parity(summary: Mapping[str, object]) -> None:
+    """Print one scoped parity heartbeat plus an explicit trust alarm when needed."""
+
+    result = summary.get("result")
+    if (
+        summary.get("status") != "available"
+        or not isinstance(result, paper_trade_journal_reconcile.PaperTradeJournalParityResult)
+    ):
+        print(
+            "paper_trade_journal_parity: unavailable "
+            f"detail={summary.get('detail', 'result missing')}"
+        )
+        print("WARNING: current canonical paper-trade journal parity is unavailable")
+        return
+
+    print(paper_trade_journal_reconcile.format_botcheck_parity_line(result))
+    if result.verdict != "OK":
+        level = "ALARM" if result.verdict.startswith("ALARM_") else "WARNING"
+        print(
+            f"{level}: current canonical paper-trade journal/DB parity is not trustworthy; "
+            "reconcile before relying on paper-trade counts or profit attribution"
+        )
+
+
 def print_live_submission_hold_section(stats: LiveSubmissionHoldStats) -> None:
     print("=== Live submission reservations ===")
     print(f"State file : {stats.path}")
@@ -2776,6 +2838,11 @@ def main() -> int:
         now=now,
         now_epoch=now_epoch,
     )
+    runtime_paper_trade_journal_parity = summarize_runtime_paper_trade_journal_parity(
+        args.home,
+        args.trades_log,
+        runtime_paper_cohort_attestation,
+    )
     live_submission_holds = summarize_live_submission_holds(args.live_submission_hold)
     research_dossiers = summarize_research_dossiers(default_home, now=now)
 
@@ -2786,6 +2853,7 @@ def main() -> int:
     print_signal_flow_section(signal_flow, now=now)
     print_pending_paper_cohort_section(pending_paper_cohorts)
     print_runtime_paper_cohort_attestation_section(runtime_paper_cohort_attestation)
+    print_runtime_paper_trade_journal_parity(runtime_paper_trade_journal_parity)
     print_live_submission_hold_section(live_submission_holds)
     print_research_gate_section(
         default_home,

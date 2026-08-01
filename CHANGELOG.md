@@ -19,6 +19,22 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.35] - 2026-08-01
+
+### Added
+
+- **Paper-trade journal parity control.** A read-only reconciliation now joins
+  canonical paper-trade rows to archive-plus-live `PAPER_TRADE` records by
+  immutable trade identity. Daily review and `botcheck` mark profit telemetry
+  unavailable or untrusted on parity alarms rather than silently relying on a
+  partial journal.
+
+### Verification
+
+- `CI=1 .venv/bin/python -m pytest tests/test_paper_trade_journal_reconcile.py tests/test_daily_review.py tests/test_botcheck.py -q`
+- Independent review verified fail-closed handling for incomplete identities,
+  unreadable journal input, and display-hook failures.
+
 ## [0.33.34] - 2026-08-01
 
 ### Added

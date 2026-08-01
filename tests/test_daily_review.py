@@ -541,6 +541,39 @@ def test_save_current_tier_state_rejects_mismatched_runtime_cohort_lineage(tmp_p
 
 def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     funnel_calls: list[dict[str, object]] = []
+    parity_calls: list[dict[str, object]] = []
+    parity_errors: list[Exception] = []
+    parity_result = daily_review.paper_trade_journal_reconcile.PaperTradeJournalParityResult(
+        verdict="ALARM_DB_ONLY",
+        trade_log_root=Path("logs/trades"),
+        paper_db_path=Path("data/paper_trades.db"),
+        runtime_paper_cohort_id="legacy-pending-20260729",
+        runtime_paper_cohort_kind="legacy_pending",
+        db_trade_rows_scanned=1,
+        journal_rows_scanned=0,
+        journal_rows_excluded_outside_scope=0,
+        matched_count=0,
+        db_only_count=1,
+        journal_only_count=0,
+        ambiguous_count=0,
+        legacy_unmatchable_count=0,
+        db_only_examples=({"trade_id": "db-only"},),
+        journal_only_examples=(),
+        ambiguous_examples=(),
+        legacy_unmatchable_examples=(),
+    )
+
+    def _fake_reconcile_paper_trade_journal(**kwargs):
+        parity_calls.append(kwargs)
+        if parity_errors:
+            raise parity_errors[0]
+        return parity_result
+
+    monkeypatch.setattr(
+        daily_review.paper_trade_journal_reconcile,
+        "reconcile_paper_trade_journal",
+        _fake_reconcile_paper_trade_journal,
+    )
     monkeypatch.setattr(
         "scripts.daily_review._ollama_runtime_summary",
         lambda: "configured=qwen2.5:7b health=ok available=['qwen2.5:7b']",
@@ -996,26 +1029,31 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
         },
     )
 
-    lines = build_daily_review(
-        trades_path=Path("logs/trades/trades.jsonl"),
-        paper_db_path=(
+    review_kwargs = {
+        "trades_path": Path("logs/trades/trades.jsonl"),
+        "paper_db_path": (
             daily_review.REPO_ROOT
             / "data"
             / "legacy_pending_paper_cohorts"
             / "legacy-pending-20260729"
             / "paper_trades.db"
         ),
-        since=datetime(2026, 4, 10, tzinfo=timezone.utc),
-        until=datetime(2026, 4, 11, 23, 59, tzinfo=timezone.utc),
-        top=2,
-        exclude_test=True,
-        runtime_paper_cohort_id="legacy-pending-20260729",
-        runtime_paper_cohort_kind="legacy_pending",
-    )
+        "since": datetime(2026, 4, 10, tzinfo=timezone.utc),
+        "until": datetime(2026, 4, 11, 23, 59, tzinfo=timezone.utc),
+        "top": 2,
+        "exclude_test": True,
+        "runtime_paper_cohort_id": "legacy-pending-20260729",
+        "runtime_paper_cohort_kind": "legacy_pending",
+    }
+    lines = build_daily_review(**review_kwargs)
 
     rendered = "\n".join(lines)
 
     assert "PIPELINE REVIEW" in rendered
+    assert "Paper-trade journal parity       : ALARM_DB_ONLY" in rendered
+    assert "paper-trade journal/DB parity is not trustworthy" in rendered
+    assert parity_calls[0]["runtime_paper_cohort_id"] == "legacy-pending-20260729"
+    assert parity_calls[0]["runtime_paper_cohort_kind"] == "legacy_pending"
     assert "Software version                 : v" in rendered
     assert "SINCE-RESTART MONEY PATH" in rendered
     assert "Boundary source                  : health bot_runtime.started_utc (process start)" in rendered
@@ -1149,6 +1187,11 @@ def test_build_daily_review_formats_pipeline_stages(monkeypatch):
     assert "Unknown mark cost" not in rendered
     assert "Drilldown: open exposure by resolution horizon" in rendered
     assert "0-3d venue=polymarket trades=1 exposure=$12.50" in rendered
+
+    parity_errors.append(RuntimeError("unexpected journal reader failure"))
+    unavailable_rendered = "\n".join(build_daily_review(**review_kwargs))
+    assert "Paper-trade journal parity       : ALARM_AMBIGUOUS error=unexpected journal reader failure" in unavailable_rendered
+    assert "paper-trade journal/DB parity is unavailable" in unavailable_rendered
 
 
 def test_counterfactual_eval_report_hydrates_when_env_enabled(monkeypatch):

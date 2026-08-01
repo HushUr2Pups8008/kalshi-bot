@@ -3389,3 +3389,94 @@ def test_read_env_file_value_strips_dotenv_inline_comment(tmp_path):
         )
         == "true"
     )
+
+
+def test_runtime_paper_trade_journal_parity_surfaces_attested_scope_alarm(
+    capsys,
+    monkeypatch,
+    tmp_path,
+):
+    database_path = tmp_path / "data" / "paper_cohorts" / "cohort-a" / "paper_trades.db"
+    captured: dict[str, object] = {}
+    result = botcheck.paper_trade_journal_reconcile.PaperTradeJournalParityResult(
+        verdict="ALARM_DB_ONLY",
+        trade_log_root=tmp_path / "logs" / "trades",
+        paper_db_path=database_path,
+        runtime_paper_cohort_id="cohort-a",
+        runtime_paper_cohort_kind="active",
+        db_trade_rows_scanned=1,
+        journal_rows_scanned=0,
+        journal_rows_excluded_outside_scope=0,
+        matched_count=0,
+        db_only_count=1,
+        journal_only_count=0,
+        ambiguous_count=0,
+        legacy_unmatchable_count=0,
+        db_only_examples=({"trade_id": "db-only"},),
+        journal_only_examples=(),
+        ambiguous_examples=(),
+        legacy_unmatchable_examples=(),
+    )
+
+    def _fake_reconcile(**kwargs):
+        captured.update(kwargs)
+        return result
+
+    monkeypatch.setattr(
+        botcheck.paper_trade_journal_reconcile,
+        "reconcile_paper_trade_journal",
+        _fake_reconcile,
+    )
+    summary = botcheck.summarize_runtime_paper_trade_journal_parity(
+        tmp_path,
+        tmp_path / "logs" / "trades",
+        {
+            "status": "attested",
+            "cohort_id": "cohort-a",
+            "cohort_kind": "active",
+            "database_path": database_path,
+        },
+    )
+
+    assert summary == {"status": "available", "result": result}
+    assert captured == {
+        "trade_log_root": tmp_path / "logs" / "trades",
+        "paper_db_path": database_path,
+        "repo_root": tmp_path,
+        "runtime_paper_cohort_id": "cohort-a",
+        "runtime_paper_cohort_kind": "active",
+    }
+    botcheck.print_runtime_paper_trade_journal_parity(summary)
+    output = capsys.readouterr().out
+    assert "paper_trade_journal_parity: verdict=ALARM_DB_ONLY" in output
+    assert "ALARM: current canonical paper-trade journal/DB parity is not trustworthy" in output
+
+
+def test_runtime_paper_trade_journal_parity_failure_is_contained(capsys, monkeypatch, tmp_path):
+    database_path = tmp_path / "data" / "paper_cohorts" / "cohort-a" / "paper_trades.db"
+
+    def _broken_reconcile(**_kwargs):
+        raise RuntimeError("reader failed")
+
+    monkeypatch.setattr(
+        botcheck.paper_trade_journal_reconcile,
+        "reconcile_paper_trade_journal",
+        _broken_reconcile,
+    )
+    summary = botcheck.summarize_runtime_paper_trade_journal_parity(
+        tmp_path,
+        tmp_path / "logs" / "trades",
+        {
+            "status": "attested",
+            "cohort_id": "cohort-a",
+            "cohort_kind": "active",
+            "database_path": database_path,
+        },
+    )
+
+    assert summary["status"] == "unavailable"
+    assert "RuntimeError: reader failed" in str(summary["detail"])
+    botcheck.print_runtime_paper_trade_journal_parity(summary)
+    output = capsys.readouterr().out
+    assert "paper_trade_journal_parity: unavailable" in output
+    assert "WARNING: current canonical paper-trade journal parity is unavailable" in output
