@@ -1626,6 +1626,125 @@ async def test_research_dossier_lists_due_researchable_tasks(tmp_path):
         "KXDECISION-26JUL01",
         "KXSOURCEPATH-26JUL01",
     ]
+    assert hasattr(store, "get_due_research_tasks")
+    assert [
+        (task.market_ticker, task.last_skip_reason)
+        for task in store.get_due_research_tasks(
+            now=now,
+            target_cooldown_seconds=1800.0,
+        )
+    ] == [
+        ("KXDUE-26JUL01", "ambiguous_direction"),
+        ("KXNEEDSRESEARCH-26JUL01", "missing_resolution_source"),
+        ("KXDECISION-26JUL01", "no_reliable_source_path"),
+        ("KXSOURCEPATH-26JUL01", "no_reliable_source_path"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_research_dossier_lists_all_due_tasks_for_reason(tmp_path):
+    db_path = tmp_path / "research_dossier.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+    tickers = [f"KXOFFICIAL-{index:02d}" for index in range(6)]
+    for ticker in tickers:
+        await store.record_research_run(
+            ticker,
+            f"run-{ticker}",
+            trigger_headline="Official data pending",
+            trigger_source="research_prewarm",
+            attempted=True,
+            summary="Official source has not published yet.",
+            verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+            skip_reason="official_data_pending",
+            decision_grade_status=ResearchStatus.NEEDS_RESEARCH.value,
+        )
+    await store.record_research_run(
+        "KXOTHER-REASON",
+        "run-other-reason",
+        trigger_headline="More research needed",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="No usable research hits.",
+        verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+        skip_reason="no_research_hits",
+        decision_grade_status=ResearchStatus.NEEDS_RESEARCH.value,
+    )
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE research_tasks
+            SET cooldown_until_ts = NULL,
+                backoff_seconds = 0,
+                updated_ts = '2026-06-30T10:00:00.000Z'
+            """
+        )
+
+    assert hasattr(store, "get_due_research_tasks_for_reason")
+    due = store.get_due_research_tasks_for_reason(
+        "official_data_pending",
+        now=datetime(2026, 6, 30, 12, tzinfo=timezone.utc),
+        target_cooldown_seconds=1800.0,
+    )
+
+    assert [task.market_ticker for task in due] == tickers
+    assert {task.last_skip_reason for task in due} == {"official_data_pending"}
+
+
+@pytest.mark.asyncio
+async def test_due_research_tasks_for_reason_matches_last_skip_or_terminal_reason(tmp_path):
+    db_path = tmp_path / "research_dossier.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+    for ticker in (
+        "KXTERMINAL-OFFICIAL-26JUL01",
+        "KXLAST-OFFICIAL-26JUL01",
+    ):
+        await store.record_research_run(
+            ticker,
+            f"run-{ticker}",
+            trigger_headline="Research update",
+            trigger_source="research_prewarm",
+            attempted=True,
+            summary="Another research pass is needed.",
+            verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+            skip_reason="no_research_hits",
+            decision_grade_status=ResearchStatus.NEEDS_RESEARCH.value,
+        )
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE research_tasks
+            SET last_skip_reason = 'no_research_hits',
+                terminal_reason = 'official_data_pending',
+                cooldown_until_ts = NULL,
+                backoff_seconds = 0,
+                updated_ts = '2026-06-30T10:00:00.000Z'
+            WHERE market_ticker = 'KXTERMINAL-OFFICIAL-26JUL01'
+            """
+        )
+        conn.execute(
+            """
+            UPDATE research_tasks
+            SET last_skip_reason = 'official_data_pending',
+                terminal_reason = 'no_research_hits',
+                cooldown_until_ts = NULL,
+                backoff_seconds = 0,
+                updated_ts = '2026-06-30T10:00:00.000Z'
+            WHERE market_ticker = 'KXLAST-OFFICIAL-26JUL01'
+            """
+        )
+
+    due = store.get_due_research_tasks_for_reason(
+        "official_data_pending",
+        now=datetime(2026, 6, 30, 12, tzinfo=timezone.utc),
+        target_cooldown_seconds=1800.0,
+    )
+
+    assert {task.market_ticker for task in due} == {
+        "KXTERMINAL-OFFICIAL-26JUL01",
+        "KXLAST-OFFICIAL-26JUL01",
+    }
 
 
 @pytest.mark.asyncio
@@ -1946,8 +2065,14 @@ async def test_due_research_tasks_honor_existing_official_pending_cooldown(tmp_p
             """
         )
 
+    now = datetime(2026, 6, 30, 12, tzinfo=timezone.utc)
     assert store.get_due_research_task_tickers(
-        now=datetime(2026, 6, 30, 12, tzinfo=timezone.utc),
+        now=now,
+        target_cooldown_seconds=0.0,
+    ) == []
+    assert store.get_due_research_tasks_for_reason(
+        "official_data_pending",
+        now=now,
         target_cooldown_seconds=0.0,
     ) == []
 

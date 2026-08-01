@@ -83,7 +83,10 @@ from analysis.research_gate import (
     run_research_gate,
 )
 from tasks.stats.keyword_stats import KeywordStats
-from tasks.research_dossier import default_store as default_research_dossier_store
+from tasks.research_dossier import (
+    ResearchTaskSnapshot,
+    default_store as default_research_dossier_store,
+)
 from tasks.research_paper_admission import (
     ResearchBackedBlendStore,
     ResearchPaperAdmissionBridge,
@@ -1294,20 +1297,50 @@ class TradingBot:
         if ticker:
             self._research_prewarm_cooldown_book().pop(ticker, None)
 
-    def _research_prewarm_due_task_tickers(
+    def _research_prewarm_official_pending_limit(self, *, max_markets: int) -> int:
+        configured_limit = max(
+            0,
+            int(
+                getattr(
+                    cfg,
+                    "research_prewarm_max_official_pending_per_cycle",
+                    1,
+                )
+            ),
+        )
+        return min(configured_limit, max(0, max_markets))
+
+    def _research_prewarm_due_tasks(
         self,
         *,
         limit: int,
         cooldown_seconds: float,
-    ) -> list[str]:
+    ) -> list[ResearchTaskSnapshot]:
         try:
-            return default_research_dossier_store().get_due_research_task_tickers(
+            return default_research_dossier_store().get_due_research_tasks(
                 limit=limit,
                 target_cooldown_seconds=cooldown_seconds,
             )
         except Exception as exc:
             log.warning("[RESEARCH_PREWARM] due task lookup failed: %s", exc)
             return []
+
+    def _research_prewarm_due_official_pending_tasks(
+        self,
+        *,
+        cooldown_seconds: float,
+    ) -> list[ResearchTaskSnapshot] | None:
+        try:
+            return default_research_dossier_store().get_due_research_tasks_for_reason(
+                "official_data_pending",
+                target_cooldown_seconds=cooldown_seconds,
+            )
+        except Exception as exc:
+            log.warning(
+                "[RESEARCH_PREWARM] due official-pending lookup failed: %s",
+                exc,
+            )
+            return None
 
     def _enrich_research_prewarm_market_source_path(self, market: object) -> object:
         if tuple(getattr(market, "settlement_sources", ()) or ()):
@@ -1351,22 +1384,89 @@ class TradingBot:
         except Exception as exc:
             log.warning("[RESEARCH_PREWARM] open-market scan failed: %s", exc)
             return []
-        max_markets = int(getattr(cfg, "research_prewarm_max_markets", 25))
+        max_markets = max(0, int(getattr(cfg, "research_prewarm_max_markets", 25)))
         market_list = list(markets or [])
         now_monotonic = time.monotonic()
         cooldown = self._research_prewarm_target_cooldown_seconds()
-        target_sequence: list[str] = []
-        seen_targets: set[str] = set()
-        due_task_tickers = [
-            ticker
-            for ticker in self._research_prewarm_due_task_tickers(
+        due_tasks = [
+            task
+            for task in self._research_prewarm_due_tasks(
                 limit=max(max_markets * 5, max_markets),
                 cooldown_seconds=cooldown,
             )
-            if not _research_prewarm_ticker_blocked(ticker)
+            if not _research_prewarm_ticker_blocked(task.market_ticker)
+        ]
+        bounded_official_pending_tasks = [
+            task
+            for task in due_tasks
+            if "official_data_pending"
+            in (task.last_skip_reason, task.terminal_reason)
+        ]
+        all_due_official_pending_tasks = (
+            self._research_prewarm_due_official_pending_tasks(
+                cooldown_seconds=cooldown
+            )
+        )
+        official_pending_lookup_available = all_due_official_pending_tasks is not None
+        if all_due_official_pending_tasks is None:
+            all_due_official_pending_tasks = bounded_official_pending_tasks
+        else:
+            all_due_official_pending_tasks = [
+                task
+                for task in all_due_official_pending_tasks
+                if not _research_prewarm_ticker_blocked(task.market_ticker)
+            ]
+            known_pending_tickers = {
+                task.market_ticker for task in all_due_official_pending_tasks
+            }
+            all_due_official_pending_tasks.extend(
+                task
+                for task in bounded_official_pending_tasks
+                if task.market_ticker not in known_pending_tickers
+            )
+        all_due_official_pending_tickers = {
+            task.market_ticker for task in all_due_official_pending_tasks
+        }
+        allowed_official_pending_tasks = all_due_official_pending_tasks[
+            : self._research_prewarm_official_pending_limit(
+                max_markets=max_markets
+            )
+        ]
+        allowed_official_pending_tickers = {
+            task.market_ticker
+            for task in allowed_official_pending_tasks
+        }
+        allowed_official_pending_order = {
+            task.market_ticker: index
+            for index, task in enumerate(allowed_official_pending_tasks)
+        }
+        deferred_official_pending_tickers = {
+            ticker
+            for ticker in all_due_official_pending_tickers
+            if ticker not in allowed_official_pending_tickers
+        }
+        target_sequence: list[str] = []
+        seen_targets: set[str] = set()
+        due_task_tickers = [
+            task.market_ticker
+            for task in [*allowed_official_pending_tasks, *due_tasks]
+            if task.market_ticker not in deferred_official_pending_tickers
         ]
         due_task_ticker_set = set(due_task_tickers)
-        runtime_target_tickers = _recent_runtime_research_prewarm_tickers()
+        nonpending_due_tickers = {
+            task.market_ticker
+            for task in due_tasks
+            if task.market_ticker not in all_due_official_pending_tickers
+        }
+        runtime_target_tickers = (
+            [
+                ticker
+                for ticker in _recent_runtime_research_prewarm_tickers()
+                if ticker not in deferred_official_pending_tickers
+            ]
+            if official_pending_lookup_available
+            else []
+        )
         for ticker in due_task_tickers + runtime_target_tickers:
             if ticker in seen_targets:
                 continue
@@ -1397,6 +1497,15 @@ class TradingBot:
             open_by_ticker[ticker] = market
         target_sequence.sort(
             key=lambda ticker: (
+                0
+                if ticker in allowed_official_pending_tickers
+                else 1
+                if ticker in nonpending_due_tickers
+                else 2,
+                allowed_official_pending_order.get(
+                    ticker,
+                    len(allowed_official_pending_tasks),
+                ),
                 research_market_priority_key(open_by_ticker[ticker])
                 if ticker in open_by_ticker
                 else (2, 4),
@@ -1446,13 +1555,21 @@ class TradingBot:
             return market_has_research_source_path(market)
 
         def open_markets_by_price(markets: Iterable[object]) -> list[object]:
+            if not official_pending_lookup_available:
+                return []
             return sorted(
-                [market for market in markets if is_open_market(market)],
+                [
+                    market
+                    for market in markets
+                    if is_open_market(market)
+                    and market_ticker(market)
+                    not in deferred_official_pending_tickers
+                ],
                 key=research_market_priority_key,
             )
 
         def sourceable_series_fallback(selected_tickers: set[str] | None = None) -> list[object]:
-            if not hasattr(self.rest, "get_markets"):
+            if not official_pending_lookup_available or not hasattr(self.rest, "get_markets"):
                 return []
             selected_tickers = selected_tickers if selected_tickers is not None else set()
             candidates: dict[str, object] = {}
@@ -1483,6 +1600,7 @@ class TradingBot:
                         not ticker
                         or ticker in selected_tickers
                         or ticker in candidates
+                        or ticker in deferred_official_pending_tickers
                         or not ticker_available(ticker)
                     ):
                         continue
@@ -1576,11 +1694,15 @@ class TradingBot:
             if unsourceable_targets:
                 return unsourceable_targets[:max_markets]
             return open_markets_by_price(market_list)[:max_markets]
+        if not official_pending_lookup_available:
+            return []
         sourceable = sorted(
             [
                 market
                 for market in market_list
                 if is_open_market(market)
+                and market_ticker(market)
+                not in deferred_official_pending_tickers
                 and ticker_available(market_ticker(market))
                 and market_has_research_source_path(
                     self._enrich_research_prewarm_market_source_path(market)

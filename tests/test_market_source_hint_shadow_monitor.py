@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 import inspect
+import logging
 from pathlib import Path
 import sqlite3
 from types import SimpleNamespace
@@ -299,6 +300,35 @@ async def test_shadow_capture_supervisor_contains_store_initialization_failure(
     )
 
     await monitor.run(stop_event)
+
+
+@pytest.mark.asyncio
+async def test_shadow_capture_supervisor_logs_each_completed_cycle(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    stop_event = asyncio.Event()
+
+    async def stop_after_cycle(_seconds: float) -> None:
+        stop_event.set()
+
+    monitor = MarketSourceHintShadowMonitor(
+        store=MarketSourceHintShadowStore(tmp_path / "data" / "shadow.db"),
+        get_markets=lambda: (_kalshi_market(),),
+        get_series_metadata=lambda: {},
+        seen_state_path=tmp_path / "state" / "seen.json",
+        feed_url_builders=(),
+        max_markets=1,
+        sleep=stop_after_cycle,
+    )
+
+    with caplog.at_level(logging.INFO, logger=monitor_module.logger.name):
+        await monitor.run(stop_event)
+
+    assert (
+        "source-hint shadow capture cycle markets=1 queries=0 feeds=0 "
+        "captured=0 timeouts=0 failures=0 store_failures=0"
+    ) in caplog.text
 
 
 @pytest.mark.asyncio

@@ -138,7 +138,19 @@ class MarketSourceHintShadowMonitor:
                 initialized = True
 
             try:
-                await self.run_once()
+                result = await self.run_once()
+                logger.info(
+                    "source-hint shadow capture cycle "
+                    "markets=%d queries=%d feeds=%d captured=%d "
+                    "timeouts=%d failures=%d store_failures=%d",
+                    result.markets_considered,
+                    result.queries_attempted,
+                    result.feeds_attempted,
+                    result.records_captured,
+                    result.timed_out_feeds,
+                    result.failed_feeds,
+                    result.store_failures,
+                )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

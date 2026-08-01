@@ -19,6 +19,33 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.36] - 2026-08-01
+
+### Added
+
+- **Fee-net Kalshi paper admission.** Paper entries now quote the pinned,
+  direct-account taker fee from final execution terms and reject unscorable or
+  non-positive expected net edge before a trade is recorded. Live and
+  non-Kalshi paths are unchanged.
+- **Fair periodic research prewarm.** The scheduler reserves a bounded
+  official-data retry while preventing deferred official-pending tasks from
+  re-entering generic, runtime, or sourceable fallback selection. If the full
+  pending-status lookup fails, unclassified periodic fills fail closed while
+  known due work continues.
+- **Source-hint capture heartbeat.** The isolated shadow monitor logs compact
+  completed-cycle counters without changing its intake, research, or order
+  boundaries.
+
+### Verification
+
+- `CI=1 .venv/bin/python -m pytest -q tests/test_executor.py tests/test_executor_execution_depth.py tests/test_fees.py tests/test_main_pipeline.py tests/test_research_dossier.py tests/test_market_source_hint_shadow_monitor.py`
+- Clean-worktree suite: `5787 passed, 9 skipped, 1 deselected, 71 xfailed`.
+  The single deselection is the host-installed launchd plist equivalence test;
+  it was separately verified in the active workspace after canonical plist
+  regeneration.
+- Independent reviews covered final-term fee quoting, periodic pending-task
+  reservation and lookup-failure behavior, and source-hint isolation.
+
 ## [0.33.35] - 2026-08-01
 
 ### Added
