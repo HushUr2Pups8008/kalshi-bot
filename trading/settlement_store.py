@@ -731,6 +731,90 @@ def canonical_entry_schema_ready(conn: sqlite3.Connection) -> bool:
     ) == ("TEXT", 0, 0)
 
 
+def _fee_net_settlement_credit_cents(
+    conn: sqlite3.Connection,
+    *,
+    observation_sha256: str,
+    trades: list[sqlite3.Row],
+) -> tuple[Decimal | None, str | None]:
+    """Return the exact net bankroll credit for a fee-net observation.
+
+    Gross v1 fields remain the parent observation record. The accounting ledger
+    is the only source allowed to change the applied bankroll credit.
+    """
+
+    fee_net_trades = [
+        row
+        for row in trades
+        if row["fee_net_accounting_version"] is not None
+    ]
+    try:
+        accounting_table_exists = conn.execute(
+            """
+            SELECT 1 FROM sqlite_schema
+            WHERE type='table' AND name='paper_trade_accounting'
+            """
+        ).fetchone() is not None
+    except sqlite3.DatabaseError:
+        return None, "schema"
+    if not fee_net_trades:
+        if not accounting_table_exists:
+            return None, None
+        try:
+            orphan = conn.execute(
+                """
+                SELECT 1 FROM paper_trade_accounting
+                WHERE settlement_observation_sha256=?
+                LIMIT 1
+                """,
+                (observation_sha256,),
+            ).fetchone()
+        except sqlite3.DatabaseError:
+            return None, "schema"
+        return (None, "orphan") if orphan is not None else (None, None)
+    if len(fee_net_trades) != len(trades) or len(fee_net_trades) != 1:
+        return None, "allocation"
+    if not accounting_table_exists:
+        return None, "schema"
+    try:
+        # Import lazily: paper_accounting imports this module for the gross-v1
+        # schema contract, so an eager import would create a cycle.
+        from trading.paper_accounting import (
+            PAPER_ACCOUNTING_VERSION,
+            PaperAccountingRecord,
+            paper_accounting_schema_contract_matches,
+        )
+
+        if not paper_accounting_schema_contract_matches(conn):
+            return None, "schema"
+        ledger_rows = conn.execute(
+            """
+            SELECT * FROM paper_trade_accounting
+            WHERE settlement_observation_sha256=?
+            ORDER BY trade_id
+            """,
+            (observation_sha256,),
+        ).fetchall()
+        if len(ledger_rows) != 1:
+            return None, "row_count"
+        entry = PaperAccountingRecord.from_database_row(ledger_rows[0])
+        trade = fee_net_trades[0]
+        if (
+            entry.trade_id != str(trade["trade_id"])
+            or entry.accounting_version != PAPER_ACCOUNTING_VERSION
+            or int(trade["fee_net_accounting_version"])
+            != PAPER_ACCOUNTING_VERSION
+            or entry.settlement_observation_sha256 != observation_sha256
+            or entry.gross_settlement_payout * Decimal("100")
+            != _parse_decimal(trade["gross_payout_cents"])
+        ):
+            return None, "linkage"
+        assert entry.net_settlement_payout is not None
+        return entry.net_settlement_payout * Decimal("100"), None
+    except (TypeError, ValueError, sqlite3.DatabaseError):
+        return None, "invalid"
+
+
 @lru_cache(maxsize=1)
 def _expected_settlement_schema_contract_signature() -> str:
     conn = _SQLITE_CONNECT(":memory:")
@@ -2137,6 +2221,20 @@ class SettlementStore:
         metrics: dict[str, int | str | bool] = {}
         if not _schema_objects_ready(self._conn):
             return StoreCheck(False, ("schema_objects",), {"schema_objects_ok": False})
+        try:
+            paper_trade_columns = {
+                str(row[1])
+                for row in self._conn.execute("PRAGMA table_info(paper_trades)")
+            }
+        except sqlite3.DatabaseError:
+            return StoreCheck(False, ("paper_trade_columns",), {"schema_objects_ok": False})
+        fee_net_marker_available = "fee_net_accounting_version" in paper_trade_columns
+        fee_net_marker_sql = (
+            "fee_net_accounting_version"
+            if fee_net_marker_available
+            else "NULL"
+        )
+        metrics["fee_net_marker_available"] = fee_net_marker_available
         foreign_key_violations = _foreign_key_violation_count(self._conn)
         metrics["foreign_key_violations"] = foreign_key_violations
         if foreign_key_violations:
@@ -2256,7 +2354,7 @@ class SettlementStore:
                 reconstructed_entry[0] if reconstructed_entry is not None else None
             )
             trades = self._conn.execute(
-                """
+                f"""
                 SELECT trade_id, ticker, venue, venue_market_id, side,
                        contracts, price_cents, cost_dollars, pnl_dollars,
                        gross_payout_cents,
@@ -2266,7 +2364,8 @@ class SettlementStore:
                        ts AS entry_ts, estimated_prob, entry_price_cents,
                        signal_source, series_ticker, llm_magnitude,
                        llm_confidence, keywords_matched, fast_lane_p,
-                       accumulation_p, structural_p
+                       accumulation_p, structural_p,
+                       {fee_net_marker_sql} AS fee_net_accounting_version
                 FROM paper_trades
                 WHERE settlement_observation_sha256=?
                 ORDER BY trade_id
@@ -2276,6 +2375,25 @@ class SettlementStore:
             linked_trades += len(trades)
             if len(trades) != observation["applied_trade_count"]:
                 failures.append(f"trade_count:{observation_id}")
+            fee_net_observation = any(
+                row["fee_net_accounting_version"] is not None
+                for row in trades
+            )
+            fee_net_credit_cents: Decimal | None = None
+            fee_net_accounting_error: str | None = None
+            if fee_net_marker_available:
+                fee_net_credit_cents, fee_net_accounting_error = (
+                    _fee_net_settlement_credit_cents(
+                        self._conn,
+                        observation_sha256=observation_id,
+                        trades=trades,
+                    )
+                )
+                if fee_net_accounting_error is not None:
+                    failures.append(
+                        f"fee_net_accounting:{observation_id}:"
+                        f"{fee_net_accounting_error}"
+                    )
 
             trade_payout = Decimal("0")
             noncanonical_amount = False
@@ -2389,6 +2507,11 @@ class SettlementStore:
                     invalid_trade_outcomes += 1
 
                 if canonical_observation is not None:
+                    # Gross-only event consumers cannot safely represent a
+                    # fee-net settlement. The exact ledger remains canonical
+                    # until a versioned net event contract is available.
+                    if fee_net_observation:
+                        continue
                     trade_event = dict(row)
                     trade_event["won"] = (
                         None
@@ -2449,7 +2572,12 @@ class SettlementStore:
             else:
                 if trade_payout != observation_payout:
                     failures.append(f"trade_payout:{observation_id}")
-                if bankroll_before + observation_payout != bankroll_after:
+                bankroll_credit = (
+                    fee_net_credit_cents
+                    if fee_net_credit_cents is not None
+                    else observation_payout
+                )
+                if bankroll_before + bankroll_credit != bankroll_after:
                     failures.append(f"bankroll:{observation_id}")
             if any(
                 row["resolved"] != 1

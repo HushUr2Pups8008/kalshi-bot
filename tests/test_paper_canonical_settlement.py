@@ -7,6 +7,7 @@ import asyncio
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+import hashlib
 import inspect
 import json
 from pathlib import Path
@@ -23,6 +24,7 @@ from trading.paper_accounting import (
     PAPER_ACCOUNTING_VERSION,
     PaperAccountingAdmissionError,
     PaperAccountingHandlers,
+    PaperAccountingRecord,
 )
 from trading.executor import TradeExecutor
 from trading.portfolio import Portfolio, Position
@@ -33,7 +35,16 @@ from trading.settlement import (
     VoidRefundContract,
     build_settlement_observation,
 )
-from trading.settlement_store import settlement_schema_contract_matches
+from trading.settlement_store import SettlementStore, settlement_schema_contract_matches
+from trading.settlement_economics import (
+    KALSHI_FIX_MISC_FEE_RECEIPT_V1,
+    SettlementEconomicsBinding,
+    SettlementEconomicsContract,
+    SettlementEconomicsEvidence,
+    canonical_json,
+    derive_settlement_cashflows,
+    derive_settlement_fee_receipt,
+)
 from trading.venue import MarketRef, Venue
 
 
@@ -91,6 +102,7 @@ def _observation(
     void_refund: VoidRefundContract | None = None,
     previous: SettlementObservation | None = None,
     supersedes: str | None = None,
+    source_id: str = SOURCE_ID,
 ) -> SettlementObservation:
     authoritative_payload = payload or {
         "id": market_ref.venue_market_id,
@@ -105,10 +117,106 @@ def _observation(
         observed_at=observed_at,
         effective_at=effective_at,
         rules_version=RULES_VERSION,
-        source_id=SOURCE_ID,
+        source_id=source_id,
         void_refund=void_refund,
         previous_observation=previous,
         supersedes_observation_sha256=supersedes,
+    )
+
+
+def _fee_net_settlement_payload(
+    market_ref: MarketRef,
+    outcome: MarketOutcome,
+    *,
+    settlement_fee: str = "0.0137",
+) -> dict[str, object]:
+    account_party_id = "test-customer-account"
+    message = {
+        "MarketSettlementReportID": "test-settlement-report-1",
+        "NoMarketSettlementPartyIDs": [
+            {
+                "LongQty": "5",
+                "MarketSettlementPartyID": account_party_id,
+                "MarketSettlementPartyRole": "24",
+                "MiscFees": [
+                    {
+                        "MiscFeeAmt": settlement_fee,
+                        "MiscFeeBasis": "0",
+                        "MiscFeeCurr": "USD",
+                        "MiscFeeType": "4",
+                    }
+                ],
+                "NoMiscFees": "1",
+                "ShortQty": "0",
+            }
+        ],
+        "Symbol": market_ref.venue_market_id,
+    }
+    message_json = canonical_json(message)
+    return {
+        "market_id": market_ref.venue_market_id,
+        "result": outcome.value,
+        "settlement_fee_receipt": {
+            "message": message,
+            "message_sha256": hashlib.sha256(message_json.encode("utf-8")).hexdigest(),
+        },
+    }
+
+
+def _fee_net_evidence(
+    trader,
+    trade_id: str,
+    observation: SettlementObservation,
+) -> SettlementEconomicsEvidence:
+    accounting_row = trader._conn.execute(
+        "SELECT * FROM paper_trade_accounting WHERE trade_id=?",
+        (trade_id,),
+    ).fetchone()
+    assert accounting_row is not None
+    accounting = PaperAccountingRecord.from_database_row(accounting_row)
+    trade = trader._conn.execute(
+        "SELECT side FROM paper_trades WHERE trade_id=?",
+        (trade_id,),
+    ).fetchone()
+    assert trade is not None
+    contract = SettlementEconomicsContract(
+        settlement_fee_receipt_profile=KALSHI_FIX_MISC_FEE_RECEIPT_V1,
+        void_refund_policy=None,
+    )
+    binding = SettlementEconomicsBinding(
+        venue=observation.market_ref.venue,
+        venue_market_id=observation.market_ref.venue_market_id,
+        account_party_id_sha256=hashlib.sha256(
+            b"test-customer-account"
+        ).hexdigest(),
+        contract_fingerprint="contract-v1",
+        rules_fingerprint="rules-v1",
+        settlement_fingerprint="settlement-v1",
+        authoritative_observation_sha256=observation.observation_sha256,
+        authoritative_payload_sha256=observation.payload_sha256,
+        source_id=observation.source_id,
+    )
+    receipt = derive_settlement_fee_receipt(
+        contract=contract,
+        binding=binding,
+        source_payload_json=observation.canonical_payload_json,
+    )
+    cashflows = derive_settlement_cashflows(
+        contract=contract,
+        binding=binding,
+        outcome=observation.outcome,
+        held_side=str(trade["side"]).lower(),
+        quantity=accounting.quantity,
+        entry_price=accounting.price,
+        entry_fee=accounting.quote.net_fee,
+        void_refund=observation.void_refund,
+        fee_receipt=receipt,
+    )
+    return SettlementEconomicsEvidence(
+        contract=contract,
+        binding=binding,
+        fee_receipt=receipt,
+        cashflows=cashflows,
     )
 
 
@@ -287,6 +395,51 @@ def test_enabled_accounting_installs_connection_bound_sqlite_handlers(
     ).fetchone()
     assert row is not None
     assert row["entry_request_id"] == "candidate-stable-request-2"
+
+
+def test_fee_net_entry_rejects_second_open_trade_for_same_canonical_market(
+    trader_factory,
+    monkeypatch,
+):
+    trader = trader_factory("accounting-one-fee-net-trade-per-market")
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", True)
+    market_ref = MarketRef(
+        Venue.KALSHI,
+        "KX-ACCT-ONE-FEE-NET",
+        "KX-ACCT-ONE-FEE-NET",
+    )
+    analysis = _make_mock_analysis(ticker=market_ref.alias, capped_dollars=11.0)
+    analysis.venue = market_ref.venue.value
+    analysis.market.venue = market_ref.venue.value
+    analysis.market.market_id = market_ref.alias
+    analysis.market.venue_market_id = market_ref.venue_market_id
+    first_trade_id = _record_analysis(
+        trader,
+        analysis,
+        trade_id="acctfee00006",
+        entry_request_id="candidate-stable-request-one-market-1",
+    )
+
+    with pytest.raises(
+        PaperAccountingAdmissionError,
+        match="one open trade per canonical market",
+    ):
+        _record_analysis(
+            trader,
+            analysis,
+            trade_id="acctfee00007",
+            entry_request_id="candidate-stable-request-one-market-2",
+        )
+
+    assert trader._conn.execute(
+        "SELECT COUNT(*) FROM paper_trades"
+    ).fetchone()[0] == 1
+    assert trader._conn.execute(
+        "SELECT COUNT(*) FROM paper_trade_accounting"
+    ).fetchone()[0] == 1
+    assert trader._conn.execute(
+        "SELECT trade_id FROM paper_trades"
+    ).fetchone()[0] == first_trade_id
 
 
 def test_fee_net_parent_marker_quarantines_nonpersisting_entry_handler(
@@ -1108,6 +1261,145 @@ def test_fee_net_entry_blocks_legacy_gross_settlement_after_disabled_restart(
     assert tuple(accounting) == (None, None, None, None, None, None, None)
 
 
+def test_fee_net_entry_settles_atomically_with_exact_typed_evidence(
+    trader_factory,
+    monkeypatch,
+):
+    trader = trader_factory("accounting-settlement-evidence")
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", True)
+    market_ref = MarketRef(
+        Venue.KALSHI,
+        "KX-ACCT-SETTLE-EVIDENCE",
+        "KX-ACCT-SETTLE-EVIDENCE",
+    )
+    analysis = _make_mock_analysis(ticker=market_ref.alias, capped_dollars=12.0)
+    analysis.venue = market_ref.venue.value
+    analysis.market.venue = market_ref.venue.value
+    analysis.market.market_id = market_ref.alias
+    analysis.market.venue_market_id = market_ref.venue_market_id
+    trade_id = _record_analysis(
+        trader,
+        analysis,
+        trade_id="acctfee00004",
+        entry_request_id="candidate-stable-request-settlement-evidence",
+    )
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
+    observation = _observation(
+        market_ref,
+        MarketOutcome.YES,
+        payload=_fee_net_settlement_payload(market_ref, MarketOutcome.YES),
+        source_id="kalshi-fix-market-settlement-v1",
+    )
+    evidence = _fee_net_evidence(trader, trade_id, observation)
+    before = _financial_snapshot(trader)
+
+    assert _resolve(
+        trader,
+        observation,
+        fee_net_evidence_by_trade_id={trade_id: evidence},
+    ) is True
+
+    accounting = trader._conn.execute(
+        """
+        SELECT settlement_observation_sha256, settlement_fee_dollars,
+               settlement_refund_dollars, gross_settlement_payout_dollars,
+               net_settlement_payout_dollars, fee_net_pnl_dollars
+        FROM paper_trade_accounting
+        WHERE trade_id=?
+        """,
+        (trade_id,),
+    ).fetchone()
+    assert accounting["settlement_observation_sha256"] == observation.observation_sha256
+    assert accounting["settlement_fee_dollars"] == str(evidence.cashflows.settlement_fee)
+    assert accounting["settlement_refund_dollars"] == str(evidence.cashflows.settlement_refund)
+    assert accounting["gross_settlement_payout_dollars"] == str(evidence.cashflows.gross_payout)
+    assert accounting["net_settlement_payout_dollars"] == str(evidence.cashflows.net_payout)
+    entry = PaperAccountingRecord.from_database_row(
+        trader._conn.execute(
+            "SELECT * FROM paper_trade_accounting WHERE trade_id=?",
+            (trade_id,),
+        ).fetchone()
+    )
+    assert Decimal(accounting["fee_net_pnl_dollars"]) == (
+        evidence.cashflows.net_payout - entry.net_entry_debit
+    )
+    observation_row = trader._conn.execute(
+        """
+        SELECT gross_payout_cents
+        FROM paper_settlement_observations
+        WHERE observation_sha256=?
+        """,
+        (observation.observation_sha256,),
+    ).fetchone()
+    assert Decimal(observation_row["gross_payout_cents"]) == (
+        evidence.cashflows.gross_payout * Decimal("100")
+    )
+    assert _bankroll_cents(trader) == (
+        before["bankroll_cents"] + evidence.cashflows.net_payout * Decimal("100")
+    )
+    assert trader._conn.execute(
+        "SELECT COUNT(*) FROM paper_settlement_quarantine"
+    ).fetchone()[0] == 0
+    assert trader._conn.execute(
+        "SELECT COUNT(*) FROM paper_settlement_outbox"
+    ).fetchone()[0] == 0
+    with SettlementStore(trader.db_path, read_only=True) as settlement_store:
+        check = settlement_store.conservation(now=datetime.now(timezone.utc))
+    assert check.ok, check.failures
+
+
+def test_fee_net_typed_evidence_rejects_wrong_observation_binding(
+    trader_factory,
+    monkeypatch,
+):
+    trader = trader_factory("accounting-settlement-evidence-binding")
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", True)
+    market_ref = MarketRef(
+        Venue.KALSHI,
+        "KX-ACCT-SETTLE-BINDING",
+        "KX-ACCT-SETTLE-BINDING",
+    )
+    analysis = _make_mock_analysis(ticker=market_ref.alias, capped_dollars=12.0)
+    analysis.venue = market_ref.venue.value
+    analysis.market.venue = market_ref.venue.value
+    analysis.market.market_id = market_ref.alias
+    analysis.market.venue_market_id = market_ref.venue_market_id
+    trade_id = _record_analysis(
+        trader,
+        analysis,
+        trade_id="acctfee00005",
+        entry_request_id="candidate-stable-request-settlement-binding",
+    )
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
+    observation = _observation(
+        market_ref,
+        MarketOutcome.YES,
+        payload=_fee_net_settlement_payload(market_ref, MarketOutcome.YES),
+        source_id="kalshi-fix-market-settlement-v1",
+    )
+    evidence = _fee_net_evidence(trader, trade_id, observation)
+    invalid_evidence = replace(
+        evidence,
+        binding=replace(
+            evidence.binding,
+            authoritative_observation_sha256="b" * 64,
+        ),
+    )
+    before = _financial_snapshot(trader)
+
+    assert _resolve(
+        trader,
+        observation,
+        fee_net_evidence_by_trade_id={trade_id: invalid_evidence},
+    ) is False
+
+    _assert_quarantined_without_financial_change(trader, observation, before)
+    quarantine = trader._conn.execute(
+        "SELECT reason_code FROM paper_settlement_quarantine"
+    ).fetchone()
+    assert quarantine["reason_code"] == "fee_net_settlement_evidence_invalid"
+
+
 def test_constructor_closes_connection_when_foreign_key_setup_fails(
     monkeypatch,
     tmp_path,
@@ -1173,8 +1465,8 @@ def _record_mapped_trade(
     return recorded_id
 
 
-def _resolve(trader, observation: SettlementObservation):
-    result = trader.resolve_observation(observation)
+def _resolve(trader, observation: SettlementObservation, **kwargs):
+    result = trader.resolve_observation(observation, **kwargs)
     if inspect.isawaitable(result):
         return asyncio.run(result)
     return result

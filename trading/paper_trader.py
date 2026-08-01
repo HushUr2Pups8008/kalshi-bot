@@ -23,7 +23,7 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable, Mapping
 
 if TYPE_CHECKING:
     from tasks.calibration_task import CalibrationTask
@@ -89,6 +89,11 @@ from trading.settlement_store import (
     paper_trade_settled_outbox_contract,
     settlement_keyword_directions,
     settlement_schema_contract_matches,
+)
+from trading.settlement_economics import (
+    SettlementEconomicsEvidence,
+    SettlementEconomicsUnscorableError,
+    derive_settlement_cashflows,
 )
 from trading.venue import MarketRef, Venue, normalize_venue
 from utils.logger import get_logger, trade_log, TRADE_LOG_FILE
@@ -1475,6 +1480,34 @@ class PaperTrader:
                 "fee-net accounting callback ended its parent transaction"
             )
 
+    def _dispatch_fee_net_settlement(self, record: PaperAccountingRecord) -> None:
+        assert self._paper_accounting_handlers is not None
+        connection = self._conn
+        if not isinstance(connection, _FeeNetAccountingConnection):
+            raise PaperAccountingAdmissionError(
+                "fee-net accounting requires a guarded SQLite connection"
+            )
+        guard = _FeeNetHandlerTransactionGuard(connection._fee_net_external_authorizer)
+        connection._activate_fee_net_handler_guard(guard)
+        try:
+            self._paper_accounting_handlers.dispatch_settlement(record)
+            if guard.blocked:
+                raise PaperAccountingAdmissionError(
+                    "fee-net accounting callback transaction control is forbidden"
+                )
+        except (sqlite3.DatabaseError, _FeeNetHandlerTransactionControlError) as exc:
+            if guard.blocked:
+                raise PaperAccountingAdmissionError(
+                    "fee-net accounting callback transaction control is forbidden"
+                ) from exc
+            raise
+        finally:
+            connection._deactivate_fee_net_handler_guard()
+        if not connection.in_transaction:
+            raise PaperAccountingAdmissionError(
+                "fee-net accounting callback ended its parent transaction"
+            )
+
     @staticmethod
     def _build_fee_net_entry_record(
         *,
@@ -1963,6 +1996,22 @@ class PaperTrader:
                             existing_trade_id,
                             created=False,
                         )
+                    existing_market_trade = self._conn.execute(
+                        """
+                        SELECT trade_id
+                        FROM paper_trades
+                        WHERE resolved=0 AND venue=? AND venue_market_id=?
+                          AND identity_status='mapped'
+                        LIMIT 1
+                        """,
+                        (venue, venue_market_id),
+                    ).fetchone()
+                    if existing_market_trade is not None:
+                        raise PaperAccountingAdmissionError(
+                            "fee-net paper entry requires one open trade per "
+                            "canonical market until an exact fee allocation "
+                            "contract exists"
+                        )
                     fee_net_schedule = self._require_fee_net_entry_contract(
                         analysis,
                         entry_request_id,
@@ -2146,14 +2195,28 @@ class PaperTrader:
 
         return PaperTradeWriteResult(trade_id, created=True)
 
-    def resolve_observation(self, observation: SettlementObservation) -> bool:
-        """Apply one canonical observation without wiring runtime callers."""
+    def resolve_observation(
+        self,
+        observation: SettlementObservation,
+        *,
+        fee_net_evidence_by_trade_id: Mapping[str, SettlementEconomicsEvidence] | None = None,
+    ) -> bool:
+        """Apply one canonical observation without wiring runtime callers.
+
+        The optional evidence map is deliberately an explicit, unwired API. It
+        does not enable fee-net admission or runtime settlement collection.
+        """
         with self._transaction_lock:
-            return self._resolve_observation_locked(observation)
+            return self._resolve_observation_locked(
+                observation,
+                fee_net_evidence_by_trade_id=fee_net_evidence_by_trade_id,
+            )
 
     def _resolve_observation_locked(
         self,
         observation: SettlementObservation,
+        *,
+        fee_net_evidence_by_trade_id: Mapping[str, SettlementEconomicsEvidence] | None = None,
     ) -> bool:
         if not isinstance(observation, SettlementObservation):
             raise TypeError("observation must be a SettlementObservation")
@@ -2229,16 +2292,36 @@ class PaperTrader:
                 return False
 
             fee_net_trade_ids = self._fee_net_accounting_trade_ids(trades)
-            if fee_net_trade_ids:
+            if fee_net_trade_ids and fee_net_evidence_by_trade_id is None:
                 raise _SettlementQuarantineRequired(
                     "fee_net_settlement_evidence_unavailable",
                     {"trade_ids": fee_net_trade_ids},
                 )
 
-            outcomes, total_payout_cents = self._canonical_trade_outcomes(
+            outcomes, gross_payout_cents = self._canonical_trade_outcomes(
                 trades,
                 observation,
             )
+            bankroll_credit_cents = gross_payout_cents
+            applied_at_datetime = datetime.now(timezone.utc)
+            applied_at = applied_at_datetime.isoformat()
+            fee_net_settlements: dict[str, PaperAccountingRecord] = {}
+            if fee_net_trade_ids:
+                fee_net_settlements, bankroll_credit_cents = (
+                    self._build_fee_net_settlements(
+                        trades=trades,
+                        outcomes=outcomes,
+                        fee_net_trade_ids=fee_net_trade_ids,
+                        observation=observation,
+                        evidence_by_trade_id=fee_net_evidence_by_trade_id,
+                        settled_at=applied_at_datetime,
+                    )
+                )
+            elif fee_net_evidence_by_trade_id is not None:
+                self._require_no_unexpected_fee_net_evidence(
+                    fee_net_evidence_by_trade_id
+                )
+
             bankroll_row = self._conn.execute(
                 "SELECT value FROM bot_state WHERE key='notional_bankroll'"
             ).fetchone()
@@ -2251,14 +2334,15 @@ class PaperTrader:
                 _settlement_decimal(bankroll_row[0], "notional_bankroll")
                 * Decimal("100")
             )
-            bankroll_after_cents = bankroll_before_cents + total_payout_cents
-            applied_at = datetime.now(timezone.utc).isoformat()
-
+            bankroll_after_cents = bankroll_before_cents + bankroll_credit_cents
+            # Observation and parent-row fields are frozen gross accounting
+            # fields. The fee-net ledger and bankroll movement carry the net
+            # settlement fact for the explicit fee-net path.
             self._insert_canonical_observation(
                 observation,
                 applied_trade_count=len(outcomes),
                 bankroll_before_cents=bankroll_before_cents,
-                total_payout_cents=total_payout_cents,
+                total_payout_cents=gross_payout_cents,
                 bankroll_after_cents=bankroll_after_cents,
                 applied_at=applied_at,
             )
@@ -2294,6 +2378,11 @@ class PaperTrader:
                             "updated_rows": cursor.rowcount,
                         },
                     )
+                fee_net_settlement = fee_net_settlements.get(
+                    str(outcome["trade_id"])
+                )
+                if fee_net_settlement is not None:
+                    self._dispatch_fee_net_settlement(fee_net_settlement)
 
             bankroll_cursor = self._conn.execute(
                 """
@@ -2317,11 +2406,12 @@ class PaperTrader:
                 )
 
             for outcome in outcomes:
-                self._insert_canonical_outbox(
-                    observation,
-                    outcome,
-                    created_at=applied_at,
-                )
+                if str(outcome["trade_id"]) not in fee_net_settlements:
+                    self._insert_canonical_outbox(
+                        observation,
+                        outcome,
+                        created_at=applied_at,
+                    )
             self._conn.commit()
         except _SettlementObservationAlreadyApplied:
             if transaction_started:
@@ -2401,6 +2491,189 @@ class PaperTrader:
                 observation.market_ref.alias,
             ),
         ).fetchall()
+
+    @staticmethod
+    def _require_no_unexpected_fee_net_evidence(
+        evidence_by_trade_id: Mapping[str, SettlementEconomicsEvidence],
+    ) -> None:
+        if not isinstance(evidence_by_trade_id, Mapping):
+            raise _SettlementQuarantineRequired(
+                "fee_net_settlement_evidence_invalid",
+                {"error_type": "mapping_required"},
+            )
+        unexpected_trade_ids = sorted(
+            str(trade_id) for trade_id in evidence_by_trade_id
+        )
+        if unexpected_trade_ids:
+            raise _SettlementQuarantineRequired(
+                "fee_net_settlement_evidence_unexpected",
+                {"trade_ids": unexpected_trade_ids},
+            )
+
+    def _build_fee_net_settlements(
+        self,
+        *,
+        trades: Iterable[sqlite3.Row],
+        outcomes: Iterable[dict[str, Any]],
+        fee_net_trade_ids: Iterable[str],
+        observation: SettlementObservation,
+        evidence_by_trade_id: Mapping[str, SettlementEconomicsEvidence] | None,
+        settled_at: datetime,
+    ) -> tuple[dict[str, PaperAccountingRecord], Decimal]:
+        """Build one exact ledger completion from one bound market receipt.
+
+        A receipt is market/account aggregate evidence. Until a separately
+        verified allocation contract exists, permit one fee-net trade only.
+        """
+
+        try:
+            if not isinstance(evidence_by_trade_id, Mapping):
+                raise ValueError("fee-net settlement evidence must be a mapping")
+            trade_rows = tuple(trades)
+            expected_trade_ids = tuple(sorted(set(fee_net_trade_ids)))
+            trade_ids = tuple(sorted(str(row["trade_id"]) for row in trade_rows))
+            if (
+                len(expected_trade_ids) != 1
+                or len(trade_rows) != 1
+                or trade_ids != expected_trade_ids
+            ):
+                raise _SettlementQuarantineRequired(
+                    "fee_net_settlement_allocation_unavailable",
+                    {
+                        "fee_net_trade_ids": list(expected_trade_ids),
+                        "trade_ids": list(trade_ids),
+                    },
+                )
+            if any(not isinstance(trade_id, str) for trade_id in evidence_by_trade_id):
+                raise ValueError("fee-net settlement evidence keys must be strings")
+            supplied_trade_ids = tuple(sorted(evidence_by_trade_id))
+            if supplied_trade_ids != expected_trade_ids:
+                raise _SettlementQuarantineRequired(
+                    "fee_net_settlement_evidence_incomplete",
+                    {
+                        "missing_trade_ids": sorted(
+                            set(expected_trade_ids) - set(supplied_trade_ids)
+                        ),
+                        "unexpected_trade_ids": sorted(
+                            set(supplied_trade_ids) - set(expected_trade_ids)
+                        ),
+                    },
+                )
+
+            trade_id = expected_trade_ids[0]
+            trade = trade_rows[0]
+            outcome_by_trade_id = {
+                str(outcome["trade_id"]): outcome for outcome in outcomes
+            }
+            outcome = outcome_by_trade_id[trade_id]
+            evidence = evidence_by_trade_id[trade_id]
+            if not isinstance(evidence, SettlementEconomicsEvidence):
+                raise ValueError("fee-net settlement evidence must be typed")
+            self._validate_fee_net_evidence_binding(evidence, observation)
+
+            accounting_row = self._conn.execute(
+                "SELECT * FROM paper_trade_accounting WHERE trade_id=?",
+                (trade_id,),
+            ).fetchone()
+            if accounting_row is None:
+                raise ValueError("fee-net settlement has no accounting entry")
+            entry = PaperAccountingRecord.from_database_row(accounting_row)
+            self._validate_fee_net_entry_against_trade(entry, trade, observation)
+            if entry.settled_at is not None:
+                raise ValueError("fee-net settlement accounting entry is already settled")
+
+            expected_cashflows = derive_settlement_cashflows(
+                contract=evidence.contract,
+                binding=evidence.binding,
+                outcome=observation.outcome,
+                held_side=str(trade["side"]).lower(),
+                quantity=entry.quantity,
+                entry_price=entry.price,
+                entry_fee=entry.quote.net_fee,
+                void_refund=observation.void_refund,
+                fee_receipt=evidence.fee_receipt,
+            )
+            if evidence.cashflows != expected_cashflows:
+                raise ValueError("fee-net settlement cashflows do not match immutable entry")
+            if expected_cashflows.gross_payout != (
+                outcome["gross_payout_cents"] / Decimal("100")
+            ):
+                raise ValueError("fee-net settlement gross payout does not match observation")
+
+            settled_record = dataclasses.replace(
+                entry,
+                settlement_observation_sha256=observation.observation_sha256,
+                settled_at=settled_at,
+                settlement_fee=expected_cashflows.settlement_fee,
+                settlement_refund=expected_cashflows.settlement_refund,
+                gross_settlement_payout=expected_cashflows.gross_payout,
+                net_settlement_payout=expected_cashflows.net_payout,
+                fee_net_pnl=(
+                    expected_cashflows.net_payout - entry.net_entry_debit
+                ),
+            )
+            return (
+                {trade_id: settled_record},
+                expected_cashflows.net_payout * Decimal("100"),
+            )
+        except _SettlementQuarantineRequired:
+            raise
+        except (
+            KeyError,
+            PaperAccountingAdmissionError,
+            SettlementEconomicsUnscorableError,
+            TypeError,
+            ValueError,
+            sqlite3.DatabaseError,
+        ) as exc:
+            raise _SettlementQuarantineRequired(
+                "fee_net_settlement_evidence_invalid",
+                {"error_type": type(exc).__name__},
+            ) from exc
+
+    @staticmethod
+    def _validate_fee_net_evidence_binding(
+        evidence: SettlementEconomicsEvidence,
+        observation: SettlementObservation,
+    ) -> None:
+        binding = evidence.binding
+        if (
+            binding.venue is not observation.market_ref.venue
+            or binding.venue_market_id != observation.market_ref.venue_market_id
+            or binding.authoritative_observation_sha256
+            != observation.observation_sha256
+            or binding.authoritative_payload_sha256 != observation.payload_sha256
+            or binding.source_id != observation.source_id
+            or binding.source_id
+            != evidence.contract.settlement_fee_receipt_profile.source_id
+            or evidence.fee_receipt.source_payload_sha256
+            != observation.payload_sha256
+        ):
+            raise ValueError("fee-net settlement evidence is not bound to observation")
+
+    @staticmethod
+    def _validate_fee_net_entry_against_trade(
+        entry: PaperAccountingRecord,
+        trade: sqlite3.Row,
+        observation: SettlementObservation,
+    ) -> None:
+        contracts = _settlement_decimal(
+            trade["contracts"], f"{trade['trade_id']}.contracts"
+        )
+        price_cents = _settlement_decimal(
+            trade["price_cents"], f"{trade['trade_id']}.price_cents"
+        )
+        if (
+            entry.trade_id != str(trade["trade_id"])
+            or entry.accounting_version != PAPER_ACCOUNTING_VERSION
+            or "fee_net_accounting_version" not in trade.keys()
+            or trade["fee_net_accounting_version"] != PAPER_ACCOUNTING_VERSION
+            or entry.schedule_id.venue is not observation.market_ref.venue
+            or entry.quantity != contracts
+            or entry.price * Decimal("100") != price_cents
+            or entry.gross_entry_debit != contracts * price_cents / Decimal("100")
+        ):
+            raise ValueError("fee-net accounting entry does not match parent trade")
 
     def _fee_net_accounting_trade_ids(
         self,
