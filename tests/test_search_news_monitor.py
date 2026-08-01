@@ -189,6 +189,25 @@ def test_source_hint_query_lane_default_off_excludes_site_scoped_queries():
     assert queries == ["trump visit iran"]
 
 
+def test_source_hint_query_lane_shadow_excludes_site_scoped_queries():
+    market = _mkt(
+        "KXTRUMPIRAN",
+        "Will Trump visit Iran?",
+        oi=1000,
+        settlement_sources=(
+            SettlementSource(label="Associated Press", url="https://apnews.com/"),
+        ),
+    )
+
+    queries = _markets_to_queries(
+        [market],
+        market_source_hint_query_mode="shadow",
+        market_source_hint_query_cap=2,
+    )
+
+    assert queries == ["trump visit iran"]
+
+
 def test_source_hint_query_lane_production_adds_capped_site_scoped_queries():
     market = _mkt(
         "KXTRUMPIRAN",
@@ -222,6 +241,55 @@ def test_source_hint_query_results_are_tagged_before_callback():
     assert tagged.retrieval_mode == "source_hint"
     assert tagged.source_hint_query == "site:apnews.com trump visit iran"
     assert tagged.source_hint_domain == "apnews.com"
+
+
+@pytest.mark.asyncio
+async def test_search_monitor_shadow_does_not_poll_source_hint_queries(tmp_path, monkeypatch):
+    import feeds.search_news_monitor as search
+
+    queried = []
+    metadata_calls = 0
+
+    async def callback(_item):
+        pytest.fail("empty poll must not invoke the news callback")
+
+    async def fake_poll(url, _callback, _seen):
+        queried.append(url)
+
+    def get_series_metadata():
+        nonlocal metadata_calls
+        metadata_calls += 1
+        return {}
+
+    async def stop_after_cycle(_seconds):
+        raise StopAfterOneSearchCycle
+
+    market = _mkt(
+        "KXTRUMPIRAN",
+        "Will Trump visit Iran?",
+        oi=1000,
+        settlement_sources=(
+            SettlementSource(label="Associated Press", url="https://apnews.com/"),
+        ),
+    )
+    monkeypatch.setattr(search, "MARKET_SOURCE_HINTS_QUERY_MODE", "shadow")
+    monkeypatch.setattr(search, "ENABLE_MARKET_FIRST_QUERY_SHADOW", True)
+    monkeypatch.setattr(search, "MARKET_SOURCE_HINTS_QUERY_CAP", 2)
+    monkeypatch.setattr(search, "_enabled_search_engines", lambda: [("test", lambda query: query)])
+    monkeypatch.setattr(search, "poll_feed", fake_poll)
+    monkeypatch.setattr(search.asyncio, "sleep", stop_after_cycle)
+
+    with pytest.raises(StopAfterOneSearchCycle):
+        await search.run_search_news_monitor(
+            callback,
+            get_markets=lambda: [market],
+            get_series_metadata=get_series_metadata,
+            poll_interval=1,
+            seen_state_path=tmp_path / "search_seen_ids.json",
+        )
+
+    assert metadata_calls == 0
+    assert queried == ["trump visit iran"]
 
 
 def test_search_seen_state_path_is_distinct_from_rss_path():

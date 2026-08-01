@@ -19,6 +19,21 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.32] - 2026-08-01
+
+### Fixed
+
+- **Source-hint shadow isolation.** Restrict site-scoped source-hint polling
+  and normal intake to explicit `production`; `shadow` no longer consumes
+  query capacity, fetches source metadata, or enters the news callback path.
+
+### Verification
+
+- `CI=1 .venv/bin/python -m pytest tests/test_search_news_monitor.py tests/test_market_first_shadow_plan.py tests/test_market_source_hints.py -q` (`38 passed`)
+- `CI=1 .venv/bin/python -m pytest tests/test_main_pipeline.py tests/test_lifecycle_telemetry.py tests/test_main_startup.py -q` (`266 passed, 13 xfailed`)
+- `.venv/bin/ruff check feeds/search_news_monitor.py tests/test_search_news_monitor.py tests/test_market_first_shadow_plan.py`
+- Independent adversarial review found no blocking findings.
+
 ## [0.33.31] - 2026-08-01
 
 ### Fixed

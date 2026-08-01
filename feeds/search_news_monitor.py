@@ -248,7 +248,9 @@ def _markets_to_queries(
     source_hint_mode = (market_source_hint_query_mode or "off").strip().lower()
     if market_first_query_shadow and source_hint_mode == "off":
         source_hint_mode = "shadow"
-    source_hint_enabled = source_hint_mode in {"shadow", "production"}
+    # Shadow remains diagnostic-only; only explicit production may consume
+    # search capacity or enter the normal NewsItem callback chain.
+    source_hint_enabled = source_hint_mode == "production"
     source_hint_cap = (
         SEARCH_MAX_QUERIES
         if market_source_hint_query_cap is None
@@ -363,7 +365,7 @@ async def run_search_news_monitor(
         try:
             markets = get_markets()
             source_hint_query_mode = (MARKET_SOURCE_HINTS_QUERY_MODE or "off").strip().lower()
-            source_hint_query_enabled = source_hint_query_mode in {"shadow", "production"}
+            source_hint_query_enabled = source_hint_query_mode == "production"
             series_metadata = (
                 get_series_metadata()
                 if source_hint_query_enabled and get_series_metadata is not None
