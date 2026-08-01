@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
@@ -23,6 +24,7 @@ _CONTROL_ARTIFACT_BASENAMES = frozenset(
         "legacy_pending_finalization_plan.json",
     }
 )
+_FINALIZATION_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 
 
 @dataclass(frozen=True)
@@ -273,7 +275,7 @@ class LegacyPendingFinalizationCertificate:
         object.__setattr__(
             self,
             "finalization_id",
-            _require_exact_string(self.finalization_id, "finalization certificate finalization_id"),
+            _require_finalization_id(self.finalization_id),
         )
         object.__setattr__(
             self,
@@ -316,7 +318,7 @@ class LegacyPendingFinalizationCertificate:
         return {
             "schema_version": self.schema_version,
             "finalization_id": self.finalization_id,
-            "created_at_utc": self.created_at_utc.isoformat(),
+            "created_at_utc": _canonical_utc_datetime_text(self.created_at_utc),
             **self.family_summary.to_dict(),
             **self.archive_target.to_dict(),
             "finalization_plan_sha256": self.finalization_plan_sha256,
@@ -413,10 +415,7 @@ def parse_legacy_pending_finalization_certificate(
     }
     if set(value) != expected_fields:
         raise ValueError("finalization certificate is invalid")
-    finalization_id = _require_exact_string(
-        value["finalization_id"],
-        "finalization certificate finalization_id",
-    )
+    finalization_id = _require_finalization_id(value["finalization_id"])
     return LegacyPendingFinalizationCertificate(
         schema_version=value["schema_version"],
         finalization_id=finalization_id,
@@ -544,7 +543,7 @@ def _parse_utc_datetime(value: object, name: str) -> datetime:
     if parsed.tzinfo is None:
         raise ValueError(f"{name} is invalid")
     canonical = parsed.astimezone(timezone.utc)
-    if canonical.isoformat() != text:
+    if _canonical_utc_datetime_text(canonical) != text:
         raise ValueError(f"{name} is invalid")
     return canonical
 
@@ -553,6 +552,17 @@ def _require_utc_datetime(value: object, name: str) -> datetime:
     if not isinstance(value, datetime) or value.tzinfo is None:
         raise ValueError(f"{name} is invalid")
     return value.astimezone(timezone.utc)
+
+
+def _canonical_utc_datetime_text(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat(timespec="microseconds")
+
+
+def _require_finalization_id(value: object) -> str:
+    text = _require_exact_string(value, "finalization certificate finalization_id")
+    if not _FINALIZATION_ID_PATTERN.fullmatch(text):
+        raise ValueError("finalization certificate finalization_id is invalid")
+    return text
 
 
 def _canonical_json(value: object) -> str:

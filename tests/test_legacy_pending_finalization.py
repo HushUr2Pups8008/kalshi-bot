@@ -162,7 +162,7 @@ def test_finalization_certificate_serializes_exact_canonical_fields():
         "archived_root_relative_to_storage_root": (
             "data/finalized_legacy_pending_paper_cohorts/finalization-20260801t180000z"
         ),
-        "created_at_utc": "2026-08-01T18:00:00+00:00",
+        "created_at_utc": "2026-08-01T18:00:00.000000+00:00",
         "finalization_id": "finalization-20260801t180000z",
         "finalization_plan_sha256": finalization_plan_sha256(plan),
         "frozen_trade_ids": ["trade-1", "trade-2"],
@@ -191,6 +191,40 @@ def test_finalization_certificate_serializes_exact_canonical_fields():
         sort_keys=True,
     )
     assert parse_legacy_pending_finalization_certificate(expected_payload) == certificate
+
+
+def test_payload_inventory_preserves_file_byte_hash_domain_not_canonical_json_hash():
+    raw_payload_bytes = b'{\n  "market":"KX-1",\n  "score":0.5\n}\n'
+    raw_file_sha256 = hashlib.sha256(raw_payload_bytes).hexdigest()
+    canonical_json_sha256 = hashlib.sha256(
+        json.dumps(
+            {"market": "KX-1", "score": 0.5},
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    assert raw_file_sha256 != canonical_json_sha256
+
+    plan = SealedLegacyPendingFinalizationPlan(
+        family_summary=_family_summary(),
+        archive_target=_archive_target(),
+        payload_inventory=(
+            PayloadInventoryEntry(
+                path_relative_to_archive_root="payload/legacy_pending_a/payload.json",
+                file_type="file",
+                size_bytes=len(raw_payload_bytes),
+                sha256=raw_file_sha256,
+            ),
+        ),
+    )
+
+    serialized = serialize_legacy_pending_finalization_plan(plan)
+
+    assert plan.payload_inventory[0].sha256 == raw_file_sha256
+    assert raw_file_sha256 in serialized
+    assert canonical_json_sha256 not in serialized
 
 
 def test_payload_inventory_rejects_control_files_from_hashed_domain():
@@ -275,8 +309,8 @@ def test_parsers_reject_noncanonical_ids_timestamps_and_sha256():
 
     certificate_payload = {
         "schema_version": FINALIZATION_CERTIFICATE_SCHEMA_VERSION,
-        "finalization_id": " finalization-20260801t180000z",
-        "created_at_utc": "2026-08-01T18:00:00",
+        "finalization_id": "finalization/20260801t180000z",
+        "created_at_utc": "2026-08-01T18:00:00.000000+00:00",
         "pending_root_relative_to_storage_root": "data/legacy_pending_paper_cohorts",
         "archived_root_relative_to_storage_root": (
             "data/finalized_legacy_pending_paper_cohorts/finalization-20260801t180000z"
@@ -296,4 +330,9 @@ def test_parsers_reject_noncanonical_ids_timestamps_and_sha256():
         "operator_confirmation": "confirm finalization-20260801t180000z",
     }
     with pytest.raises(ValueError, match="finalization certificate finalization_id is invalid"):
+        parse_legacy_pending_finalization_certificate(certificate_payload)
+
+    certificate_payload["finalization_id"] = "finalization-20260801t180000z"
+    certificate_payload["created_at_utc"] = "2026-08-01T18:00:00+00:00"
+    with pytest.raises(ValueError, match="finalization certificate created_at_utc is invalid"):
         parse_legacy_pending_finalization_certificate(certificate_payload)
