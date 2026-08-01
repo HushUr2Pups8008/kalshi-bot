@@ -361,6 +361,12 @@ async def test_run_drains_only_weather_before_existing_cleanup(monkeypatch):
 
     monkeypatch.setattr(config_module.cfg, "polymarket_us_enabled", False)
     monkeypatch.setattr(config_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(
+        config_module.cfg,
+        "enable_market_source_hint_shadow_capture",
+        False,
+        raising=False,
+    )
     monkeypatch.setattr(main_module, "emit_startup_banner", MagicMock())
     monkeypatch.setattr(main_module, "_log_bankroll_summary", MagicMock())
     monkeypatch.setattr(main_module, "run_rss_monitor", _record_rss_monitor)

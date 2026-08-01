@@ -125,6 +125,7 @@ class ResearchPrewarmResult:
     query_count: int = 0
     evidence_count: int = 0
     skip_reason: str | None = None
+    research_pending_origin: str | None = None
     error: str | None = None
     research_run_id: str | None = None
     research_contract_fingerprint: str | None = None
@@ -285,6 +286,11 @@ class ResearchPrewarmTask:
                     summary=str(getattr(verdict, "summary", "") or ""),
                     verdict_status=_status_value(getattr(verdict, "status", "")),
                     skip_reason=getattr(verdict, "skip_reason", None),
+                    research_pending_origin=getattr(
+                        verdict,
+                        "research_pending_origin",
+                        None,
+                    ),
                     force_side=getattr(verdict, "force_side", None),
                     estimated_probability=getattr(
                         verdict,
@@ -327,6 +333,11 @@ class ResearchPrewarmTask:
                 query_count=len(getattr(verdict, "queries", ()) or ()),
                 evidence_count=len(getattr(verdict, "evidence", ()) or ()),
                 skip_reason=getattr(verdict, "skip_reason", None),
+                research_pending_origin=getattr(
+                    verdict,
+                    "research_pending_origin",
+                    None,
+                ),
                 research_run_id=getattr(verdict, "research_run_id", None),
                 research_contract_fingerprint=_research_contract_fingerprint(verdict),
                 research_persisted=getattr(verdict, "research_persisted", None),
@@ -912,6 +923,11 @@ async def _reconcile_prewarm_persisted_status(
             **getattr(verdict, "__dict__", {}),
             "status": stored_status,
             "skip_reason": getattr(snapshot, "last_skip_reason", None),
+            "research_pending_origin": getattr(
+                snapshot,
+                "last_research_pending_origin",
+                None,
+            ),
             "force_side": getattr(snapshot, "last_force_side", None),
             "estimated_probability": getattr(
                 snapshot,
@@ -948,6 +964,7 @@ async def _write_research_prewarm_result(result: ResearchPrewarmResult) -> None:
         query_count=result.query_count,
         evidence_count=result.evidence_count,
         skip_reason=result.skip_reason,
+        research_pending_origin=result.research_pending_origin,
         error=result.error,
         research_run_id=result.research_run_id,
         research_contract_fingerprint=result.research_contract_fingerprint,

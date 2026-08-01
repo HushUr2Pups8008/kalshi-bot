@@ -62,6 +62,9 @@ from utils.lifecycle import strict_optional_bool
 _RESEARCH_PROVIDER_ERROR_ATTRIBUTIONS = frozenset(
     {"timeout", "generic_search_unavailable", "provider_exception"}
 )
+_RESEARCH_PENDING_ORIGINS = frozenset(
+    {"no_edge", "negative_net_edge_after_costs"}
+)
 _RESEARCH_GENERIC_SEARCH_CIRCUIT_STATES = frozenset(
     {"closed", "open", "half_open"}
 )
@@ -930,6 +933,7 @@ class TradeLogger:
         query_count: int = 0,
         evidence_count: int = 0,
         skip_reason: str | None = None,
+        research_pending_origin: str | None = None,
         error: str | None = None,
         research_run_id: str | None = None,
         research_contract_fingerprint: str | None = None,
@@ -956,6 +960,8 @@ class TradeLogger:
         }
         if skip_reason:
             record["research_skip_reason"] = skip_reason
+        if research_pending_origin in _RESEARCH_PENDING_ORIGINS:
+            record["research_pending_origin"] = research_pending_origin
         if error:
             record["research_error"] = error
         if research_run_id:

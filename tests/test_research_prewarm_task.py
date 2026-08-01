@@ -2022,6 +2022,32 @@ async def test_prewarm_result_writer_emits_timeout_attribution(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_prewarm_result_writer_emits_pending_origin(monkeypatch):
+    emitted: list[tuple[object, dict]] = []
+
+    async def fake_write_trade_log_async(writer, **fields):
+        emitted.append((writer, fields))
+
+    monkeypatch.setattr(
+        research_prewarm_task_module,
+        "write_trade_log_async",
+        fake_write_trade_log_async,
+    )
+
+    await _write_research_prewarm_result(
+        ResearchPrewarmResult(
+            market_ticker="KXRESEARCH-PENDING-ORIGIN",
+            status="needs_research",
+            attempted=True,
+            skip_reason="official_data_pending",
+            research_pending_origin="negative_net_edge_after_costs",
+        )
+    )
+
+    assert emitted[0][1]["research_pending_origin"] == "negative_net_edge_after_costs"
+
+
+@pytest.mark.asyncio
 async def test_prewarm_run_once_emits_structured_result_events(tmp_path):
     store = ResearchDossierStore(tmp_path / "research_dossier.db")
     await store.initialize()

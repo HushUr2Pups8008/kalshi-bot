@@ -3499,6 +3499,8 @@ def test_pending_event_no_edge_verdict_stays_researchable():
 
     assert guarded.status == ResearchStatus.NEEDS_RESEARCH
     assert guarded.skip_reason == "official_data_pending"
+    assert guarded.research_pending_origin == "no_edge"
+    assert guarded.log_fields()["research_pending_origin"] == "no_edge"
     assert guarded.force_side is None
     assert guarded.market_price == pytest.approx(0.51)
 

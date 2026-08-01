@@ -80,6 +80,7 @@ _SETTLEMENT_CLAIM_TYPES = {
     "supporting",
 }
 _COUNTER_CLAIM_TYPES = {"contradiction", "disconfirming", "contradiction_check"}
+_RESEARCH_PENDING_ORIGINS = frozenset({"no_edge", "negative_net_edge_after_costs"})
 
 @dataclass(frozen=True)
 class ResearchDossierSnapshot:
@@ -98,6 +99,7 @@ class ResearchDossierSnapshot:
     last_decision_grade_status: str | None = None
     market_status: str | None = None
     market_close_time: str | None = None
+    last_research_pending_origin: str | None = None
 
 
 @dataclass(frozen=True)
@@ -148,6 +150,7 @@ class ResearchDossierStore:
         verdict_status: str,
         contract_question: str | None = None,
         skip_reason: str | None = None,
+        research_pending_origin: str | None = None,
         force_side: str | None = None,
         estimated_probability: float | None = None,
         confidence: float | None = None,
@@ -179,6 +182,7 @@ class ResearchDossierStore:
                 summary=summary,
                 verdict_status=verdict_status,
                 skip_reason=skip_reason,
+                research_pending_origin=research_pending_origin,
                 force_side=force_side,
                 estimated_probability=estimated_probability,
                 confidence=confidence,
@@ -381,6 +385,7 @@ class ResearchDossierStore:
                     last_researched_ts TEXT NOT NULL,
                     last_verdict_status TEXT NOT NULL,
                     last_skip_reason TEXT,
+                    last_research_pending_origin TEXT,
                     last_force_side TEXT,
                     last_estimated_probability REAL,
                     last_confidence REAL,
@@ -401,6 +406,7 @@ class ResearchDossierStore:
                 ("last_market_price", "REAL"),
                 ("last_estimated_edge", "REAL"),
                 ("last_decision_grade_status", "TEXT"),
+                ("last_research_pending_origin", "TEXT"),
                 ("contract_question", "TEXT"),
                 ("market_status", "TEXT"),
                 ("market_close_time", "TEXT"),
@@ -423,6 +429,7 @@ class ResearchDossierStore:
                     summary TEXT NOT NULL,
                     verdict_status TEXT NOT NULL,
                     skip_reason TEXT,
+                    research_pending_origin TEXT,
                     force_side TEXT,
                     estimated_probability REAL,
                     confidence REAL,
@@ -445,6 +452,7 @@ class ResearchDossierStore:
                 ("market_price", "REAL"),
                 ("estimated_edge", "REAL"),
                 ("decision_grade_status", "TEXT"),
+                ("research_pending_origin", "TEXT"),
                 ("contract_question", "TEXT"),
                 ("market_status", "TEXT"),
                 ("market_close_time", "TEXT"),
@@ -672,6 +680,7 @@ class ResearchDossierStore:
         contract_question: str | None,
         contract_question_supplied: bool,
         skip_reason: str | None,
+        research_pending_origin: str | None,
         force_side: str | None,
         estimated_probability: float | None,
         confidence: float | None,
@@ -707,6 +716,10 @@ class ResearchDossierStore:
                 queries=queries,
                 evidence=evidence,
             )
+        )
+        final_research_pending_origin = _validated_research_pending_origin(
+            research_pending_origin,
+            skip_reason=final_skip_reason,
         )
         final_open_questions = list(
             research_questions_for_skip(final_skip_reason, open_questions)
@@ -774,6 +787,7 @@ class ResearchDossierStore:
                 summary=summary,
                 verdict_status=final_verdict_status,
                 skip_reason=final_skip_reason,
+                research_pending_origin=final_research_pending_origin,
                 force_side=force_side,
                 estimated_probability=estimated_probability,
                 confidence=confidence,
@@ -786,7 +800,7 @@ class ResearchDossierStore:
                 market_close_time=normalized_market_close_time,
                 estimated_edge=estimated_edge,
                 decision_grade_status=final_decision_grade_status,
-            )
+                )
             for index, query in enumerate(queries):
                 conn.execute(
                     """
@@ -821,6 +835,9 @@ class ResearchDossierStore:
                     market_close_time=CASE WHEN ? THEN ? ELSE market_close_time END,
                     market_price=CASE WHEN ? THEN ? ELSE market_price END,
                     estimated_edge=CASE WHEN ? THEN ? ELSE estimated_edge END,
+                    research_pending_origin=CASE
+                        WHEN ? THEN ? ELSE research_pending_origin
+                    END,
                     decision_grade_status=CASE
                         WHEN ? THEN ? ELSE decision_grade_status
                     END,
@@ -850,6 +867,8 @@ class ResearchDossierStore:
                     market_price,
                     int(estimated_edge_supplied),
                     estimated_edge,
+                    int(final_research_pending_origin is not None),
+                    final_research_pending_origin,
                     int(decision_grade_status_supplied),
                     final_decision_grade_status,
                     int(decision_grade_reasons_supplied),
@@ -884,6 +903,7 @@ class ResearchDossierStore:
         verdict_status: str,
         contract_question: str | None = None,
         skip_reason: str | None = None,
+        research_pending_origin: str | None = None,
         force_side: str | None = None,
         estimated_probability: float | None = None,
         confidence: float | None = None,
@@ -908,12 +928,13 @@ class ResearchDossierStore:
                         market_ticker, last_research_run_id, last_contract_fingerprint,
                         contract_question,
                         last_researched_ts,
-                        last_verdict_status, last_skip_reason, last_force_side,
+                        last_verdict_status, last_skip_reason,
+                        last_research_pending_origin, last_force_side,
                         last_estimated_probability, last_confidence,
                         last_market_price, last_estimated_edge,
                         last_decision_grade_status
                     ) VALUES (
-                        ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?, ?, ?, ?, ?, ?, ?, ?
+                        ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?, ?, ?, ?, ?, ?, ?, ?, ?
                     )
                     ON CONFLICT(market_ticker) DO UPDATE SET
                         last_research_run_id=excluded.last_research_run_id,
@@ -922,6 +943,7 @@ class ResearchDossierStore:
                         last_researched_ts=excluded.last_researched_ts,
                         last_verdict_status=excluded.last_verdict_status,
                         last_skip_reason=excluded.last_skip_reason,
+                        last_research_pending_origin=excluded.last_research_pending_origin,
                         last_force_side=excluded.last_force_side,
                         last_estimated_probability=excluded.last_estimated_probability,
                         last_confidence=excluded.last_confidence,
@@ -937,6 +959,7 @@ class ResearchDossierStore:
                         contract_question,
                         verdict_status,
                         skip_reason,
+                        research_pending_origin,
                         force_side,
                         estimated_probability,
                         confidence,
@@ -952,12 +975,13 @@ class ResearchDossierStore:
                         market_ticker, last_research_run_id, last_contract_fingerprint,
                         contract_question,
                         last_researched_ts,
-                        last_verdict_status, last_skip_reason, last_force_side,
+                        last_verdict_status, last_skip_reason,
+                        last_research_pending_origin, last_force_side,
                         last_estimated_probability, last_confidence,
                         last_market_price, last_estimated_edge,
                         last_decision_grade_status
                     ) VALUES (
-                        ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?, ?, ?, ?, ?, ?, ?, ?
+                        ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?, ?, ?, ?, ?, ?, ?, ?, ?
                     )
                     """,
                     (
@@ -967,6 +991,7 @@ class ResearchDossierStore:
                         contract_question,
                         verdict_status,
                         skip_reason,
+                        research_pending_origin,
                         force_side,
                         estimated_probability,
                         confidence,
@@ -985,6 +1010,7 @@ class ResearchDossierStore:
                             last_researched_ts=strftime('%Y-%m-%dT%H:%M:%fZ','now'),
                             last_verdict_status=?,
                             last_skip_reason=?,
+                            last_research_pending_origin=?,
                             last_force_side=?,
                             last_estimated_probability=?,
                             last_confidence=?,
@@ -999,6 +1025,7 @@ class ResearchDossierStore:
                             contract_question,
                             verdict_status,
                             skip_reason,
+                            research_pending_origin,
                             force_side,
                             estimated_probability,
                             confidence,
@@ -1030,10 +1057,11 @@ class ResearchDossierStore:
                 INSERT OR IGNORE INTO research_runs (
                     research_run_id, market_ticker, trigger_headline, trigger_source,
                     contract_question, market_status, market_close_time,
-                    attempted, summary, verdict_status, skip_reason, force_side,
+                    attempted, summary, verdict_status, skip_reason,
+                    research_pending_origin, force_side,
                     estimated_probability, confidence, market_price, estimated_edge,
                     decision_grade_status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     research_run_id,
@@ -1047,6 +1075,7 @@ class ResearchDossierStore:
                     summary,
                     verdict_status,
                     skip_reason,
+                    research_pending_origin,
                     force_side,
                     estimated_probability,
                     confidence,
@@ -1251,6 +1280,11 @@ class ResearchDossierStore:
             last_researched_ts=row["last_researched_ts"],
             last_verdict_status=row["last_verdict_status"],
             last_skip_reason=row["last_skip_reason"],
+            last_research_pending_origin=(
+                row["last_research_pending_origin"]
+                if "last_research_pending_origin" in row.keys()
+                else None
+            ),
             last_force_side=row["last_force_side"],
             last_estimated_probability=(
                 float(row["last_estimated_probability"])
@@ -1624,6 +1658,25 @@ def _validate_timeout_diagnostic(
         raise ValueError("timeout diagnostic contract fingerprint mismatch")
     if not diagnostic.timeout_stage:
         raise ValueError("timeout diagnostic stage is required")
+
+
+def _validated_research_pending_origin(
+    research_pending_origin: str | None,
+    *,
+    skip_reason: str | None,
+) -> str | None:
+    if research_pending_origin is None:
+        return None
+    normalized = str(research_pending_origin).strip()
+    if normalized not in _RESEARCH_PENDING_ORIGINS:
+        raise ValueError(
+            "research_pending_origin must be no_edge or negative_net_edge_after_costs"
+        )
+    if skip_reason != "official_data_pending":
+        raise ValueError(
+            "research_pending_origin requires official_data_pending skip reason"
+        )
+    return normalized
 
 
 def _validated_research_status(

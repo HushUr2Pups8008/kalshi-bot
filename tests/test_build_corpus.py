@@ -1122,3 +1122,98 @@ def test_buildresult_notes_reports_inclusion_count(tmp_path: Path) -> None:
     joined = " ".join(result.notes)
     assert "include_contamination=True" in joined
     assert "2 contamination rows retained" in joined
+
+
+def test_registered_oos_corpus_exposes_fee_net_ledger_fields(tmp_path: Path) -> None:
+    """The builder must carry canonical fee-net facts from the accounting ledger."""
+
+    db = tmp_path / "paper_trades.db"
+    _prepare_registered_paper_trades_db(db)
+    _write_regimes_doc(tmp_path)
+    registry_path, _ = _write_oos_registry(tmp_path)
+    ledger_fields = (
+        "accounting_version",
+        "entry_request_id",
+        "filled_at",
+        "recorded_at",
+        "net_fee_dollars",
+        "gross_entry_debit_dollars",
+        "net_entry_debit_dollars",
+        "settlement_observation_sha256",
+        "settled_at",
+        "settlement_fee_dollars",
+        "settlement_refund_dollars",
+        "gross_settlement_payout_dollars",
+        "net_settlement_payout_dollars",
+        "fee_net_pnl_dollars",
+    )
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "CREATE TABLE paper_trade_accounting ("
+            "trade_id TEXT PRIMARY KEY, " + ", ".join(f"{field} TEXT" for field in ledger_fields) + ")"
+        )
+        for trade_id in ("t3", "t4"):
+            values = {
+                "accounting_version": "1",
+                "entry_request_id": f"req-{trade_id}",
+                "filled_at": "2026-05-23T22:00:00Z",
+                "recorded_at": "2026-05-23T22:00:00Z",
+                "net_fee_dollars": "0.01",
+                "gross_entry_debit_dollars": "0.50",
+                "net_entry_debit_dollars": "0.51",
+                "settlement_observation_sha256": "a" * 64,
+                "settled_at": "2026-05-26T00:00:00Z",
+                "settlement_fee_dollars": "0.01",
+                "settlement_refund_dollars": "0",
+                "gross_settlement_payout_dollars": "1",
+                "net_settlement_payout_dollars": "0.99",
+                "fee_net_pnl_dollars": "0.48",
+            }
+            conn.execute(
+                "INSERT INTO paper_trade_accounting (trade_id, "
+                + ", ".join(ledger_fields)
+                + ") VALUES (?, "
+                + ", ".join("?" for _ in ledger_fields)
+                + ")",
+                (trade_id, *(values[field] for field in ledger_fields)),
+            )
+
+    start, end = _start_end()
+    out = tmp_path / "registered.jsonl"
+    build_corpus.build_corpus(
+        start_utc=start,
+        end_utc=end,
+        market_families=["KXTRUMPIRAN", "KXMOCTRUMP25"],
+        cohort_tag="POST_V030_2_OOS_SEED",
+        regime_label="post_v030_2_oos_seed",
+        output_path=out,
+        paper_trades_db=db,
+        regimes_doc_path=tmp_path / "docs" / "governance" / "corpus-regimes.md",
+        built_at_utc="2026-05-26T00:00:00Z",
+        include_fee_net_ledger=True,
+        oos_registration_id="profit-oos-test-a",
+        oos_registry_path=registry_path,
+    )
+
+    rows = [json.loads(line) for line in out.read_text().splitlines()]
+    assert {row["trade_id"] for row in rows} == {"t3", "t4"}
+    for row in rows:
+        assert row["fee_net_pnl_dollars"] == "0.48"
+        assert row["net_entry_debit_dollars"] == "0.51"
+        assert row["net_settlement_payout_dollars"] == "0.99"
+
+    without_ledger_out = tmp_path / "registered_without_ledger.jsonl"
+    build_corpus.build_corpus(
+        start_utc=start,
+        end_utc=end,
+        market_families=["KXTRUMPIRAN", "KXMOCTRUMP25"],
+        cohort_tag="POST_V030_2_OOS_SEED",
+        regime_label="post_v030_2_oos_seed",
+        output_path=without_ledger_out,
+        paper_trades_db=db,
+        regimes_doc_path=tmp_path / "docs" / "governance" / "corpus-regimes.md",
+        built_at_utc="2026-05-26T00:00:00Z",
+        oos_registration_id="profit-oos-test-a",
+        oos_registry_path=registry_path,
+    )
+    assert "fee_net_pnl_dollars" not in json.loads(without_ledger_out.read_text().splitlines()[0])
