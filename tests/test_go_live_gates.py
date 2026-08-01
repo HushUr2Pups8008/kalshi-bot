@@ -19,6 +19,7 @@ Fail-closed invariants preserved (the safe direction for go-live):
 """
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -153,6 +154,40 @@ def test_gate_requires_independent_realized_profit_evidence():
         failures = main._check_go_live_gates(paper)
 
     assert any("Independent realized-profit evidence unavailable" in failure for failure in failures)
+
+
+def test_archived_legacy_receipt_cannot_satisfy_profit_attestation_or_live_readiness(
+    tmp_path: Path,
+):
+    archived_receipt = (
+        tmp_path
+        / "finalized_legacy_pending_paper_cohorts"
+        / "finalization-20260801t180000z"
+        / "payload"
+        / "legacy_receipts"
+        / "receipt-1.json"
+    )
+    archived_receipt.parent.mkdir(parents=True)
+    archived_receipt.write_text('{"receipt":"legacy-only"}', encoding="utf-8")
+    paper = _paper(notional=60.0, resolved_trades=_passing_resolved())
+    paper.db_path = archived_receipt
+
+    assert not main.independent_realized_profit_evidence_available(
+        db_path=archived_receipt
+    )
+    with patch.object(main, "cfg", _cfg()), patch.object(
+        main,
+        "_provisioned_cohort_live_risk_gate_failures",
+        return_value=(True, []),
+    ), patch(
+        "scripts.mark_open_positions.compute_open_position_marks",
+        return_value={"marked_value": 0.0, "unpriced_count": 0},
+    ):
+        failures = main._check_go_live_gates(paper)
+
+    assert failures == [
+        "Independent realized-profit evidence unavailable -- gate fails closed"
+    ]
 
 
 def test_gate_hard_blocks_nonlegacy_cohort_even_when_other_local_checks_pass():

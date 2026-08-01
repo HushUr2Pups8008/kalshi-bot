@@ -12,6 +12,7 @@ import pytest
 
 from trading.legacy_settlement_receipts import build_legacy_settlement_receipt
 from trading.paper_cohorts import (
+    discover_legacy_pending_paper_risk_cohorts,
     initialize_legacy_pending_paper_cohort_manifest,
     legacy_open_exposure_fingerprint,
     resolve_runtime_paper_cohort,
@@ -21,7 +22,10 @@ from trading.settlement import build_settlement_observation, MarketOutcome
 from trading.settlement_store import SettlementStore
 from trading.legacy_pending_finalization import (
     FINALIZATION_CERTIFICATE_SCHEMA_VERSION,
+    FINALIZATION_CERTIFICATE_FILENAME,
+    FINALIZATION_CONTROL_DIRNAME,
     FINALIZATION_PLAN_SCHEMA_VERSION,
+    FINALIZATION_PLAN_FILENAME,
     LegacyPendingArchiveTarget,
     LegacyPendingFamilySummary,
     LegacyPendingFinalizationCertificate,
@@ -1102,7 +1106,7 @@ def test_apply_legacy_pending_finalization_replay_succeeds_before_live_family_re
         "apply_legacy_pending_finalization",
     )
 
-    apply_legacy_pending_finalization(
+    initial_result = apply_legacy_pending_finalization(
         db_path=fixture["root_db"],
         pending_root=fixture["pending_root"],
         sealed_plan_path=plan_path,
@@ -1114,6 +1118,34 @@ def test_apply_legacy_pending_finalization_replay_succeeds_before_live_family_re
         write=True,
     )
     assert not fixture["pending_root"].exists()
+    assert discover_legacy_pending_paper_risk_cohorts(fixture["root_db"].parent) == ()
+
+    archive_root = (
+        fixture["root_db"].parent
+        / plan.archive_target.archived_root_relative_to_storage_root
+    )
+    archived_plan_path = (
+        archive_root / FINALIZATION_CONTROL_DIRNAME / FINALIZATION_PLAN_FILENAME
+    )
+    archived_certificate_path = (
+        archive_root
+        / FINALIZATION_CONTROL_DIRNAME
+        / FINALIZATION_CERTIFICATE_FILENAME
+    )
+    archived_plan_bytes = archived_plan_path.read_bytes()
+    archived_certificate = parse_legacy_pending_finalization_certificate(
+        json.loads(archived_certificate_path.read_text(encoding="utf-8"))
+    )
+
+    assert initial_result.replayed is False
+    assert initial_result.archive_root == archive_root
+    assert archived_plan_bytes == plan_path.read_bytes()
+    assert hashlib.sha256(archived_plan_bytes).hexdigest() == plan_sha256
+    assert parse_legacy_pending_finalization_plan(json.loads(archived_plan_bytes)) == plan
+    assert archived_certificate.family_summary == plan.family_summary
+    assert archived_certificate.archive_target == plan.archive_target
+    assert archived_certificate.finalization_plan_sha256 == plan_sha256
+    assert archived_certificate.payload_inventory_sha256 == plan.payload_inventory_sha256
 
     monkeypatch.setattr(
         legacy_pending_finalization,
@@ -1136,6 +1168,67 @@ def test_apply_legacy_pending_finalization_replay_succeeds_before_live_family_re
     )
 
     assert getattr(apply_result, "replayed") is True
+    assert apply_result.archive_root == archive_root
+    assert apply_result.certificate == archived_certificate
+
+
+def test_apply_legacy_pending_finalization_replay_rejects_mismatched_archive_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import trading.legacy_pending_finalization as legacy_pending_finalization
+
+    fixture = _planner_fixture(tmp_path)
+    plan, plan_path, plan_sha256 = _write_reviewed_plan_artifact(fixture)
+    apply_legacy_pending_finalization = getattr(
+        legacy_pending_finalization,
+        "apply_legacy_pending_finalization",
+    )
+
+    apply_legacy_pending_finalization(
+        db_path=fixture["root_db"],
+        pending_root=fixture["pending_root"],
+        sealed_plan_path=plan_path,
+        expected_finalization_plan_sha256=plan_sha256,
+        operator_confirmation=(
+            "finalize legacy_pending "
+            f"{plan.archive_target.archived_root_relative_to_storage_root}"
+        ),
+        write=True,
+    )
+    archive_root = (
+        fixture["root_db"].parent
+        / plan.archive_target.archived_root_relative_to_storage_root
+    )
+    archived_payload = archive_root / plan.payload_inventory[0].path_relative_to_archive_root
+    archived_payload.write_bytes(archived_payload.read_bytes() + b"\narchive mismatch")
+
+    monkeypatch.setattr(
+        legacy_pending_finalization,
+        "plan_legacy_pending_finalization",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("mismatched archive must fail before any live-family replan")
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="published finalization archive payload inventory is invalid",
+    ):
+        apply_legacy_pending_finalization(
+            db_path=fixture["root_db"],
+            pending_root=fixture["pending_root"],
+            sealed_plan_path=plan_path,
+            expected_finalization_plan_sha256=plan_sha256,
+            operator_confirmation=(
+                "finalize legacy_pending "
+                f"{plan.archive_target.archived_root_relative_to_storage_root}"
+            ),
+            write=True,
+        )
+
+    assert not fixture["pending_root"].exists()
+    assert archived_payload.read_bytes().endswith(b"archive mismatch")
 
 
 def test_apply_legacy_pending_finalization_acquires_runtime_lock_before_staging_and_replans_under_lock(
