@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
+
+import pytest
 
 from scripts.keyword_shadow_eval import (
     BUCKET_PROMOTE,
@@ -19,8 +22,12 @@ from scripts.keyword_shadow_eval import (
     PROMOTE_MIN_SCORE,
     PROMOTE_MIN_SOURCES,
     _phrase_matches,
+    evaluate_keyword_shadow_evidence,
     evaluate_phrases,
+    load_keyword_shadow_replay_evidence,
     load_miss_corpus,
+    main,
+    materialize_keyword_shadow_snapshot,
     parse_date_end,
     parse_date_start,
     score_phrases,
@@ -454,3 +461,162 @@ class TestScorePhrases:
         result = evaluate_phrases(records, ["strait hormuz", "blockade iran"])
         for pr in result["phrases"]:
             assert pr["overlap_hits"] == 0
+
+
+REPLAY_EVIDENCE_FIXTURE = (
+    Path(__file__).resolve().parent / "fixtures" / "keyword_shadow_replay_evidence.jsonl"
+)
+
+
+def _modern_replay_evidence() -> dict:
+    return load_keyword_shadow_replay_evidence(
+        REPLAY_EVIDENCE_FIXTURE,
+        since=None,
+        until=None,
+        exclude_test=False,
+    )
+
+
+def test_modern_replay_evidence_filters_target_slice_and_counts_excluded_rows():
+    evidence = _modern_replay_evidence()
+
+    assert evidence["lines_total"] == 10
+    assert evidence["lines_malformed"] == 1
+    assert [record["ticker"] for record in evidence["coverage_records"]] == [
+        "KXCPIYOY-26JUL-T4.1",
+        "KXOIL-26AUG01",
+    ]
+    assert evidence["target_coverage_count"] == 2
+    assert evidence["excluded_legacy_or_malformed_count"] == 2
+    assert [record["ticker"] for record in evidence["precision_risk_records"]] == [
+        "KXCPIYOY-26JUL-T4.1",
+        "KXRARE-1",
+    ]
+    assert evidence["precision_risk_count"] == 2
+
+
+def test_modern_replay_evidence_emits_coverage_breadth_and_precision_risk_proxy():
+    evidence = _modern_replay_evidence()
+    result = evaluate_keyword_shadow_evidence(
+        evidence,
+        ["strait hormuz", "hormuz blockade", "rare proxy"],
+    )
+    phrase_rows = {row["phrase"]: row for row in result["phrases"]}
+
+    strait = phrase_rows["strait hormuz"]
+    assert strait["coverage_hits"] == 1
+    assert strait["coverage_rate"] == 0.5
+    assert strait["coverage_unique_ticker_count"] == 1
+    assert strait["coverage_unique_source_count"] == 1
+    assert strait["precision_risk_hits"] == 1
+    assert strait["precision_risk_rate"] == 0.5
+
+    proxy_only = phrase_rows["rare proxy"]
+    assert proxy_only["coverage_hits"] == 0
+    assert proxy_only["precision_risk_hits"] == 1
+    score_phrases(result["phrases"])
+    assert proxy_only["bucket"] == BUCKET_REJECT
+    assert result["precision_risk_is_proxy"] is True
+    assert result["precision_risk_label"] == "not_precision_truth"
+
+
+def test_snapshot_is_deterministic_and_only_freezes_whitelisted_decision_time_fields(tmp_path):
+    evidence = _modern_replay_evidence()
+    first_path = tmp_path / "first.jsonl"
+    second_path = tmp_path / "second.jsonl"
+
+    first = materialize_keyword_shadow_snapshot(first_path, evidence)
+    second = materialize_keyword_shadow_snapshot(second_path, evidence)
+
+    assert first_path.read_bytes() == second_path.read_bytes()
+    assert first["schema_version"] == 1
+    assert first["type"] == "KEYWORD_SHADOW_REPLAY_EVIDENCE_SNAPSHOT_HEADER"
+    assert first["provenance"]["target_coverage_count"] == 2
+    assert first["provenance"]["excluded_legacy_or_malformed_count"] == 2
+    assert first["provenance"]["precision_risk_count"] == 2
+    assert first["provenance"]["filters"] == {
+        "since": None,
+        "until": None,
+        "exclude_test": False,
+    }
+    lines = [json.loads(line) for line in first_path.read_text(encoding="utf-8").splitlines()]
+    assert lines[0] == first
+    assert {line["evidence_role"] for line in lines[1:]} == {
+        "target_coverage",
+        "precision_risk_proxy",
+    }
+    assert all("ignored_live_field" not in line for line in lines[1:])
+    assert all("runtime_paper_cohort_id" in line for line in lines[1:])
+    assert any(line.get("settlement_source_names") == ["BLS"] for line in lines[1:])
+
+
+def test_snapshot_refuses_existing_destination_and_malformed_evidence(tmp_path):
+    evidence = _modern_replay_evidence()
+    existing_path = tmp_path / "existing.jsonl"
+    existing_path.write_text("existing\n", encoding="utf-8")
+
+    with pytest.raises(FileExistsError):
+        materialize_keyword_shadow_snapshot(existing_path, evidence)
+    assert existing_path.read_text(encoding="utf-8") == "existing\n"
+
+    unsafe_path = tmp_path / "unsafe.jsonl"
+    malformed = dict(evidence)
+    malformed["coverage_records"] = [{"type": "ANALYSIS_REJECTED"}]
+    with pytest.raises(ValueError, match="malformed snapshot record"):
+        materialize_keyword_shadow_snapshot(unsafe_path, malformed)
+    assert not unsafe_path.exists()
+
+
+def test_legacy_cli_without_new_options_remains_legacy_and_read_only(monkeypatch, capsys, tmp_path):
+    legacy_path = Path(__file__).resolve().parent / "fixtures" / "report_snapshots" / "keyword_misses_sample.jsonl"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "keyword_shadow_eval.py",
+            "--path",
+            str(legacy_path),
+            "--phrases",
+            "strait hormuz",
+            "hormuz blockade",
+            "blockade iran",
+        ],
+    )
+
+    assert main() == 0
+
+    output = capsys.readouterr().out
+    assert "Modern target evidence" not in output
+    assert "Precision-risk proxy" not in output
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_cli_modern_target_snapshot_is_explicit_and_refuses_overwrite(monkeypatch, capsys, tmp_path):
+    snapshot_path = tmp_path / "modern-evidence.jsonl"
+    argv = [
+        "keyword_shadow_eval.py",
+        "--path",
+        str(REPLAY_EVIDENCE_FIXTURE),
+        "--modern-target-slice",
+        "--phrases",
+        "strait hormuz",
+        "hormuz blockade",
+        "rare proxy",
+        "--materialize-snapshot",
+        str(snapshot_path),
+        "--json",
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+
+    assert main() == 0
+
+    output = capsys.readouterr().out
+    assert "Modern target evidence (opt-in)" in output
+    assert "Precision-risk is not precision truth" in output
+    assert f"Snapshot materialized: {snapshot_path}" in output
+    assert snapshot_path.exists()
+    assert "modern_target_evidence" in output
+
+    monkeypatch.setattr(sys, "argv", argv)
+    assert main() == 2
+    assert "Snapshot refused: snapshot destination already exists" in capsys.readouterr().err
