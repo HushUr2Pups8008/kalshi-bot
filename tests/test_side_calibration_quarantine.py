@@ -337,6 +337,34 @@ def test_polymarket_capture_requires_numeric_market_id_and_explicit_slug_alias(t
     assert result.disposition == "candidate"
 
 
+def test_kalshi_capture_requires_settlement_alias_equal_to_native_market_id(tmp_path):
+    store = SideCalibrationQuarantineStore(tmp_path / "quarantine.db")
+
+    result = store.append_capture(
+        _capture(
+            venue="kalshi",
+            native_market_id="KXTEST-26AUG01",
+            settlement_alias="KXTEST-26AUG01",
+        )
+    )
+
+    assert result.status == "inserted"
+    assert result.disposition == "candidate"
+
+
+@pytest.mark.parametrize("settlement_alias", [None, "KXTEST-26AUG01-OTHER"])
+def test_kalshi_wrong_or_missing_settlement_alias_is_unscorable(
+    tmp_path, settlement_alias
+):
+    store = SideCalibrationQuarantineStore(tmp_path / "quarantine.db")
+
+    result = store.append_capture(_capture(settlement_alias=settlement_alias))
+
+    assert result.status == "unscorable"
+    assert "invalid_kalshi_settlement_alias" in result.unscorable_reasons
+    assert result.candidate_id is None
+
+
 @pytest.mark.parametrize(
     ("native_market_id", "settlement_alias", "reason"),
     [

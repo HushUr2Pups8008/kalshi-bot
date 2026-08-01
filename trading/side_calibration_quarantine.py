@@ -941,6 +941,8 @@ def _candidate_reasons(capture: SideCalibrationCapture) -> tuple[str, ...]:
             or _POLYMARKET_SLUG_PATTERN.fullmatch(capture.settlement_alias) is None
         ):
             reasons.append("invalid_polymarket_settlement_alias")
+    elif capture.venue == "kalshi" and capture.settlement_alias != capture.native_market_id:
+        reasons.append("invalid_kalshi_settlement_alias")
     if capture.side not in {"yes", "no"}:
         reasons.append("invalid_side")
     model_yes = _number_reason(reasons, "model_yes_probability", capture.model_yes_probability)
