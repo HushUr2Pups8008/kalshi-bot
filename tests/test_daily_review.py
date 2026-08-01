@@ -119,14 +119,22 @@ def test_summarize_g7_receipt_reconciliation_separates_non_drawdown_drawdown_and
         conn.execute(
             "CREATE TABLE g7_skip_evidence_records (lifecycle_id TEXT NOT NULL, trade_blocked_reason TEXT NOT NULL, runtime_paper_cohort_id TEXT, runtime_paper_cohort_kind TEXT)"
         )
-        conn.execute(
+        conn.executemany(
             "INSERT INTO g7_skip_evidence_records (lifecycle_id, trade_blocked_reason, runtime_paper_cohort_id, runtime_paper_cohort_kind) VALUES (?, ?, ?, ?)",
-            (
-                "lc-nondrawdown",
-                "G7_adverse_price_momentum",
-                "legacy-pending-20260729",
-                "legacy_pending",
-            ),
+            [
+                (
+                    "lc-nondrawdown",
+                    "G7_adverse_price_momentum",
+                    "legacy-pending-20260729",
+                    "legacy_pending",
+                ),
+                (
+                    "lc-drawdown",
+                    "G7_open_exposure_drawdown",
+                    "legacy-pending-20260729",
+                    "legacy_pending",
+                ),
+            ],
         )
     with sqlite3.connect(capital_db_path) as conn:
         conn.execute(

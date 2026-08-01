@@ -519,6 +519,7 @@ def _summarize_g7_receipt_reconciliation(
             receipt is not None
             and runtime_paper_cohort_id is not None
             and runtime_paper_cohort_kind is not None
+            and receipt.get("trade_blocked_reason") != "G7_open_exposure_drawdown"
             and receipt.get("runtime_paper_cohort_id") == runtime_paper_cohort_id
             and receipt.get("runtime_paper_cohort_kind") == runtime_paper_cohort_kind
         ):
