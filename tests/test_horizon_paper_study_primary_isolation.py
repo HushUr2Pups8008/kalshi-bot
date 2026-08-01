@@ -6,6 +6,9 @@ import sqlite3
 from pathlib import Path
 
 import main
+from trading.horizon_paper_study_manifest import (
+    derive_horizon_paper_study_database_identity,
+)
 
 
 STUDY_ID = "pm-horizon-15-30-20260805"
@@ -33,7 +36,7 @@ def _write_manifest_only_study(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     state_path = study_root / "study_state.db"
     ledger_path.write_bytes(b"do-not-open-ledger")
     state_path.write_bytes(b"do-not-open-state")
-    payload = {
+    configuration = {
         "schema_version": 1,
         "study_id": STUDY_ID,
         "study_kind": "polymarket_horizon_15_30",
@@ -41,7 +44,6 @@ def _write_manifest_only_study(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
         "created_at_utc": "2026-08-05T00:00:00.000000+00:00",
         "ledger_path": "study_ledger.db",
         "state_db_path": "study_state.db",
-        "database_identity": "a" * 64,
         "starting_bankroll": "250.00",
         "horizon_lower_exclusive_days": 14.0,
         "horizon_upper_inclusive_days": 30.0,
@@ -51,10 +53,18 @@ def _write_manifest_only_study(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
         "live_order_forbidden": True,
         "profit_receipt_attested": False,
     }
+    payload = {
+        **configuration,
+        "database_identity": derive_horizon_paper_study_database_identity(
+            configuration
+        ),
+    }
     payload["manifest_sha256"] = hashlib.sha256(
         _canonical_json(payload).encode("utf-8")
     ).hexdigest()
-    (study_root / "manifest.json").write_text(_canonical_json(payload), encoding="utf-8")
+    manifest_path = study_root / "manifest.json"
+    manifest_path.write_text(_canonical_json(payload), encoding="utf-8")
+    manifest_path.chmod(0o600)
     attestation_path = (
         tmp_path
         / "logs"

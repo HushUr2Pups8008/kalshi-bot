@@ -7,12 +7,14 @@ import json
 import math
 import os
 import re
+import sqlite3
 import stat
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Mapping
+from urllib.parse import quote
 
 
 HORIZON_PAPER_STUDY_KIND = "polymarket_horizon_15_30"
@@ -35,6 +37,20 @@ _STUDY_LOG_FILENAMES = (
     "horizon-paper-study.log",
     "horizon-paper-study.error.log",
 )
+_SQLITE_SIDECAR_SUFFIXES = ("-journal", "-shm", "-wal")
+_BOOTSTRAP_METADATA_TABLE = "horizon_study_bootstrap"
+_BOOTSTRAP_SCHEMA_VERSION = 1
+_LEDGER_APPLICATION_ID = 0x48504C47
+_STATE_APPLICATION_ID = 0x48505354
+_BOOTSTRAP_METADATA_COLUMNS = (
+    "singleton",
+    "bootstrap_schema_version",
+    "database_role",
+    "study_id",
+    "study_kind",
+    "database_identity",
+    "manifest_preimage_sha256",
+)
 _MANIFEST_FIELDS = frozenset(
     {
         "schema_version",
@@ -56,6 +72,10 @@ _MANIFEST_FIELDS = frozenset(
         "manifest_sha256",
     }
 )
+_MANIFEST_CONFIGURATION_FIELDS = _MANIFEST_FIELDS - {
+    "database_identity",
+    "manifest_sha256",
+}
 
 
 class HorizonPaperStudyManifestError(ValueError):
@@ -98,6 +118,10 @@ class HorizonPaperStudyManifest:
         if self.state_db_path != "study_state.db":
             _invalid("state_db_path")
         _require_sha256(self.database_identity, "database_identity")
+        if self.database_identity != derive_horizon_paper_study_database_identity(
+            self._manifest_configuration()
+        ):
+            _invalid("database_identity")
         _require_positive_decimal(self.starting_bankroll, "starting_bankroll")
         _require_exact_horizons(
             self.horizon_lower_exclusive_days,
@@ -168,6 +192,34 @@ class HorizonPaperStudyManifest:
             "profit_receipt_attested": self.profit_receipt_attested,
         }
 
+    def _manifest_configuration(self) -> dict[str, object]:
+        payload = self._payload_without_digest()
+        payload.pop("database_identity")
+        return payload
+
+
+def derive_horizon_paper_study_database_identity(
+    manifest_configuration: Mapping[str, object],
+) -> str:
+    """Derive the immutable identity shared by the initialized study databases."""
+
+    if (
+        not isinstance(manifest_configuration, Mapping)
+        or set(manifest_configuration) != _MANIFEST_CONFIGURATION_FIELDS
+    ):
+        _invalid("database identity configuration")
+    configuration_sha256 = _sha256_canonical_json(dict(manifest_configuration))
+    return _sha256_canonical_json(
+        {
+            "bootstrap_metadata_columns": _BOOTSTRAP_METADATA_COLUMNS,
+            "bootstrap_metadata_table": _BOOTSTRAP_METADATA_TABLE,
+            "bootstrap_schema_version": _BOOTSTRAP_SCHEMA_VERSION,
+            "ledger_application_id": _LEDGER_APPLICATION_ID,
+            "state_application_id": _STATE_APPLICATION_ID,
+            "study_configuration_sha256": configuration_sha256,
+        }
+    )
+
 
 def validate_horizon_paper_study_manifest(
     manifest_path: Path | str,
@@ -183,7 +235,7 @@ def validate_horizon_paper_study_manifest(
     _assert_no_symlinks_from(storage_root, candidate, "manifest path")
     if candidate.name != HORIZON_PAPER_STUDY_MANIFEST_FILENAME:
         _invalid("manifest path")
-    raw = _read_regular_file(candidate, "manifest")
+    raw = _read_regular_file(candidate, "manifest", required_mode=0o600)
     try:
         text = raw.decode("utf-8")
         payload = json.loads(text)
@@ -209,15 +261,19 @@ def validate_horizon_paper_study_manifest(
         label="fee schedule",
     )
     if verify_runtime_targets:
-        _validate_database_target(
+        _validate_study_database(
             expected_root / manifest.ledger_path,
             storage_root=storage_root,
             label="study ledger",
+            manifest=manifest,
+            role="ledger",
         )
-        _validate_database_target(
+        _validate_study_database(
             expected_root / manifest.state_db_path,
             storage_root=storage_root,
             label="study state",
+            manifest=manifest,
+            role="state",
         )
     return manifest
 
@@ -235,7 +291,10 @@ def validate_study_coexistence(
     if not isinstance(manifest, HorizonPaperStudyManifest):
         _invalid("study manifest")
     storage_root = _absolute_path(data_root)
-    logs = _absolute_path(logs_root if logs_root is not None else Path("logs"))
+    expected_logs_root = _absolute_path(storage_root.parent / "logs")
+    logs = _absolute_path(logs_root) if logs_root is not None else expected_logs_root
+    if logs != expected_logs_root:
+        _invalid("study logs root")
     if primary_launchd_label != _PRIMARY_LAUNCHD_LABEL:
         _invalid("primary launchd label")
     if study_launchd_label != _STUDY_LAUNCHD_LABEL:
@@ -330,21 +389,104 @@ def _validate_database_target(path: Path, *, storage_root: Path, label: str) -> 
     _require_regular_file(path, label)
 
 
-def _read_regular_file(path: Path, label: str) -> bytes:
+def _validate_study_database(
+    path: Path,
+    *,
+    storage_root: Path,
+    label: str,
+    manifest: HorizonPaperStudyManifest,
+    role: str,
+) -> None:
+    _validate_database_target(path, storage_root=storage_root, label=label)
+    _reject_sqlite_sidecars(path, label)
+    expected_application_id = {
+        "ledger": _LEDGER_APPLICATION_ID,
+        "state": _STATE_APPLICATION_ID,
+    }[role]
     before = _require_regular_file(path, label)
+    try:
+        connection = sqlite3.connect(_sqlite_read_only_uri(path), uri=True)
+    except sqlite3.Error as exc:
+        raise HorizonPaperStudyManifestError(
+            f"horizon paper study {label} is not an initialized SQLite database"
+        ) from exc
+    try:
+        application_id_row = connection.execute("PRAGMA application_id").fetchone()
+        if application_id_row != (expected_application_id,):
+            _invalid(label)
+        columns = tuple(
+            row[1]
+            for row in connection.execute(
+                f"PRAGMA table_info({_BOOTSTRAP_METADATA_TABLE})"
+            )
+        )
+        if columns != _BOOTSTRAP_METADATA_COLUMNS:
+            _invalid(label)
+        rows = connection.execute(
+            f"""
+            SELECT {", ".join(_BOOTSTRAP_METADATA_COLUMNS)}
+            FROM {_BOOTSTRAP_METADATA_TABLE}
+            ORDER BY singleton
+            """
+        ).fetchall()
+    except sqlite3.Error as exc:
+        raise HorizonPaperStudyManifestError(
+            f"horizon paper study {label} bootstrap metadata is invalid"
+        ) from exc
+    finally:
+        connection.close()
+    expected_row = (
+        1,
+        _BOOTSTRAP_SCHEMA_VERSION,
+        role,
+        manifest.study_id,
+        manifest.study_kind,
+        manifest.database_identity,
+        manifest.manifest_sha256,
+    )
+    if rows != [expected_row]:
+        _invalid(label)
+    after = _require_regular_file(path, label)
+    _reject_sqlite_sidecars(path, label)
+    if _stat_identity(before) != _stat_identity(after):
+        _invalid(label)
+
+
+def _reject_sqlite_sidecars(path: Path, label: str) -> None:
+    for suffix in _SQLITE_SIDECAR_SUFFIXES:
+        if _path_exists_or_symlink(Path(f"{path}{suffix}")):
+            _invalid(label)
+
+
+def _sqlite_read_only_uri(path: Path) -> str:
+    return f"file:{quote(path.as_posix(), safe='/:')}?mode=ro"
+
+
+def _read_regular_file(
+    path: Path,
+    label: str,
+    *,
+    required_mode: int | None = None,
+) -> bytes:
+    before = _require_regular_file(path, label, required_mode=required_mode)
     try:
         data = path.read_bytes()
     except OSError as exc:
         raise HorizonPaperStudyManifestError(
             f"horizon paper study {label} is unreadable"
         ) from exc
-    after = _require_regular_file(path, label)
+    after = _require_regular_file(path, label, required_mode=required_mode)
     if _stat_identity(before) != _stat_identity(after):
         _invalid(label)
     return data
 
 
-def _require_regular_file(path: Path, label: str) -> os.stat_result:
+def _require_regular_file(
+    path: Path,
+    label: str,
+    *,
+    required_mode: int | None = None,
+) -> os.stat_result:
     try:
         file_stat = path.lstat()
     except OSError as exc:
@@ -356,6 +498,8 @@ def _require_regular_file(path: Path, label: str) -> os.stat_result:
         or not stat.S_ISREG(file_stat.st_mode)
         or file_stat.st_nlink != 1
     ):
+        _invalid(label)
+    if required_mode is not None and stat.S_IMODE(file_stat.st_mode) != required_mode:
         _invalid(label)
     return file_stat
 
