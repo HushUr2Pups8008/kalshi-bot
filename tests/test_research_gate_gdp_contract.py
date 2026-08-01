@@ -195,6 +195,52 @@ def test_gdp_threshold_contract_rejects_ambiguous_or_unsupported_terms(
     ) is None
 
 
+@pytest.mark.parametrize(
+    "negated_comparator",
+    (
+        "not more than",
+        "not above",
+        "not over",
+        "not greater than",
+        "no greater than",
+    ),
+)
+def test_gdp_threshold_contract_rejects_negated_supported_comparators(
+    negated_comparator: str,
+) -> None:
+    market = _strict_gdp_market(
+        title=(
+            f"Will real GDP be {negated_comparator} 2.0% in Q2 2026?"
+        ),
+        rules_primary=(
+            "This market resolves Yes only if Q2 2026 real GDP SAAR is "
+            f"{negated_comparator} 2.0%."
+        ),
+    )
+
+    assert research_gate_module._parse_gdp_threshold_contract(market) is None
+
+
+def test_gdp_threshold_contract_rejects_multiword_negated_comparator() -> None:
+    market = _strict_gdp_market(
+        rules_primary=(
+            "This market resolves Yes only if Q2 2026 real GDP SAAR cannot be "
+            "more than 2.0%."
+        ),
+    )
+
+    assert research_gate_module._parse_gdp_threshold_contract(market) is None
+
+
+def test_gdp_threshold_contract_rejects_cross_field_synthetic_clause() -> None:
+    market = _strict_gdp_market(
+        rules_primary="This market resolves Yes only if Q2 2026 real GDP",
+        rules_secondary="SAAR is greater than 2.0%.",
+    )
+
+    assert research_gate_module._parse_gdp_threshold_contract(market) is None
+
+
 def test_current_run_gdpnow_context_binds_verified_observation_to_exact_contract_and_query() -> None:
     contract = _strict_contract()
     query = _gdpnow_query()

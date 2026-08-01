@@ -4508,6 +4508,12 @@ _GDP_COMPARATOR_TOKEN_RE = re.compile(
     r"\b(?:more\s+than|above|over|greater\s+than)\b",
     flags=re.I,
 )
+_GDP_NEGATED_COMPARATOR_RE = re.compile(
+    r"\b(?:not|never|no|cannot|can't|cant|isn't|isnt|aren't|arent|wasn't|"
+    r"wasnt|weren't|werent)(?:\s+|-)+(?:be\s+)?"
+    r"(?:more\s+than|above|over|greater\s+than)\b",
+    flags=re.I,
+)
 _GDP_STRICT_THRESHOLD_RE = re.compile(
     r"\b(?:more\s+than|above|over|greater\s+than)\s+"
     r"(-?(?:\d+(?:\.\d+)?|\.\d+))\s*(?:%|percent\b)",
@@ -4552,6 +4558,14 @@ def _gdp_contract_clauses(text: str) -> tuple[str, ...]:
         cleaned
         for clause in re.split(r"(?:[!?;]|\.(?!\d)|\n)+", text)
         if (cleaned := _clean(clause))
+    )
+
+
+def _gdp_contract_rule_fields(market: Any) -> tuple[str, ...]:
+    return tuple(
+        cleaned
+        for attr in ("rules_primary", "rules_secondary")
+        if (cleaned := _clean(getattr(market, attr, "")))
     )
 
 
@@ -4626,11 +4640,13 @@ def _gdp_title_clause_matches_contract(
 def _parse_gdp_threshold_contract(market: Any) -> GDPThresholdContract | None:
     """Parse the narrow GDPNow countercheck contract surface, fail-closed."""
     contract_text = _market_text(market)
-    rules_text = _market_rules_text(market)
-    if not contract_text or not rules_text:
+    rule_fields = _gdp_contract_rule_fields(market)
+    if not contract_text or not rule_fields:
         return None
-    if _GDP_UNSUPPORTED_COMPARATOR_RE.search(contract_text) or _GDP_RANGE_RE.search(
-        contract_text
+    if (
+        _GDP_NEGATED_COMPARATOR_RE.search(contract_text)
+        or _GDP_UNSUPPORTED_COMPARATOR_RE.search(contract_text)
+        or _GDP_RANGE_RE.search(contract_text)
     ):
         return None
     target_periods = _gdp_target_periods(contract_text)
@@ -4638,19 +4654,20 @@ def _parse_gdp_threshold_contract(market: Any) -> GDPThresholdContract | None:
         return None
     target_period = next(iter(target_periods))
     parsed_rules: list[tuple[float, int, int]] = []
-    for clause in _gdp_contract_clauses(rules_text):
-        if not _GDP_REAL_GDP_RE.search(clause):
-            continue
-        if (
-            _GDP_SAAR_RE.search(clause)
-            or _GDP_COMPARATOR_TOKEN_RE.search(clause)
-            or _GDP_STRICT_THRESHOLD_RE.search(clause)
-            or _GDP_PERCENT_VALUE_RE.search(clause)
-        ):
-            parsed = _strict_gdp_settlement_clause(clause)
-            if parsed is None:
-                return None
-            parsed_rules.append(parsed)
+    for rule_text in rule_fields:
+        for clause in _gdp_contract_clauses(rule_text):
+            if not _GDP_REAL_GDP_RE.search(clause):
+                continue
+            if (
+                _GDP_SAAR_RE.search(clause)
+                or _GDP_COMPARATOR_TOKEN_RE.search(clause)
+                or _GDP_STRICT_THRESHOLD_RE.search(clause)
+                or _GDP_PERCENT_VALUE_RE.search(clause)
+            ):
+                parsed = _strict_gdp_settlement_clause(clause)
+                if parsed is None:
+                    return None
+                parsed_rules.append(parsed)
     if not parsed_rules or len(set(parsed_rules)) != 1:
         return None
     threshold, target_quarter, target_year = parsed_rules[0]
