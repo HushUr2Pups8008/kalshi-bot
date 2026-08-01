@@ -713,6 +713,183 @@ def test_official_data_pending_is_reported_as_shadow_wait_reason(tmp_path: Path)
     assert any("official settlement data is pending" in reason for reason in report.reasons)
 
 
+def test_current_run_blocker_overrides_retained_vetted_dossier_snapshot(
+    tmp_path: Path,
+) -> None:
+    trades_log, evidence_db, paper_db = _base_paths(tmp_path)
+    with sqlite3.connect(evidence_db) as conn:
+        # record_research_run retains the prior vetted snapshot for this result.
+        conn.execute(
+            """
+            INSERT INTO research_runs (
+                research_run_id, market_ticker, trigger_headline,
+                trigger_source, attempted, summary, verdict_status,
+                skip_reason, force_side, estimated_probability, confidence,
+                market_price, estimated_edge, decision_grade_status, created_ts
+            ) VALUES (
+                'rr-current-pending',
+                'KXPROFIT-26JUL01',
+                'fresh headline',
+                'source',
+                1,
+                'Official result is pending.',
+                'needs_research',
+                'official_data_pending',
+                NULL,
+                NULL,
+                NULL,
+                0.51,
+                NULL,
+                NULL,
+                '2026-06-29T11:00:00Z'
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE research_tasks (
+                market_ticker TEXT PRIMARY KEY,
+                state TEXT NOT NULL,
+                updated_ts TEXT,
+                terminal_reason TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO research_tasks VALUES (
+                'KXPROFIT-26JUL01',
+                'needs_research',
+                '2026-06-29T11:00:00Z',
+                'research_pending_origin'
+            )
+            """
+        )
+    _write_trade_log(trades_log, [])
+    _write_paper_db(paper_db, [])
+
+    report = evaluate_research_profit_validation(
+        tmp_path,
+        trades_log=trades_log,
+        paper_db=paper_db,
+        evidence_db=evidence_db,
+        now=NOW,
+    )
+
+    assert report.decision_grade.decision_grade_candidates == 0
+    assert report.decision_grade.blocked_by_official_data_pending == 1
+
+
+def test_current_run_blocker_uses_rowid_when_created_timestamp_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    trades_log = tmp_path / "logs" / "trades" / "live" / "trades.jsonl"
+    evidence_db = tmp_path / "data" / "evidence_store.db"
+    paper_db = tmp_path / "data" / "paper_trades.db"
+    evidence_db.parent.mkdir(parents=True)
+    with sqlite3.connect(evidence_db) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE research_runs (
+                research_run_id TEXT PRIMARY KEY,
+                market_ticker TEXT NOT NULL,
+                verdict_status TEXT,
+                skip_reason TEXT,
+                force_side TEXT,
+                estimated_probability REAL,
+                market_price REAL,
+                estimated_edge REAL
+            );
+            CREATE TABLE research_dossiers (
+                market_ticker TEXT PRIMARY KEY,
+                last_research_run_id TEXT,
+                market_status TEXT,
+                market_close_time TEXT
+            );
+            INSERT INTO research_runs VALUES (
+                'run-z-candidate', 'KXROWID', 'decision_grade_candidate',
+                NULL, 'yes', 0.64, 0.51, 0.13
+            );
+            INSERT INTO research_runs VALUES (
+                'run-a-pending', 'KXROWID', 'needs_research',
+                'official_data_pending', NULL, NULL, 0.51, NULL
+            );
+            INSERT INTO research_dossiers VALUES (
+                'KXROWID', 'run-z-candidate', 'active', '2026-07-01T00:00:00Z'
+            );
+            """
+        )
+    _write_trade_log(trades_log, [])
+    _write_paper_db(paper_db, [])
+
+    report = evaluate_research_profit_validation(
+        tmp_path,
+        trades_log=trades_log,
+        paper_db=paper_db,
+        evidence_db=evidence_db,
+        now=NOW,
+    )
+
+    assert report.decision_grade.decision_grade_candidates == 0
+    assert report.decision_grade.blocked_by_official_data_pending == 1
+
+
+def test_current_run_blocker_uses_rowid_when_latest_timestamp_is_unusable(
+    tmp_path: Path,
+) -> None:
+    trades_log = tmp_path / "logs" / "trades" / "live" / "trades.jsonl"
+    evidence_db = tmp_path / "data" / "evidence_store.db"
+    paper_db = tmp_path / "data" / "paper_trades.db"
+    evidence_db.parent.mkdir(parents=True)
+    with sqlite3.connect(evidence_db) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE research_runs (
+                research_run_id TEXT PRIMARY KEY,
+                market_ticker TEXT NOT NULL,
+                verdict_status TEXT,
+                skip_reason TEXT,
+                force_side TEXT,
+                estimated_probability REAL,
+                market_price REAL,
+                estimated_edge REAL,
+                created_ts TEXT
+            );
+            CREATE TABLE research_dossiers (
+                market_ticker TEXT PRIMARY KEY,
+                last_research_run_id TEXT,
+                market_status TEXT,
+                market_close_time TEXT
+            );
+            INSERT INTO research_runs VALUES (
+                'run-z-candidate', 'KXMIXEDROWID', 'decision_grade_candidate',
+                NULL, 'yes', 0.64, 0.51, 0.13, '2026-06-29T10:00:00Z'
+            );
+            INSERT INTO research_runs VALUES (
+                'run-a-pending', 'KXMIXEDROWID', 'needs_research',
+                'official_data_pending', NULL, NULL, 0.51, NULL, NULL
+            );
+            INSERT INTO research_dossiers VALUES (
+                'KXMIXEDROWID', 'run-z-candidate', 'active',
+                '2026-07-01T00:00:00Z'
+            );
+            """
+        )
+    _write_trade_log(trades_log, [])
+    _write_paper_db(paper_db, [])
+
+    report = evaluate_research_profit_validation(
+        tmp_path,
+        trades_log=trades_log,
+        paper_db=paper_db,
+        evidence_db=evidence_db,
+        now=NOW,
+    )
+
+    assert report.decision_grade.decision_grade_candidates == 0
+    assert report.decision_grade.blocked_by_official_data_pending == 1
+
+
 def test_candidate_proofs_include_decision_grade_candidates(tmp_path: Path) -> None:
     evidence_db = tmp_path / "proofs" / "evidence_store.db"
     _write_evidence_store(evidence_db)

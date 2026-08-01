@@ -19,6 +19,23 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.41] - 2026-08-01
+
+### Fixed
+
+- **Polymarket US provider-status normalization.** The authoritative provider's
+  `MARKET_STATUS_OPEN` enum now canonicalizes to `open` before shared
+  tradeability checks. A `closed=true` flag still wins, and unknown enums remain
+  untradeable. This restores eligible-market coverage without relaxing price,
+  evidence, or execution gates.
+- **Current research readiness accounting.** Current-window validation and
+  botcheck now select the latest persisted research run per ticker while
+  retaining historical vetted dossier snapshots for proof. New runs persist
+  their normalized contract fingerprint for run-scoped proof matching; legacy
+  rows remain unresolved and fail closed. Missing or invalid run timestamps
+  fall back to SQLite persistence order, so a fresh blocker cannot be masked
+  by an older candidate snapshot.
+
 ## [0.33.40] - 2026-07-31
 
 ### Fixed

@@ -877,13 +877,6 @@ def _decision_grade_evidence(
                 FROM research_runs AS r
                 LEFT JOIN research_dossiers AS d
                   ON d.market_ticker = r.market_ticker
-                 AND d.last_research_run_id = r.research_run_id
-                WHERE d.last_research_run_id IS NOT NULL
-                   OR NOT EXISTS (
-                        SELECT 1
-                        FROM research_dossiers AS current_dossier
-                        WHERE current_dossier.market_ticker = r.market_ticker
-                   )
             """
             eligibility_select = "d.market_status, d.market_close_time"
         else:
@@ -896,6 +889,7 @@ def _decision_grade_evidence(
             SELECT
                 r.market_ticker,
                 r.research_run_id,
+                r.rowid AS persisted_rowid,
                 r.verdict_status,
                 r.skip_reason,
                 {created_expr},
@@ -948,16 +942,23 @@ def _decision_grade_evidence(
             terminal_untradeable_tasks.add(str(row["market_ticker"]))
         if terminal_reason == "research_timeout_exhausted":
             counts["terminal_timeout_exhausted"] += 1
-    latest_rows_by_ticker: dict[str, sqlite3.Row] = {}
+    rows_by_ticker: dict[str, list[sqlite3.Row]] = {}
     for row in rows:
         ticker = str(row["market_ticker"] or "").strip()
         if not ticker:
             continue
-        current = latest_rows_by_ticker.get(ticker)
-        if current is None or _research_row_sort_key(row) > _research_row_sort_key(
-            current
-        ):
-            latest_rows_by_ticker[ticker] = row
+        rows_by_ticker.setdefault(ticker, []).append(row)
+    latest_rows_by_ticker = {
+        ticker: max(
+            ticker_rows,
+            key=(
+                _research_row_persistence_sort_key
+                if any(_parse_ts(row["created_ts"]) is None for row in ticker_rows)
+                else _research_row_sort_key
+            ),
+        )
+        for ticker, ticker_rows in rows_by_ticker.items()
+    }
     for row in latest_rows_by_ticker.values():
         ticker = str(row["market_ticker"] or "")
         if ticker in terminal_untradeable_tasks:
@@ -1056,6 +1057,17 @@ def _research_row_sort_key(row: sqlite3.Row) -> tuple[datetime, str]:
     ts = _parse_ts(row["created_ts"])
     return (
         ts if ts is not None else datetime.min.replace(tzinfo=timezone.utc),
+        str(row["research_run_id"] or ""),
+    )
+
+
+def _research_row_persistence_sort_key(row: sqlite3.Row) -> tuple[int, str]:
+    try:
+        persisted_rowid = int(row["persisted_rowid"] or 0)
+    except (TypeError, ValueError, IndexError):
+        persisted_rowid = 0
+    return (
+        persisted_rowid,
         str(row["research_run_id"] or ""),
     )
 

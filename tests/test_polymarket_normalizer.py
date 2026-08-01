@@ -142,6 +142,37 @@ def _long_book_payload() -> dict:
     }
 
 
+def test_provider_open_status_enum_normalizes_to_tradeable_open():
+    payload = _long_book_payload()
+    payload["status"] = "MARKET_STATUS_OPEN"
+
+    market = normalize_polymarket_market(payload)
+
+    assert market.status == "open"
+    assert market.is_tradeable()
+
+
+def test_unknown_provider_status_enum_remains_untradeable():
+    payload = _long_book_payload()
+    payload["status"] = "MARKET_STATUS_UNRECOGNIZED"
+
+    market = normalize_polymarket_market(payload)
+
+    assert market.status == "market_status_unrecognized"
+    assert not market.is_tradeable()
+
+
+def test_closed_flag_overrides_open_provider_status_enum():
+    payload = _long_book_payload()
+    payload["status"] = "MARKET_STATUS_OPEN"
+    payload["closed"] = True
+
+    market = normalize_polymarket_market(payload)
+
+    assert market.status == "closed"
+    assert not market.is_tradeable()
+
+
 def test_authoritative_long_book_ignores_reversed_positional_prices():
     payload = _long_book_payload()
     payload["marketSides"][0]["quote"]["value"] = "0.87"
