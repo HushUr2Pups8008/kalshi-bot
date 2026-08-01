@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -24,7 +25,11 @@ from analysis.feedback_counterfactual import (
     FeedbackMultiplierReceipt,
 )
 from utils import logger as logger_module
-from utils.log_records import SignalAnalysisDetail
+from utils.log_records import (
+    ExecutedPriceSkipProvenance,
+    SignalAnalysisDetail,
+    build_executed_price_skip_provenance,
+)
 from utils.logger import ShadowTradeLogger, TradeLogger
 
 
@@ -441,6 +446,513 @@ def test_logger_emits_required_only_record():
         assert "keyword_contributions" not in record
     finally:
         _cleanup(tmp)
+
+
+_EXECUTED_PRICE_SKIP_PROVENANCE_KEYS = frozenset(
+    {
+        "schema_version",
+        "origin",
+        "requested_side",
+        "primary_fault",
+        "fault_codes",
+        "executed_price_state",
+        "observed_executed_price_cents",
+        "source_quote_state",
+        "observed_source_quote_cents",
+        "market_price_available",
+        "source_kind",
+        "source_method",
+        "source_timestamp_state",
+        "source_price_retrieved_at",
+        "source_price_age_seconds",
+        "source_price_age_bucket",
+        "source_payload_sha256_prefix",
+    }
+)
+
+_EXECUTED_PRICE_PRIMARY_FAULTS = frozenset(
+    {
+        "executed_price_missing",
+        "executed_price_zero",
+        "executed_price_invalid",
+        "source_quote_empty",
+        "source_quote_zero",
+        "source_quote_invalid",
+        "side_unknown",
+        "unknown",
+    }
+)
+
+_EXECUTED_PRICE_FAULT_CODES = _EXECUTED_PRICE_PRIMARY_FAULTS | {
+    "source_quote_stale",
+    "source_timestamp_missing",
+    "source_timestamp_invalid",
+    "source_timestamp_future",
+}
+
+_EXECUTED_PRICE_STATES = {
+    "missing",
+    "zero",
+    "out_of_range_integer",
+    "boolean",
+    "non_integer",
+    "unknown",
+}
+
+_SOURCE_QUOTE_STATES = {
+    "valid",
+    "empty",
+    "zero",
+    "out_of_range_integer",
+    "boolean",
+    "non_integer",
+    "not_applicable",
+    "unknown",
+}
+
+_SOURCE_KINDS = {
+    "rest_list",
+    "rest_detail",
+    "polymarket_public",
+    "polymarket_us_rest",
+    "unavailable",
+    "other",
+    "unknown",
+}
+
+_SOURCE_METHODS = {
+    "dollars_fixed_point",
+    "legacy_cents",
+    "none",
+    "other",
+    "unknown",
+}
+
+_SOURCE_TIMESTAMP_STATES = {"present", "missing", "invalid", "future", "unknown"}
+_SOURCE_AGE_BUCKETS = {"fresh", "stale", "stale_capped", "unknown"}
+_PROVENANCE_OBSERVED_AT = "2026-08-01T12:00:00+00:00"
+_PROVENANCE_FRESH_AT = "2026-08-01T11:59:30+00:00"
+
+
+def _make_executed_price_skip_provenance(
+    **overrides: object,
+) -> ExecutedPriceSkipProvenance:
+    values: dict[str, object] = {
+        "executed_price_cents": True,
+        "requested_side": "yes",
+        "signal_type": "research_decision_grade",
+        "selected_quote_cents": 50,
+        "price_available": True,
+        "price_source": "rest_list",
+        "price_method": "dollars_fixed_point",
+        "price_retrieved_at": _PROVENANCE_FRESH_AT,
+        "raw_payload_hash": "0123456789abcdef" * 4,
+        "observed_at": _PROVENANCE_OBSERVED_AT,
+        "stale_after_seconds": 60,
+    }
+    values.update(overrides)
+    return build_executed_price_skip_provenance(**values)
+
+
+def _assert_fixed_executed_price_skip_provenance_schema(record: dict[str, object]) -> None:
+    assert set(record) == _EXECUTED_PRICE_SKIP_PROVENANCE_KEYS
+    assert record["schema_version"] == 1
+    assert record["origin"] in {
+        "news",
+        "research_decision_grade",
+        "fade_tweet",
+        "price_fade",
+        "other",
+        "unknown",
+    }
+    assert record["requested_side"] in {"yes", "no", "unknown"}
+    assert record["primary_fault"] in _EXECUTED_PRICE_PRIMARY_FAULTS
+    assert record["executed_price_state"] in _EXECUTED_PRICE_STATES
+    assert record["source_quote_state"] in _SOURCE_QUOTE_STATES
+    assert record["market_price_available"] is None or isinstance(
+        record["market_price_available"], bool
+    )
+    assert record["source_kind"] in _SOURCE_KINDS
+    assert record["source_method"] in _SOURCE_METHODS
+    assert record["source_timestamp_state"] in _SOURCE_TIMESTAMP_STATES
+    assert record["source_price_age_bucket"] in _SOURCE_AGE_BUCKETS
+
+    fault_codes = record["fault_codes"]
+    assert isinstance(fault_codes, list)
+    assert 1 <= len(fault_codes) <= 4
+    assert fault_codes[0] == record["primary_fault"]
+    assert set(fault_codes) <= _EXECUTED_PRICE_FAULT_CODES
+
+    for field in (
+        "observed_executed_price_cents",
+        "observed_source_quote_cents",
+    ):
+        value = record[field]
+        assert value is None or (
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            and -100 <= value <= 200
+        )
+
+    source_retrieved_at = record["source_price_retrieved_at"]
+    assert source_retrieved_at is None or (
+        isinstance(source_retrieved_at, str) and len(source_retrieved_at) <= 32
+    )
+
+    source_age_seconds = record["source_price_age_seconds"]
+    assert source_age_seconds is None or (
+        isinstance(source_age_seconds, int)
+        and not isinstance(source_age_seconds, bool)
+        and 0 <= source_age_seconds <= 86400
+    )
+
+    payload_prefix = record["source_payload_sha256_prefix"]
+    assert payload_prefix is None or (
+        isinstance(payload_prefix, str)
+        and re.fullmatch(r"[0-9a-f]{16}", payload_prefix) is not None
+    )
+
+
+@pytest.mark.parametrize(
+    (
+        "executed_price_cents, requested_side, selected_quote_cents, "
+        "price_available, price_retrieved_at, expected_primary_fault, "
+        "expected_executed_price_state, expected_source_quote_state, "
+        "expected_timestamp_state, expected_age_seconds, expected_age_bucket, "
+        "expected_secondary_faults"
+    ),
+    [
+        pytest.param(
+            None,
+            "yes",
+            None,
+            False,
+            None,
+            "executed_price_missing",
+            "missing",
+            "empty",
+            "missing",
+            None,
+            "unknown",
+            {"source_quote_empty", "source_timestamp_missing"},
+            id="missing-handoff-empty-source",
+        ),
+        pytest.param(
+            0,
+            "yes",
+            0,
+            True,
+            _PROVENANCE_FRESH_AT,
+            "executed_price_zero",
+            "zero",
+            "zero",
+            "present",
+            30,
+            "fresh",
+            {"source_quote_zero"},
+            id="zero-handoff-zero-source",
+        ),
+        pytest.param(
+            True,
+            "yes",
+            101,
+            True,
+            _PROVENANCE_FRESH_AT,
+            "executed_price_invalid",
+            "boolean",
+            "out_of_range_integer",
+            "present",
+            30,
+            "fresh",
+            {"source_quote_invalid"},
+            id="boolean-handoff-over-100-source",
+        ),
+        pytest.param(
+            101,
+            "yes",
+            True,
+            True,
+            _PROVENANCE_FRESH_AT,
+            "executed_price_invalid",
+            "out_of_range_integer",
+            "boolean",
+            "present",
+            30,
+            "fresh",
+            {"source_quote_invalid"},
+            id="over-100-handoff-boolean-source",
+        ),
+        pytest.param(
+            True,
+            "yes",
+            1,
+            True,
+            _PROVENANCE_FRESH_AT,
+            "executed_price_invalid",
+            "boolean",
+            "valid",
+            "present",
+            30,
+            "fresh",
+            set(),
+            id="invalid-handoff-fresh-valid-source",
+        ),
+        pytest.param(
+            True,
+            "no",
+            99,
+            True,
+            "2026-08-01T11:58:59+00:00",
+            "executed_price_invalid",
+            "boolean",
+            "valid",
+            "present",
+            61,
+            "stale",
+            {"source_quote_stale"},
+            id="invalid-handoff-stale-valid-source",
+        ),
+        pytest.param(
+            True,
+            "yes",
+            100,
+            True,
+            _PROVENANCE_FRESH_AT,
+            "executed_price_invalid",
+            "boolean",
+            "out_of_range_integer",
+            "present",
+            30,
+            "fresh",
+            {"source_quote_invalid"},
+            id="source-100-is-not-executable",
+        ),
+        pytest.param(
+            True,
+            "yes",
+            -1,
+            True,
+            _PROVENANCE_FRESH_AT,
+            "executed_price_invalid",
+            "boolean",
+            "out_of_range_integer",
+            "present",
+            30,
+            "fresh",
+            {"source_quote_invalid"},
+            id="negative-source-is-not-executable",
+        ),
+        pytest.param(
+            True,
+            "yes",
+            50,
+            False,
+            _PROVENANCE_FRESH_AT,
+            "executed_price_invalid",
+            "boolean",
+            "valid",
+            "present",
+            30,
+            "fresh",
+            set(),
+            id="unavailable-flag-does-not-erase-populated-source",
+        ),
+        pytest.param(
+            True,
+            "yes",
+            False,
+            True,
+            _PROVENANCE_FRESH_AT,
+            "executed_price_invalid",
+            "boolean",
+            "boolean",
+            "present",
+            30,
+            "fresh",
+            {"source_quote_invalid"},
+            id="boolean-source-is-not-integer",
+        ),
+        pytest.param(
+            True,
+            "yes",
+            "not-a-price",
+            True,
+            _PROVENANCE_FRESH_AT,
+            "executed_price_invalid",
+            "boolean",
+            "non_integer",
+            "present",
+            30,
+            "fresh",
+            {"source_quote_invalid"},
+            id="string-source-is-not-integer",
+        ),
+        pytest.param(
+            True,
+            "yes",
+            99,
+            True,
+            "2026-08-01T11:59:30",
+            "executed_price_invalid",
+            "boolean",
+            "valid",
+            "invalid",
+            None,
+            "unknown",
+            {"source_timestamp_invalid"},
+            id="naive-source-timestamp-is-invalid",
+        ),
+        pytest.param(
+            True,
+            "yes",
+            99,
+            True,
+            "not-a-timestamp",
+            "executed_price_invalid",
+            "boolean",
+            "valid",
+            "invalid",
+            None,
+            "unknown",
+            {"source_timestamp_invalid"},
+            id="malformed-source-timestamp-is-invalid",
+        ),
+        pytest.param(
+            True,
+            "yes",
+            99,
+            True,
+            "2026-08-01T12:00:01+00:00",
+            "executed_price_invalid",
+            "boolean",
+            "valid",
+            "future",
+            None,
+            "unknown",
+            {"source_timestamp_future"},
+            id="future-source-timestamp-is-not-fresh",
+        ),
+        pytest.param(
+            True,
+            "yes",
+            99,
+            True,
+            "2026-07-30T12:00:00+00:00",
+            "executed_price_invalid",
+            "boolean",
+            "valid",
+            "present",
+            86400,
+            "stale_capped",
+            {"source_quote_stale"},
+            id="source-age-is-capped-after-24-hours",
+        ),
+    ],
+)
+def test_build_executed_price_skip_provenance_distinguishes_source_faults(
+    executed_price_cents,
+    requested_side,
+    selected_quote_cents,
+    price_available,
+    price_retrieved_at,
+    expected_primary_fault,
+    expected_executed_price_state,
+    expected_source_quote_state,
+    expected_timestamp_state,
+    expected_age_seconds,
+    expected_age_bucket,
+    expected_secondary_faults,
+):
+    """The invalid handoff stays primary while the selected source stays diagnostic."""
+    provenance = _make_executed_price_skip_provenance(
+        executed_price_cents=executed_price_cents,
+        requested_side=requested_side,
+        selected_quote_cents=selected_quote_cents,
+        price_available=price_available,
+        price_retrieved_at=price_retrieved_at,
+    )
+    record = provenance.as_log_record()
+
+    assert isinstance(provenance, ExecutedPriceSkipProvenance)
+    assert dataclasses.is_dataclass(provenance)
+    _assert_fixed_executed_price_skip_provenance_schema(record)
+    assert record["requested_side"] == requested_side
+    assert record["primary_fault"] == expected_primary_fault
+    assert record["executed_price_state"] == expected_executed_price_state
+    assert record["source_quote_state"] == expected_source_quote_state
+    assert record["market_price_available"] is price_available
+    assert record["source_timestamp_state"] == expected_timestamp_state
+    assert record["source_price_age_seconds"] == expected_age_seconds
+    assert record["source_price_age_bucket"] == expected_age_bucket
+
+    fault_codes = record["fault_codes"]
+    assert isinstance(fault_codes, list)
+    assert set(expected_secondary_faults) <= set(fault_codes)
+    if expected_age_bucket == "fresh":
+        assert "source_quote_stale" not in fault_codes
+    if price_available is False and selected_quote_cents is not None:
+        assert "source_quote_empty" not in fault_codes
+
+
+def test_build_executed_price_skip_provenance_redacts_untrusted_values():
+    """All malformed input stays within the fixed, JSON-safe diagnostic schema."""
+    secret = "executed-price-provenance-secret-must-not-be-emitted"
+    untrusted_value = {"secret": secret, "nested": [secret]}
+    redacted = _make_executed_price_skip_provenance(
+        executed_price_cents=untrusted_value,
+        selected_quote_cents=untrusted_value,
+        price_available="not-a-boolean",
+        price_source=untrusted_value,
+        price_method=untrusted_value,
+        price_retrieved_at=untrusted_value,
+        raw_payload_hash=untrusted_value,
+        observed_at=untrusted_value,
+    ).as_log_record()
+
+    _assert_fixed_executed_price_skip_provenance_schema(redacted)
+    assert redacted["executed_price_state"] == "non_integer"
+    assert redacted["observed_executed_price_cents"] is None
+    assert redacted["source_quote_state"] == "non_integer"
+    assert redacted["observed_source_quote_cents"] is None
+    assert redacted["market_price_available"] is None
+    assert redacted["source_kind"] == "unknown"
+    assert redacted["source_method"] == "unknown"
+    assert redacted["source_timestamp_state"] == "unknown"
+    assert redacted["source_price_retrieved_at"] is None
+    assert redacted["source_price_age_seconds"] is None
+    assert redacted["source_price_age_bucket"] == "unknown"
+    assert redacted["source_payload_sha256_prefix"] is None
+    assert secret not in json.dumps(redacted, sort_keys=True)
+
+    raw_payload_hash = "abcdef0123456789" * 4
+    bounded = _make_executed_price_skip_provenance(
+        executed_price_cents=-100,
+        selected_quote_cents=200,
+        price_retrieved_at="2026-07-30T12:00:00+00:00",
+        raw_payload_hash=raw_payload_hash,
+    ).as_log_record()
+    overflow = _make_executed_price_skip_provenance(
+        executed_price_cents=-101,
+        selected_quote_cents=201,
+    ).as_log_record()
+
+    for record in (bounded, overflow):
+        _assert_fixed_executed_price_skip_provenance_schema(record)
+
+    assert bounded["observed_executed_price_cents"] == -100
+    assert bounded["observed_source_quote_cents"] == 200
+    assert bounded["source_price_age_seconds"] == 86400
+    assert bounded["source_price_age_bucket"] == "stale_capped"
+    assert bounded["source_payload_sha256_prefix"] == raw_payload_hash[:16]
+    assert re.fullmatch(
+        r"[0-9a-f]{16}", bounded["source_payload_sha256_prefix"]
+    )
+    assert overflow["observed_executed_price_cents"] is None
+    assert overflow["observed_source_quote_cents"] is None
+
+    provenance = _make_executed_price_skip_provenance()
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        provenance.primary_fault = "unknown"
 
 
 def test_trade_logger_omits_optional_no_candidate_pool_fields():
