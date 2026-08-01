@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -43,8 +44,11 @@ from utils.keyword_diagnostics_helpers import (
     PROMOTE_MIN_HITS,
     PROMOTE_MIN_SCORE,
     PROMOTE_MIN_SOURCES,
+    evaluate_keyword_shadow_evidence,
     evaluate_shadow_phrases as evaluate_phrases,
+    load_keyword_shadow_replay_evidence,
     load_no_keyword_miss_corpus as load_miss_corpus,
+    materialize_keyword_shadow_snapshot,
     phrase_matches as _phrase_matches,
     score_shadow_phrases as score_phrases,
     tokenize_keyword_text,
@@ -63,8 +67,11 @@ __all__ = [
     "PROMOTE_MIN_SCORE",
     "PROMOTE_MIN_SOURCES",
     "_phrase_matches",
+    "evaluate_keyword_shadow_evidence",
     "evaluate_phrases",
+    "load_keyword_shadow_replay_evidence",
     "load_miss_corpus",
+    "materialize_keyword_shadow_snapshot",
     "score_phrases",
     "tokenize_keyword_text",
 ]
@@ -110,6 +117,23 @@ def parse_args() -> argparse.Namespace:
         dest="emit_json",
         action="store_true",
         help="Also emit structured JSON to stdout after the text report",
+    )
+    parser.add_argument(
+        "--modern-target-slice",
+        action="store_true",
+        help=(
+            "Use only post-LLM neutral empty-keyword rejections and add a "
+            "false-positive-neutral precision-risk proxy (manual evidence only)"
+        ),
+    )
+    parser.add_argument(
+        "--materialize-snapshot",
+        type=Path,
+        metavar="PATH",
+        help=(
+            "Explicitly create one immutable modern-evidence JSONL snapshot; "
+            "refuses existing or unsafe destinations"
+        ),
     )
     return parser.parse_args()
 
@@ -261,7 +285,7 @@ def build_json_result(
     result: dict[str, Any],
     phrases: list[str],
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "shadow_phrases": phrases,
         "total_miss_events": result["total_miss_events"],
         "events_with_any_hit": result["events_with_any_hit"],
@@ -285,6 +309,61 @@ def build_json_result(
             for pr in result["phrases"]
         ],
     }
+    if result.get("precision_risk_is_proxy"):
+        payload["modern_target_evidence"] = {
+            "target_coverage_count": result["target_coverage_count"],
+            "precision_risk_count": result["precision_risk_count"],
+            "excluded_legacy_or_malformed_count": result[
+                "excluded_legacy_or_malformed_count"
+            ],
+            "precision_risk_is_proxy": True,
+            "precision_risk_label": result["precision_risk_label"],
+        }
+        for output_row, phrase_row in zip(payload["phrase_results"], result["phrases"], strict=True):
+            for field in (
+                "coverage_hits",
+                "coverage_rate",
+                "coverage_unique_ticker_count",
+                "coverage_unique_source_count",
+                "precision_risk_hits",
+                "precision_risk_rate",
+                "precision_risk_unique_ticker_count",
+                "precision_risk_unique_source_count",
+            ):
+                output_row[field] = phrase_row[field]
+    return payload
+
+
+def _print_modern_target_evidence(result: dict[str, Any]) -> None:
+    thin = "-" * 60
+    print()
+    print("Modern target evidence (opt-in)")
+    print(thin)
+    print(
+        "  Coverage target: ANALYSIS_REJECTED(no_keywords) with "
+        "post-LLM neutral empty-keyword lineage."
+    )
+    print(f"  Target coverage events          : {result['target_coverage_count']}")
+    print(
+        "  Excluded legacy/malformed events: "
+        f"{result['excluded_legacy_or_malformed_count']}"
+    )
+    print(f"  Precision-risk proxy reviews    : {result['precision_risk_count']}")
+    print("  Precision-risk is not precision truth and never changes promotion scoring.")
+    for phrase in result["phrases"]:
+        print(f"  {phrase['phrase']}")
+        print(
+            "    coverage: "
+            f"{phrase['coverage_hits']} ({phrase['coverage_rate']:.3f}), "
+            f"tickers={phrase['coverage_unique_ticker_count']}, "
+            f"sources={phrase['coverage_unique_source_count']}"
+        )
+        print(
+            "    precision-risk proxy: "
+            f"{phrase['precision_risk_hits']} ({phrase['precision_risk_rate']:.3f}), "
+            f"tickers={phrase['precision_risk_unique_ticker_count']}, "
+            f"sources={phrase['precision_risk_unique_source_count']}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -300,15 +379,39 @@ def main() -> int:
     warn_if_full_trade_root_scan(path, since=since, until=until)
     phrases = args.phrases if args.phrases else DEFAULT_SHADOW_PHRASES
 
-    records, total_lines, malformed = load_miss_corpus(
-        path,
-        since=since,
-        until=until,
-        exclude_test=args.exclude_test,
-        is_test_record=is_test_record,
-    )
-    result = evaluate_phrases(records, phrases, max_examples=args.max_examples)
+    modern_evidence = None
+    if args.modern_target_slice or args.materialize_snapshot is not None:
+        modern_evidence = load_keyword_shadow_replay_evidence(
+            path,
+            since=since,
+            until=until,
+            exclude_test=args.exclude_test,
+            is_test_record=is_test_record,
+        )
+        result = evaluate_keyword_shadow_evidence(
+            modern_evidence,
+            phrases,
+            max_examples=args.max_examples,
+        )
+        total_lines = modern_evidence["lines_total"]
+        malformed = modern_evidence["lines_malformed"]
+    else:
+        records, total_lines, malformed = load_miss_corpus(
+            path,
+            since=since,
+            until=until,
+            exclude_test=args.exclude_test,
+            is_test_record=is_test_record,
+        )
+        result = evaluate_phrases(records, phrases, max_examples=args.max_examples)
     score_phrases(result["phrases"])
+
+    if args.materialize_snapshot is not None:
+        try:
+            materialize_keyword_shadow_snapshot(args.materialize_snapshot, modern_evidence)
+        except (FileExistsError, ValueError) as exc:
+            print(f"Snapshot refused: {exc}", file=sys.stderr)
+            return 2
 
     print_report(
         result,
@@ -320,9 +423,12 @@ def main() -> int:
         until=until,
         max_examples=args.max_examples,
     )
+    if modern_evidence is not None:
+        _print_modern_target_evidence(result)
+        if args.materialize_snapshot is not None:
+            print(f"Snapshot materialized: {args.materialize_snapshot}")
 
     if args.emit_json:
-        import sys
         json_result = build_json_result(result, phrases)
         print()
         print("JSON Output:")
