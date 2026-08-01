@@ -121,6 +121,16 @@ _SCHEMA_STATEMENTS = (
     )
     """,
 )
+_SCHEMA_META_MIGRATION_STAGE = "g7_skip_evidence_schema_meta_migrated"
+_SCHEMA_META_MIGRATION_STAGE_STATEMENT = _SCHEMA_STATEMENTS[0].replace(
+    "CREATE TABLE IF NOT EXISTS g7_skip_evidence_schema_meta",
+    f"CREATE TABLE {_SCHEMA_META_MIGRATION_STAGE}",
+)
+_RECORDS_MIGRATION_STAGE = "g7_skip_evidence_records_migrated"
+_RECORDS_MIGRATION_STAGE_STATEMENT = _SCHEMA_STATEMENTS[1].replace(
+    "CREATE TABLE IF NOT EXISTS g7_skip_evidence_records",
+    f"CREATE TABLE {_RECORDS_MIGRATION_STAGE}",
+)
 _IMMUTABLE_TABLES = (
     "g7_skip_evidence_schema_meta",
     "g7_skip_evidence_records",
@@ -183,6 +193,12 @@ _EXPECTED_SCHEMA_SQL = {
         for name, statement in _immutable_triggers()
     },
 }
+_EXPECTED_SCHEMA_META_MIGRATION_STAGE_SQL = _normalized_schema_sql(
+    _SCHEMA_META_MIGRATION_STAGE_STATEMENT
+)
+_EXPECTED_RECORDS_MIGRATION_STAGE_SQL = _normalized_schema_sql(
+    _RECORDS_MIGRATION_STAGE_STATEMENT
+)
 G7_SKIP_EVIDENCE_DDL_SHA256 = sha256(
     "\n".join(f"{name}:{sql}" for name, sql in sorted(_EXPECTED_SCHEMA_SQL.items())).encode("utf-8")
 ).hexdigest()
@@ -447,6 +463,12 @@ class G7SkipEvidenceRecord:
     _g7_inputs_json: str = field(init=False, repr=False, compare=False)
     _g7_results_json: str = field(init=False, repr=False, compare=False)
     _execution_liquidity_json: str = field(init=False, repr=False, compare=False)
+    _payload_contract: Literal["current", "pre_lineage"] = field(
+        init=False,
+        default="current",
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         if self.receipt_version != G7_SKIP_EVIDENCE_RECEIPT_VERSION:
@@ -524,6 +546,7 @@ class G7SkipEvidenceRecord:
         object.__setattr__(self, "_g7_inputs_json", g7_inputs_json)
         object.__setattr__(self, "_g7_results_json", g7_results_json)
         object.__setattr__(self, "_execution_liquidity_json", execution_liquidity_json)
+        object.__setattr__(self, "_payload_contract", "current")
 
     @property
     def evidence_id(self) -> str:
@@ -535,9 +558,11 @@ class G7SkipEvidenceRecord:
         )
         return sha256(identity.encode("utf-8")).hexdigest()
 
-    @property
-    def payload(self) -> dict[str, object]:
-        return {
+    def _payload_for_contract(
+        self,
+        contract: Literal["current", "pre_lineage"],
+    ) -> dict[str, object]:
+        payload: dict[str, object] = {
             "receipt_version": self.receipt_version,
             "decision_key": self.decision_key,
             "lifecycle_id": self.lifecycle_id,
@@ -547,8 +572,6 @@ class G7SkipEvidenceRecord:
             "market_ticker": self.market_ticker,
             "intended_side": self.intended_side,
             "market_family": self.market_family,
-            "runtime_paper_cohort_id": self.runtime_paper_cohort_id,
-            "runtime_paper_cohort_kind": self.runtime_paper_cohort_kind,
             "ordered_failures": list(self.ordered_failures),
             "g7_failures": list(self.g7_failures),
             "trade_blocked_reason": self.trade_blocked_reason,
@@ -558,10 +581,24 @@ class G7SkipEvidenceRecord:
             "execution_liquidity": json.loads(self._execution_liquidity_json),
             "diagnostic_only": True,
         }
+        if contract == "current":
+            payload["runtime_paper_cohort_id"] = self.runtime_paper_cohort_id
+            payload["runtime_paper_cohort_kind"] = self.runtime_paper_cohort_kind
+        return payload
+
+    def _payload_sha256_for_contract(
+        self,
+        contract: Literal["current", "pre_lineage"],
+    ) -> str:
+        return sha256(canonical_json(self._payload_for_contract(contract)).encode("utf-8")).hexdigest()
+
+    @property
+    def payload(self) -> dict[str, object]:
+        return self._payload_for_contract(self._payload_contract)
 
     @property
     def payload_sha256(self) -> str:
-        return sha256(canonical_json(self.payload).encode("utf-8")).hexdigest()
+        return self._payload_sha256_for_contract(self._payload_contract)
 
 
 @dataclass(frozen=True)
@@ -619,6 +656,157 @@ def _schema_contract_matches(conn: sqlite3.Connection) -> bool:
         return False
 
 
+def _schema_tables_match(conn: sqlite3.Connection) -> bool:
+    try:
+        meta_rows = conn.execute(
+            "SELECT schema_version, ddl_sha256 FROM g7_skip_evidence_schema_meta"
+        ).fetchall()
+        if meta_rows != [(G7_SKIP_EVIDENCE_SCHEMA_VERSION, G7_SKIP_EVIDENCE_DDL_SHA256)]:
+            return False
+        actual_sql = {
+            str(name): _normalized_schema_sql(str(sql))
+            for name, sql in conn.execute(
+                "SELECT name, sql FROM sqlite_master "
+                "WHERE type = 'table' AND name IN (?, ?)",
+                _IMMUTABLE_TABLES,
+            ).fetchall()
+            if sql is not None
+        }
+        return actual_sql == {
+            name: _EXPECTED_SCHEMA_SQL[name]
+            for name in _IMMUTABLE_TABLES
+        }
+    except sqlite3.DatabaseError:
+        return False
+
+
+def _table_sql(conn: sqlite3.Connection, table: str) -> str | None:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table,),
+    ).fetchone()
+    if row is None or row[0] is None:
+        return None
+    return _normalized_schema_sql(str(row[0]))
+
+
+def _migration_stage_is_empty(conn: sqlite3.Connection, stage: str) -> bool:
+    return conn.execute(f"SELECT NOT EXISTS(SELECT 1 FROM {stage})").fetchone() == (1,)
+
+
+def _migration_stage_matches_source(
+    conn: sqlite3.Connection,
+    *,
+    source: str,
+    stage: str,
+    identity_columns: tuple[str, ...],
+) -> bool:
+    columns = ", ".join(identity_columns)
+    try:
+        source_count = conn.execute(f"SELECT COUNT(*) FROM {source}").fetchone()
+        stage_count = conn.execute(f"SELECT COUNT(*) FROM {stage}").fetchone()
+        if source_count != stage_count:
+            return False
+        difference = conn.execute(
+            f"""
+            SELECT 1 FROM (
+                SELECT {columns} FROM {source}
+                EXCEPT
+                SELECT {columns} FROM {stage}
+            )
+            UNION ALL
+            SELECT 1 FROM (
+                SELECT {columns} FROM {stage}
+                EXCEPT
+                SELECT {columns} FROM {source}
+            )
+            LIMIT 1
+            """
+        ).fetchone()
+    except sqlite3.DatabaseError as exc:
+        raise G7SkipEvidenceSchemaError(
+            "G7 skip evidence migration recovery cannot reconcile staging table"
+        ) from exc
+    return difference is None
+
+
+def _validate_stage_only_records(conn: sqlite3.Connection) -> None:
+    try:
+        rows = conn.execute(
+            f"SELECT {', '.join(_RECORD_COLUMNS)} FROM {_RECORDS_MIGRATION_STAGE}"
+        ).fetchall()
+        for row in rows:
+            _record_from_row(tuple(row))
+    except (G7SkipEvidenceSchemaError, sqlite3.DatabaseError) as exc:
+        raise G7SkipEvidenceSchemaError(
+            "G7 skip evidence migration recovery staging receipt is invalid"
+        ) from exc
+
+
+def _recover_interrupted_records_migration(conn: sqlite3.Connection) -> bool:
+    source = "g7_skip_evidence_records"
+    stage_sql = _table_sql(conn, _RECORDS_MIGRATION_STAGE)
+    if stage_sql is None:
+        return False
+    if stage_sql != _EXPECTED_RECORDS_MIGRATION_STAGE_SQL:
+        raise G7SkipEvidenceSchemaError(
+            "G7 skip evidence migration recovery staging table has an unexpected schema"
+        )
+
+    if _table_sql(conn, source) is None:
+        _validate_stage_only_records(conn)
+        conn.execute(
+            f"ALTER TABLE {_RECORDS_MIGRATION_STAGE} RENAME TO {source}"
+        )
+        return True
+
+    if _migration_stage_is_empty(conn, _RECORDS_MIGRATION_STAGE) or _migration_stage_matches_source(
+        conn,
+        source=source,
+        stage=_RECORDS_MIGRATION_STAGE,
+        identity_columns=("evidence_id", "decision_key", "payload_sha256"),
+    ):
+        conn.execute(f"DROP TABLE {_RECORDS_MIGRATION_STAGE}")
+        return True
+
+    raise G7SkipEvidenceSchemaError(
+        "G7 skip evidence migration recovery cannot prove staging records match source"
+    )
+
+
+def _recover_interrupted_schema_meta_migration(conn: sqlite3.Connection) -> bool:
+    source = "g7_skip_evidence_schema_meta"
+    stage_sql = _table_sql(conn, _SCHEMA_META_MIGRATION_STAGE)
+    if stage_sql is None:
+        return False
+    if stage_sql != _EXPECTED_SCHEMA_META_MIGRATION_STAGE_SQL:
+        raise G7SkipEvidenceSchemaError(
+            "G7 skip evidence migration recovery metadata staging table has an unexpected schema"
+        )
+
+    if _table_sql(conn, source) is None:
+        conn.execute(f"ALTER TABLE {_SCHEMA_META_MIGRATION_STAGE} RENAME TO {source}")
+        return True
+
+    if _migration_stage_is_empty(conn, _SCHEMA_META_MIGRATION_STAGE) or _migration_stage_matches_source(
+        conn,
+        source=source,
+        stage=_SCHEMA_META_MIGRATION_STAGE,
+        identity_columns=("schema_version", "ddl_sha256", "applied_at"),
+    ):
+        conn.execute(f"DROP TABLE {_SCHEMA_META_MIGRATION_STAGE}")
+        return True
+
+    raise G7SkipEvidenceSchemaError(
+        "G7 skip evidence migration recovery cannot prove metadata staging matches source"
+    )
+
+
+def _drop_immutable_triggers(conn: sqlite3.Connection) -> None:
+    for name, _ in _immutable_triggers():
+        conn.execute(f"DROP TRIGGER IF EXISTS {name}")
+
+
 def _migrate_schema(conn: sqlite3.Connection, *, applied_at: datetime) -> None:
     existing_meta_sql_row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'g7_skip_evidence_schema_meta'"
@@ -630,15 +818,7 @@ def _migrate_schema(conn: sqlite3.Connection, *, applied_at: datetime) -> None:
     )
     expected_meta_sql = _EXPECTED_SCHEMA_SQL["g7_skip_evidence_schema_meta"]
     if existing_meta_sql and existing_meta_sql != expected_meta_sql:
-        conn.execute(
-            """
-            CREATE TABLE g7_skip_evidence_schema_meta_migrated (
-                schema_version INTEGER PRIMARY KEY,
-                ddl_sha256 TEXT NOT NULL,
-                applied_at TEXT NOT NULL
-            )
-            """
-        )
+        conn.execute(_SCHEMA_META_MIGRATION_STAGE_STATEMENT)
         conn.execute(
             """
             INSERT INTO g7_skip_evidence_schema_meta_migrated (
@@ -679,34 +859,7 @@ def _migrate_schema(conn: sqlite3.Connection, *, applied_at: datetime) -> None:
             if "runtime_paper_cohort_kind" in columns
             else "NULL"
         )
-        conn.execute(
-            """
-            CREATE TABLE g7_skip_evidence_records_migrated (
-                evidence_id TEXT PRIMARY KEY,
-                receipt_version INTEGER NOT NULL,
-                decision_key TEXT NOT NULL UNIQUE,
-                payload_sha256 TEXT NOT NULL,
-                decision_at TEXT NOT NULL,
-                captured_at TEXT NOT NULL,
-                lifecycle_id TEXT NOT NULL,
-                venue TEXT NOT NULL,
-                market_ticker TEXT NOT NULL,
-                intended_side TEXT,
-                market_family TEXT,
-                runtime_paper_cohort_id TEXT,
-                runtime_paper_cohort_kind TEXT,
-                ordered_failures_json TEXT NOT NULL,
-                g7_failures_json TEXT NOT NULL,
-                trade_blocked_reason TEXT NOT NULL,
-                g7_inputs_json TEXT NOT NULL,
-                g7_results_json TEXT NOT NULL,
-                liquidity_evidence_status TEXT NOT NULL
-                    CHECK (liquidity_evidence_status IN ('observed', 'unavailable', 'not_queried')),
-                execution_liquidity_json TEXT NOT NULL,
-                diagnostic_only INTEGER NOT NULL CHECK (diagnostic_only = 1)
-            )
-            """
-        )
+        conn.execute(_RECORDS_MIGRATION_STAGE_STATEMENT)
         conn.execute(
             """
             INSERT INTO g7_skip_evidence_records_migrated (
@@ -766,13 +919,25 @@ class G7SkipEvidenceStore:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
         applied = _require_utc_datetime(applied_at or datetime.now(UTC), "applied_at")
         with _open_writable(self.db_path) as conn:
-            for statement in _SCHEMA_STATEMENTS:
-                conn.execute(statement)
-            _migrate_schema(conn, applied_at=applied)
-            for _, statement in _immutable_triggers():
-                conn.execute(statement)
-            if not _schema_contract_matches(conn):
-                raise G7SkipEvidenceSchemaError("G7 skip evidence schema contract does not match")
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                _recover_interrupted_schema_meta_migration(conn)
+                _recover_interrupted_records_migration(conn)
+                for statement in _SCHEMA_STATEMENTS:
+                    conn.execute(statement)
+                if not _schema_tables_match(conn):
+                    _drop_immutable_triggers(conn)
+                    _migrate_schema(conn, applied_at=applied)
+                if not _schema_tables_match(conn):
+                    raise G7SkipEvidenceSchemaError("G7 skip evidence schema contract does not match")
+                for _, statement in _immutable_triggers():
+                    conn.execute(statement)
+                if not _schema_contract_matches(conn):
+                    raise G7SkipEvidenceSchemaError("G7 skip evidence schema contract does not match")
+                conn.commit()
+            except BaseException:
+                conn.rollback()
+                raise
         return True
 
     def append_record(self, record: G7SkipEvidenceRecord) -> G7SkipEvidenceAppendResult:
@@ -906,9 +1071,20 @@ def _record_from_row(row: tuple[object, ...]) -> G7SkipEvidenceRecord:
         )
     except (TypeError, ValueError, json.JSONDecodeError) as exc:
         raise G7SkipEvidenceSchemaError("stored G7 skip evidence receipt is invalid") from exc
-    if str(evidence_id) != record.evidence_id or str(payload_sha256) != record.payload_sha256:
+    if str(evidence_id) != record.evidence_id:
         raise G7SkipEvidenceSchemaError("stored G7 skip evidence receipt hash does not match")
-    return record
+    stored_payload_sha256 = str(payload_sha256)
+    if stored_payload_sha256 == record.payload_sha256:
+        return record
+    # Pre-lineage receipts omitted both cohort keys; retain their original hash contract.
+    if (
+        record.runtime_paper_cohort_id is None
+        and record.runtime_paper_cohort_kind is None
+        and stored_payload_sha256 == record._payload_sha256_for_contract("pre_lineage")
+    ):
+        object.__setattr__(record, "_payload_contract", "pre_lineage")
+        return record
+    raise G7SkipEvidenceSchemaError("stored G7 skip evidence receipt hash does not match")
 
 
 _RECORD_SELECT = """

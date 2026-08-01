@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timezone
+from hashlib import sha256
 import json
 from pathlib import Path
 import sqlite3
@@ -12,6 +13,9 @@ from trading.g7_skip_evidence import (
     G7SkipEvidenceRecord,
     G7SkipEvidenceSchemaError,
     G7SkipEvidenceStore,
+    _SCHEMA_STATEMENTS,
+    _immutable_triggers,
+    canonical_json,
     read_g7_skip_evidence_records,
     read_g7_skip_evidence_snapshot,
 )
@@ -19,6 +23,7 @@ from trading.g7_skip_evidence import (
 
 UTC = timezone.utc
 NOW = datetime(2026, 7, 31, 12, 30, tzinfo=UTC)
+_PRE_LINEAGE_OBSERVED_RECORD_HASH = "0efdbd901f72a6b7e9d457457291f7630f00f1b0103b7fd0154639997701a96a"
 
 
 def _observed_record(**overrides: object) -> G7SkipEvidenceRecord:
@@ -65,6 +70,130 @@ def _observed_record(**overrides: object) -> G7SkipEvidenceRecord:
     }
     payload.update(overrides)
     return G7SkipEvidenceRecord(**payload)
+
+
+def _pre_lineage_payload_sha256(record: G7SkipEvidenceRecord) -> str:
+    payload = record.payload
+    payload.pop("runtime_paper_cohort_id")
+    payload.pop("runtime_paper_cohort_kind")
+    return sha256(canonical_json(payload).encode("utf-8")).hexdigest()
+
+
+def _create_pre_lineage_store(
+    conn: sqlite3.Connection,
+    record: G7SkipEvidenceRecord,
+    *,
+    stored_payload_sha256: str | None = None,
+) -> None:
+    conn.execute(
+        """
+        CREATE TABLE g7_skip_evidence_schema_meta (
+            schema_version INTEGER PRIMARY KEY,
+            ddl_sha256 TEXT NOT NULL,
+            applied_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE g7_skip_evidence_records (
+            evidence_id TEXT PRIMARY KEY,
+            receipt_version INTEGER NOT NULL,
+            decision_key TEXT NOT NULL UNIQUE,
+            payload_sha256 TEXT NOT NULL,
+            decision_at TEXT NOT NULL,
+            captured_at TEXT NOT NULL,
+            lifecycle_id TEXT NOT NULL,
+            venue TEXT NOT NULL,
+            market_ticker TEXT NOT NULL,
+            intended_side TEXT,
+            market_family TEXT,
+            ordered_failures_json TEXT NOT NULL,
+            g7_failures_json TEXT NOT NULL,
+            trade_blocked_reason TEXT NOT NULL,
+            g7_inputs_json TEXT NOT NULL,
+            g7_results_json TEXT NOT NULL,
+            liquidity_evidence_status TEXT NOT NULL,
+            execution_liquidity_json TEXT NOT NULL,
+            diagnostic_only INTEGER NOT NULL CHECK (diagnostic_only = 1)
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO g7_skip_evidence_schema_meta (schema_version, ddl_sha256, applied_at) VALUES (1, ?, ?)",
+        ("legacy-ddl", "2026-07-31T12:30:00Z"),
+    )
+    conn.execute(
+        """
+        INSERT INTO g7_skip_evidence_records (
+            evidence_id, receipt_version, decision_key, payload_sha256, decision_at,
+            captured_at, lifecycle_id, venue, market_ticker, intended_side,
+            market_family, ordered_failures_json, g7_failures_json, trade_blocked_reason,
+            g7_inputs_json, g7_results_json, liquidity_evidence_status,
+            execution_liquidity_json, diagnostic_only
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            record.evidence_id,
+            record.receipt_version,
+            record.decision_key,
+            stored_payload_sha256 or record.payload_sha256,
+            record.payload["decision_at"],
+            record.payload["captured_at"],
+            record.lifecycle_id,
+            record.venue,
+            record.market_ticker,
+            record.intended_side,
+            record.market_family,
+            json.dumps(record.payload["ordered_failures"]),
+            json.dumps(record.payload["g7_failures"]),
+            record.trade_blocked_reason,
+            json.dumps(record.payload["g7_inputs"]),
+            json.dumps(record.payload["g7_results"]),
+            record.liquidity_evidence_status,
+            json.dumps(record.payload["execution_liquidity"]),
+            1,
+        ),
+    )
+
+
+def _create_records_migration_stage(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        _SCHEMA_STATEMENTS[1].replace(
+            "CREATE TABLE IF NOT EXISTS g7_skip_evidence_records",
+            "CREATE TABLE g7_skip_evidence_records_migrated",
+        )
+    )
+
+
+def _create_schema_meta_migration_stage(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        _SCHEMA_STATEMENTS[0].replace(
+            "CREATE TABLE IF NOT EXISTS g7_skip_evidence_schema_meta",
+            "CREATE TABLE g7_skip_evidence_schema_meta_migrated",
+        )
+    )
+
+
+def _copy_pre_lineage_records_to_stage(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        INSERT INTO g7_skip_evidence_records_migrated (
+            evidence_id, receipt_version, decision_key, payload_sha256, decision_at,
+            captured_at, lifecycle_id, venue, market_ticker, intended_side,
+            market_family, runtime_paper_cohort_id, runtime_paper_cohort_kind,
+            ordered_failures_json, g7_failures_json, trade_blocked_reason,
+            g7_inputs_json, g7_results_json, liquidity_evidence_status,
+            execution_liquidity_json, diagnostic_only
+        )
+        SELECT evidence_id, receipt_version, decision_key, payload_sha256, decision_at,
+               captured_at, lifecycle_id, venue, market_ticker, intended_side,
+               market_family, NULL, NULL, ordered_failures_json, g7_failures_json,
+               trade_blocked_reason, g7_inputs_json, g7_results_json,
+               liquidity_evidence_status, execution_liquidity_json, diagnostic_only
+        FROM g7_skip_evidence_records
+        """
+    )
 
 
 def test_store_appends_immutable_receipts_idempotently_and_rejects_conflicts(tmp_path: Path) -> None:
@@ -272,81 +401,12 @@ def test_read_only_record_iterator_round_trips_validated_receipts_without_creati
 
 def test_initialize_migrates_pre_lineage_receipt_store_without_backfill(tmp_path: Path) -> None:
     db_path = tmp_path / "g7_skip_evidence.db"
+    record = _observed_record(
+        runtime_paper_cohort_id=None,
+        runtime_paper_cohort_kind=None,
+    )
     with sqlite3.connect(db_path) as conn:
-        conn.execute(
-            """
-            CREATE TABLE g7_skip_evidence_schema_meta (
-                schema_version INTEGER PRIMARY KEY,
-                ddl_sha256 TEXT NOT NULL,
-                applied_at TEXT NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE g7_skip_evidence_records (
-                evidence_id TEXT PRIMARY KEY,
-                receipt_version INTEGER NOT NULL,
-                decision_key TEXT NOT NULL UNIQUE,
-                payload_sha256 TEXT NOT NULL,
-                decision_at TEXT NOT NULL,
-                captured_at TEXT NOT NULL,
-                lifecycle_id TEXT NOT NULL,
-                venue TEXT NOT NULL,
-                market_ticker TEXT NOT NULL,
-                intended_side TEXT,
-                market_family TEXT,
-                ordered_failures_json TEXT NOT NULL,
-                g7_failures_json TEXT NOT NULL,
-                trade_blocked_reason TEXT NOT NULL,
-                g7_inputs_json TEXT NOT NULL,
-                g7_results_json TEXT NOT NULL,
-                liquidity_evidence_status TEXT NOT NULL,
-                execution_liquidity_json TEXT NOT NULL,
-                diagnostic_only INTEGER NOT NULL CHECK (diagnostic_only = 1)
-            )
-            """
-        )
-        conn.execute(
-            "INSERT INTO g7_skip_evidence_schema_meta (schema_version, ddl_sha256, applied_at) VALUES (1, ?, ?)",
-            ("legacy-ddl", "2026-07-31T12:30:00Z"),
-        )
-        record = _observed_record(
-            runtime_paper_cohort_id=None,
-            runtime_paper_cohort_kind=None,
-        )
-        conn.execute(
-            """
-            INSERT INTO g7_skip_evidence_records (
-                evidence_id, receipt_version, decision_key, payload_sha256, decision_at,
-                captured_at, lifecycle_id, venue, market_ticker, intended_side,
-                market_family, ordered_failures_json, g7_failures_json, trade_blocked_reason,
-                g7_inputs_json, g7_results_json, liquidity_evidence_status,
-                execution_liquidity_json, diagnostic_only
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                record.evidence_id,
-                record.receipt_version,
-                record.decision_key,
-                record.payload_sha256,
-                record.payload["decision_at"],
-                record.payload["captured_at"],
-                record.lifecycle_id,
-                record.venue,
-                record.market_ticker,
-                record.intended_side,
-                record.market_family,
-                json.dumps(record.payload["ordered_failures"]),
-                json.dumps(record.payload["g7_failures"]),
-                record.trade_blocked_reason,
-                json.dumps(record.payload["g7_inputs"]),
-                json.dumps(record.payload["g7_results"]),
-                record.liquidity_evidence_status,
-                json.dumps(record.payload["execution_liquidity"]),
-                1,
-            ),
-        )
+        _create_pre_lineage_store(conn, record)
 
     store = G7SkipEvidenceStore(db_path=db_path)
     assert store.initialize(applied_at=NOW) is True
@@ -354,6 +414,307 @@ def test_initialize_migrates_pre_lineage_receipt_store_without_backfill(tmp_path
     [migrated] = read_g7_skip_evidence_records(db_path)
     assert migrated.runtime_paper_cohort_id is None
     assert migrated.runtime_paper_cohort_kind is None
+
+
+def test_migrated_pre_lineage_receipt_uses_its_original_payload_hash_contract(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "g7_skip_evidence.db"
+    record = _observed_record(
+        runtime_paper_cohort_id=None,
+        runtime_paper_cohort_kind=None,
+    )
+    assert _pre_lineage_payload_sha256(record) == _PRE_LINEAGE_OBSERVED_RECORD_HASH
+    assert record.payload_sha256 != _PRE_LINEAGE_OBSERVED_RECORD_HASH
+    with sqlite3.connect(db_path) as conn:
+        _create_pre_lineage_store(
+            conn,
+            record,
+            stored_payload_sha256=_PRE_LINEAGE_OBSERVED_RECORD_HASH,
+        )
+
+    assert G7SkipEvidenceStore(db_path=db_path).initialize(applied_at=NOW) is True
+    [migrated] = read_g7_skip_evidence_records(db_path)
+
+    assert migrated.runtime_paper_cohort_id is None
+    assert migrated.runtime_paper_cohort_kind is None
+    assert "runtime_paper_cohort_id" not in migrated.payload
+    assert "runtime_paper_cohort_kind" not in migrated.payload
+    assert migrated.payload_sha256 == _PRE_LINEAGE_OBSERVED_RECORD_HASH
+
+
+def test_current_null_cohort_receipt_keeps_current_payload_hash_contract(tmp_path: Path) -> None:
+    db_path = tmp_path / "g7_skip_evidence.db"
+    record = _observed_record(
+        runtime_paper_cohort_id=None,
+        runtime_paper_cohort_kind=None,
+    )
+    store = G7SkipEvidenceStore(db_path=db_path)
+    assert store.initialize(applied_at=NOW) is True
+    assert store.append_record(record).status == "inserted"
+
+    [stored] = read_g7_skip_evidence_records(db_path)
+
+    assert "runtime_paper_cohort_id" in stored.payload
+    assert "runtime_paper_cohort_kind" in stored.payload
+    assert stored.payload_sha256 == record.payload_sha256
+
+
+def test_legacy_payload_contract_fallback_requires_both_cohort_fields_to_be_null(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "g7_skip_evidence.db"
+    record = _observed_record(runtime_paper_cohort_kind=None)
+    store = G7SkipEvidenceStore(db_path=db_path)
+    assert store.initialize(applied_at=NOW) is True
+    assert store.append_record(record).status == "inserted"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DROP TRIGGER immutable_g7_skip_evidence_records_update")
+        conn.execute(
+            "UPDATE g7_skip_evidence_records SET payload_sha256 = ?",
+            (_pre_lineage_payload_sha256(record),),
+        )
+        for name, statement in _immutable_triggers():
+            if name == "immutable_g7_skip_evidence_records_update":
+                conn.execute(statement)
+
+    with pytest.raises(G7SkipEvidenceSchemaError, match="hash does not match"):
+        read_g7_skip_evidence_records(db_path)
+
+
+def test_initialize_recovers_empty_schema_meta_migration_stage(tmp_path: Path) -> None:
+    db_path = tmp_path / "g7_skip_evidence.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE g7_skip_evidence_schema_meta (
+                schema_version INTEGER PRIMARY KEY,
+                ddl_sha256 TEXT NOT NULL,
+                applied_at TEXT NOT NULL,
+                legacy_marker TEXT
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO g7_skip_evidence_schema_meta "
+            "(schema_version, ddl_sha256, applied_at, legacy_marker) VALUES (1, ?, ?, ?)",
+            ("legacy-ddl", "2026-07-31T12:30:00Z", "legacy"),
+        )
+        for name, statement in _immutable_triggers():
+            if "schema_meta" in name:
+                conn.execute(statement)
+        _create_schema_meta_migration_stage(conn)
+
+    assert G7SkipEvidenceStore(db_path=db_path).initialize(applied_at=NOW) is True
+    snapshot = read_g7_skip_evidence_snapshot(db_path)
+    assert snapshot.schema_valid is True
+    assert snapshot.record_count == 0
+
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' "
+            "AND name = 'g7_skip_evidence_schema_meta_migrated'"
+        ).fetchone() == (0,)
+
+
+def test_initialize_rejects_divergent_schema_meta_migration_stage_without_writes(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "g7_skip_evidence.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE g7_skip_evidence_schema_meta (
+                schema_version INTEGER PRIMARY KEY,
+                ddl_sha256 TEXT NOT NULL,
+                applied_at TEXT NOT NULL,
+                legacy_marker TEXT
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO g7_skip_evidence_schema_meta "
+            "(schema_version, ddl_sha256, applied_at, legacy_marker) VALUES (1, ?, ?, ?)",
+            ("legacy-ddl", "2026-07-31T12:30:00Z", "legacy"),
+        )
+        _create_schema_meta_migration_stage(conn)
+        conn.execute(
+            "INSERT INTO g7_skip_evidence_schema_meta_migrated "
+            "(schema_version, ddl_sha256, applied_at) VALUES (1, ?, ?)",
+            ("different-ddl", "2026-07-31T12:30:00Z"),
+        )
+
+    with pytest.raises(G7SkipEvidenceSchemaError, match="cannot prove metadata"):
+        G7SkipEvidenceStore(db_path=db_path).initialize(applied_at=NOW)
+
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute(
+            "SELECT schema_version, ddl_sha256, applied_at, legacy_marker "
+            "FROM g7_skip_evidence_schema_meta"
+        ).fetchall() == [(1, "legacy-ddl", "2026-07-31T12:30:00Z", "legacy")]
+        assert conn.execute(
+            "SELECT schema_version, ddl_sha256, applied_at "
+            "FROM g7_skip_evidence_schema_meta_migrated"
+        ).fetchall() == [(1, "different-ddl", "2026-07-31T12:30:00Z")]
+
+
+def test_initialize_promotes_stage_only_schema_meta_migration(tmp_path: Path) -> None:
+    db_path = tmp_path / "g7_skip_evidence.db"
+    with sqlite3.connect(db_path) as conn:
+        _create_schema_meta_migration_stage(conn)
+        conn.execute(
+            "INSERT INTO g7_skip_evidence_schema_meta_migrated "
+            "(schema_version, ddl_sha256, applied_at) VALUES (1, ?, ?)",
+            ("legacy-ddl", "2026-07-31T12:30:00Z"),
+        )
+
+    assert G7SkipEvidenceStore(db_path=db_path).initialize(applied_at=NOW) is True
+    assert read_g7_skip_evidence_snapshot(db_path).schema_valid is True
+
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' "
+            "AND name = 'g7_skip_evidence_schema_meta_migrated'"
+        ).fetchone() == (0,)
+
+
+def test_initialize_recovers_production_shaped_empty_records_migration_stage(tmp_path: Path) -> None:
+    db_path = tmp_path / "g7_skip_evidence.db"
+    record = _observed_record(
+        runtime_paper_cohort_id=None,
+        runtime_paper_cohort_kind=None,
+    )
+    with sqlite3.connect(db_path) as conn:
+        _create_pre_lineage_store(conn, record)
+        for _, statement in _immutable_triggers():
+            conn.execute(statement)
+        _create_records_migration_stage(conn)
+
+    assert G7SkipEvidenceStore(db_path=db_path).initialize(applied_at=NOW) is True
+    assert read_g7_skip_evidence_records(db_path) == (record,)
+
+    with sqlite3.connect(db_path) as conn:
+        names = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        assert "g7_skip_evidence_records_migrated" not in names
+        assert conn.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' "
+            "AND name LIKE 'immutable_g7_skip_evidence_%'"
+        ).fetchone() == (4,)
+
+
+def test_initialize_recovers_equivalent_completed_records_migration_stage(tmp_path: Path) -> None:
+    db_path = tmp_path / "g7_skip_evidence.db"
+    record = _observed_record(
+        runtime_paper_cohort_id=None,
+        runtime_paper_cohort_kind=None,
+    )
+    with sqlite3.connect(db_path) as conn:
+        _create_pre_lineage_store(conn, record)
+        _create_records_migration_stage(conn)
+        _copy_pre_lineage_records_to_stage(conn)
+
+    assert G7SkipEvidenceStore(db_path=db_path).initialize(applied_at=NOW) is True
+    assert read_g7_skip_evidence_records(db_path) == (record,)
+
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' "
+            "AND name = 'g7_skip_evidence_records_migrated'"
+        ).fetchone() == (0,)
+
+
+def test_initialize_rejects_divergent_records_migration_stage_without_writes(tmp_path: Path) -> None:
+    db_path = tmp_path / "g7_skip_evidence.db"
+    record = _observed_record(
+        runtime_paper_cohort_id=None,
+        runtime_paper_cohort_kind=None,
+    )
+    with sqlite3.connect(db_path) as conn:
+        _create_pre_lineage_store(conn, record)
+        _create_records_migration_stage(conn)
+        _copy_pre_lineage_records_to_stage(conn)
+        conn.execute(
+            "UPDATE g7_skip_evidence_records_migrated SET payload_sha256 = ?",
+            ("b" * 64,),
+        )
+
+    with pytest.raises(G7SkipEvidenceSchemaError, match="cannot prove"):
+        G7SkipEvidenceStore(db_path=db_path).initialize(applied_at=NOW)
+
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute(
+            "SELECT evidence_id, decision_key, payload_sha256 FROM g7_skip_evidence_records"
+        ).fetchall() == [(record.evidence_id, record.decision_key, record.payload_sha256)]
+        assert conn.execute(
+            "SELECT evidence_id, decision_key, payload_sha256 "
+            "FROM g7_skip_evidence_records_migrated"
+        ).fetchall() == [(record.evidence_id, record.decision_key, "b" * 64)]
+        assert conn.execute(
+            "SELECT schema_version, ddl_sha256 FROM g7_skip_evidence_schema_meta"
+        ).fetchall() == [(1, "legacy-ddl")]
+
+
+def test_initialize_promotes_valid_stage_only_records_migration(tmp_path: Path) -> None:
+    db_path = tmp_path / "g7_skip_evidence.db"
+    record = _observed_record(
+        runtime_paper_cohort_id=None,
+        runtime_paper_cohort_kind=None,
+    )
+    with sqlite3.connect(db_path) as conn:
+        _create_pre_lineage_store(conn, record)
+        _create_records_migration_stage(conn)
+        _copy_pre_lineage_records_to_stage(conn)
+        conn.execute("DROP TABLE g7_skip_evidence_records")
+
+    assert G7SkipEvidenceStore(db_path=db_path).initialize(applied_at=NOW) is True
+    assert read_g7_skip_evidence_records(db_path) == (record,)
+
+
+def test_initialize_rejects_invalid_stage_only_records_migration(tmp_path: Path) -> None:
+    db_path = tmp_path / "g7_skip_evidence.db"
+    record = _observed_record(
+        runtime_paper_cohort_id=None,
+        runtime_paper_cohort_kind=None,
+    )
+    with sqlite3.connect(db_path) as conn:
+        _create_pre_lineage_store(conn, record)
+        _create_records_migration_stage(conn)
+        _copy_pre_lineage_records_to_stage(conn)
+        conn.execute(
+            "UPDATE g7_skip_evidence_records_migrated SET payload_sha256 = ?",
+            ("b" * 64,),
+        )
+        conn.execute("DROP TABLE g7_skip_evidence_records")
+
+    with pytest.raises(G7SkipEvidenceSchemaError, match="staging receipt"):
+        G7SkipEvidenceStore(db_path=db_path).initialize(applied_at=NOW)
+
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' "
+            "AND name = 'g7_skip_evidence_records'"
+        ).fetchone() == (0,)
+        assert conn.execute(
+            "SELECT payload_sha256 FROM g7_skip_evidence_records_migrated"
+        ).fetchone() == ("b" * 64,)
+
+
+def test_initialize_discards_empty_records_migration_stage_when_source_is_current(tmp_path: Path) -> None:
+    db_path = tmp_path / "g7_skip_evidence.db"
+    store = G7SkipEvidenceStore(db_path=db_path)
+    record = _observed_record()
+    assert store.initialize(applied_at=NOW) is True
+    assert store.append_record(record).status == "inserted"
+    with sqlite3.connect(db_path) as conn:
+        _create_records_migration_stage(conn)
+
+    assert store.initialize(applied_at=NOW) is True
+    assert read_g7_skip_evidence_records(db_path) == (record,)
 
 
 def test_snapshot_rejects_weak_record_table_ddl_even_with_same_columns(tmp_path: Path) -> None:
