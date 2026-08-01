@@ -19,6 +19,7 @@ Fail-closed invariants preserved (the safe direction for go-live):
 """
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -153,6 +154,82 @@ def test_gate_requires_independent_realized_profit_evidence():
         failures = main._check_go_live_gates(paper)
 
     assert any("Independent realized-profit evidence unavailable" in failure for failure in failures)
+
+
+def test_archived_legacy_receipt_path_hard_blocks_go_live_when_profit_predicate_passes(
+    tmp_path: Path,
+):
+    archived_db_path = (
+        tmp_path
+        / "finalized_legacy_pending_paper_cohorts"
+        / "finalization-20260801t180000z"
+        / "payload"
+        / "legacy_receipts"
+        / "paper_trades.db"
+    )
+    archived_db_path.parent.mkdir(parents=True)
+    archived_db_path.touch()
+    paper = _paper(notional=60.0, resolved_trades=_passing_resolved())
+    paper.db_path = archived_db_path
+
+    with patch.object(main, "cfg", _cfg()), patch.object(
+        main,
+        "_provisioned_cohort_live_risk_gate_failures",
+        return_value=(True, []),
+    ), patch.object(
+        main,
+        "independent_realized_profit_evidence_available",
+        return_value=True,
+    ), patch(
+        "scripts.mark_open_positions.compute_open_position_marks",
+        return_value={"marked_value": 0.0, "unpriced_count": 0},
+    ):
+        failures = main._check_go_live_gates(paper)
+
+    assert failures == [
+        "Archived legacy-pending finalization payload cannot qualify for live "
+        "readiness -- gate fails closed"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("db_path", "expected"),
+    (
+        (
+            Path(
+                "scratch/../finalized_legacy_pending_paper_cohorts/"
+                "finalization-20260801t180000z/payload/legacy_receipts/paper_trades.db"
+            ),
+            True,
+        ),
+        (
+            Path(
+                "finalized_legacy_pending_paper_cohorts-copy/"
+                "finalization-20260801t180000z/payload/paper_trades.db"
+            ),
+            False,
+        ),
+        (
+            Path(
+                "finalized_legacy_pending_paper_cohorts/"
+                "finalization-20260801t180000z/payload-copy/paper_trades.db"
+            ),
+            False,
+        ),
+        (
+            Path(
+                "finalized_legacy_pending_paper_cohorts/"
+                "finalization-20260801t180000z/payload/../active/paper_trades.db"
+            ),
+            False,
+        ),
+    ),
+)
+def test_archived_payload_path_uses_normalized_exact_components(
+    db_path: Path,
+    expected: bool,
+):
+    assert main.is_finalized_legacy_pending_archive_payload_path(db_path) is expected
 
 
 def test_gate_hard_blocks_nonlegacy_cohort_even_when_other_local_checks_pass():

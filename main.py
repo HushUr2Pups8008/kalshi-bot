@@ -139,6 +139,7 @@ from trading.paper_cohorts import (
     aggregate_open_exposure_snapshot,
     discover_legacy_pending_paper_risk_cohorts,
     discover_paper_risk_cohorts,
+    is_finalized_legacy_pending_archive_payload_path,
     provisioned_paper_cohort_block_reason,
     resolve_runtime_paper_cohort,
     validate_active_paper_cohort_manifest,
@@ -5233,6 +5234,12 @@ def _check_go_live_gates(paper: PaperTrader) -> list[str]:
       GO_LIVE_MIN_WIN_RATE    -- minimum win rate (default 0.52)
       GO_LIVE_MAX_DRAWDOWN_PCT -- max drawdown as fraction of starting bankroll (default 0.20)
     """
+    if is_finalized_legacy_pending_archive_payload_path(paper.db_path):
+        return [
+            "Archived legacy-pending finalization payload cannot qualify for live "
+            "readiness -- gate fails closed"
+        ]
+
     trades = paper.get_all_trades()
     raw_resolved = [trade for trade in trades if trade["resolved"]]
     notional = paper.get_notional_bankroll()
