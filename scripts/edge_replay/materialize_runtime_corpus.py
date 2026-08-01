@@ -21,6 +21,7 @@ import sqlite3
 import stat
 import sys
 from typing import Final
+from uuid import uuid4
 
 from scripts.edge_replay.build_corpus import (
     BuildResult,
@@ -52,8 +53,8 @@ REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[2]
 DEFAULT_RUNTIME_ATTESTATION: Final[Path] = Path("logs/state/runtime_paper_cohort_attestation.json")
 DEFAULT_REGIMES_DOC: Final[Path] = Path("docs/governance/corpus-regimes.md")
 _OUTPUT_NAME_RE: Final[re.Pattern[str]] = re.compile(r"^corpus_[a-z0-9][a-z0-9._-]{2,191}\.jsonl$")
-_SHA256_RE: Final[re.Pattern[str]] = re.compile(r"^[0-9a-f]{64}$")
 _SNAPSHOT_ROOT: Final[Path] = Path("edge_replay_snapshots")
+_SNAPSHOT_SIDECAR_SUFFIXES: Final[tuple[str, ...]] = ("-journal", "-shm", "-wal")
 
 
 class RuntimeCorpusMaterializationError(ValueError):
@@ -73,6 +74,7 @@ class RuntimeCorpusMaterializationResult:
     runtime_attestation_sha256: str
     snapshot_path_relative_to_data: str
     snapshot_sha256: str
+    snapshot_creation_method: str
     protected_registration_trusted_ref: str
     protected_registration_commit: str
     protected_registration_integrated_at_utc: str
@@ -90,6 +92,7 @@ class RuntimeCorpusMaterializationResult:
             "runtime_attestation_sha256": self.runtime_attestation_sha256,
             "snapshot_path_relative_to_data": self.snapshot_path_relative_to_data,
             "snapshot_sha256": self.snapshot_sha256,
+            "snapshot_creation_method": self.snapshot_creation_method,
             "protected_registration_trusted_ref": self.protected_registration_trusted_ref,
             "protected_registration_commit": self.protected_registration_commit,
             "protected_registration_integrated_at_utc": self.protected_registration_integrated_at_utc,
@@ -104,8 +107,6 @@ def materialize_runtime_corpus(
     *,
     repo_root: Path = REPO_ROOT,
     registration_id: str,
-    snapshot_path: Path,
-    snapshot_sha256: str,
     runtime_attestation_path: Path = DEFAULT_RUNTIME_ATTESTATION,
     output_path: Path | None = None,
     registry_path: Path = DEFAULT_REGISTRY_PATH,
@@ -113,13 +114,12 @@ def materialize_runtime_corpus(
     materialized_at_utc: datetime | None = None,
     registration_attestor: RegistrationAttestor = attest_oos_registration_history,
 ) -> RuntimeCorpusMaterializationResult:
-    """Build one closed registered OOS corpus from a verified active snapshot.
+    """Build one closed registered OOS corpus from an owned active-DB backup.
 
-    ``snapshot_path`` is a caller-provided immutable file beneath
-    ``data/edge_replay_snapshots/<cohort-id>/``. Its digest and embedded cohort
-    identity must match the active manifest-bound runtime receipt. The mutable
-    runtime DB is resolved only to verify that binding and is never passed to
-    :func:`build_corpus`.
+    The wrapper creates its own immutable SQLite online backup below
+    ``data/edge_replay_snapshots/<cohort-id>/`` only after registration and
+    active-runtime lineage validation. No caller can choose a database or
+    snapshot path; :func:`build_corpus` receives only the generated snapshot.
     """
 
     root = _repository_root(repo_root)
@@ -167,33 +167,25 @@ def materialize_runtime_corpus(
         receipt=receipt,
     )
 
-    snapshot = _validated_snapshot_path(
-        root=root,
+    snapshot, actual_snapshot_sha256 = _create_owned_runtime_snapshot(
         data_root=data_root,
+        runtime_db=runtime_db,
         cohort_id=receipt.cohort_id,
-        snapshot_path=snapshot_path,
-    )
-    if _same_file(snapshot, runtime_db):
-        raise RuntimeCorpusMaterializationError("snapshot must not be the mutable attested runtime database")
-    expected_snapshot_sha256 = _validated_sha256(snapshot_sha256, label="snapshot")
-    actual_snapshot_sha256 = _sha256_file(snapshot)
-    if actual_snapshot_sha256 != expected_snapshot_sha256:
-        raise RuntimeCorpusMaterializationError("snapshot SHA-256 does not match")
-
-    _validate_snapshot_contract(
-        snapshot,
+        registration_hash=registration.registration_hash,
+        runtime_attestation_sha256=attestation_sha256,
+        materialized_at_utc=moment,
         registration=registration,
         receipt=receipt,
     )
-
-    resolved_output = _validated_output_path(
-        root=root,
-        registration=registration,
-        snapshot_sha256=actual_snapshot_sha256,
-        output_path=output_path,
-    )
-    staged_output = _staged_output_path(root=root, output_path=resolved_output)
+    staged_output: Path | None = None
     try:
+        resolved_output = _validated_output_path(
+            root=root,
+            registration=registration,
+            snapshot_sha256=actual_snapshot_sha256,
+            output_path=output_path,
+        )
+        staged_output = _staged_output_path(root=root, output_path=resolved_output)
         built = build_corpus(
             start_utc=_parse_registration_utc(registration.window_start_utc),
             end_utc=_parse_registration_utc(registration.window_end_utc),
@@ -216,6 +208,7 @@ def materialize_runtime_corpus(
             provenance={
                 "runtime_attestation_sha256": attestation_sha256,
                 "snapshot_sha256": actual_snapshot_sha256,
+                "snapshot_creation_method": "sqlite_online_backup",
                 "protected_registration_trusted_ref": registration_proof.trusted_ref,
                 "protected_registration_commit": registration_proof.commit,
                 "protected_registration_integrated_at_utc": registration_proof.integrated_at_utc,
@@ -224,9 +217,11 @@ def materialize_runtime_corpus(
         os.replace(staged_output, resolved_output)
     except RuntimeCorpusMaterializationError:
         _cleanup_staged_output(staged_output)
+        _cleanup_owned_snapshot(snapshot)
         raise
     except (OSError, sqlite3.Error, ValueError, RuntimeError) as exc:
         _cleanup_staged_output(staged_output)
+        _cleanup_owned_snapshot(snapshot)
         raise RuntimeCorpusMaterializationError(f"registered corpus build failed: {exc}") from exc
 
     return RuntimeCorpusMaterializationResult(
@@ -239,6 +234,7 @@ def materialize_runtime_corpus(
         runtime_attestation_sha256=attestation_sha256,
         snapshot_path_relative_to_data=_relative_to(snapshot, data_root),
         snapshot_sha256=actual_snapshot_sha256,
+        snapshot_creation_method="sqlite_online_backup",
         protected_registration_trusted_ref=registration_proof.trusted_ref,
         protected_registration_commit=registration_proof.commit,
         protected_registration_integrated_at_utc=registration_proof.integrated_at_utc,
@@ -322,24 +318,174 @@ def _validated_active_runtime_database(
     return runtime_db
 
 
-def _validated_snapshot_path(
+def _create_owned_runtime_snapshot(
+    *,
+    data_root: Path,
+    runtime_db: Path,
+    cohort_id: str,
+    registration_hash: str,
+    runtime_attestation_sha256: str,
+    materialized_at_utc: datetime,
+    registration: OOSRegistration,
+    receipt: RuntimePaperCohortAttestation,
+) -> tuple[Path, str]:
+    """Create and atomically publish a read-only SQLite online backup.
+
+    The source is the already-attested active runtime database, opened in
+    ``mode=ro``. The backup API gives one consistent SQLite view even while the
+    runtime is writing; no raw file copy or caller-selected path is involved.
+    """
+
+    snapshot_directory = _owned_snapshot_directory(data_root=data_root, cohort_id=cohort_id)
+    timestamp = _format_utc(materialized_at_utc).replace("-", "").replace(":", "").lower()
+    name = f"snapshot_{registration_hash[:16]}_{runtime_attestation_sha256[:16]}_{timestamp}_{uuid4().hex}.sqlite"
+    snapshot = snapshot_directory / name
+    staging = snapshot_directory / f".{name}.tmp"
+    _assert_no_symlink_components(data_root, snapshot, allow_missing=True)
+    _assert_no_symlink_components(data_root, staging, allow_missing=True)
+    if snapshot.exists() or snapshot.is_symlink() or staging.exists() or staging.is_symlink():
+        raise RuntimeCorpusMaterializationError("owned runtime snapshot path already exists")
+    _reserve_snapshot_staging_file(staging, data_root=data_root)
+
+    source: sqlite3.Connection | None = None
+    destination: sqlite3.Connection | None = None
+    try:
+        source = sqlite3.connect(f"{runtime_db.as_uri()}?mode=ro", uri=True)
+        source.execute("PRAGMA query_only = ON")
+        destination = sqlite3.connect(staging)
+        source.backup(destination)
+        destination.commit()
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        _cleanup_owned_snapshot(staging)
+        raise RuntimeCorpusMaterializationError(f"cannot create owned runtime snapshot: {exc}") from exc
+    finally:
+        if destination is not None:
+            destination.close()
+        if source is not None:
+            source.close()
+
+    try:
+        _assert_immutable_snapshot_file(staging, root=data_root, require_readonly=False)
+        if _same_file(staging, runtime_db):
+            raise RuntimeCorpusMaterializationError("owned snapshot aliases the mutable attested runtime database")
+        _fsync_file(staging)
+        os.chmod(staging, 0o444)
+        _assert_immutable_snapshot_file(staging, root=data_root, require_readonly=True)
+        _fsync_file(staging)
+        _validate_snapshot_contract(
+            staging,
+            registration=registration,
+            receipt=receipt,
+        )
+        snapshot_sha256 = _sha256_file(staging)
+        os.replace(staging, snapshot)
+        _fsync_directory(snapshot_directory)
+        snapshot = _validated_owned_snapshot(
+            snapshot,
+            data_root=data_root,
+            cohort_id=cohort_id,
+        )
+        if _sha256_file(snapshot) != snapshot_sha256:
+            raise RuntimeCorpusMaterializationError("owned snapshot changed during publication")
+        return snapshot, snapshot_sha256
+    except RuntimeCorpusMaterializationError:
+        _cleanup_owned_snapshot(staging)
+        _cleanup_owned_snapshot(snapshot)
+        raise
+    except OSError as exc:
+        _cleanup_owned_snapshot(staging)
+        _cleanup_owned_snapshot(snapshot)
+        raise RuntimeCorpusMaterializationError(f"cannot publish owned runtime snapshot: {exc}") from exc
+
+
+def _owned_snapshot_directory(*, data_root: Path, cohort_id: str) -> Path:
+    directory = data_root / _SNAPSHOT_ROOT / cohort_id
+    _assert_no_symlink_components(data_root, directory, allow_missing=True)
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise RuntimeCorpusMaterializationError("cannot create owned snapshot directory") from exc
+    _assert_no_symlink_components(data_root, directory, allow_missing=False)
+    return _required_directory(directory, label="owned snapshot directory")
+
+
+def _reserve_snapshot_staging_file(staging: Path, *, data_root: Path) -> None:
+    """Create a unique non-symlink SQLite destination before opening it."""
+
+    _assert_no_symlink_components(data_root, staging, allow_missing=True)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(staging, flags, 0o600)
+    except OSError as exc:
+        raise RuntimeCorpusMaterializationError("cannot reserve owned snapshot staging file") from exc
+    else:
+        os.close(descriptor)
+    _assert_immutable_snapshot_file(staging, root=data_root, require_readonly=False)
+
+
+def _validated_owned_snapshot(snapshot: Path, *, data_root: Path, cohort_id: str) -> Path:
+    expected_directory = data_root / _SNAPSHOT_ROOT / cohort_id
+    if snapshot.parent != expected_directory:
+        raise RuntimeCorpusMaterializationError("owned snapshot is outside its active cohort directory")
+    return _assert_immutable_snapshot_file(snapshot, root=data_root, require_readonly=True)
+
+
+def _assert_immutable_snapshot_file(
+    snapshot: Path,
     *,
     root: Path,
-    data_root: Path,
-    cohort_id: str,
-    snapshot_path: Path,
+    require_readonly: bool,
 ) -> Path:
-    snapshot = _path_within(root, snapshot_path, label="snapshot")
-    relative = _relative_to(snapshot, data_root)
-    expected_prefix = _SNAPSHOT_ROOT / cohort_id
-    if not Path(relative).is_relative_to(expected_prefix):
-        raise RuntimeCorpusMaterializationError(
-            "snapshot must stay below data/edge_replay_snapshots/<active-cohort-id>/"
-        )
-    snapshot = _required_regular_file(snapshot, root=data_root, label="snapshot")
-    if os.stat(snapshot, follow_symlinks=False).st_mode & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH):
-        raise RuntimeCorpusMaterializationError("snapshot must be immutable (not writable)")
+    snapshot = _required_regular_file(snapshot, root=root, label="owned snapshot")
+    try:
+        snapshot_stat = os.lstat(snapshot)
+    except OSError as exc:
+        raise RuntimeCorpusMaterializationError("owned snapshot is unavailable") from exc
+    if snapshot_stat.st_nlink != 1:
+        raise RuntimeCorpusMaterializationError("owned snapshot must not be hard-linked")
+    if require_readonly and snapshot_stat.st_mode & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH):
+        raise RuntimeCorpusMaterializationError("owned snapshot must be immutable (not writable)")
+    for suffix in _SNAPSHOT_SIDECAR_SUFFIXES:
+        sidecar = snapshot.with_name(snapshot.name + suffix)
+        if sidecar.exists() or sidecar.is_symlink():
+            raise RuntimeCorpusMaterializationError("owned snapshot must not have SQLite sidecar files")
     return snapshot
+
+
+def _cleanup_owned_snapshot(snapshot: Path) -> None:
+    for candidate in (snapshot, *(snapshot.with_name(snapshot.name + suffix) for suffix in _SNAPSHOT_SIDECAR_SUFFIXES)):
+        try:
+            candidate.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _fsync_file(path: Path) -> None:
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError as exc:
+        raise RuntimeCorpusMaterializationError(f"cannot open snapshot for fsync: {path}") from exc
+    try:
+        os.fsync(descriptor)
+    except OSError as exc:
+        raise RuntimeCorpusMaterializationError(f"cannot fsync snapshot: {path}") from exc
+    finally:
+        os.close(descriptor)
+
+
+def _fsync_directory(directory: Path) -> None:
+    try:
+        descriptor = os.open(directory, os.O_RDONLY)
+    except OSError as exc:
+        raise RuntimeCorpusMaterializationError("cannot open snapshot directory for fsync") from exc
+    try:
+        os.fsync(descriptor)
+    except OSError as exc:
+        raise RuntimeCorpusMaterializationError("cannot fsync snapshot directory") from exc
+    finally:
+        os.close(descriptor)
 
 
 def _validate_snapshot_contract(
@@ -354,6 +500,11 @@ def _validate_snapshot_contract(
         conn = sqlite3.connect(uri, uri=True)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA query_only = ON")
+        integrity_rows = conn.execute("PRAGMA integrity_check").fetchall()
+        if [str(row[0]) for row in integrity_rows] != ["ok"]:
+            raise RuntimeCorpusMaterializationError("snapshot SQLite integrity check failed")
+        if conn.execute("PRAGMA foreign_key_check").fetchone() is not None:
+            raise RuntimeCorpusMaterializationError("snapshot SQLite foreign-key check failed")
         identity = conn.execute(
             "SELECT cohort_id, cohort_identity, manifest_sha256 FROM paper_cohort_identity WHERE singleton = 1"
         ).fetchone()
@@ -437,6 +588,7 @@ def _validate_selected_fee_net_rows(
             )
         ledger = {field: row.get(f"ledger_{field}") for field in FEE_NET_REPLAY_FIELDS}
         _validate_fee_net_row(ledger, trade_id=trade_id)
+        _validate_parent_settlement_link(row, ledger=ledger, trade_id=trade_id)
         observed_families.add(matches[0])
     return observed_families
 
@@ -466,6 +618,30 @@ def _validate_fee_net_row(row: dict[str, object], *, trade_id: str) -> None:
         raise RuntimeCorpusMaterializationError(f"selected trade {trade_id!r} has incoherent fee-net settlement payout")
     if fee_net_pnl != net_payout - net_entry:
         raise RuntimeCorpusMaterializationError(f"selected trade {trade_id!r} has incoherent fee-net P&L")
+
+
+def _validate_parent_settlement_link(
+    parent: dict[str, object],
+    *,
+    ledger: dict[str, object],
+    trade_id: str,
+) -> None:
+    """Require the fee ledger to describe the same resolved canonical parent row."""
+
+    if parent.get("resolved") != 1:
+        raise RuntimeCorpusMaterializationError(f"selected trade {trade_id!r} parent trade is not resolved")
+    if parent.get("identity_status") != "mapped":
+        raise RuntimeCorpusMaterializationError(f"selected trade {trade_id!r} parent trade identity is not mapped")
+    if parent.get("fee_net_accounting_version") != PAPER_ACCOUNTING_VERSION:
+        raise RuntimeCorpusMaterializationError(
+            f"selected trade {trade_id!r} parent trade has an unsupported fee-net accounting version"
+        )
+    if parent.get("settlement_observation_sha256") != ledger["settlement_observation_sha256"]:
+        raise RuntimeCorpusMaterializationError(
+            f"selected trade {trade_id!r} parent settlement observation does not match ledger"
+        )
+    if parent.get("settled_at") != ledger["settled_at"]:
+        raise RuntimeCorpusMaterializationError(f"selected trade {trade_id!r} parent settled_at does not match ledger")
 
 
 def _assert_materialized_build(
@@ -563,7 +739,9 @@ def _staged_output_path(*, root: Path, output_path: Path) -> Path:
     return staged
 
 
-def _cleanup_staged_output(staged_output: Path) -> None:
+def _cleanup_staged_output(staged_output: Path | None) -> None:
+    if staged_output is None:
+        return
     for candidate in (
         staged_output,
         staged_output.with_name(staged_output.name + ".tmp"),
@@ -679,12 +857,6 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _validated_sha256(value: str, *, label: str) -> str:
-    if not isinstance(value, str) or not _SHA256_RE.fullmatch(value):
-        raise RuntimeCorpusMaterializationError(f"{label} SHA-256 must be lowercase hex")
-    return value
-
-
 def _canonical_utc(value: datetime) -> datetime:
     if not isinstance(value, datetime) or value.tzinfo is None:
         raise RuntimeCorpusMaterializationError("materialized_at_utc must be timezone-aware")
@@ -706,8 +878,6 @@ def _parse_registration_utc(value: str) -> datetime:
 def _build_argparser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--registration-id", required=True)
-    parser.add_argument("--snapshot", type=Path, required=True)
-    parser.add_argument("--snapshot-sha256", required=True)
     parser.add_argument(
         "--runtime-attestation",
         type=Path,
@@ -724,8 +894,6 @@ def main(argv: list[str] | None = None) -> int:
         result = materialize_runtime_corpus(
             repo_root=args.repo_root,
             registration_id=args.registration_id,
-            snapshot_path=args.snapshot,
-            snapshot_sha256=args.snapshot_sha256,
             runtime_attestation_path=args.runtime_attestation,
             output_path=args.output,
         )

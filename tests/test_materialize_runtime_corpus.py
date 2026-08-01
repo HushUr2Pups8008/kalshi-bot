@@ -6,10 +6,10 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 import hashlib
+import inspect
 import json
 import os
 from pathlib import Path
-import shutil
 import sqlite3
 
 import pytest
@@ -130,21 +130,36 @@ def _ensure_runtime_tables(conn: sqlite3.Connection) -> None:
     )
 
 
-def _seed_trade(conn: sqlite3.Connection, *, trade_id: str, family: str) -> str:
+def _seed_trade(
+    conn: sqlite3.Connection,
+    *,
+    trade_id: str,
+    family: str,
+    identity_status: str = "mapped",
+    fee_net_accounting_version: int = PAPER_ACCOUNTING_VERSION,
+) -> str:
     market_id = f"{family}-MKT"
     conn.execute(
         """
         INSERT INTO paper_trades (
             trade_id, ts, ticker, venue, venue_market_id, identity_status,
+            fee_net_accounting_version,
             market_title, side, contracts, price_cents, cost_dollars,
             estimated_prob, entry_price_cents, edge, kelly_dollars,
             capped_dollars, signal_headline, signal_source,
             keywords_matched, reasoning
-        ) VALUES (?, ?, ?, 'kalshi', ?, 'mapped',
+        ) VALUES (?, ?, ?, 'kalshi', ?, ?, ?,
                   'Test market', 'yes', 1, 45, 0.45, 0.55, 45, 0.10,
                   0.45, 0.45, 'headline', 'source', '[]', 'reason')
         """,
-        (trade_id, _utc_text(WINDOW_START + timedelta(hours=1)), f"{family}-1", market_id),
+        (
+            trade_id,
+            _utc_text(WINDOW_START + timedelta(hours=1)),
+            f"{family}-1",
+            market_id,
+            identity_status,
+            fee_net_accounting_version,
+        ),
     )
     conn.execute(
         "UPDATE paper_trades SET series_ticker = ?, cohort_extension = NULL WHERE trade_id = ?",
@@ -191,6 +206,9 @@ def _seed_settled_accounting(
     *,
     trade_id: str,
     observation_sha256: str,
+    parent_resolved: int = 1,
+    parent_settlement_observation_sha256: str | None = None,
+    parent_settled_at: datetime | None = None,
 ) -> None:
     quantity = Decimal("1")
     price = Decimal("0.45")
@@ -249,6 +267,15 @@ def _seed_settled_accounting(
         f"INSERT INTO paper_trade_accounting ({','.join(values)}) VALUES ({','.join('?' for _ in values)})",
         tuple(values.values()),
     )
+    conn.execute(
+        "UPDATE paper_trades SET resolved = ?, settlement_observation_sha256 = ?, settled_at = ? WHERE trade_id = ?",
+        (
+            parent_resolved,
+            parent_settlement_observation_sha256 or observation_sha256,
+            (parent_settled_at or MATERIALIZED_AT).isoformat(),
+            trade_id,
+        ),
+    )
 
 
 def _snapshot_sha256(path: Path) -> str:
@@ -273,6 +300,8 @@ def _runtime_fixture(
         ("trade-alpha", "KXALPHA"),
         ("trade-beta", "KXBETA"),
     ),
+    parent_overrides: dict[str, dict[str, object]] | None = None,
+    missing_fee_net_field: bool = False,
 ) -> dict[str, Path]:
     repo_root = tmp_path / "repo"
     data_root = repo_root / "data"
@@ -294,17 +323,47 @@ def _runtime_fixture(
     with sqlite3.connect(runtime.db_path) as conn:
         _ensure_runtime_tables(conn)
         for trade_id, family in settled_trades:
-            market_id = _seed_trade(conn, trade_id=trade_id, family=family)
+            overrides = (parent_overrides or {}).get(trade_id, {})
+            identity_status = overrides.get("identity_status", "mapped")
+            fee_net_accounting_version = overrides.get("fee_net_accounting_version", PAPER_ACCOUNTING_VERSION)
+            parent_resolved = overrides.get("resolved", 1)
+            parent_observation_sha256 = overrides.get("settlement_observation_sha256")
+            parent_settled_at = overrides.get("settled_at")
+            assert isinstance(identity_status, str)
+            assert isinstance(fee_net_accounting_version, int)
+            assert isinstance(parent_resolved, int)
+            assert parent_observation_sha256 is None or isinstance(parent_observation_sha256, str)
+            assert parent_settled_at is None or isinstance(parent_settled_at, datetime)
+            market_id = _seed_trade(
+                conn,
+                trade_id=trade_id,
+                family=family,
+                identity_status=identity_status,
+                fee_net_accounting_version=fee_net_accounting_version,
+            )
             observation_sha256 = hashlib.sha256(trade_id.encode("utf-8")).hexdigest()
             _seed_settlement_observation(
                 conn,
                 market_id=market_id,
                 observation_sha256=observation_sha256,
             )
+            if parent_observation_sha256 and parent_observation_sha256 != observation_sha256:
+                _seed_settlement_observation(
+                    conn,
+                    market_id=market_id,
+                    observation_sha256=parent_observation_sha256,
+                )
             _seed_settled_accounting(
                 conn,
                 trade_id=trade_id,
                 observation_sha256=observation_sha256,
+                parent_resolved=parent_resolved,
+                parent_settlement_observation_sha256=parent_observation_sha256,
+                parent_settled_at=parent_settled_at,
+            )
+        if missing_fee_net_field:
+            conn.execute(
+                "ALTER TABLE paper_trade_accounting RENAME COLUMN fee_net_pnl_dollars TO missing_fee_net_pnl_dollars"
             )
 
     binding = active_cohort_binding_for_db(runtime.db_path, cohort_id=COHORT_ID)
@@ -320,14 +379,9 @@ def _runtime_fixture(
         ),
         receipt_path,
     )
-    snapshot_path = data_root / "edge_replay_snapshots" / COHORT_ID / "closed.sqlite"
-    snapshot_path.parent.mkdir(parents=True)
-    shutil.copyfile(runtime.db_path, snapshot_path)
-    snapshot_path.chmod(0o444)
     return {
         "repo_root": repo_root,
         "runtime_db": runtime.db_path,
-        "snapshot": snapshot_path,
         "receipt": receipt_path,
         "registry": _write_registry(repo_root),
         "regimes": _write_regimes_doc(repo_root),
@@ -338,8 +392,6 @@ def _materialize(paths: dict[str, Path], **overrides):
     kwargs = {
         "repo_root": paths["repo_root"],
         "registration_id": REGISTRATION_ID,
-        "snapshot_path": paths["snapshot"],
-        "snapshot_sha256": _snapshot_sha256(paths["snapshot"]),
         "runtime_attestation_path": paths["receipt"],
         "registry_path": paths["registry"],
         "regimes_doc_path": paths["regimes"],
@@ -360,7 +412,12 @@ def test_materializes_only_attested_active_snapshot_with_fee_net_ledger(
 
     assert result.runtime_cohort_id == COHORT_ID
     assert result.runtime_cohort_kind == "active"
-    assert result.snapshot_sha256 == _snapshot_sha256(paths["snapshot"])
+    assert result.snapshot_creation_method == "sqlite_online_backup"
+    snapshot = paths["repo_root"] / "data" / result.snapshot_path_relative_to_data
+    assert snapshot.parent == paths["repo_root"] / "data" / "edge_replay_snapshots" / COHORT_ID
+    assert result.snapshot_sha256 == _snapshot_sha256(snapshot)
+    assert not os.path.samefile(snapshot, paths["runtime_db"])
+    assert not os.lstat(snapshot).st_mode & 0o222
     assert result.runtime_attestation_sha256 == _snapshot_sha256(paths["receipt"])
     assert result.registration_id == REGISTRATION_ID
     assert result.protected_registration_trusted_ref == "origin/main"
@@ -381,19 +438,44 @@ def test_materializes_only_attested_active_snapshot_with_fee_net_ledger(
         assert row["fee_net_ledger_settled_at"] == MATERIALIZED_AT.isoformat()
         assert row["runtime_attestation_sha256"] == result.runtime_attestation_sha256
         assert row["snapshot_sha256"] == result.snapshot_sha256
+        assert row["snapshot_creation_method"] == "sqlite_online_backup"
         assert row["protected_registration_trusted_ref"] == "origin/main"
         assert row["protected_registration_commit"] == "a" * 40
         assert row["protected_registration_integrated_at_utc"] == "2026-07-02T00:00:00Z"
     assert paths["runtime_db"].read_bytes() == runtime_before
 
 
-def test_rejects_snapshot_hash_mismatch_before_writing_output(tmp_path: Path) -> None:
+def test_public_interface_never_accepts_snapshot_or_database_paths() -> None:
+    parameters = inspect.signature(materialize_runtime_corpus.materialize_runtime_corpus).parameters
+    assert "snapshot_path" not in parameters
+    assert "snapshot_sha256" not in parameters
+    assert not any("database" in name or name.endswith("_db") for name in parameters)
+
+    parser = materialize_runtime_corpus._build_argparser()
+    assert parser.parse_args(["--registration-id", REGISTRATION_ID]).registration_id == REGISTRATION_ID
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--registration-id", REGISTRATION_ID, "--snapshot", "untrusted.sqlite"])
+
+
+def test_validates_owned_snapshot_staging_before_atomic_publish(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     paths = _runtime_fixture(tmp_path)
+    original_validate = materialize_runtime_corpus._validate_snapshot_contract
+    staged_paths: list[Path] = []
 
-    with pytest.raises(materialize_runtime_corpus.RuntimeCorpusMaterializationError, match="SHA-256"):
-        _materialize(paths, snapshot_sha256="0" * 64)
+    def validate_staging(snapshot: Path, **kwargs) -> None:
+        staged_paths.append(snapshot)
+        assert snapshot.name.startswith(".snapshot_")
+        assert not list(snapshot.parent.glob("snapshot_*.sqlite"))
+        original_validate(snapshot, **kwargs)
 
-    assert not (paths["repo_root"] / "logs" / "edge_replay").exists()
+    monkeypatch.setattr(materialize_runtime_corpus, "_validate_snapshot_contract", validate_staging)
+    result = _materialize(paths)
+
+    assert len(staged_paths) == 1
+    assert (paths["repo_root"] / "data" / result.snapshot_path_relative_to_data).is_file()
 
 
 def test_post_build_failure_leaves_no_unbound_corpus(
@@ -411,6 +493,8 @@ def test_post_build_failure_leaves_no_unbound_corpus(
 
     output_dir = paths["repo_root"] / "logs" / "edge_replay"
     assert list(output_dir.glob("*")) == []
+    snapshot_dir = paths["repo_root"] / "data" / "edge_replay_snapshots" / COHORT_ID
+    assert list(snapshot_dir.glob("*")) == []
 
 
 def test_rejects_pending_runtime_receipt(tmp_path: Path) -> None:
@@ -444,13 +528,13 @@ def test_rejects_attestation_path_escape_and_root_fallback(
         _materialize(paths)
 
 
-def test_rejects_snapshot_symlink_and_out_of_root_output(tmp_path: Path) -> None:
+def test_rejects_symlinked_owned_snapshot_root_and_out_of_root_output(tmp_path: Path) -> None:
     paths = _runtime_fixture(tmp_path)
-    outside = tmp_path / "outside.sqlite"
-    shutil.copyfile(paths["snapshot"], outside)
-    paths["snapshot"].unlink()
+    snapshot_root = paths["repo_root"] / "data" / "edge_replay_snapshots"
+    outside = tmp_path / "outside-snapshots"
+    outside.mkdir()
     try:
-        paths["snapshot"].symlink_to(outside)
+        snapshot_root.symlink_to(outside, target_is_directory=True)
     except OSError as exc:
         pytest.skip(f"symlinks unavailable: {exc}")
 
@@ -463,22 +547,6 @@ def test_rejects_snapshot_symlink_and_out_of_root_output(tmp_path: Path) -> None
             paths,
             output_path=paths["repo_root"] / "logs" / "edge_replay" / "nested" / "corpus_bad.jsonl",
         )
-
-
-def test_rejects_snapshot_hardlink_to_mutable_runtime_database(tmp_path: Path) -> None:
-    paths = _runtime_fixture(tmp_path)
-    paths["snapshot"].unlink()
-    paths["runtime_db"].chmod(0o444)
-    try:
-        os.link(paths["runtime_db"], paths["snapshot"])
-    except OSError as exc:
-        pytest.skip(f"hard links unavailable: {exc}")
-
-    with pytest.raises(
-        materialize_runtime_corpus.RuntimeCorpusMaterializationError,
-        match="hard link|mutable attested",
-    ):
-        _materialize(paths)
 
 
 def test_rejects_snapshot_missing_registered_family_before_writing_output(tmp_path: Path) -> None:
@@ -501,6 +569,29 @@ def test_rejects_snapshot_with_zero_materializable_registered_rows(tmp_path: Pat
     assert not (paths["repo_root"] / "logs" / "edge_replay").exists()
 
 
+@pytest.mark.parametrize(
+    ("parent_overrides", "message"),
+    [
+        ({"trade-alpha": {"resolved": 0}}, "not resolved"),
+        ({"trade-alpha": {"identity_status": "quarantined"}}, "identity is not mapped"),
+        ({"trade-alpha": {"fee_net_accounting_version": 999}}, "accounting version"),
+        ({"trade-alpha": {"settlement_observation_sha256": "f" * 64}}, "settlement observation"),
+        ({"trade-alpha": {"settled_at": MATERIALIZED_AT + timedelta(seconds=1)}}, "settled_at"),
+    ],
+)
+def test_rejects_parent_fee_net_settlement_link_mismatch(
+    tmp_path: Path,
+    parent_overrides: dict[str, dict[str, object]],
+    message: str,
+) -> None:
+    paths = _runtime_fixture(tmp_path, parent_overrides=parent_overrides)
+
+    with pytest.raises(materialize_runtime_corpus.RuntimeCorpusMaterializationError, match=message):
+        _materialize(paths)
+
+    assert not (paths["repo_root"] / "logs" / "edge_replay").exists()
+
+
 def test_rejects_open_registration_and_missing_fee_net_replay_field(tmp_path: Path) -> None:
     paths = _runtime_fixture(tmp_path)
     paths["registry"] = _write_registry(
@@ -510,12 +601,6 @@ def test_rejects_open_registration_and_missing_fee_net_replay_field(tmp_path: Pa
     with pytest.raises(materialize_runtime_corpus.RuntimeCorpusMaterializationError, match="closed"):
         _materialize(paths)
 
-    paths = _runtime_fixture(tmp_path / "second")
-    paths["snapshot"].chmod(0o644)
-    with sqlite3.connect(paths["snapshot"]) as conn:
-        conn.execute(
-            "ALTER TABLE paper_trade_accounting RENAME COLUMN fee_net_pnl_dollars TO missing_fee_net_pnl_dollars"
-        )
-    paths["snapshot"].chmod(0o444)
+    paths = _runtime_fixture(tmp_path / "second", missing_fee_net_field=True)
     with pytest.raises(materialize_runtime_corpus.RuntimeCorpusMaterializationError, match="fee-net replay"):
         _materialize(paths)
