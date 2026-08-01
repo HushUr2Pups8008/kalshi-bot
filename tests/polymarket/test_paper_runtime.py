@@ -144,6 +144,24 @@ def test_horizon_shadow_market_sets_preserves_existing_partition_boundaries():
     ]
 
 
+def test_horizon_shadow_market_sets_preserves_legacy_reversed_band_behavior():
+    now = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
+    inside_market = _market(
+        market_id="inside-20d",
+        close_time=(now + timedelta(days=20)).isoformat(),
+    )
+
+    production, shadow = _horizon_shadow_market_sets(
+        [inside_market],
+        now=now,
+        production_horizon_days=31.0,
+        shadow_horizon_end_days=30.0,
+    )
+
+    assert [market.market_id for market in production] == ["inside-20d"]
+    assert shadow == []
+
+
 class _FakeClient:
     def __init__(self, markets, cursor=None):
         self.markets = markets

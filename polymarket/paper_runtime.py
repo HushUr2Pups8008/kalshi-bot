@@ -32,7 +32,11 @@ from config import (
 )
 from feeds import NewsItem
 from polymarket.candidate_adapter import adapt_polymarket_analysis
-from polymarket.horizon_selection import select_polymarket_horizon_band
+from polymarket.horizon_selection import (
+    _is_pre_admission_matchable_market as _shared_is_pre_admission_matchable_market,
+    _is_suppressed_market as _shared_is_suppressed_market,
+    select_polymarket_horizon_band,
+)
 from polymarket.models import PolymarketMarket
 from polymarket.public_client import PolymarketPublicClient
 from trading.fees import INITIAL_ORDER_FEE_ACCUMULATOR
@@ -1520,6 +1524,8 @@ def _horizon_shadow_market_sets(
         lower_exclusive_days=0.0,
         upper_inclusive_days=production_horizon_days,
     )
+    if production_horizon_days >= shadow_horizon_end_days:
+        return production, []
     shadow = select_polymarket_horizon_band(
         markets,
         now=now,
@@ -1530,11 +1536,7 @@ def _horizon_shadow_market_sets(
 
 
 def _is_pre_admission_matchable_market(market: PolymarketMarket) -> bool:
-    return (
-        market.venue == Venue.POLYMARKET_US
-        and market.is_tradeable()
-        and not _is_suppressed_market(market)
-    )
+    return _shared_is_pre_admission_matchable_market(market)
 
 
 def _news_match_tokens(news: NewsItem) -> tuple[set[str], set[str]]:
@@ -1558,23 +1560,7 @@ def _is_within_admission_horizon(
 
 
 def _is_suppressed_market(market: PolymarketMarket) -> bool:
-    category = market.category.strip().lower()
-    if category in _ALLOWED_CATEGORIES:
-        return False
-    has_resolution_source = bool(market.resolution_source.strip())
-    has_liquidity = market.volume_dollars > 0.0 or market.open_interest_dollars > 0.0
-    context_text = " ".join(
-        part
-        for part in (
-            category,
-            market.event_title,
-            market.series_title,
-            *market.tags,
-        )
-        if part
-    ).lower()
-    topic_relevant = bool(_meaningful_tokens(context_text) & _DISCOVERY_TOPIC_TOKENS)
-    return not (has_resolution_source and has_liquidity and topic_relevant)
+    return _shared_is_suppressed_market(market)
 
 
 def _market_match_text(market: PolymarketMarket) -> str:
