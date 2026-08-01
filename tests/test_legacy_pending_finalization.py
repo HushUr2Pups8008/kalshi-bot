@@ -63,6 +63,18 @@ def _inventory_entries() -> tuple[PayloadInventoryEntry, ...]:
     )
 
 
+def _payload_inventory_sha256_for(entries: list[dict[str, object]]) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            entries,
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 def test_sealed_finalization_plan_serializes_exact_canonical_fields_and_hashes():
     plan = SealedLegacyPendingFinalizationPlan(
         family_summary=_family_summary(),
@@ -277,6 +289,113 @@ def test_contract_rejects_empty_pending_family_and_duplicate_manifest_hashes():
         )
 
 
+def test_contract_rejects_noncanonical_pending_cohort_ids():
+    with pytest.raises(ValueError, match="pending family pending_cohort_ids is invalid"):
+        LegacyPendingFamilySummary(
+            pending_root_relative_to_storage_root="data/legacy_pending_paper_cohorts",
+            legacy_db_relative_to_storage_root="data/paper_trades.db",
+            shared_legacy_snapshot_sha256="1" * 64,
+            shared_legacy_baseline_attestation="2" * 64,
+            shared_legacy_open_rows_sha256="3" * 64,
+            shared_legacy_open_trade_count=1,
+            pending_manifest_sha256s=("a" * 64,),
+            pending_cohort_ids=("UPPER/ID",),
+            frozen_trade_ids=("trade-1",),
+            applied_receipt_sha256s=("f" * 64,),
+            root_db_sha256="4" * 64,
+        )
+
+
+def test_certificate_rejects_mismatched_target_and_confirmation_binding():
+    plan = SealedLegacyPendingFinalizationPlan(
+        family_summary=_family_summary(),
+        archive_target=_archive_target(),
+        payload_inventory=_inventory_entries(),
+    )
+
+    with pytest.raises(ValueError, match="finalization certificate archived_root_relative_to_storage_root is invalid"):
+        LegacyPendingFinalizationCertificate(
+            finalization_id="finalization-20260801t180000z",
+            created_at_utc=datetime(2026, 8, 1, 18, 0, tzinfo=timezone.utc),
+            family_summary=plan.family_summary,
+            archive_target=LegacyPendingArchiveTarget(
+                archived_root_relative_to_storage_root=(
+                    "data/finalized_legacy_pending_paper_cohorts/finalization-20260801t180001z"
+                )
+            ),
+            finalization_plan_sha256=finalization_plan_sha256(plan),
+            payload_inventory_sha256=plan.payload_inventory_sha256,
+            operator_confirmation=(
+                "finalize legacy_pending data/finalized_legacy_pending_paper_cohorts/"
+                "finalization-20260801t180000z"
+            ),
+        )
+
+    with pytest.raises(ValueError, match="finalization certificate operator_confirmation is invalid"):
+        LegacyPendingFinalizationCertificate(
+            finalization_id="finalization-20260801t180000z",
+            created_at_utc=datetime(2026, 8, 1, 18, 0, tzinfo=timezone.utc),
+            family_summary=plan.family_summary,
+            archive_target=plan.archive_target,
+            finalization_plan_sha256=finalization_plan_sha256(plan),
+            payload_inventory_sha256=plan.payload_inventory_sha256,
+            operator_confirmation="yes",
+        )
+
+
+def test_parsers_reject_noncanonical_input_order_instead_of_silently_sorting():
+    reversed_plan_payload = {
+        "schema_version": FINALIZATION_PLAN_SCHEMA_VERSION,
+        "pending_root_relative_to_storage_root": "data/legacy_pending_paper_cohorts",
+        "archived_root_relative_to_storage_root": (
+            "data/finalized_legacy_pending_paper_cohorts/finalization-20260801t180000z"
+        ),
+        "legacy_db_relative_to_storage_root": "data/paper_trades.db",
+        "shared_legacy_snapshot_sha256": "1" * 64,
+        "shared_legacy_baseline_attestation": "2" * 64,
+        "shared_legacy_open_rows_sha256": "3" * 64,
+        "shared_legacy_open_trade_count": 2,
+        "pending_manifest_sha256s": ["b" * 64, "a" * 64],
+        "pending_cohort_ids": ["legacy-pending-b", "legacy-pending-a"],
+        "frozen_trade_ids": ["trade-2", "trade-1"],
+        "applied_receipt_sha256s": ["f" * 64, "e" * 64],
+        "root_db_sha256": "4" * 64,
+        "payload_inventory": [
+            {
+                "path_relative_to_archive_root": "payload/legacy_snapshot/paper_trades.db",
+                "file_type": "file",
+                "size_bytes": 17,
+                "sha256": "d" * 64,
+            },
+            {
+                "path_relative_to_archive_root": "payload/legacy_pending_b/manifest.json",
+                "file_type": "file",
+                "size_bytes": 29,
+                "sha256": "c" * 64,
+            },
+        ],
+        "payload_inventory_sha256": _payload_inventory_sha256_for(
+            [
+                {
+                    "path_relative_to_archive_root": "payload/legacy_pending_b/manifest.json",
+                    "file_type": "file",
+                    "size_bytes": 29,
+                    "sha256": "c" * 64,
+                },
+                {
+                    "path_relative_to_archive_root": "payload/legacy_snapshot/paper_trades.db",
+                    "file_type": "file",
+                    "size_bytes": 17,
+                    "sha256": "d" * 64,
+                },
+            ]
+        ),
+    }
+
+    with pytest.raises(ValueError, match="pending family pending_manifest_sha256s is invalid"):
+        parse_legacy_pending_finalization_plan(reversed_plan_payload)
+
+
 def test_parsers_reject_noncanonical_ids_timestamps_and_sha256():
     plan_payload = {
         "schema_version": FINALIZATION_PLAN_SCHEMA_VERSION,
@@ -302,9 +421,23 @@ def test_parsers_reject_noncanonical_ids_timestamps_and_sha256():
                 "sha256": "4" * 64,
             }
         ],
-        "payload_inventory_sha256": "5" * 64,
+        "payload_inventory_sha256": _payload_inventory_sha256_for(
+            [
+                {
+                    "path_relative_to_archive_root": "payload/legacy_pending_a/manifest.json",
+                    "file_type": "file",
+                    "size_bytes": 1,
+                    "sha256": "4" * 64,
+                }
+            ]
+        ),
     }
     with pytest.raises(ValueError, match="pending family root_db_sha256 is invalid"):
+        parse_legacy_pending_finalization_plan(plan_payload)
+
+    plan_payload["root_db_sha256"] = "4" * 64
+    plan_payload["pending_cohort_ids"] = ["UPPER/ID"]
+    with pytest.raises(ValueError, match="pending family pending_cohort_ids is invalid"):
         parse_legacy_pending_finalization_plan(plan_payload)
 
     certificate_payload = {

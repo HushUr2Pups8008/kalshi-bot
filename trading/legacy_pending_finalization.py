@@ -154,7 +154,7 @@ class LegacyPendingFamilySummary:
         object.__setattr__(
             self,
             "pending_cohort_ids",
-            _sorted_unique_strings(
+            _sorted_unique_cohort_ids(
                 self.pending_cohort_ids,
                 "pending family pending_cohort_ids",
             ),
@@ -289,6 +289,10 @@ class LegacyPendingFinalizationCertificate:
             raise ValueError("finalization certificate family_summary is invalid")
         if not isinstance(self.archive_target, LegacyPendingArchiveTarget):
             raise ValueError("finalization certificate archive_target is invalid")
+        if _archive_target_finalization_id(self.archive_target) != self.finalization_id:
+            raise ValueError(
+                "finalization certificate archived_root_relative_to_storage_root is invalid"
+            )
         object.__setattr__(
             self,
             "finalization_plan_sha256",
@@ -308,9 +312,9 @@ class LegacyPendingFinalizationCertificate:
         object.__setattr__(
             self,
             "operator_confirmation",
-            _require_exact_string(
+            _require_operator_confirmation(
                 self.operator_confirmation,
-                "finalization certificate operator_confirmation",
+                archive_target=self.archive_target,
             ),
         )
 
@@ -369,7 +373,7 @@ def parse_legacy_pending_finalization_plan(
         archive_target=LegacyPendingArchiveTarget(
             archived_root_relative_to_storage_root=value["archived_root_relative_to_storage_root"],
         ),
-        payload_inventory=_parse_payload_inventory(value["payload_inventory"]),
+        payload_inventory=_parse_canonical_payload_inventory(value["payload_inventory"]),
     )
     payload_inventory_sha256 = _require_sha256(
         value["payload_inventory_sha256"],
@@ -436,6 +440,22 @@ def parse_legacy_pending_finalization_certificate(
 def _parse_pending_family_summary(
     value: Mapping[str, object],
 ) -> LegacyPendingFamilySummary:
+    pending_manifest_sha256s = _require_canonical_sha256_sequence(
+        value["pending_manifest_sha256s"],
+        "pending family pending_manifest_sha256s",
+    )
+    pending_cohort_ids = _require_canonical_cohort_id_sequence(
+        value["pending_cohort_ids"],
+        "pending family pending_cohort_ids",
+    )
+    frozen_trade_ids = _require_canonical_string_sequence(
+        value["frozen_trade_ids"],
+        "pending family frozen_trade_ids",
+    )
+    applied_receipt_sha256s = _require_canonical_sha256_sequence(
+        value["applied_receipt_sha256s"],
+        "pending family applied_receipt_sha256s",
+    )
     return LegacyPendingFamilySummary(
         pending_root_relative_to_storage_root=value["pending_root_relative_to_storage_root"],
         legacy_db_relative_to_storage_root=value["legacy_db_relative_to_storage_root"],
@@ -443,10 +463,10 @@ def _parse_pending_family_summary(
         shared_legacy_baseline_attestation=value["shared_legacy_baseline_attestation"],
         shared_legacy_open_rows_sha256=value["shared_legacy_open_rows_sha256"],
         shared_legacy_open_trade_count=value["shared_legacy_open_trade_count"],
-        pending_manifest_sha256s=tuple(_require_sequence(value["pending_manifest_sha256s"])),
-        pending_cohort_ids=tuple(_require_sequence(value["pending_cohort_ids"])),
-        frozen_trade_ids=tuple(_require_sequence(value["frozen_trade_ids"])),
-        applied_receipt_sha256s=tuple(_require_sequence(value["applied_receipt_sha256s"])),
+        pending_manifest_sha256s=pending_manifest_sha256s,
+        pending_cohort_ids=pending_cohort_ids,
+        frozen_trade_ids=frozen_trade_ids,
+        applied_receipt_sha256s=applied_receipt_sha256s,
         root_db_sha256=value["root_db_sha256"],
     )
 
@@ -460,6 +480,12 @@ def _parse_payload_inventory(value: object) -> tuple[PayloadInventoryEntry, ...]
         else:
             parsed.append(PayloadInventoryEntry.from_dict(entry))
     return tuple(parsed)
+
+
+def _parse_canonical_payload_inventory(value: object) -> tuple[PayloadInventoryEntry, ...]:
+    parsed = _parse_payload_inventory(value)
+    _require_canonical_inventory(parsed)
+    return parsed
 
 
 def _sorted_inventory(value: object) -> tuple[PayloadInventoryEntry, ...]:
@@ -482,12 +508,53 @@ def _sorted_unique_sha256s(value: object, name: str) -> tuple[str, ...]:
     return tuple(sorted(normalized))
 
 
+def _sorted_unique_cohort_ids(value: object, name: str) -> tuple[str, ...]:
+    raw_items = _require_sequence(value)
+    normalized = tuple(_require_cohort_id(item, name) for item in raw_items)
+    if not normalized or len(set(normalized)) != len(normalized):
+        raise ValueError(f"{name} is invalid")
+    return tuple(sorted(normalized))
+
+
 def _sorted_unique_strings(value: object, name: str) -> tuple[str, ...]:
     raw_items = _require_sequence(value)
     normalized = tuple(_require_exact_string(item, name) for item in raw_items)
     if not normalized or len(set(normalized)) != len(normalized):
         raise ValueError(f"{name} is invalid")
     return tuple(sorted(normalized))
+
+
+def _require_canonical_sha256_sequence(value: object, name: str) -> tuple[str, ...]:
+    raw_items = tuple(_require_sequence(value))
+    normalized = tuple(_require_sha256(item, name) for item in raw_items)
+    if not normalized or len(set(normalized)) != len(normalized) or tuple(sorted(normalized)) != normalized:
+        raise ValueError(f"{name} is invalid")
+    return normalized
+
+
+def _require_canonical_cohort_id_sequence(value: object, name: str) -> tuple[str, ...]:
+    raw_items = tuple(_require_sequence(value))
+    normalized = tuple(_require_cohort_id(item, name) for item in raw_items)
+    if not normalized or len(set(normalized)) != len(normalized) or tuple(sorted(normalized)) != normalized:
+        raise ValueError(f"{name} is invalid")
+    return normalized
+
+
+def _require_canonical_string_sequence(value: object, name: str) -> tuple[str, ...]:
+    raw_items = tuple(_require_sequence(value))
+    normalized = tuple(_require_exact_string(item, name) for item in raw_items)
+    if not normalized or len(set(normalized)) != len(normalized) or tuple(sorted(normalized)) != normalized:
+        raise ValueError(f"{name} is invalid")
+    return normalized
+
+
+def _require_canonical_inventory(value: tuple[PayloadInventoryEntry, ...]) -> tuple[PayloadInventoryEntry, ...]:
+    if not value:
+        raise ValueError("sealed finalization plan payload_inventory is invalid")
+    paths = tuple(entry.path_relative_to_archive_root for entry in value)
+    if len(set(paths)) != len(paths) or tuple(sorted(paths)) != paths:
+        raise ValueError("sealed finalization plan payload_inventory is invalid")
+    return value
 
 
 def _require_sequence(value: object) -> Sequence[object]:
@@ -517,6 +584,13 @@ def _require_exact_string(value: object, name: str) -> str:
 def _require_sha256(value: object, name: str) -> str:
     text = _require_exact_string(value, name)
     if len(text) != 64 or any(char not in "0123456789abcdef" for char in text):
+        raise ValueError(f"{name} is invalid")
+    return text
+
+
+def _require_cohort_id(value: object, name: str) -> str:
+    text = _require_exact_string(value, name)
+    if not _FINALIZATION_ID_PATTERN.fullmatch(text):
         raise ValueError(f"{name} is invalid")
     return text
 
@@ -562,6 +636,22 @@ def _require_finalization_id(value: object) -> str:
     text = _require_exact_string(value, "finalization certificate finalization_id")
     if not _FINALIZATION_ID_PATTERN.fullmatch(text):
         raise ValueError("finalization certificate finalization_id is invalid")
+    return text
+
+
+def _archive_target_finalization_id(value: LegacyPendingArchiveTarget) -> str:
+    return PurePosixPath(value.archived_root_relative_to_storage_root).name
+
+
+def _require_operator_confirmation(
+    value: object,
+    *,
+    archive_target: LegacyPendingArchiveTarget,
+) -> str:
+    text = _require_exact_string(value, "finalization certificate operator_confirmation")
+    expected = f"finalize legacy_pending {archive_target.archived_root_relative_to_storage_root}"
+    if text != expected:
+        raise ValueError("finalization certificate operator_confirmation is invalid")
     return text
 
 
