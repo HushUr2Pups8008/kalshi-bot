@@ -942,3 +942,83 @@ def test_plan_legacy_pending_finalization_rejects_failed_conservation(
 
     with pytest.raises(ValueError, match="conservation"):
         _plan_from_fixture(fixture)
+
+
+def test_plan_legacy_pending_finalization_rejects_root_identity_drift_mid_proof(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _planner_fixture(tmp_path)
+    original = plan_legacy_pending_finalization.__globals__["_unresolved_trade_count"]
+
+    def swapped_unresolved_trade_count(root_file) -> int:
+        root_path = root_file.path
+        replacement = root_path.with_name("replacement-root.db")
+        replacement.write_bytes(root_path.read_bytes())
+        root_path.unlink()
+        replacement.replace(root_path)
+        return original(root_file)
+
+    monkeypatch.setitem(
+        plan_legacy_pending_finalization.__globals__,
+        "_unresolved_trade_count",
+        swapped_unresolved_trade_count,
+    )
+
+    with pytest.raises(ValueError, match="identity changed|reviewed value|legacy root"):
+        _plan_from_fixture(fixture)
+
+
+def test_plan_legacy_pending_finalization_rejects_snapshot_identity_drift_mid_proof(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _planner_fixture(tmp_path)
+    original = plan_legacy_pending_finalization.__globals__["_frozen_trade_ids"]
+
+    def swapped_frozen_trade_ids(snapshot_file) -> tuple[str, ...]:
+        snapshot_path = snapshot_file.path
+        replacement = snapshot_path.with_name("replacement-snapshot.db")
+        replacement.write_bytes(snapshot_path.read_bytes())
+        snapshot_path.unlink()
+        replacement.replace(snapshot_path)
+        return original(snapshot_file)
+
+    monkeypatch.setitem(
+        plan_legacy_pending_finalization.__globals__,
+        "_frozen_trade_ids",
+        swapped_frozen_trade_ids,
+    )
+
+    with pytest.raises(ValueError, match="identity changed|reviewed value|baseline snapshot"):
+        _plan_from_fixture(fixture)
+
+
+def test_plan_legacy_pending_finalization_rejects_manifest_drift_before_inventory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _planner_fixture(tmp_path)
+    original = plan_legacy_pending_finalization.__globals__["_deterministic_payload_inventory"]
+
+    def rewriting_inventory(payload_files):
+        manifest_path = next(
+            item.verified_file.path
+            for item in payload_files
+            if item.path_relative_to_archive_root.endswith("/cohort.json")
+        )
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest_path.write_text(
+            json.dumps(payload, sort_keys=True, indent=2),
+            encoding="utf-8",
+        )
+        return original(payload_files)
+
+    monkeypatch.setitem(
+        plan_legacy_pending_finalization.__globals__,
+        "_deterministic_payload_inventory",
+        rewriting_inventory,
+    )
+
+    with pytest.raises(ValueError, match="manifest|payload|identity changed|reviewed value"):
+        _plan_from_fixture(fixture)
