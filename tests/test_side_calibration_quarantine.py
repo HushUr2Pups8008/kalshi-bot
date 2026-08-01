@@ -93,6 +93,7 @@ def _capture(**overrides: object) -> SideCalibrationCapture:
         "venue": "kalshi",
         "ticker": "KXTEST-26AUG01",
         "native_market_id": "KXTEST-26AUG01",
+        "settlement_alias": "KXTEST-26AUG01",
         "side": "yes",
         "model_yes_probability": Decimal("0.62"),
         "selected_side_probability": Decimal("0.62"),
@@ -159,6 +160,8 @@ def test_complete_capture_freezes_candidate_and_required_facts(tmp_path):
         ({"dossier_provenance": SideCalibrationProvenance(state="wrong")}, "invalid_dossier_provenance"),
         ({"run_provenance": SideCalibrationProvenance(state="unavailable", detail="not persisted")}, "unavailable_run_provenance"),
         ({"contract_provenance": SideCalibrationProvenance(state="unavailable", detail="not persisted")}, "unavailable_contract_provenance"),
+        ({"run_provenance": SideCalibrationProvenance(state="not_applicable", detail="not persisted")}, "unavailable_run_provenance"),
+        ({"contract_provenance": SideCalibrationProvenance(state="not_applicable", detail="not persisted")}, "unavailable_contract_provenance"),
         ({"fee_context": SideCalibrationFeeContext(state="unavailable", detail="fee missing")}, "unavailable_fee_context"),
         ({"market_contract": SideCalibrationMarketContract(state="unavailable", detail="snapshot missing")}, "unavailable_market_contract_metadata"),
         ({"paper_cohort": replace(_cohort(), manifest_sha256="not-a-hash")}, "invalid_paper_cohort"),
@@ -181,6 +184,8 @@ def test_complete_capture_freezes_candidate_and_required_facts(tmp_path):
         "dossier",
         "run",
         "contract",
+        "run-not-applicable",
+        "contract-not-applicable",
         "fee",
         "market-contract",
         "cohort",
@@ -314,6 +319,86 @@ def test_canonical_ordering_is_deterministic_for_evidence_ids(tmp_path):
 
     assert first.payload_sha256 == second.payload_sha256
     assert second.status == "duplicate"
+
+
+def test_polymarket_capture_requires_numeric_market_id_and_explicit_slug_alias(tmp_path):
+    store = SideCalibrationQuarantineStore(tmp_path / "quarantine.db")
+
+    result = store.append_capture(
+        _capture(
+            venue="polymarket_us",
+            ticker="will-test-condition-resolve-yes",
+            native_market_id="44051",
+            settlement_alias="will-test-condition-resolve-yes",
+        )
+    )
+
+    assert result.status == "inserted"
+    assert result.disposition == "candidate"
+
+
+@pytest.mark.parametrize(
+    ("native_market_id", "settlement_alias", "reason"),
+    [
+        ("legacy-ticker-slug", "will-test-condition-resolve-yes", "invalid_polymarket_native_market_id"),
+        ("44051", None, "invalid_polymarket_settlement_alias"),
+        ("44051", "not a slug", "invalid_polymarket_settlement_alias"),
+    ],
+)
+def test_polymarket_legacy_or_invalid_settlement_identity_is_unscorable(
+    tmp_path, native_market_id, settlement_alias, reason
+):
+    store = SideCalibrationQuarantineStore(tmp_path / "quarantine.db")
+
+    result = store.append_capture(
+        _capture(
+            venue="polymarket_us",
+            ticker="legacy-ticker-slug",
+            native_market_id=native_market_id,
+            settlement_alias=settlement_alias,
+        )
+    )
+
+    assert result.status == "unscorable"
+    assert reason in result.unscorable_reasons
+    assert result.candidate_id is None
+
+
+def test_canonical_utc_timestamp_strings_roundtrip_as_a_candidate(tmp_path):
+    store = SideCalibrationQuarantineStore(tmp_path / "quarantine.db")
+    result = store.append_capture(
+        _capture(
+            decision_at="2026-08-01T17:00:00Z",
+            captured_at="2026-08-01T17:00:01Z",
+            book_observed_at="2026-08-01T16:59:58Z",
+        )
+    )
+
+    assert result.status == "inserted"
+    with sqlite3.connect(store.path) as connection:
+        payload_json = connection.execute(
+            "SELECT candidate_json FROM side_calibration_candidates"
+        ).fetchone()[0]
+    assert '"decision_at":"2026-08-01T17:00:00Z"' in payload_json
+    assert '"captured_at":"2026-08-01T17:00:01Z"' in payload_json
+
+
+@pytest.mark.parametrize(
+    "decision_at",
+    [
+        "2026-08-01T17:00:00+00:00",
+        "2026-08-01 17:00:00Z",
+        datetime(2026, 8, 1, 17, 0),
+    ],
+    ids=["offset", "space-separator", "naive"],
+)
+def test_noncanonical_or_naive_decision_timestamps_are_unscorable(tmp_path, decision_at):
+    store = SideCalibrationQuarantineStore(tmp_path / "quarantine.db")
+
+    result = store.append_capture(_capture(decision_at=decision_at))
+
+    assert result.status == "unscorable"
+    assert "invalid_decision_at" in result.unscorable_reasons
 
 
 def test_all_evidence_tables_reject_updates_and_deletes(tmp_path):

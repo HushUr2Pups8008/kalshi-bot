@@ -19,8 +19,13 @@ from pathlib import Path
 from typing import Literal
 
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 _SHA256_HEX_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_CANONICAL_UTC_TIMESTAMP_PATTERN = re.compile(
+    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z"
+)
+_POLYMARKET_ID_PATTERN = re.compile(r"[0-9]+")
+_POLYMARKET_SLUG_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 _VENUES = frozenset(("kalshi", "polymarket_us"))
 _COHORT_KINDS = frozenset(("active", "legacy", "legacy_pending"))
 _PROVENANCE_STATES = frozenset(("available", "unavailable", "not_applicable"))
@@ -115,6 +120,7 @@ class SideCalibrationCapture:
     venue: str | None
     ticker: str | None
     native_market_id: str | None
+    settlement_alias: str | None
     side: str | None
     model_yes_probability: Decimal | int | float | str | None
     selected_side_probability: Decimal | int | float | str | None
@@ -250,7 +256,7 @@ _TABLE_STATEMENTS: tuple[tuple[str, str], ...] = (
         "side_calibration_schema_meta",
         """
         CREATE TABLE side_calibration_schema_meta (
-            schema_version INTEGER PRIMARY KEY CHECK (schema_version = 3),
+            schema_version INTEGER PRIMARY KEY CHECK (schema_version = 4),
             ddl_sha256 TEXT NOT NULL CHECK (length(ddl_sha256) = 64),
             applied_at TEXT NOT NULL
         )
@@ -812,6 +818,7 @@ def _capture_payload(capture: SideCalibrationCapture) -> dict[str, object]:
         "venue": _raw_text(capture.venue),
         "ticker": _raw_text(capture.ticker),
         "native_market_id": _raw_text(capture.native_market_id),
+        "settlement_alias": _raw_text(capture.settlement_alias),
         "side": _raw_text(capture.side),
         "model_yes_probability": _raw_number(capture.model_yes_probability),
         "selected_side_probability": _raw_number(capture.selected_side_probability),
@@ -923,6 +930,17 @@ def _candidate_reasons(capture: SideCalibrationCapture) -> tuple[str, ...]:
     for name in ("lifecycle_id", "ticker", "native_market_id"):
         if not _is_text(getattr(capture, name)):
             reasons.append(f"unavailable_{name}")
+    if capture.venue == "polymarket_us":
+        if (
+            not isinstance(capture.native_market_id, str)
+            or _POLYMARKET_ID_PATTERN.fullmatch(capture.native_market_id) is None
+        ):
+            reasons.append("invalid_polymarket_native_market_id")
+        if (
+            not isinstance(capture.settlement_alias, str)
+            or _POLYMARKET_SLUG_PATTERN.fullmatch(capture.settlement_alias) is None
+        ):
+            reasons.append("invalid_polymarket_settlement_alias")
     if capture.side not in {"yes", "no"}:
         reasons.append("invalid_side")
     model_yes = _number_reason(reasons, "model_yes_probability", capture.model_yes_probability)
@@ -958,10 +976,13 @@ def _candidate_reasons(capture: SideCalibrationCapture) -> tuple[str, ...]:
         reasons, "dossier_provenance", capture.dossier_provenance, allow_not_applicable=True
     )
     _add_provenance_reasons(
-        reasons, "run_provenance", capture.run_provenance, allow_not_applicable=True
+        reasons, "run_provenance", capture.run_provenance, allow_not_applicable=False
     )
     _add_provenance_reasons(
-        reasons, "contract_provenance", capture.contract_provenance, allow_not_applicable=True
+        reasons,
+        "contract_provenance",
+        capture.contract_provenance,
+        allow_not_applicable=False,
     )
     _add_fee_reasons(reasons, capture.fee_context)
     _add_market_contract_reasons(reasons, capture.market_contract)
@@ -1178,16 +1199,27 @@ def _raw_timestamp(value: object) -> str | None:
     if value is None:
         return None
     if isinstance(value, str):
-        return value
+        parsed = _utc_datetime(value)
+        return value if parsed is None else _timestamp(parsed)
     if isinstance(value, datetime):
-        return value.isoformat()
+        parsed = _utc_datetime(value)
+        return value.isoformat() if parsed is None else _timestamp(parsed)
     raise SideCalibrationQuarantineError("timestamp fields must be datetime, string, or None")
 
 
 def _utc_datetime(value: object) -> datetime | None:
-    if not isinstance(value, datetime) or value.tzinfo is None:
-        return None
-    if value.utcoffset() != timedelta(0):
+    if isinstance(value, str):
+        if _CANONICAL_UTC_TIMESTAMP_PATTERN.fullmatch(value) is None:
+            return None
+        try:
+            value = datetime.fromisoformat(f"{value[:-1]}+00:00")
+        except ValueError:
+            return None
+    if (
+        not isinstance(value, datetime)
+        or value.tzinfo is None
+        or value.utcoffset() != timedelta(0)
+    ):
         return None
     return value
 
@@ -1199,11 +1231,7 @@ def _timestamp(value: datetime) -> str:
 
 
 def _utc_datetime_from_timestamp(value: str) -> datetime | None:
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return _utc_datetime(parsed)
+    return _utc_datetime(value)
 
 
 def _is_text(value: object) -> bool:
