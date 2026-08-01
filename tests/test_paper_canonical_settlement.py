@@ -19,7 +19,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from polymarket.settlement_reconciler import PersistedPositionReconciler
-from tests.test_paper_trader import _cfg_module, _make_mock_analysis
+from tests.test_paper_trader import (
+    _cfg_module,
+    _cutover_eligible_legacy_db,
+    _make_mock_analysis,
+)
 from trading.paper_accounting import (
     PAPER_ACCOUNTING_VERSION,
     PaperAccountingAdmissionError,
@@ -260,6 +264,70 @@ def _record_analysis(
         patch("dataclasses.asdict", return_value={"series_ticker": "KXTEST"}),
     ):
         return trader.record_trade(analysis, entry_request_id=entry_request_id)
+
+
+def _kalshi_market_api_binary_payload(
+    market_ref: MarketRef,
+    outcome: MarketOutcome,
+    *,
+    market_type: str = "binary",
+) -> dict[str, object]:
+    return {
+        "expiration_time": "2026-07-14T17:30:00+00:00",
+        "market_type": market_type,
+        "raw_payload_hash": "a" * 64,
+        "result": outcome.value,
+        "status": "settled",
+        "ticker": market_ref.venue_market_id,
+        "updated_time": "2026-07-14T18:00:00+00:00",
+    }
+
+
+def _active_runtime_fee_net_trader(monkeypatch, tmp_path: Path, *, cohort_id: str):
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+    monkeypatch.setattr(_cfg_module.cfg, "max_ticker_exposure_pct", 0.25)
+    monkeypatch.setattr(_cfg_module.cfg, "kelly_fraction", 0.5)
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", True)
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "enable_canonical_persisted_settlement_reconciliation",
+        True,
+    )
+    monkeypatch.setattr(_cfg_module.cfg, "paper_cohort_id", cohort_id)
+
+    from trading.paper_cohorts import (
+        initialize_active_paper_cohort_manifest,
+        resolve_runtime_paper_cohort,
+    )
+    from trading.paper_trader import PaperTrader
+
+    PaperTrader._runtime_owner_pid = None
+
+    legacy_path = tmp_path / "paper_trades.db"
+    _cutover_eligible_legacy_db(legacy_path)
+    cohort = resolve_runtime_paper_cohort(
+        cohort_id,
+        legacy_starting_bankroll=500.0,
+        active_starting_bankroll=125.0,
+        db_root=tmp_path,
+    )
+    initialize_active_paper_cohort_manifest(
+        cohort,
+        max_days_to_close=14.0,
+        legacy_db_path=legacy_path,
+        legacy_starting_bankroll=500.0,
+    )
+
+    with patch("trading.paper_trader.SourceCredibility") as mock_cred:
+        mock_cred.return_value.get_multiplier.return_value = 1.0
+        trader = PaperTrader(
+            db_path=cohort.db_path,
+            startup_context="runtime",
+            starting_bankroll=125.0,
+            paper_cohort_storage_root=tmp_path,
+        )
+    return trader
 
 
 def test_fresh_database_installs_disabled_accounting_beside_unchanged_gross_v1(
@@ -967,6 +1035,11 @@ def test_fee_net_runtime_entry_stays_blocked_after_post_init_flag_change(
     trader = trader_factory("accounting-runtime-entry-block")
     trader._startup_context = "runtime"
     monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", True)
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "enable_canonical_persisted_settlement_reconciliation",
+        False,
+    )
     analysis = _make_mock_analysis(ticker="KX-ACCT-RUNTIME-BLOCK", capped_dollars=11.0)
     analysis.venue = Venue.KALSHI.value
     analysis.market.venue = Venue.KALSHI.value
@@ -974,7 +1047,7 @@ def test_fee_net_runtime_entry_stays_blocked_after_post_init_flag_change(
 
     with pytest.raises(
         PaperAccountingAdmissionError,
-        match="authoritative settlement fee evidence",
+        match="canonical persisted settlement reconciliation",
     ):
         _record_analysis(
             trader,
@@ -990,23 +1063,80 @@ def test_fee_net_runtime_entry_stays_blocked_after_post_init_flag_change(
     ).fetchone()[0] == 0
 
 
-def test_fee_net_runtime_startup_stays_blocked_until_receipt_settlement_exists(
+def test_fee_net_runtime_startup_requires_manifest_bound_active_cohort(
     monkeypatch,
     tmp_path,
 ):
     monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", True)
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "enable_canonical_persisted_settlement_reconciliation",
+        False,
+    )
     from trading.paper_trader import PaperTrader
+
+    PaperTrader._runtime_owner_pid = None
 
     db_path = tmp_path / "paper-trades.db"
     with pytest.raises(
         PaperAccountingAdmissionError,
-        match="authoritative settlement fee evidence",
+        match="canonical persisted settlement reconciliation",
     ):
         PaperTrader(
             db_path=db_path,
             startup_context="runtime",
+            paper_cohort_storage_root=tmp_path,
         )
-    assert not db_path.exists()
+
+
+def test_fee_net_active_runtime_startup_rejects_when_canonical_reconciliation_disabled(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+    monkeypatch.setattr(_cfg_module.cfg, "max_ticker_exposure_pct", 0.25)
+    monkeypatch.setattr(_cfg_module.cfg, "kelly_fraction", 0.5)
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", True)
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "enable_canonical_persisted_settlement_reconciliation",
+        False,
+    )
+    monkeypatch.setattr(_cfg_module.cfg, "paper_cohort_id", "active-guard-test")
+
+    from trading.paper_cohorts import (
+        initialize_active_paper_cohort_manifest,
+        resolve_runtime_paper_cohort,
+    )
+    from trading.paper_trader import PaperTrader
+
+    PaperTrader._runtime_owner_pid = None
+    legacy_path = tmp_path / "paper_trades.db"
+    _cutover_eligible_legacy_db(legacy_path)
+    cohort = resolve_runtime_paper_cohort(
+        "active-guard-test",
+        legacy_starting_bankroll=500.0,
+        active_starting_bankroll=125.0,
+        db_root=tmp_path,
+    )
+    initialize_active_paper_cohort_manifest(
+        cohort,
+        max_days_to_close=14.0,
+        legacy_db_path=legacy_path,
+        legacy_starting_bankroll=500.0,
+    )
+
+    with pytest.raises(
+        PaperAccountingAdmissionError,
+        match="canonical persisted settlement reconciliation",
+    ):
+        PaperTrader(
+            db_path=cohort.db_path,
+            startup_context="runtime",
+            starting_bankroll=125.0,
+            paper_cohort_storage_root=tmp_path,
+        )
 
 
 def test_fee_net_entry_handler_failure_rolls_back_parent_trade_and_bankroll(
@@ -1400,6 +1530,264 @@ def test_fee_net_entry_settles_atomically_with_exact_typed_evidence(
         assert settlement_store.canonical_delivery_complete_trade_ids(
             now=datetime.now(timezone.utc)
         ) == (trade_id,)
+
+
+def test_fee_net_runtime_resolve_observation_synthesizes_modeled_binary_zero_evidence(
+    monkeypatch,
+    tmp_path: Path,
+):
+    trader = _active_runtime_fee_net_trader(
+        monkeypatch,
+        tmp_path,
+        cohort_id="active-modeled-settle",
+    )
+    market_ref = MarketRef(
+        Venue.KALSHI,
+        "KX-ACCT-MODELED-SETTLE",
+        "KX-ACCT-MODELED-SETTLE",
+    )
+    analysis = _make_mock_analysis(ticker=market_ref.alias, capped_dollars=12.0)
+    analysis.venue = market_ref.venue.value
+    analysis.market.venue = market_ref.venue.value
+    analysis.market.market_id = market_ref.alias
+    analysis.market.venue_market_id = market_ref.venue_market_id
+    trade_id = _record_analysis(
+        trader,
+        analysis,
+        trade_id="acctfee00006",
+        entry_request_id="paper-entry:v1:active-modeled-settle:lc-" + "m" * 32,
+    )
+    observation = _observation(
+        market_ref,
+        MarketOutcome.YES,
+        payload=_kalshi_market_api_binary_payload(market_ref, MarketOutcome.YES),
+        source_id="kalshi-market-api",
+    )
+
+    assert _resolve(trader, observation) is True
+
+    accounting = trader._conn.execute(
+        """
+        SELECT settlement_observation_sha256, settlement_fee_dollars,
+               settlement_refund_dollars, gross_settlement_payout_dollars,
+               net_settlement_payout_dollars, fee_net_pnl_dollars
+        FROM paper_trade_accounting
+        WHERE trade_id=?
+        """,
+        (trade_id,),
+    ).fetchone()
+    assert accounting["settlement_observation_sha256"] == observation.observation_sha256
+    assert Decimal(accounting["settlement_fee_dollars"]) == Decimal("0")
+    assert Decimal(accounting["settlement_refund_dollars"]) == Decimal("0")
+    assert Decimal(accounting["gross_settlement_payout_dollars"]) == Decimal("30")
+    assert Decimal(accounting["net_settlement_payout_dollars"]) == Decimal("30")
+    outbox = trader._conn.execute(
+        """
+        SELECT event_kind, payload_json
+        FROM paper_settlement_outbox
+        WHERE trade_id=?
+        """,
+        (trade_id,),
+    ).fetchone()
+    assert outbox["event_kind"] == PAPER_TRADE_FEE_NET_SETTLED_EVENT_KIND
+    payload = json.loads(outbox["payload_json"])
+    assert payload["accounting_basis"] == "fee_net_v1"
+    assert payload["entry_fee_provenance"] == "modeled_pinned_entry_schedule"
+    assert (
+        payload["settlement_fee_provenance"]
+        == "documented_binary_zero_settlement_policy"
+    )
+    assert payload["settlement_fee_cents"] == "0"
+
+
+def test_fee_net_runtime_resolve_observation_quarantines_nonsimple_kalshi_binary_policy(
+    monkeypatch,
+    tmp_path: Path,
+):
+    trader = _active_runtime_fee_net_trader(
+        monkeypatch,
+        tmp_path,
+        cohort_id="active-modeled-scalar",
+    )
+    market_ref = MarketRef(
+        Venue.KALSHI,
+        "KX-ACCT-MODELED-SCALAR",
+        "KX-ACCT-MODELED-SCALAR",
+    )
+    analysis = _make_mock_analysis(ticker=market_ref.alias, capped_dollars=12.0)
+    analysis.venue = market_ref.venue.value
+    analysis.market.venue = market_ref.venue.value
+    analysis.market.market_id = market_ref.alias
+    analysis.market.venue_market_id = market_ref.venue_market_id
+    _record_analysis(
+        trader,
+        analysis,
+        trade_id="acctfee00007",
+        entry_request_id="paper-entry:v1:active-modeled-scalar:lc-" + "n" * 32,
+    )
+    observation = _observation(
+        market_ref,
+        MarketOutcome.YES,
+        payload=_kalshi_market_api_binary_payload(
+            market_ref,
+            MarketOutcome.YES,
+            market_type="scalar",
+        ),
+        source_id="kalshi-market-api",
+    )
+    before = _financial_snapshot(trader)
+
+    assert _resolve(trader, observation) is False
+
+    _assert_quarantined_without_financial_change(trader, observation, before)
+    quarantine = trader._conn.execute(
+        "SELECT reason_code FROM paper_settlement_quarantine"
+    ).fetchone()
+    assert quarantine["reason_code"] == "fee_net_settlement_evidence_invalid"
+
+
+def test_fee_net_runtime_resolve_observation_quarantines_missing_kalshi_market_type(
+    monkeypatch,
+    tmp_path: Path,
+):
+    trader = _active_runtime_fee_net_trader(
+        monkeypatch,
+        tmp_path,
+        cohort_id="active-modeled-missing-type",
+    )
+    market_ref = MarketRef(
+        Venue.KALSHI,
+        "KX-ACCT-MODELED-MISSING-TYPE",
+        "KX-ACCT-MODELED-MISSING-TYPE",
+    )
+    analysis = _make_mock_analysis(ticker=market_ref.alias, capped_dollars=12.0)
+    analysis.venue = market_ref.venue.value
+    analysis.market.venue = market_ref.venue.value
+    analysis.market.market_id = market_ref.alias
+    analysis.market.venue_market_id = market_ref.venue_market_id
+    _record_analysis(
+        trader,
+        analysis,
+        trade_id="acctfee00012",
+        entry_request_id="paper-entry:v1:active-modeled-missing-type:lc-" + "t" * 32,
+    )
+    payload = _kalshi_market_api_binary_payload(market_ref, MarketOutcome.YES)
+    payload["market_type"] = None
+    observation = _observation(
+        market_ref,
+        MarketOutcome.YES,
+        payload=payload,
+        source_id="kalshi-market-api",
+    )
+    before = _financial_snapshot(trader)
+
+    assert _resolve(trader, observation) is False
+
+    _assert_quarantined_without_financial_change(trader, observation, before)
+    quarantine = trader._conn.execute(
+        "SELECT reason_code FROM paper_settlement_quarantine"
+    ).fetchone()
+    assert quarantine["reason_code"] == "fee_net_settlement_evidence_invalid"
+
+
+def test_fee_net_runtime_resolve_observation_quarantines_void_modeled_policy(
+    monkeypatch,
+    tmp_path: Path,
+):
+    trader = _active_runtime_fee_net_trader(
+        monkeypatch,
+        tmp_path,
+        cohort_id="active-modeled-void",
+    )
+    market_ref = MarketRef(
+        Venue.KALSHI,
+        "KX-ACCT-MODELED-VOID",
+        "KX-ACCT-MODELED-VOID",
+    )
+    analysis = _make_mock_analysis(ticker=market_ref.alias, capped_dollars=12.0)
+    analysis.venue = market_ref.venue.value
+    analysis.market.venue = market_ref.venue.value
+    analysis.market.market_id = market_ref.alias
+    analysis.market.venue_market_id = market_ref.venue_market_id
+    _record_analysis(
+        trader,
+        analysis,
+        trade_id="acctfee00008",
+        entry_request_id="paper-entry:v1:active-modeled-void:lc-" + "o" * 32,
+    )
+    observation = _observation(
+        market_ref,
+        MarketOutcome.VOID,
+        payload=_kalshi_market_api_binary_payload(market_ref, MarketOutcome.VOID),
+        source_id="kalshi-market-api",
+        void_refund=VoidRefundContract(
+            refund_cents_per_contract=Decimal("40"),
+            refunds_entry_fee=False,
+        ),
+    )
+    before = _financial_snapshot(trader)
+
+    assert _resolve(trader, observation) is False
+
+    _assert_quarantined_without_financial_change(trader, observation, before)
+    quarantine = trader._conn.execute(
+        "SELECT reason_code FROM paper_settlement_quarantine"
+    ).fetchone()
+    assert quarantine["reason_code"] == "fee_net_settlement_evidence_invalid"
+
+
+def test_fee_net_runtime_resolve_observation_quarantines_multi_allocation_for_one_market(
+    monkeypatch,
+    tmp_path: Path,
+):
+    trader = _active_runtime_fee_net_trader(
+        monkeypatch,
+        tmp_path,
+        cohort_id="active-modeled-multi",
+    )
+    market_ref = MarketRef(
+        Venue.KALSHI,
+        "KX-ACCT-MODELED-MULTI",
+        "KX-ACCT-MODELED-MULTI",
+    )
+    fee_net_analysis = _make_mock_analysis(ticker=market_ref.alias, capped_dollars=12.0)
+    fee_net_analysis.venue = market_ref.venue.value
+    fee_net_analysis.market.venue = market_ref.venue.value
+    fee_net_analysis.market.market_id = market_ref.alias
+    fee_net_analysis.market.venue_market_id = market_ref.venue_market_id
+    _record_analysis(
+        trader,
+        fee_net_analysis,
+        trade_id="acctfee00009",
+        entry_request_id="paper-entry:v1:active-modeled-multi:lc-" + "s" * 32,
+    )
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
+    gross_analysis = _make_mock_analysis(ticker=market_ref.alias, capped_dollars=12.0)
+    gross_analysis.venue = market_ref.venue.value
+    gross_analysis.market.venue = market_ref.venue.value
+    gross_analysis.market.market_id = market_ref.alias
+    gross_analysis.market.venue_market_id = market_ref.venue_market_id
+    _record_analysis(
+        trader,
+        gross_analysis,
+        trade_id="acctfee00010",
+    )
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", True)
+    observation = _observation(
+        market_ref,
+        MarketOutcome.YES,
+        payload=_kalshi_market_api_binary_payload(market_ref, MarketOutcome.YES),
+        source_id="kalshi-market-api",
+    )
+    before = _financial_snapshot(trader)
+
+    assert _resolve(trader, observation) is False
+
+    _assert_quarantined_without_financial_change(trader, observation, before)
+    quarantine = trader._conn.execute(
+        "SELECT reason_code FROM paper_settlement_quarantine"
+    ).fetchone()
+    assert quarantine["reason_code"] == "fee_net_settlement_allocation_unavailable"
 
 
 def test_fee_net_typed_evidence_rejects_wrong_observation_binding(

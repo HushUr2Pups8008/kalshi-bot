@@ -42,6 +42,7 @@ def _kalshi_market(*, ticker: str = "KXTEST-26JUL", result: str = "yes") -> Kals
         volume=0,
         open_interest=0,
         close_time="2026-07-14T17:55:00+00:00",
+        market_type="binary",
         status="settled",
         result=result,
         updated_time=EFFECTIVE_AT,
@@ -148,6 +149,12 @@ def test_venue_normalizers_produce_yes_and_no_observations(
     assert observation.authoritative_outcome_json == canonical_payload_json(
         raw_outcome
     )
+
+
+def test_kalshi_normalizer_binds_market_type_into_canonical_payload():
+    observation = _kalshi_observation(result="yes")
+
+    assert '"market_type":"binary"' in observation.canonical_payload_json
 
 
 @pytest.mark.parametrize("venue", [Venue.KALSHI, Venue.POLYMARKET_US])

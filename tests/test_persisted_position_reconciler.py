@@ -202,6 +202,32 @@ def test_authoritative_source_fetches_and_normalizes_kalshi_by_canonical_id():
     assert observation.effective_at == _NOW
 
 
+def test_authoritative_source_tolerates_missing_kalshi_market_type_metadata():
+    market_ref = MarketRef(Venue.KALSHI, "KXGDP-26JUL31", "KXGDP-26JUL31")
+    kalshi_source = SimpleNamespace(
+        get_market=lambda market_id: SimpleNamespace(
+            ticker=market_id,
+            status="settled",
+            result="yes",
+            expiration_time="2026-07-31T16:00:00Z",
+            raw_payload_hash="a" * 64,
+            updated_time=_NOW,
+        )
+    )
+    source = VenueRoutingAuthoritativeSettlementSource(
+        kalshi_source=kalshi_source,
+        polymarket_source=SimpleNamespace(
+            get_settlement=lambda _market_id: pytest.fail("wrong venue route")
+        ),
+        clock=lambda: _NOW,
+    )
+
+    observation = source.get_settlement(market_ref)
+
+    assert observation is not None
+    assert '"market_type":null' in observation.canonical_payload_json
+
+
 def test_authoritative_source_treats_nonterminal_kalshi_as_not_found():
     market_ref = MarketRef(Venue.KALSHI, "KXGDP-26JUL31", "KXGDP-26JUL31")
     source = VenueRoutingAuthoritativeSettlementSource(

@@ -95,6 +95,7 @@ from trading.settlement_economics import (
     SettlementEconomicsEvidence,
     SettlementEconomicsUnscorableError,
     derive_settlement_cashflows,
+    modeled_kalshi_binary_zero_evidence,
 )
 from trading.venue import MarketRef, Venue, normalize_venue
 from utils.logger import get_logger, trade_log, TRADE_LOG_FILE
@@ -624,7 +625,6 @@ class PaperTrader:
             raise ValueError(
                 "runtime/CLI rejects custom paper accounting handlers; use built-in wiring"
             )
-        self._require_fee_net_runtime_settlement_capability()
         topology_block = paper_runtime_database_topology_block_reason(self._db_path)
         if topology_block is not None:
             raise RuntimeError(f"immutable paper cohort database is blocked: {topology_block}")
@@ -808,13 +808,26 @@ class PaperTrader:
         self._require_fee_net_runtime_settlement_capability()
 
     def _require_fee_net_runtime_settlement_capability(self) -> None:
-        if (
-            config_module.cfg.enable_fee_net_paper_accounting
-            and self._startup_context in {"runtime", "cli"}
-        ):
+        if not config_module.cfg.enable_fee_net_paper_accounting:
+            return
+        if self._startup_context not in {"runtime", "cli"}:
+            return
+        if not config_module.cfg.enable_canonical_persisted_settlement_reconciliation:
             raise PaperAccountingAdmissionError(
-                "fee-net paper accounting remains disabled until authoritative "
-                "settlement fee evidence can complete settlement atomically"
+                "fee-net paper accounting requires canonical persisted settlement reconciliation"
+            )
+        binding = self._paper_cohort_binding
+        if getattr(binding, "cohort_type", None) != PAPER_COHORT_KIND_ACTIVE:
+            raise PaperAccountingAdmissionError(
+                "fee-net paper accounting requires a manifest-bound active paper cohort"
+            )
+        bound_cohort_id = str(binding.cohort.cohort_id)
+        configured_cohort_id = str(
+            getattr(config_module.cfg, "paper_cohort_id", "") or ""
+        ).strip()
+        if configured_cohort_id != bound_cohort_id:
+            raise PaperAccountingAdmissionError(
+                "fee-net paper entry cohort does not match its active manifest binding"
             )
 
     def _require_fee_net_manifest_context(self) -> None:
@@ -2208,10 +2221,13 @@ class PaperTrader:
         *,
         fee_net_evidence_by_trade_id: Mapping[str, SettlementEconomicsEvidence] | None = None,
     ) -> bool:
-        """Apply one canonical observation without wiring runtime callers.
+        """Apply one canonical observation.
 
-        The optional evidence map is deliberately an explicit, unwired API. It
-        does not enable fee-net admission or runtime settlement collection.
+        Runtime callers may omit the evidence map. For eligible active-cohort
+        fee-net paper trades, the trader will synthesize the modeled Kalshi
+        simple-binary zero-fee evidence internally from the canonical
+        observation payload. Non-eligible or unsupported cases still fail
+        closed through quarantine.
         """
         with self._transaction_lock:
             return self._resolve_observation_locked(
@@ -2300,10 +2316,19 @@ class PaperTrader:
 
             fee_net_trade_ids = self._fee_net_accounting_trade_ids(trades)
             if fee_net_trade_ids and fee_net_evidence_by_trade_id is None:
-                raise _SettlementQuarantineRequired(
-                    "fee_net_settlement_evidence_unavailable",
-                    {"trade_ids": fee_net_trade_ids},
-                )
+                if self._can_synthesize_modeled_fee_net_evidence(observation):
+                    fee_net_evidence_by_trade_id = (
+                        self._synthesize_modeled_fee_net_evidence_by_trade_id(
+                            trades=trades,
+                            fee_net_trade_ids=fee_net_trade_ids,
+                            observation=observation,
+                        )
+                    )
+                else:
+                    raise _SettlementQuarantineRequired(
+                        "fee_net_settlement_evidence_unavailable",
+                        {"trade_ids": fee_net_trade_ids},
+                    )
 
             outcomes, gross_payout_cents = self._canonical_trade_outcomes(
                 trades,
@@ -2643,6 +2668,91 @@ class PaperTrader:
                 "fee_net_settlement_evidence_invalid",
                 {"error_type": type(exc).__name__},
             ) from exc
+
+    def _synthesize_modeled_fee_net_evidence_by_trade_id(
+        self,
+        *,
+        trades: Iterable[sqlite3.Row],
+        fee_net_trade_ids: Iterable[str],
+        observation: SettlementObservation,
+    ) -> Mapping[str, SettlementEconomicsEvidence]:
+        trade_rows = tuple(trades)
+        expected_trade_ids = tuple(sorted(set(fee_net_trade_ids)))
+        trade_ids = tuple(sorted(str(row["trade_id"]) for row in trade_rows))
+        if (
+            len(expected_trade_ids) != 1
+            or len(trade_rows) != 1
+            or trade_ids != expected_trade_ids
+        ):
+            return {}
+        if (
+            observation.market_ref.venue is not Venue.KALSHI
+            or observation.source_id != "kalshi-market-api"
+        ):
+            raise _SettlementQuarantineRequired(
+                "fee_net_settlement_evidence_unavailable",
+                {"trade_ids": list(expected_trade_ids)},
+            )
+        trade_id = expected_trade_ids[0]
+        trade = trade_rows[0]
+        accounting_row = self._conn.execute(
+            "SELECT * FROM paper_trade_accounting WHERE trade_id=?",
+            (trade_id,),
+        ).fetchone()
+        if accounting_row is None:
+            raise _SettlementQuarantineRequired(
+                "fee_net_settlement_evidence_invalid",
+                {"error_type": "missing_accounting_row"},
+            )
+        try:
+            entry = PaperAccountingRecord.from_database_row(accounting_row)
+            return {
+                trade_id: modeled_kalshi_binary_zero_evidence(
+                    venue_market_id=observation.market_ref.venue_market_id,
+                    authoritative_observation_sha256=observation.observation_sha256,
+                    authoritative_payload_sha256=observation.payload_sha256,
+                    source_payload_json=observation.canonical_payload_json,
+                    outcome=observation.outcome,
+                    held_side=str(trade["side"]).lower(),
+                    quantity=entry.quantity,
+                    entry_price=entry.price,
+                    entry_fee=entry.quote.net_fee,
+                    void_refund=observation.void_refund,
+                )
+            }
+        except (
+            PaperAccountingAdmissionError,
+            SettlementEconomicsUnscorableError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            raise _SettlementQuarantineRequired(
+                "fee_net_settlement_evidence_invalid",
+                {"error_type": type(exc).__name__},
+            ) from exc
+
+    def _can_synthesize_modeled_fee_net_evidence(
+        self,
+        observation: SettlementObservation,
+    ) -> bool:
+        if not config_module.cfg.enable_fee_net_paper_accounting:
+            return False
+        if self._startup_context not in {"runtime", "cli"}:
+            return False
+        if not config_module.cfg.enable_canonical_persisted_settlement_reconciliation:
+            return False
+        binding = self._paper_cohort_binding
+        if getattr(binding, "cohort_type", None) != PAPER_COHORT_KIND_ACTIVE:
+            return False
+        configured_cohort_id = str(
+            getattr(config_module.cfg, "paper_cohort_id", "") or ""
+        ).strip()
+        if configured_cohort_id != str(binding.cohort.cohort_id):
+            return False
+        return (
+            observation.market_ref.venue is Venue.KALSHI
+            and observation.source_id == "kalshi-market-api"
+        )
 
     @staticmethod
     def _validate_fee_net_evidence_binding(

@@ -25,6 +25,9 @@ from tests.test_paper_canonical_settlement import (
 from tests.test_paper_trader import _cfg_module, _make_mock_analysis
 from trading.settlement import MarketOutcome, VoidRefundContract
 from trading.settlement_store import (
+    PAPER_FEE_NET_ENTRY_PROVENANCE_MODELED,
+    PAPER_FEE_NET_SETTLEMENT_PROVENANCE_MODELED,
+    PAPER_FEE_NET_SETTLEMENT_PROVENANCE_RECEIPT,
     PAPER_TRADE_FEE_NET_SETTLED_EVENT_KIND,
     SettlementStore,
     settlement_result_sha256,
@@ -605,10 +608,12 @@ async def test_run_once_uses_fee_net_event_cashflows_for_paper_log(
         {
             "accounting_basis": "fee_net_v1",
             "accounting_version": 1,
+            "entry_fee_provenance": PAPER_FEE_NET_ENTRY_PROVENANCE_MODELED,
             "gross_entry_debit_cents": "1200",
             "entry_fee_cents": "50",
             "net_entry_debit_cents": "1250",
             "settlement_fee_cents": "10",
+            "settlement_fee_provenance": PAPER_FEE_NET_SETTLEMENT_PROVENANCE_RECEIPT,
             "settlement_refund_cents": "0",
             "net_settlement_payout_cents": str(gross_payout_cents - Decimal("10")),
             "fee_net_pnl_cents": str(gross_payout_cents - Decimal("1260")),
@@ -658,6 +663,108 @@ async def test_run_once_uses_fee_net_event_cashflows_for_paper_log(
         float(Decimal(payload["net_settlement_payout_cents"]) / 100)
     )
     assert _pending_consumers(fee_seed) == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mutation", "expected_message"),
+    (
+        ("missing_entry_fee_provenance", "fee-net payload missing fields"),
+        ("invalid_entry_fee_provenance", "unsupported fee-net entry fee provenance"),
+        (
+            "missing_settlement_fee_provenance",
+            "fee-net payload missing fields",
+        ),
+        (
+            "invalid_settlement_fee_provenance",
+            "unsupported fee-net settlement fee provenance",
+        ),
+    ),
+)
+async def test_run_once_rejects_fee_net_payloads_without_required_provenance(
+    monkeypatch,
+    tmp_path,
+    mutation,
+    expected_message,
+    caplog,
+):
+    seed = _seed_directional_event(monkeypatch, tmp_path)
+    _record_receipts(seed, DIRECTIONAL_CONSUMERS)
+    payload = dict(seed.payload)
+    payload["event_kind"] = PAPER_TRADE_FEE_NET_SETTLED_EVENT_KIND
+    payload["outbox_id"] = _outbox_id(
+        event_version=1,
+        event_kind=PAPER_TRADE_FEE_NET_SETTLED_EVENT_KIND,
+        observation_sha256=str(payload["observation_sha256"]),
+        trade_id=seed.trade_id,
+    )
+    gross_payout_cents = Decimal(str(payload["gross_payout_cents"]))
+    payload.update(
+        {
+            "accounting_basis": "fee_net_v1",
+            "accounting_version": 1,
+            "entry_fee_provenance": PAPER_FEE_NET_ENTRY_PROVENANCE_MODELED,
+            "gross_entry_debit_cents": "1200",
+            "entry_fee_cents": "50",
+            "net_entry_debit_cents": "1250",
+            "settlement_fee_cents": "10",
+            "settlement_fee_provenance": PAPER_FEE_NET_SETTLEMENT_PROVENANCE_MODELED,
+            "settlement_refund_cents": "0",
+            "net_settlement_payout_cents": str(gross_payout_cents - Decimal("10")),
+            "fee_net_pnl_cents": str(gross_payout_cents - Decimal("1260")),
+        }
+    )
+    if mutation == "missing_entry_fee_provenance":
+        payload.pop("entry_fee_provenance")
+    elif mutation == "invalid_entry_fee_provenance":
+        payload["entry_fee_provenance"] = "forged_entry_fee_provenance"
+    elif mutation == "missing_settlement_fee_provenance":
+        payload.pop("settlement_fee_provenance")
+    elif mutation == "invalid_settlement_fee_provenance":
+        payload["settlement_fee_provenance"] = "forged_settlement_fee_provenance"
+    else:
+        raise AssertionError(f"unsupported mutation: {mutation}")
+    with sqlite3.connect(seed.db_path) as conn:
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute(
+            """
+            INSERT INTO paper_settlement_outbox (
+                outbox_id, event_version, event_kind, observation_sha256,
+                trade_id, payload_json, created_at
+            ) VALUES (?, 1, ?, ?, ?, ?, ?)
+            """,
+            (
+                payload["outbox_id"],
+                PAPER_TRADE_FEE_NET_SETTLED_EVENT_KIND,
+                payload["observation_sha256"],
+                seed.trade_id,
+                _canonical_json(payload),
+                payload["settled_at"],
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO paper_settlement_outbox_requirements (outbox_id, consumer_name)
+            VALUES (?, 'paper_trade_log')
+            """,
+            (payload["outbox_id"],),
+        )
+    fee_seed = SeededEvent(
+        db_path=seed.db_path,
+        outbox_id=str(payload["outbox_id"]),
+        trade_id=seed.trade_id,
+        payload=payload,
+    )
+    trade_logger = MagicMock()
+
+    with caplog.at_level(logging.ERROR):
+        processed = await _task(fee_seed, trade_logger=trade_logger).run_once(limit=100)
+
+    assert processed == 0
+    assert trade_logger.log_paper_resolution.call_count == 0
+    assert _paper_log_receipts(fee_seed) == []
+    assert _pending_consumers(fee_seed) == ("paper_trade_log",)
+    assert expected_message in caplog.text
 
 
 @pytest.mark.asyncio
