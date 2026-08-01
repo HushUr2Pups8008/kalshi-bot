@@ -1526,6 +1526,65 @@ def test_canonical_settlement_status_reports_backlogs_and_last_observation_read_
     assert set(tmp_path.rglob("*")) == before_names
 
 
+def test_canonical_settlement_status_uses_attested_runtime_cohort_database(
+    capsys,
+    tmp_path,
+):
+    root_db = tmp_path / "data" / "paper_trades.db"
+    cohort_db = (
+        tmp_path
+        / "data"
+        / "legacy_pending_paper_cohorts"
+        / "active"
+        / "paper_trades.db"
+    )
+    _create_legacy_paper_db(root_db)
+    _create_settlement_diagnostics_db(cohort_db)
+
+    botcheck.print_canonical_settlement_status(
+        tmp_path,
+        runtime_paper_cohort_attestation={
+            "status": "attested",
+            "database_path": cohort_db,
+        },
+    )
+
+    out = capsys.readouterr().out.strip()
+    assert "binding=runtime_attested" in out
+    assert "schema=present contract=ok" in out
+    assert "mapped_open=2" in out
+
+
+def test_canonical_settlement_status_fails_closed_for_unverified_runtime_binding(
+    capsys,
+    tmp_path,
+    monkeypatch,
+):
+    root_db = tmp_path / "data" / "paper_trades.db"
+    _create_settlement_diagnostics_db(root_db)
+
+    def unexpected_connect(*args, **kwargs):
+        pytest.fail(f"root paper DB was opened: {args!r} {kwargs!r}")
+
+    monkeypatch.setattr(botcheck.sqlite3, "connect", unexpected_connect)
+
+    botcheck.print_canonical_settlement_status(
+        tmp_path,
+        runtime_paper_cohort_attestation={
+            "status": "unverified",
+            "detail": "runtime cohort attestation is unavailable",
+        },
+    )
+
+    assert capsys.readouterr().out.strip() == (
+        "canonical_settlement: off (default) db=unavailable "
+        "binding=runtime_unverified schema=n/a contract=n/a "
+        "mapped_open=n/a identity_quarantined_open=n/a "
+        "identity_unmapped_open=n/a settlement_quarantine=n/a "
+        "pending_outbox=n/a last_observation=n/a"
+    )
+
+
 def test_canonical_settlement_status_does_not_create_clean_source_wal_sidecars(
     capsys,
     tmp_path,

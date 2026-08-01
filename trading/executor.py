@@ -94,11 +94,26 @@ def classify_skip_category(reason: str | None) -> str:
         or "execution_depth" in text
     ):
         return "liquidity"
+    if "decision_grade_research" in text:
+        return "research"
     return "other"
 
 
 def _is_research_paper_review_signal(signal_meta: dict[str, Any]) -> bool:
     return str(signal_meta.get("research_admission_status") or "") == "decision_grade_candidate"
+
+
+def _requires_decision_grade_research_paper_admission(
+    analysis: SignalAnalysis,
+    signal_meta: dict[str, Any],
+) -> bool:
+    """Return whether a raw LLM-only paper signal lacks research admission."""
+    if _is_research_paper_review_signal(signal_meta):
+        return False
+    if bool(getattr(analysis, "keywords_matched", ())):
+        return False
+    magnitude = getattr(analysis, "llm_magnitude", None)
+    return magnitude is not None and str(magnitude).strip().lower() not in {"", "none"}
 
 
 def _correlated_exposure_prefix(market: Any) -> str:
@@ -278,7 +293,13 @@ class TradeExecutor:
                 signal_meta=signal_meta,
             )
             return None
-        skip_reason = self._validate(analysis)
+        if self._is_paper and _requires_decision_grade_research_paper_admission(
+            analysis,
+            signal_meta,
+        ):
+            skip_reason = "paper_llm_only_requires_decision_grade_research"
+        else:
+            skip_reason = self._validate(analysis)
         execution_plan: FinalExecutionTerms | None = None
         if skip_reason is None:
             execution_plan, skip_reason = await self._final_execution_plan(analysis)

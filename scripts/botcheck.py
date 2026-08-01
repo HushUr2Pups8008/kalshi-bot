@@ -1486,7 +1486,11 @@ def print_kalshi_fix_settlement_ingress_status(
     print(f"{prefix} {_format_fix_settlement_ingress_status(status)} db=present")
 
 
-def print_canonical_settlement_status(repo_root: Path) -> None:
+def print_canonical_settlement_status(
+    repo_root: Path,
+    *,
+    runtime_paper_cohort_attestation: Mapping[str, object] | None = None,
+) -> None:
     enabled_value, source = _research_env_value(
         repo_root,
         "ENABLE_CANONICAL_PERSISTED_SETTLEMENT_RECONCILIATION",
@@ -1500,9 +1504,35 @@ def print_canonical_settlement_status(repo_root: Path) -> None:
         "pending_outbox=n/a last_observation=n/a"
     )
 
+    if (
+        runtime_paper_cohort_attestation is not None
+        and runtime_paper_cohort_attestation.get("status") != "attested"
+    ):
+        print(
+            f"{prefix} db=unavailable binding=runtime_unverified "
+            f"schema=n/a contract=n/a {unavailable}"
+        )
+        return
+
     db_path = repo_root / "data" / "paper_trades.db"
+    binding_suffix = ""
+    if (
+        runtime_paper_cohort_attestation is not None
+        and runtime_paper_cohort_attestation.get("status") == "attested"
+    ):
+        runtime_db_path = runtime_paper_cohort_attestation.get("database_path")
+        if not isinstance(runtime_db_path, Path):
+            print(f"{prefix} db=invalid binding=runtime_attested schema=n/a contract=n/a {unavailable}")
+            return
+        try:
+            runtime_db_path.resolve().relative_to((repo_root / "data").resolve())
+        except ValueError:
+            print(f"{prefix} db=invalid binding=runtime_attested schema=n/a contract=n/a {unavailable}")
+            return
+        db_path = runtime_db_path
+        binding_suffix = " binding=runtime_attested"
     if not db_path.is_file():
-        print(f"{prefix} db=missing schema=n/a contract=n/a {unavailable}")
+        print(f"{prefix} db=missing{binding_suffix} schema=n/a contract=n/a {unavailable}")
         return
 
     try:
@@ -1513,7 +1543,7 @@ def print_canonical_settlement_status(repo_root: Path) -> None:
             )
             if not schema_present:
                 print(
-                    f"{prefix} db=ok schema=absent contract=n/a {unavailable}"
+                    f"{prefix} db=ok{binding_suffix} schema=absent contract=n/a {unavailable}"
                 )
                 return
 
@@ -1595,7 +1625,7 @@ def print_canonical_settlement_status(repo_root: Path) -> None:
             else:
                 observation_row = None
     except (OSError, sqlite3.Error) as exc:
-        print(f"{prefix} db=error error={exc}")
+        print(f"{prefix} db=error{binding_suffix} error={exc}")
         return
 
     last_observation = (
@@ -1605,7 +1635,7 @@ def print_canonical_settlement_status(repo_root: Path) -> None:
     )
     display = lambda value: "n/a" if value is None else str(value)
     print(
-        f"{prefix} db=ok schema=present contract={contract} "
+        f"{prefix} db=ok{binding_suffix} schema=present contract={contract} "
         f"mapped_open={display(mapped_open)} "
         f"identity_quarantined_open={display(identity_quarantined_open)} "
         f"identity_unmapped_open={display(identity_unmapped_open)} "
@@ -2866,7 +2896,10 @@ def main() -> int:
     print_capital_guard_shadow_status(args.home, current_proc=current_proc)
     print_g7_skip_evidence_status(args.home, current_proc=current_proc)
     print_kalshi_fix_settlement_ingress_status(args.home, current_proc=current_proc)
-    print_canonical_settlement_status(args.home)
+    print_canonical_settlement_status(
+        args.home,
+        runtime_paper_cohort_attestation=runtime_paper_cohort_attestation,
+    )
     print_kalshi_drift_section(now=now)
     print_history(sessions=sessions, current_proc=current_proc, now=now)
     return 0

@@ -1391,6 +1391,75 @@ class TestExecutorModeSafety:
 
 
 # ---------------------------------------------------------------------------
+# Decision-grade research paper admission
+# ---------------------------------------------------------------------------
+
+
+class TestPaperResearchAdmission:
+    @pytest.mark.asyncio
+    async def test_paper_entry_blocks_llm_only_signal_without_decision_grade_research(
+        self,
+        monkeypatch,
+    ):
+        """Uncorroborated LLM-only news must not create a paper position."""
+        executor, _, paper = _make_paper_executor(monkeypatch)
+        terms = FinalExecutionTerms(price_cents=50, contracts=1, cost_dollars=0.50)
+        executor._final_execution_plan = AsyncMock(return_value=(terms, None))
+        paper.record_trade.return_value = "paper-trade-id"
+        analysis = _make_analysis(
+            edge=0.05,
+            estimated_prob=0.55,
+            yes_price=50.0,
+            capped_dollars=0.50,
+        )
+        analysis.keywords_matched = []
+        analysis.llm_magnitude = "small"
+
+        with patch("trading.executor.trade_log") as trade_log_mock:
+            trade_id = await executor.execute(analysis)
+
+        assert trade_id is None
+        executor._final_execution_plan.assert_not_awaited()
+        paper.record_trade.assert_not_called()
+        assert (
+            trade_log_mock.log_skipped.call_args.kwargs["reason"]
+            == "paper_llm_only_requires_decision_grade_research"
+        )
+        assert (
+            trade_log_mock.log_skipped.call_args.kwargs["skip_category"]
+            == "research"
+        )
+
+    @pytest.mark.asyncio
+    async def test_paper_entry_allows_llm_only_signal_with_decision_grade_research(
+        self,
+        monkeypatch,
+    ):
+        """The existing research bridge remains the admission path for LLM-only news."""
+        executor, _, paper = _make_paper_executor(monkeypatch)
+        terms = FinalExecutionTerms(price_cents=50, contracts=1, cost_dollars=0.50)
+        executor._final_execution_plan = AsyncMock(return_value=(terms, None))
+        paper.record_trade.return_value = "paper-trade-id"
+        analysis = _make_analysis(
+            edge=0.05,
+            estimated_prob=0.55,
+            yes_price=50.0,
+            capped_dollars=0.50,
+        )
+        analysis.keywords_matched = []
+        analysis.llm_magnitude = "small"
+        analysis.signal_meta = {
+            "research_admission_status": "decision_grade_candidate",
+        }
+
+        with patch("trading.executor.trade_log"):
+            trade_id = await executor.execute(analysis)
+
+        assert trade_id == "paper-trade-id"
+        paper.record_trade.assert_called_once_with(analysis, execution_terms=terms)
+
+
+# ---------------------------------------------------------------------------
 # Fee-aware paper admission
 # ---------------------------------------------------------------------------
 
