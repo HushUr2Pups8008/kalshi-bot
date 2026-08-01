@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -745,6 +747,20 @@ def _plan_from_fixture(fixture: dict[str, object]) -> SealedLegacyPendingFinaliz
     )
 
 
+def _write_reviewed_plan_artifact(
+    fixture: dict[str, object],
+    *,
+    plan_path: Path | None = None,
+) -> tuple[SealedLegacyPendingFinalizationPlan, Path, str]:
+    plan = _plan_from_fixture(fixture)
+    target = plan_path or (fixture["root_db"].parent / "reviewed-plan.json")
+    target.write_text(
+        serialize_legacy_pending_finalization_plan(plan),
+        encoding="utf-8",
+    )
+    return plan, target, finalization_plan_sha256(plan)
+
+
 def test_plan_legacy_pending_finalization_proves_family_and_is_read_only(
     tmp_path: Path,
 ) -> None:
@@ -1022,3 +1038,347 @@ def test_plan_legacy_pending_finalization_rejects_manifest_drift_before_inventor
 
     with pytest.raises(ValueError, match="manifest|payload|identity changed|reviewed value"):
         _plan_from_fixture(fixture)
+
+
+def test_apply_legacy_pending_finalization_requires_write_expected_sha_and_confirmation(
+    tmp_path: Path,
+) -> None:
+    import trading.legacy_pending_finalization as legacy_pending_finalization
+
+    fixture = _planner_fixture(tmp_path)
+    plan, plan_path, plan_sha256 = _write_reviewed_plan_artifact(fixture)
+    apply_legacy_pending_finalization = getattr(
+        legacy_pending_finalization,
+        "apply_legacy_pending_finalization",
+    )
+
+    with pytest.raises(ValueError, match="--write"):
+        apply_legacy_pending_finalization(
+            db_path=fixture["root_db"],
+            pending_root=fixture["pending_root"],
+            sealed_plan_path=plan_path,
+            expected_finalization_plan_sha256=plan_sha256,
+            operator_confirmation=(
+                "finalize legacy_pending "
+                f"{plan.archive_target.archived_root_relative_to_storage_root}"
+            ),
+            write=False,
+        )
+
+    with pytest.raises(ValueError, match="expected-finalization-plan-sha"):
+        apply_legacy_pending_finalization(
+            db_path=fixture["root_db"],
+            pending_root=fixture["pending_root"],
+            sealed_plan_path=plan_path,
+            expected_finalization_plan_sha256="",
+            operator_confirmation=(
+                "finalize legacy_pending "
+                f"{plan.archive_target.archived_root_relative_to_storage_root}"
+            ),
+            write=True,
+        )
+
+    with pytest.raises(ValueError, match="operator_confirmation|confirmation"):
+        apply_legacy_pending_finalization(
+            db_path=fixture["root_db"],
+            pending_root=fixture["pending_root"],
+            sealed_plan_path=plan_path,
+            expected_finalization_plan_sha256=plan_sha256,
+            operator_confirmation="yes",
+            write=True,
+        )
+
+
+def test_apply_legacy_pending_finalization_replay_succeeds_before_live_family_replan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import trading.legacy_pending_finalization as legacy_pending_finalization
+
+    fixture = _planner_fixture(tmp_path)
+    plan, plan_path, plan_sha256 = _write_reviewed_plan_artifact(fixture)
+    apply_legacy_pending_finalization = getattr(
+        legacy_pending_finalization,
+        "apply_legacy_pending_finalization",
+    )
+
+    apply_legacy_pending_finalization(
+        db_path=fixture["root_db"],
+        pending_root=fixture["pending_root"],
+        sealed_plan_path=plan_path,
+        expected_finalization_plan_sha256=plan_sha256,
+        operator_confirmation=(
+            "finalize legacy_pending "
+            f"{plan.archive_target.archived_root_relative_to_storage_root}"
+        ),
+        write=True,
+    )
+    assert not fixture["pending_root"].exists()
+
+    monkeypatch.setattr(
+        legacy_pending_finalization,
+        "plan_legacy_pending_finalization",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("replay must verify archive before any live-family replan")
+        ),
+    )
+
+    apply_result = apply_legacy_pending_finalization(
+        db_path=fixture["root_db"],
+        pending_root=fixture["pending_root"],
+        sealed_plan_path=plan_path,
+        expected_finalization_plan_sha256=plan_sha256,
+        operator_confirmation=(
+            "finalize legacy_pending "
+            f"{plan.archive_target.archived_root_relative_to_storage_root}"
+        ),
+        write=True,
+    )
+
+    assert getattr(apply_result, "replayed") is True
+
+
+def test_apply_legacy_pending_finalization_acquires_runtime_lock_before_staging_and_replans_under_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import trading.legacy_pending_finalization as legacy_pending_finalization
+
+    fixture = _planner_fixture(tmp_path)
+    plan, plan_path, plan_sha256 = _write_reviewed_plan_artifact(fixture)
+    apply_legacy_pending_finalization = getattr(
+        legacy_pending_finalization,
+        "apply_legacy_pending_finalization",
+    )
+    original_plan = legacy_pending_finalization.plan_legacy_pending_finalization
+
+    state = {"lock_held": False, "replanned": False}
+
+    @contextmanager
+    def fake_runtime_lock(db_path: Path) -> Iterator[None]:
+        assert db_path == fixture["root_db"]
+        state["lock_held"] = True
+        try:
+            yield
+        finally:
+            state["lock_held"] = False
+
+    def wrapped_plan(**kwargs):
+        state["replanned"] = True
+        assert state["lock_held"] is True
+        return original_plan(**kwargs)
+
+    def wrapped_stage(*args, **kwargs):
+        assert state["lock_held"] is True
+        return original_stage(*args, **kwargs)
+
+    original_stage = getattr(
+        legacy_pending_finalization,
+        "_stage_archive_payload",
+    )
+    monkeypatch.setattr(
+        legacy_pending_finalization,
+        "_runtime_lock_for_finalization",
+        fake_runtime_lock,
+    )
+    monkeypatch.setattr(
+        legacy_pending_finalization,
+        "plan_legacy_pending_finalization",
+        wrapped_plan,
+    )
+    monkeypatch.setattr(
+        legacy_pending_finalization,
+        "_stage_archive_payload",
+        wrapped_stage,
+    )
+
+    apply_legacy_pending_finalization(
+        db_path=fixture["root_db"],
+        pending_root=fixture["pending_root"],
+        sealed_plan_path=plan_path,
+        expected_finalization_plan_sha256=plan_sha256,
+        operator_confirmation=(
+            "finalize legacy_pending "
+            f"{plan.archive_target.archived_root_relative_to_storage_root}"
+        ),
+        write=True,
+    )
+
+    assert state["replanned"] is True
+
+
+def test_apply_legacy_pending_finalization_publishes_archive_before_live_root_removal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import trading.legacy_pending_finalization as legacy_pending_finalization
+
+    fixture = _planner_fixture(tmp_path)
+    plan, plan_path, plan_sha256 = _write_reviewed_plan_artifact(fixture)
+    apply_legacy_pending_finalization = getattr(
+        legacy_pending_finalization,
+        "apply_legacy_pending_finalization",
+    )
+
+    original_remove = getattr(
+        legacy_pending_finalization,
+        "_remove_live_pending_root",
+    )
+
+    def wrapped_remove(*, pending_root: Path, archive_root: Path) -> None:
+        assert archive_root.is_dir()
+        assert (archive_root / "control" / "legacy_pending_finalization_plan.json").is_file()
+        assert (
+            archive_root / "control" / "finalization_certificate.json"
+        ).is_file()
+        return original_remove(pending_root=pending_root, archive_root=archive_root)
+
+    monkeypatch.setattr(
+        legacy_pending_finalization,
+        "_remove_live_pending_root",
+        wrapped_remove,
+    )
+
+    apply_legacy_pending_finalization(
+        db_path=fixture["root_db"],
+        pending_root=fixture["pending_root"],
+        sealed_plan_path=plan_path,
+        expected_finalization_plan_sha256=plan_sha256,
+        operator_confirmation=(
+            "finalize legacy_pending "
+            f"{plan.archive_target.archived_root_relative_to_storage_root}"
+        ),
+        write=True,
+    )
+
+    assert not fixture["pending_root"].exists()
+
+
+def test_apply_legacy_pending_finalization_cleans_stage_on_abort_and_keeps_db_unchanged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import trading.legacy_pending_finalization as legacy_pending_finalization
+
+    fixture = _planner_fixture(tmp_path)
+    plan, plan_path, plan_sha256 = _write_reviewed_plan_artifact(fixture)
+    apply_legacy_pending_finalization = getattr(
+        legacy_pending_finalization,
+        "apply_legacy_pending_finalization",
+    )
+    before = _db_fingerprint(fixture["root_db"])
+    archive_parent = fixture["root_db"].parent / "finalized_legacy_pending_paper_cohorts"
+
+    monkeypatch.setattr(
+        legacy_pending_finalization,
+        "_write_staged_control_files",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        apply_legacy_pending_finalization(
+            db_path=fixture["root_db"],
+            pending_root=fixture["pending_root"],
+            sealed_plan_path=plan_path,
+            expected_finalization_plan_sha256=plan_sha256,
+            operator_confirmation=(
+                "finalize legacy_pending "
+                f"{plan.archive_target.archived_root_relative_to_storage_root}"
+            ),
+            write=True,
+        )
+
+    assert fixture["pending_root"].exists()
+    assert _db_fingerprint(fixture["root_db"]) == before
+    if archive_parent.exists():
+        assert [path.name for path in archive_parent.iterdir()] == []
+
+
+def test_apply_legacy_pending_finalization_never_opens_sqlite_write_transaction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import trading.legacy_pending_finalization as legacy_pending_finalization
+
+    fixture = _planner_fixture(tmp_path)
+    plan, plan_path, plan_sha256 = _write_reviewed_plan_artifact(fixture)
+    apply_legacy_pending_finalization = getattr(
+        legacy_pending_finalization,
+        "apply_legacy_pending_finalization",
+    )
+    original_connect = sqlite3.connect
+
+    def guarded_connect(database, *args, **kwargs):
+        if isinstance(database, str) and database.startswith("file:"):
+            return original_connect(database, *args, **kwargs)
+        if isinstance(database, str) and "?mode=ro" in database and kwargs.get("uri") is True:
+            return original_connect(database, *args, **kwargs)
+        raise AssertionError(f"apply opened non-read-only sqlite connection: {database!r}")
+
+    monkeypatch.setattr(sqlite3, "connect", guarded_connect)
+
+    apply_legacy_pending_finalization(
+        db_path=fixture["root_db"],
+        pending_root=fixture["pending_root"],
+        sealed_plan_path=plan_path,
+        expected_finalization_plan_sha256=plan_sha256,
+        operator_confirmation=(
+            "finalize legacy_pending "
+            f"{plan.archive_target.archived_root_relative_to_storage_root}"
+        ),
+        write=True,
+    )
+
+
+def test_cli_apply_requires_expected_sha_and_write_confirmation(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from scripts.finalize_legacy_pending_paper_cohort import main as cli_main
+
+    fixture = _planner_fixture(tmp_path)
+    plan, plan_path, plan_sha256 = _write_reviewed_plan_artifact(fixture)
+
+    exit_code = cli_main(
+        [
+            "apply",
+            "--db-path",
+            str(fixture["root_db"]),
+            "--pending-root",
+            str(fixture["pending_root"]),
+            "--sealed-plan-path",
+            str(plan_path),
+            "--operator-confirmation",
+            (
+                "finalize legacy_pending "
+                f"{plan.archive_target.archived_root_relative_to_storage_root}"
+            ),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code != 0
+    assert "expected-finalization-plan-sha" in (captured.err + captured.out)
+
+    exit_code = cli_main(
+        [
+            "apply",
+            "--db-path",
+            str(fixture["root_db"]),
+            "--pending-root",
+            str(fixture["pending_root"]),
+            "--sealed-plan-path",
+            str(plan_path),
+            "--expected-finalization-plan-sha",
+            plan_sha256,
+            "--operator-confirmation",
+            (
+                "finalize legacy_pending "
+                f"{plan.archive_target.archived_root_relative_to_storage_root}"
+            ),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code != 0
+    assert "--write" in (captured.err + captured.out)

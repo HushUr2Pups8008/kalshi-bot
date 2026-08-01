@@ -1,20 +1,18 @@
-"""Pure canonical contracts for legacy-pending finalization artifacts.
-
-This module intentionally has no filesystem or database behavior. It defines the
-sealed plan, payload inventory, and certificate shapes that later finalization
-steps will consume.
-"""
+"""Canonical contracts and filesystem-only apply flow for legacy-pending finalization."""
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import secrets
+import shutil
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 from scripts.reconcile_legacy_paper_receipts import (
     LegacyReceiptReconciliationError,
@@ -23,6 +21,7 @@ from scripts.reconcile_legacy_paper_receipts import (
     _require_quiescent_sqlite_artifacts,
     _require_same_plain_file,
     _read_verified_plain_file,
+    _runtime_lock as _receipt_runtime_lock,
 )
 from trading.paper_cohorts import (
     LEGACY_PENDING_BASELINE_COHORT_ID,
@@ -40,10 +39,14 @@ from trading.settlement_store import (
 
 FINALIZATION_PLAN_SCHEMA_VERSION = 1
 FINALIZATION_CERTIFICATE_SCHEMA_VERSION = 1
+FINALIZATION_CONTROL_DIRNAME = "control"
+FINALIZATION_PAYLOAD_DIRNAME = "payload"
+FINALIZATION_PLAN_FILENAME = "legacy_pending_finalization_plan.json"
+FINALIZATION_CERTIFICATE_FILENAME = "finalization_certificate.json"
 _CONTROL_ARTIFACT_BASENAMES = frozenset(
     {
-        "finalization_certificate.json",
-        "legacy_pending_finalization_plan.json",
+        FINALIZATION_CERTIFICATE_FILENAME,
+        FINALIZATION_PLAN_FILENAME,
     }
 )
 _FINALIZATION_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
@@ -367,6 +370,13 @@ class LegacyPendingFinalizationCertificate:
             "payload_inventory_sha256": self.payload_inventory_sha256,
             "operator_confirmation": self.operator_confirmation,
         }
+
+
+@dataclass(frozen=True)
+class LegacyPendingFinalizationApplyResult:
+    archive_root: Path
+    certificate: LegacyPendingFinalizationCertificate
+    replayed: bool
 
 
 def serialize_legacy_pending_finalization_plan(
@@ -816,6 +826,403 @@ def plan_legacy_pending_finalization(
         archive_target=archive_target,
         payload_inventory=payload_inventory,
     )
+
+
+def apply_legacy_pending_finalization(
+    *,
+    db_path: Path | str,
+    pending_root: Path | str,
+    sealed_plan_path: Path | str,
+    expected_finalization_plan_sha256: str,
+    operator_confirmation: str,
+    write: bool,
+    clock: Callable[[], datetime] | None = None,
+) -> LegacyPendingFinalizationApplyResult:
+    if not write:
+        raise ValueError("legacy pending finalization apply requires --write")
+    reviewed_plan, reviewed_plan_bytes = _load_reviewed_finalization_plan(
+        sealed_plan_path,
+        expected_finalization_plan_sha256=expected_finalization_plan_sha256,
+    )
+    _require_operator_confirmation(
+        operator_confirmation,
+        archive_target=reviewed_plan.archive_target,
+    )
+    root_path = _require_absolute_path_without_symlinks(db_path, "legacy root")
+    storage_root = root_path.parent
+    archive_root = storage_root / reviewed_plan.archive_target.archived_root_relative_to_storage_root
+    replay_certificate = _validate_published_archive(
+        archive_root=archive_root,
+        reviewed_plan=reviewed_plan,
+        reviewed_plan_bytes=reviewed_plan_bytes,
+        expected_finalization_plan_sha256=expected_finalization_plan_sha256,
+    )
+    if replay_certificate is not None:
+        return LegacyPendingFinalizationApplyResult(
+            archive_root=archive_root,
+            certificate=replay_certificate,
+            replayed=True,
+        )
+    pending_root_path = _require_absolute_path_without_symlinks(
+        pending_root,
+        "legacy pending root",
+    )
+    if not pending_root_path.exists():
+        raise ValueError("legacy pending root is missing and no published archive is available")
+    if pending_root_path != storage_root / reviewed_plan.family_summary.pending_root_relative_to_storage_root:
+        raise ValueError("legacy pending root is invalid")
+    if root_path != storage_root / reviewed_plan.family_summary.legacy_db_relative_to_storage_root:
+        raise ValueError("legacy root is invalid")
+
+    finalization_id = _archive_target_finalization_id(reviewed_plan.archive_target)
+    archive_parent = _prepare_archive_parent(archive_root.parent)
+    stage_root = _reserve_hidden_stage_root(
+        archive_parent=archive_parent,
+        finalization_id=finalization_id,
+    )
+    published = False
+    try:
+        with _runtime_lock_for_finalization(root_path):
+            locked_plan = plan_legacy_pending_finalization(
+                db_path=root_path,
+                pending_root=pending_root_path,
+                finalization_id=finalization_id,
+                expected_root_sha256=reviewed_plan.family_summary.root_db_sha256,
+                expected_pending_manifest_sha256s=reviewed_plan.family_summary.pending_manifest_sha256s,
+                expected_legacy_snapshot_sha256=reviewed_plan.family_summary.shared_legacy_snapshot_sha256,
+                expected_baseline_open_rows_sha256=reviewed_plan.family_summary.shared_legacy_open_rows_sha256,
+                expected_baseline_trade_ids=reviewed_plan.family_summary.frozen_trade_ids,
+            )
+            locked_plan_bytes = serialize_legacy_pending_finalization_plan(locked_plan).encode(
+                "utf-8"
+            )
+            if locked_plan_bytes != reviewed_plan_bytes:
+                raise ValueError("sealed finalization plan changed under the runtime lock")
+            if finalization_plan_sha256(locked_plan) != expected_finalization_plan_sha256:
+                raise ValueError("sealed finalization plan SHA-256 changed under the runtime lock")
+
+            _stage_archive_payload(
+                plan=reviewed_plan,
+                storage_root=storage_root,
+                stage_root=stage_root,
+            )
+            staged_inventory = _recompute_payload_inventory(stage_root)
+            if staged_inventory != reviewed_plan.payload_inventory:
+                raise ValueError("staged payload inventory differs from the reviewed plan")
+            if _inventory_sha256(staged_inventory) != reviewed_plan.payload_inventory_sha256:
+                raise ValueError("staged payload inventory SHA-256 differs from the reviewed plan")
+
+            certificate = _write_staged_control_files(
+                stage_root=stage_root,
+                reviewed_plan=reviewed_plan,
+                reviewed_plan_bytes=reviewed_plan_bytes,
+                expected_finalization_plan_sha256=expected_finalization_plan_sha256,
+                operator_confirmation=operator_confirmation,
+                clock=(clock or _utc_now),
+            )
+            _fsync_tree(stage_root)
+            os.replace(stage_root, archive_root)
+            published = True
+            _fsync_directory(archive_parent)
+            published_certificate = _validate_published_archive(
+                archive_root=archive_root,
+                reviewed_plan=reviewed_plan,
+                reviewed_plan_bytes=reviewed_plan_bytes,
+                expected_finalization_plan_sha256=expected_finalization_plan_sha256,
+            )
+            assert published_certificate is not None
+            _remove_live_pending_root(
+                pending_root=pending_root_path,
+                archive_root=archive_root,
+            )
+            _fsync_directory(storage_root)
+            return LegacyPendingFinalizationApplyResult(
+                archive_root=archive_root,
+                certificate=published_certificate,
+                replayed=False,
+            )
+    finally:
+        if not published:
+            _cleanup_stage_root(stage_root)
+
+
+def _runtime_lock_for_finalization(db_path: Path) -> object:
+    return _receipt_runtime_lock(db_path)
+
+
+def _load_reviewed_finalization_plan(
+    path: Path | str,
+    *,
+    expected_finalization_plan_sha256: str,
+) -> tuple[SealedLegacyPendingFinalizationPlan, bytes]:
+    expected_sha = _require_sha256(
+        expected_finalization_plan_sha256,
+        "expected-finalization-plan-sha",
+    )
+    verified = _require_verified_plain_file(
+        path,
+        label="sealed finalization plan",
+        expected_sha256=expected_sha,
+        sqlite=False,
+    )
+    reviewed_bytes = _read_verified_plain_file(
+        verified.path,
+        verified.identity,
+        verified.label,
+    )
+    try:
+        payload = json.loads(reviewed_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("sealed finalization plan is invalid") from exc
+    reviewed_plan = parse_legacy_pending_finalization_plan(payload)
+    if serialize_legacy_pending_finalization_plan(reviewed_plan).encode("utf-8") != reviewed_bytes:
+        raise ValueError("sealed finalization plan is invalid")
+    return reviewed_plan, reviewed_bytes
+
+
+def _prepare_archive_parent(path: Path) -> Path:
+    path.mkdir(parents=True, exist_ok=True)
+    return _require_directory_without_symlinks(path, label="finalized archive parent")
+
+
+def _reserve_hidden_stage_root(*, archive_parent: Path, finalization_id: str) -> Path:
+    if (archive_parent / finalization_id).exists():
+        raise ValueError("finalization archive target already exists")
+    for _attempt in range(32):
+        candidate = archive_parent / f".{finalization_id}.{secrets.token_hex(6)}.tmp"
+        try:
+            candidate.mkdir(mode=0o700)
+        except FileExistsError:
+            continue
+        return candidate
+    raise ValueError("unable to reserve hidden finalization staging directory")
+
+
+def _stage_archive_payload(
+    *,
+    plan: SealedLegacyPendingFinalizationPlan,
+    storage_root: Path,
+    stage_root: Path,
+) -> None:
+    for entry in plan.payload_inventory:
+        destination = stage_root / entry.path_relative_to_archive_root
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        source = _source_path_for_payload_entry(entry, storage_root=storage_root)
+        verified = _require_verified_plain_file(
+            source,
+            label="legacy pending payload file",
+            expected_sha256=entry.sha256,
+            sqlite=source.suffix == ".db",
+        )
+        data = _read_verified_plain_file(source, verified.identity, verified.label)
+        _write_new_file(destination, data)
+
+
+def _source_path_for_payload_entry(
+    entry: PayloadInventoryEntry,
+    *,
+    storage_root: Path,
+) -> Path:
+    prefix = f"{FINALIZATION_PAYLOAD_DIRNAME}/"
+    if not entry.path_relative_to_archive_root.startswith(prefix):
+        raise ValueError("sealed finalization plan payload_inventory is invalid")
+    return storage_root / entry.path_relative_to_archive_root[len(prefix) :]
+
+
+def _write_staged_control_files(
+    *,
+    stage_root: Path,
+    reviewed_plan: SealedLegacyPendingFinalizationPlan,
+    reviewed_plan_bytes: bytes,
+    expected_finalization_plan_sha256: str,
+    operator_confirmation: str,
+    clock: Callable[[], datetime],
+) -> LegacyPendingFinalizationCertificate:
+    control_root = stage_root / FINALIZATION_CONTROL_DIRNAME
+    control_root.mkdir(parents=True, exist_ok=True)
+    plan_path = control_root / FINALIZATION_PLAN_FILENAME
+    certificate_path = control_root / FINALIZATION_CERTIFICATE_FILENAME
+    _write_new_file(plan_path, reviewed_plan_bytes)
+    certificate = LegacyPendingFinalizationCertificate(
+        finalization_id=_archive_target_finalization_id(reviewed_plan.archive_target),
+        created_at_utc=clock(),
+        family_summary=reviewed_plan.family_summary,
+        archive_target=reviewed_plan.archive_target,
+        finalization_plan_sha256=expected_finalization_plan_sha256,
+        payload_inventory_sha256=reviewed_plan.payload_inventory_sha256,
+        operator_confirmation=operator_confirmation,
+    )
+    _write_new_file(
+        certificate_path,
+        serialize_legacy_pending_finalization_certificate(certificate).encode("utf-8"),
+    )
+    if _sha256_path(plan_path) != expected_finalization_plan_sha256:
+        raise ValueError("staged sealed finalization plan SHA-256 is invalid")
+    staged_plan, staged_plan_bytes = _load_reviewed_finalization_plan(
+        plan_path,
+        expected_finalization_plan_sha256=expected_finalization_plan_sha256,
+    )
+    if staged_plan != reviewed_plan or staged_plan_bytes != reviewed_plan_bytes:
+        raise ValueError("staged sealed finalization plan is invalid")
+    staged_inventory = _recompute_payload_inventory(stage_root)
+    if staged_inventory != reviewed_plan.payload_inventory:
+        raise ValueError("staged payload inventory differs from the reviewed plan")
+    parsed_certificate = _load_finalization_certificate(certificate_path)
+    if parsed_certificate != certificate:
+        raise ValueError("staged finalization certificate is invalid")
+    return certificate
+
+
+def _validate_published_archive(
+    *,
+    archive_root: Path,
+    reviewed_plan: SealedLegacyPendingFinalizationPlan,
+    reviewed_plan_bytes: bytes,
+    expected_finalization_plan_sha256: str,
+) -> LegacyPendingFinalizationCertificate | None:
+    if not archive_root.exists():
+        return None
+    if not archive_root.is_dir():
+        raise ValueError("published finalization archive is invalid")
+    plan_path = archive_root / FINALIZATION_CONTROL_DIRNAME / FINALIZATION_PLAN_FILENAME
+    certificate_path = (
+        archive_root / FINALIZATION_CONTROL_DIRNAME / FINALIZATION_CERTIFICATE_FILENAME
+    )
+    archived_plan, archived_plan_bytes = _load_reviewed_finalization_plan(
+        plan_path,
+        expected_finalization_plan_sha256=expected_finalization_plan_sha256,
+    )
+    if archived_plan != reviewed_plan or archived_plan_bytes != reviewed_plan_bytes:
+        raise ValueError("published finalization archive plan is invalid")
+    inventory = _recompute_payload_inventory(archive_root)
+    if inventory != reviewed_plan.payload_inventory:
+        raise ValueError("published finalization archive payload inventory is invalid")
+    if _inventory_sha256(inventory) != reviewed_plan.payload_inventory_sha256:
+        raise ValueError("published finalization archive payload inventory is invalid")
+    certificate = _load_finalization_certificate(certificate_path)
+    if certificate.family_summary != reviewed_plan.family_summary:
+        raise ValueError("published finalization archive certificate is invalid")
+    if certificate.archive_target != reviewed_plan.archive_target:
+        raise ValueError("published finalization archive certificate is invalid")
+    if certificate.finalization_plan_sha256 != expected_finalization_plan_sha256:
+        raise ValueError("published finalization archive certificate is invalid")
+    if certificate.payload_inventory_sha256 != reviewed_plan.payload_inventory_sha256:
+        raise ValueError("published finalization archive certificate is invalid")
+    return certificate
+
+
+def _load_finalization_certificate(path: Path) -> LegacyPendingFinalizationCertificate:
+    verified = _require_verified_plain_file(
+        path,
+        label="finalization certificate",
+        expected_sha256=None,
+        sqlite=False,
+    )
+    payload_bytes = _read_verified_plain_file(verified.path, verified.identity, verified.label)
+    try:
+        payload = json.loads(payload_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("finalization certificate is invalid") from exc
+    certificate = parse_legacy_pending_finalization_certificate(payload)
+    if serialize_legacy_pending_finalization_certificate(certificate).encode("utf-8") != payload_bytes:
+        raise ValueError("finalization certificate is invalid")
+    return certificate
+
+
+def _recompute_payload_inventory(archive_root: Path) -> tuple[PayloadInventoryEntry, ...]:
+    payload_root = archive_root / FINALIZATION_PAYLOAD_DIRNAME
+    if not payload_root.is_dir():
+        raise ValueError("published finalization archive payload inventory is invalid")
+    discovered: list[PayloadInventoryEntry] = []
+    for path in sorted(payload_root.rglob("*")):
+        if path.is_dir():
+            continue
+        relative = path.relative_to(archive_root).as_posix()
+        verified = _require_verified_plain_file(
+            path,
+            label="archived payload file",
+            expected_sha256=None,
+            sqlite=path.suffix == ".db",
+        )
+        discovered.append(
+            PayloadInventoryEntry(
+                path_relative_to_archive_root=relative,
+                file_type="file",
+                size_bytes=verified.size_bytes,
+                sha256=verified.sha256,
+            )
+        )
+    return _require_canonical_inventory(tuple(discovered))
+
+
+def _remove_live_pending_root(*, pending_root: Path, archive_root: Path) -> None:
+    if not archive_root.is_dir():
+        raise ValueError("published finalization archive is invalid")
+    if not pending_root.exists():
+        return
+    tombstone = pending_root.parent / f".{pending_root.name}.removed"
+    if tombstone.exists():
+        shutil.rmtree(tombstone)
+    os.replace(pending_root, tombstone)
+    shutil.rmtree(tombstone)
+
+
+def _cleanup_stage_root(stage_root: Path) -> None:
+    if stage_root.exists():
+        shutil.rmtree(stage_root)
+
+
+def _write_new_file(path: Path, data: bytes) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    fd = os.open(path, flags, 0o600)
+    try:
+        with os.fdopen(fd, "wb", closefd=False) as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+    finally:
+        os.close(fd)
+
+
+def _fsync_tree(root: Path) -> None:
+    file_paths = sorted(path for path in root.rglob("*") if path.is_file())
+    for path in file_paths:
+        _fsync_file(path)
+    dir_paths = sorted((path for path in root.rglob("*") if path.is_dir()), key=lambda p: len(p.parts), reverse=True)
+    for path in dir_paths:
+        _fsync_directory(path)
+    _fsync_directory(root)
+
+
+def _fsync_file(path: Path) -> None:
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _fsync_directory(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    fd = os.open(path, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _inventory_sha256(value: Sequence[PayloadInventoryEntry]) -> str:
+    return hashlib.sha256(
+        _canonical_json([entry.to_dict() for entry in value]).encode("utf-8")
+    ).hexdigest()
+
+
+def _sha256_path(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def _verified_shared_snapshot_file(
