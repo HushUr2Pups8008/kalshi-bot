@@ -192,6 +192,46 @@ def test_archived_legacy_receipt_path_hard_blocks_go_live_when_profit_predicate_
     ]
 
 
+@pytest.mark.parametrize(
+    ("db_path", "expected"),
+    (
+        (
+            Path(
+                "scratch/../finalized_legacy_pending_paper_cohorts/"
+                "finalization-20260801t180000z/payload/legacy_receipts/paper_trades.db"
+            ),
+            True,
+        ),
+        (
+            Path(
+                "finalized_legacy_pending_paper_cohorts-copy/"
+                "finalization-20260801t180000z/payload/paper_trades.db"
+            ),
+            False,
+        ),
+        (
+            Path(
+                "finalized_legacy_pending_paper_cohorts/"
+                "finalization-20260801t180000z/payload-copy/paper_trades.db"
+            ),
+            False,
+        ),
+        (
+            Path(
+                "finalized_legacy_pending_paper_cohorts/"
+                "finalization-20260801t180000z/payload/../active/paper_trades.db"
+            ),
+            False,
+        ),
+    ),
+)
+def test_archived_payload_path_uses_normalized_exact_components(
+    db_path: Path,
+    expected: bool,
+):
+    assert main.is_finalized_legacy_pending_archive_payload_path(db_path) is expected
+
+
 def test_gate_hard_blocks_nonlegacy_cohort_even_when_other_local_checks_pass():
     paper = _paper(notional=60.0, resolved_trades=_passing_resolved())
     with patch.object(main, "cfg", _cfg(paper_cohort_id="active-20260728")), patch.object(
