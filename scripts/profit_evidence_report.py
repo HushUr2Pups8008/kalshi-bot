@@ -53,6 +53,20 @@ class ReplayEvidenceSummary:
     per_trade_ev: float | None
     ev_ci_95_lo: float | None
     ev_ci_95_hi: float | None
+    provenance: Literal[
+        "head_t0_no_corpus",
+        "head_insufficient_corpus",
+        "head_scored_attested",
+        "head_scored_failed",
+        "head_scored_explicit_subset",
+        "head_unscored",
+        "ci_historical",
+        "ci_explicit_subset",
+        "historical_cycle",
+        "production_proxy",
+        "missing",
+        "unknown",
+    ] = "unknown"
 
     def with_updates(self, **updates: Any) -> "ReplayEvidenceSummary":
         return replace(self, **updates)
@@ -100,6 +114,7 @@ def collect_replay_evidence(edge_replay_root: Path | str) -> list[ReplayEvidence
                 per_trade_ev=None,
                 ev_ci_95_lo=None,
                 ev_ci_95_hi=None,
+                provenance="missing",
             )
         ]
     return [_parse_replay_artifact(path, root) for path in paths]
@@ -150,10 +165,15 @@ def readiness_verdict(
 
     current_replay = _current_replay_items(replay)
     scored = [item for item in current_replay if item.status == "scored"]
-    if current_replay and not scored:
+    if not scored and (
+        _has_current_replay_receipt(replay)
+        or any(item.status == "scored" for item in replay)
+    ):
         reasons.append("missing current replay evidence")
     elif not scored:
         reasons.append("missing replay evidence")
+    elif any(item.provenance == "head_scored_failed" for item in scored):
+        reasons.append("current replay gate failed")
     elif not _replay_passes(scored[-1]):
         reasons.append("replay EV evidence failed")
 
@@ -198,7 +218,7 @@ def render_text(report: ProfitEvidenceReport) -> str:
     for item in report.replay:
         lines.append(
             "  "
-            f"{item.source}: {item.status}"
+            f"{item.source}: {item.status} provenance={item.provenance}"
             f" trades={_fmt_optional_int(item.trade_count)}"
             f" win_rate={_fmt_optional_pct(item.win_rate)}"
             f" ev={_fmt_optional_money(item.per_trade_ev)}"
@@ -378,10 +398,11 @@ def _parse_replay_artifact(path: Path, root: Path) -> ReplayEvidenceSummary:
         data = json.loads(path.read_text())
     except json.JSONDecodeError:
         return _replay_unknown(source)
+    provenance = _classify_replay_provenance(source, data)
     if data is None or data == [] or data == {}:
-        return _replay_insufficient(source)
+        return _replay_insufficient(source, provenance=provenance)
     if isinstance(data, dict) and _is_insufficient_verdict(data):
-        return _replay_insufficient(source)
+        return _replay_insufficient(source, provenance=provenance)
 
     metrics = _extract_replay_metrics(data)
     trade_count = _as_int(_first_present(metrics, "trade_count", "trades"))
@@ -396,7 +417,7 @@ def _parse_replay_artifact(path: Path, root: Path) -> ReplayEvidenceSummary:
         for value in (trade_count, win_rate, realized_pnl, per_trade_ev, ci_lo, ci_hi)
     )
     if trade_count == 0:
-        return _replay_insufficient(source)
+        return _replay_insufficient(source, provenance=provenance)
     return ReplayEvidenceSummary(
         source=source,
         status="scored" if has_score else "unknown",
@@ -406,7 +427,88 @@ def _parse_replay_artifact(path: Path, root: Path) -> ReplayEvidenceSummary:
         per_trade_ev=per_trade_ev,
         ev_ci_95_lo=ci_lo,
         ev_ci_95_hi=ci_hi,
+        provenance=provenance,
     )
+
+
+def _classify_replay_provenance(source: str, data: Any) -> str:
+    """Classify artifacts without treating diagnostic inputs as current OOS proof."""
+
+    if source.startswith("ci_runs/HEAD/"):
+        if source != "ci_runs/HEAD/verdict.json":
+            return "head_unscored"
+        if _is_head_t0_no_corpus(data):
+            return "head_t0_no_corpus"
+        if isinstance(data, dict) and _is_insufficient_verdict(data):
+            return "head_insufficient_corpus"
+        if _has_explicit_corpus_subset(data):
+            return "head_scored_explicit_subset"
+        if _is_head_score(data):
+            return (
+                "head_scored_attested"
+                if isinstance(data, dict) and data.get("pass") is True
+                else "head_scored_failed"
+            )
+        return "unknown"
+    if source.startswith("ci_runs/"):
+        return "ci_explicit_subset" if _has_explicit_corpus_subset(data) else "ci_historical"
+    if "production_proxy" in Path(source).name or _nested_value(
+        data, "forensics", "variant"
+    ) == "production_proxy":
+        return "production_proxy"
+    return "historical_cycle"
+
+
+def _is_head_t0_no_corpus(data: Any) -> bool:
+    if not isinstance(data, dict):
+        return False
+    if data.get("tier") == "T0":
+        return True
+    notes = str(data.get("notes", "")).lower()
+    return "t0:" in notes and data.get("rule4") is None
+
+
+def _has_explicit_corpus_subset(data: Any) -> bool:
+    return "explicit corpora subset supplied" in _flatten_text(data).lower()
+
+
+def _is_head_score(data: Any) -> bool:
+    if not isinstance(data, dict):
+        return False
+    if data.get("tier") not in {"T1", "T2"} or data.get("pass") not in {
+        True,
+        False,
+    }:
+        return False
+    metrics = _extract_replay_metrics(data)
+    return any(
+        value is not None
+        for value in (
+            _as_int(_first_present(metrics, "trade_count", "trades")),
+            _as_float(metrics.get("win_rate")),
+            _as_float(_first_present(metrics, "realized_pnl", "pnl")),
+            _as_float(_first_present(metrics, "per_trade_ev", "avg_pnl_per_trade")),
+        )
+    )
+
+
+def _nested_value(data: Any, *keys: str) -> Any:
+    current = data
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def _flatten_text(data: Any) -> str:
+    if isinstance(data, str):
+        return data
+    if isinstance(data, dict):
+        return " ".join(_flatten_text(value) for value in data.values())
+    if isinstance(data, list | tuple):
+        return " ".join(_flatten_text(value) for value in data)
+    return ""
 
 
 def _extract_replay_metrics(data: Any) -> dict[str, Any]:
@@ -457,18 +559,47 @@ def _replay_passes(item: ReplayEvidenceSummary) -> bool:
 def _current_replay_items(
     replay: list[ReplayEvidenceSummary],
 ) -> list[ReplayEvidenceSummary]:
-    head_items = [item for item in replay if item.source.startswith("ci_runs/HEAD/")]
-    if head_items:
-        return head_items
-    return [item for item in replay if item.status == "scored"]
+    return [
+        item
+        for item in replay
+        if item.provenance in {"head_scored_attested", "head_scored_failed"}
+    ]
 
 
-def _replay_insufficient(source: str) -> ReplayEvidenceSummary:
-    return ReplayEvidenceSummary(source, "insufficient_corpus", None, None, None, None, None, None)
+def _has_current_replay_receipt(replay: list[ReplayEvidenceSummary]) -> bool:
+    return any(item.source.startswith("ci_runs/HEAD/") for item in replay)
+
+
+def _replay_insufficient(
+    source: str,
+    *,
+    provenance: str = "unknown",
+) -> ReplayEvidenceSummary:
+    return ReplayEvidenceSummary(
+        source,
+        "insufficient_corpus",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        provenance=provenance,
+    )
 
 
 def _replay_unknown(source: str) -> ReplayEvidenceSummary:
-    return ReplayEvidenceSummary(source, "unknown", None, None, None, None, None, None)
+    return ReplayEvidenceSummary(
+        source,
+        "unknown",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        provenance="unknown",
+    )
 
 
 def _relative_source(path: Path, root: Path) -> str:
@@ -506,6 +637,7 @@ def _replay_to_dict(summary: ReplayEvidenceSummary) -> dict[str, Any]:
     return {
         "source": summary.source,
         "status": summary.status,
+        "provenance": summary.provenance,
         "trade_count": summary.trade_count,
         "win_rate": summary.win_rate,
         "realized_pnl": summary.realized_pnl,

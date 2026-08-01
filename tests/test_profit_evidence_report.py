@@ -209,6 +209,114 @@ def test_verdict_uses_current_head_replay_over_stale_scored_cycle(tmp_path: Path
     assert "missing current replay evidence" in report.verdict.reasons
 
 
+def test_replay_provenance_marks_head_t0_and_historical_cycle_non_current(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "paper_trades.db"
+    _create_paper_db(
+        db_path,
+        [_paper_row(f"trade-{idx}", resolved=True, pnl=0.30, edge=0.07) for idx in range(20)],
+    )
+    replay_root = tmp_path / "edge_replay"
+    cycle_dir = replay_root / "cycle99"
+    cycle_dir.mkdir(parents=True)
+    (cycle_dir / "counterfactual_scores.json").write_text(
+        json.dumps(
+            {
+                "trade_count": 25,
+                "per_trade_ev": 0.20,
+                "ev_ci_95_lo": 0.05,
+            }
+        )
+    )
+    head_dir = replay_root / "ci_runs" / "HEAD"
+    head_dir.mkdir(parents=True)
+    (head_dir / "verdict.json").write_text(
+        json.dumps(
+            {
+                "tier": "T0",
+                "pass": True,
+                "rule4": None,
+                "notes": "T0: Rule 2 exempt - passing without corpus/scenarios/cache.",
+            }
+        )
+    )
+    (head_dir / "rule4_table.json").write_text("null")
+
+    report = build_profit_evidence_report(db_path, replay_root)
+    provenance_by_source = {item.source: item.provenance for item in report.replay}
+
+    assert provenance_by_source["cycle99/counterfactual_scores.json"] == "historical_cycle"
+    assert provenance_by_source["ci_runs/HEAD/verdict.json"] == "head_t0_no_corpus"
+    assert provenance_by_source["ci_runs/HEAD/rule4_table.json"] == "head_unscored"
+    assert "missing current replay evidence" in report.verdict.reasons
+
+
+def test_replay_provenance_excludes_head_explicit_subset_score_from_current_proof(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "paper_trades.db"
+    _create_paper_db(
+        db_path,
+        [_paper_row(f"trade-{idx}", resolved=True, pnl=0.30, edge=0.07) for idx in range(20)],
+    )
+    replay_root = tmp_path / "edge_replay"
+    head_dir = replay_root / "ci_runs" / "HEAD"
+    head_dir.mkdir(parents=True)
+    (head_dir / "verdict.json").write_text(
+        json.dumps(
+            {
+                "tier": "T1",
+                "pass": True,
+                "notes": "WARNING (safeguard D): explicit corpora subset supplied",
+                "rule4": {
+                    "trade_count": 25,
+                    "per_trade_ev": 0.20,
+                    "ev_ci_95_lo": 0.05,
+                },
+            }
+        )
+    )
+
+    report = build_profit_evidence_report(db_path, replay_root)
+    head = next(item for item in report.replay if item.source.endswith("verdict.json"))
+
+    assert head.status == "scored"
+    assert head.provenance == "head_scored_explicit_subset"
+    assert "missing current replay evidence" in report.verdict.reasons
+
+
+def test_scored_failed_head_replay_is_current_negative_evidence(tmp_path: Path) -> None:
+    db_path = tmp_path / "paper_trades.db"
+    _create_paper_db(
+        db_path,
+        [_paper_row(f"trade-{idx}", resolved=True, pnl=0.30, edge=0.07) for idx in range(20)],
+    )
+    replay_root = tmp_path / "edge_replay"
+    head_dir = replay_root / "ci_runs" / "HEAD"
+    head_dir.mkdir(parents=True)
+    (head_dir / "verdict.json").write_text(
+        json.dumps(
+            {
+                "tier": "T1",
+                "pass": False,
+                "rule4": {
+                    "trade_count": 25,
+                    "per_trade_ev": -0.20,
+                    "ev_ci_95_lo": -0.05,
+                },
+            }
+        )
+    )
+
+    report = build_profit_evidence_report(db_path, replay_root)
+    head = next(item for item in report.replay if item.source.endswith("verdict.json"))
+
+    assert head.provenance == "head_scored_failed"
+    assert "current replay gate failed" in report.verdict.reasons
+    assert "missing current replay evidence" not in report.verdict.reasons
+
+
 def test_verdict_requires_paper_and_replay_proof(tmp_path: Path) -> None:
     db_path = tmp_path / "paper_trades.db"
     rows = [
@@ -254,6 +362,7 @@ def test_verdict_requires_paper_and_replay_proof(tmp_path: Path) -> None:
     assert "resolved sample 20 below 21" in verdict.reasons
 
     bad_replay = [item for item in report.replay if item.status == "scored"][0].with_updates(
+        provenance="head_scored_attested",
         per_trade_ev=-0.01,
         ev_ci_95_lo=-0.05,
     )
