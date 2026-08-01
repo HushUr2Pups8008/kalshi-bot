@@ -1175,6 +1175,8 @@ class TradingBot:
             ),
             capital_guard_capture_sink=self._capital_guard_shadow_capture_sink,
             g7_skip_evidence_capture_sink=self._g7_skip_evidence_capture_sink,
+            runtime_paper_cohort_id=self.paper_cohort.cohort_id,
+            runtime_paper_cohort_kind=runtime_cohort_kind,
         )
         self._research_paper_admission_bridge = ResearchPaperAdmissionBridge(
             research_store=default_research_dossier_store(),
@@ -3410,6 +3412,8 @@ class TradingBot:
                 "_g7_skip_evidence_capture_sink",
                 None,
             ),
+            runtime_paper_cohort_id=self.paper_cohort.cohort_id,
+            runtime_paper_cohort_kind=_configured_paper_cohort_kind(),
         )
         return await self._route_analysis_through_blend(
             analysis,

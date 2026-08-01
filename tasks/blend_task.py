@@ -267,6 +267,8 @@ class BlendTask:
         capital_guard_capture_sink: CapitalGuardCaptureSinkLike | None = None,
         g7_skip_evidence_capture_sink: G7SkipEvidenceCaptureSinkLike | None = None,
         execution_liquidity_provider: ExecutionLiquidityProvider | None = None,
+        runtime_paper_cohort_id: str | None = None,
+        runtime_paper_cohort_kind: str | None = None,
     ) -> None:
         self._trading_queue = trading_queue
         self._store = store if store is not None else evidence_store.default_store()
@@ -279,6 +281,8 @@ class BlendTask:
         self._capital_guard_capture_sink = capital_guard_capture_sink
         self._g7_skip_evidence_capture_sink = g7_skip_evidence_capture_sink
         self._execution_liquidity_provider = execution_liquidity_provider
+        self._runtime_paper_cohort_id = runtime_paper_cohort_id
+        self._runtime_paper_cohort_kind = runtime_paper_cohort_kind
         self._is_paper_mode = cfg.is_paper_trading if is_paper_mode is None else is_paper_mode
         self._now = now if now is not None else lambda: datetime.now(UTC)
         # PROFIT-EXEC-002 series-correlation guard state. Maps series prefix
@@ -735,6 +739,8 @@ class BlendTask:
                 decision_at,
                 fast_lane_result,
             ),
+            runtime_paper_cohort_id=self._runtime_paper_cohort_id,
+            runtime_paper_cohort_kind=self._runtime_paper_cohort_kind,
         )
         try:
             await sink.capture(envelope)

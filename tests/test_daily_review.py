@@ -3,6 +3,7 @@ import sys
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
+import sqlite3
 
 import pytest
 
@@ -10,9 +11,11 @@ from scripts import daily_review
 from scripts.daily_review import (
     _build_tier_by_source,
     _format_fresh_pass_conversion_lines,
+    _format_g7_receipt_reconciliation_lines,
     _format_match_attribution_lines,
     _format_same_window_lifecycle_attribution_lines,
     _summarize_fresh_pass_assignment_shadow,
+    _summarize_g7_receipt_reconciliation,
     _format_tier_change_lines,
     _load_previous_tier_state,
     _save_current_tier_state,
@@ -105,6 +108,68 @@ def test_format_same_window_lifecycle_attribution_lines_shows_selected_cohort_sc
     assert lines[:2] == [
         "  Same-window linkable cohort      : legacy-pending-20260729 (legacy_pending); 0 opportunities",
         "    Funnel scope                   : cohort-only; excluded untagged=7, other_cohort=3, malformed=1; all structured-log readers and paper DB use this lineage",
+    ]
+
+
+def test_summarize_g7_receipt_reconciliation_separates_non_drawdown_drawdown_and_unmatched(tmp_path):
+    g7_db_path = tmp_path / "g7_skip_evidence.db"
+    g7_db_path.write_text("", encoding="utf-8")
+    capital_db_path = tmp_path / "capital_guard_shadow.db"
+    with sqlite3.connect(g7_db_path) as conn:
+        conn.execute(
+            "CREATE TABLE g7_skip_evidence_records (lifecycle_id TEXT NOT NULL, trade_blocked_reason TEXT NOT NULL)"
+        )
+        conn.execute(
+            "INSERT INTO g7_skip_evidence_records (lifecycle_id, trade_blocked_reason) VALUES (?, ?)",
+            ("lc-nondrawdown", "G7_adverse_price_momentum"),
+        )
+    with sqlite3.connect(capital_db_path) as conn:
+        conn.execute(
+            "CREATE TABLE capital_guard_shadow_capture_attempts (lifecycle_id TEXT NOT NULL, target_failure TEXT NOT NULL)"
+        )
+        conn.execute(
+            "INSERT INTO capital_guard_shadow_capture_attempts (lifecycle_id, target_failure) VALUES (?, ?)",
+            ("lc-drawdown", "G7_open_exposure_drawdown"),
+        )
+
+    summary = _summarize_g7_receipt_reconciliation(
+        {
+            "g7_skip_lifecycle_details": (
+                {"lifecycle_id": "lc-nondrawdown", "reasons": ("G7_adverse_price_momentum",)},
+                {"lifecycle_id": "lc-drawdown", "reasons": ("G7_open_exposure_drawdown",)},
+                {"lifecycle_id": "lc-missing", "reasons": ("G7_zero_liquidity",)},
+            )
+        },
+        g7_skip_evidence_db_path=g7_db_path,
+        capital_guard_shadow_db_path=capital_db_path,
+    )
+
+    assert summary["total_g7_lifecycles"] == 3
+    assert summary["matched_non_drawdown_lifecycle_ids"] == ("lc-nondrawdown",)
+    assert summary["supported_drawdown_lifecycle_ids"] == ("lc-drawdown",)
+    assert summary["unmatched_lifecycle_details"] == (
+        {"lifecycle_id": "lc-missing", "reasons": ("G7_zero_liquidity",)},
+    )
+
+
+def test_format_g7_receipt_reconciliation_lines_surfaces_drift_examples():
+    lines = _format_g7_receipt_reconciliation_lines(
+        {
+            "total_g7_lifecycles": 3,
+            "matched_non_drawdown_lifecycle_ids": ("lc-nondrawdown",),
+            "supported_drawdown_lifecycle_ids": ("lc-drawdown",),
+            "unmatched_lifecycle_details": (
+                {"lifecycle_id": "lc-missing", "reasons": ("G7_zero_liquidity",)},
+            ),
+        }
+    )
+
+    assert lines == [
+        "    G7 receipt reconciliation     : exact lifecycle join only; report buckets and receipt stores are not treated as equivalent by default",
+        "    Non-drawdown receipt matches  : 1/3",
+        "    Drawdown evidence-only matches: 1/3",
+        "    Unmatched G7 lifecycles       : 1/3",
+        "    Unmatched G7 lifecycle IDs    : lc-missing[G7_zero_liquidity]",
     ]
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 import sqlite3
 
@@ -30,6 +31,8 @@ def _observed_record(**overrides: object) -> G7SkipEvidenceRecord:
         "market_ticker": "KXTEST-26JUL31-B52.5",
         "intended_side": "yes",
         "market_family": "macro",
+        "runtime_paper_cohort_id": "legacy-pending-20260729",
+        "runtime_paper_cohort_kind": "legacy_pending",
         "ordered_failures": ("G7_zero_liquidity",),
         "g7_failures": ("G7_zero_liquidity",),
         "trade_blocked_reason": "G7_zero_liquidity",
@@ -265,6 +268,92 @@ def test_read_only_record_iterator_round_trips_validated_receipts_without_creati
     assert store.append_record(record).status == "inserted"
 
     assert read_g7_skip_evidence_records(db_path) == (record,)
+
+
+def test_initialize_migrates_pre_lineage_receipt_store_without_backfill(tmp_path: Path) -> None:
+    db_path = tmp_path / "g7_skip_evidence.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE g7_skip_evidence_schema_meta (
+                schema_version INTEGER PRIMARY KEY,
+                ddl_sha256 TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE g7_skip_evidence_records (
+                evidence_id TEXT PRIMARY KEY,
+                receipt_version INTEGER NOT NULL,
+                decision_key TEXT NOT NULL UNIQUE,
+                payload_sha256 TEXT NOT NULL,
+                decision_at TEXT NOT NULL,
+                captured_at TEXT NOT NULL,
+                lifecycle_id TEXT NOT NULL,
+                venue TEXT NOT NULL,
+                market_ticker TEXT NOT NULL,
+                intended_side TEXT,
+                market_family TEXT,
+                ordered_failures_json TEXT NOT NULL,
+                g7_failures_json TEXT NOT NULL,
+                trade_blocked_reason TEXT NOT NULL,
+                g7_inputs_json TEXT NOT NULL,
+                g7_results_json TEXT NOT NULL,
+                liquidity_evidence_status TEXT NOT NULL,
+                execution_liquidity_json TEXT NOT NULL,
+                diagnostic_only INTEGER NOT NULL CHECK (diagnostic_only = 1)
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO g7_skip_evidence_schema_meta (schema_version, ddl_sha256, applied_at) VALUES (1, ?, ?)",
+            ("legacy-ddl", "2026-07-31T12:30:00Z"),
+        )
+        record = _observed_record(
+            runtime_paper_cohort_id=None,
+            runtime_paper_cohort_kind=None,
+        )
+        conn.execute(
+            """
+            INSERT INTO g7_skip_evidence_records (
+                evidence_id, receipt_version, decision_key, payload_sha256, decision_at,
+                captured_at, lifecycle_id, venue, market_ticker, intended_side,
+                market_family, ordered_failures_json, g7_failures_json, trade_blocked_reason,
+                g7_inputs_json, g7_results_json, liquidity_evidence_status,
+                execution_liquidity_json, diagnostic_only
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record.evidence_id,
+                record.receipt_version,
+                record.decision_key,
+                record.payload_sha256,
+                record.payload["decision_at"],
+                record.payload["captured_at"],
+                record.lifecycle_id,
+                record.venue,
+                record.market_ticker,
+                record.intended_side,
+                record.market_family,
+                json.dumps(record.payload["ordered_failures"]),
+                json.dumps(record.payload["g7_failures"]),
+                record.trade_blocked_reason,
+                json.dumps(record.payload["g7_inputs"]),
+                json.dumps(record.payload["g7_results"]),
+                record.liquidity_evidence_status,
+                json.dumps(record.payload["execution_liquidity"]),
+                1,
+            ),
+        )
+
+    store = G7SkipEvidenceStore(db_path=db_path)
+    assert store.initialize(applied_at=NOW) is True
+
+    [migrated] = read_g7_skip_evidence_records(db_path)
+    assert migrated.runtime_paper_cohort_id is None
+    assert migrated.runtime_paper_cohort_kind is None
 
 
 def test_snapshot_rejects_altered_trigger_contract_before_reporting_counts(tmp_path: Path) -> None:

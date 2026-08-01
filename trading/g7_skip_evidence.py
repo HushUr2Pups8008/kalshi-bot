@@ -16,7 +16,7 @@ from typing import Literal
 
 UTC = timezone.utc
 G7_SKIP_EVIDENCE_DB = Path("data/g7_skip_evidence.db")
-G7_SKIP_EVIDENCE_SCHEMA_VERSION = 1
+G7_SKIP_EVIDENCE_SCHEMA_VERSION = 2
 G7_SKIP_EVIDENCE_RECEIPT_VERSION = 1
 _BUSY_TIMEOUT_SECONDS = 5.0
 _LIQUIDITY_STATUSES = frozenset({"observed", "unavailable", "not_queried"})
@@ -103,6 +103,8 @@ _SCHEMA_STATEMENTS = (
         market_ticker TEXT NOT NULL,
         intended_side TEXT,
         market_family TEXT,
+        runtime_paper_cohort_id TEXT,
+        runtime_paper_cohort_kind TEXT,
         ordered_failures_json TEXT NOT NULL,
         g7_failures_json TEXT NOT NULL,
         trade_blocked_reason TEXT NOT NULL,
@@ -118,6 +120,34 @@ _SCHEMA_STATEMENTS = (
 _IMMUTABLE_TABLES = (
     "g7_skip_evidence_schema_meta",
     "g7_skip_evidence_records",
+)
+_SCHEMA_META_COLUMNS = (
+    "schema_version",
+    "ddl_sha256",
+    "applied_at",
+)
+_RECORD_COLUMNS = (
+    "evidence_id",
+    "receipt_version",
+    "decision_key",
+    "payload_sha256",
+    "decision_at",
+    "captured_at",
+    "lifecycle_id",
+    "venue",
+    "market_ticker",
+    "intended_side",
+    "market_family",
+    "runtime_paper_cohort_id",
+    "runtime_paper_cohort_kind",
+    "ordered_failures_json",
+    "g7_failures_json",
+    "trade_blocked_reason",
+    "g7_inputs_json",
+    "g7_results_json",
+    "liquidity_evidence_status",
+    "execution_liquidity_json",
+    "diagnostic_only",
 )
 
 
@@ -399,6 +429,8 @@ class G7SkipEvidenceRecord:
     market_ticker: str
     intended_side: str | None
     market_family: str | None
+    runtime_paper_cohort_id: str | None
+    runtime_paper_cohort_kind: str | None
     ordered_failures: Sequence[str]
     g7_failures: Sequence[str]
     trade_blocked_reason: str
@@ -424,6 +456,16 @@ class G7SkipEvidenceRecord:
         market_ticker = _require_text(self.market_ticker, "market_ticker")
         intended_side = _require_text(self.intended_side, "intended_side", allow_none=True)
         market_family = _require_text(self.market_family, "market_family", allow_none=True)
+        runtime_paper_cohort_id = _require_text(
+            self.runtime_paper_cohort_id,
+            "runtime_paper_cohort_id",
+            allow_none=True,
+        )
+        runtime_paper_cohort_kind = _require_text(
+            self.runtime_paper_cohort_kind,
+            "runtime_paper_cohort_kind",
+            allow_none=True,
+        )
         blocked_reason = _require_text(self.trade_blocked_reason, "trade_blocked_reason")
         decision_at = _require_utc_datetime(self.decision_at, "decision_at")
         captured_at = _require_utc_datetime(self.captured_at, "captured_at")
@@ -467,6 +509,8 @@ class G7SkipEvidenceRecord:
         object.__setattr__(self, "market_ticker", market_ticker)
         object.__setattr__(self, "intended_side", intended_side)
         object.__setattr__(self, "market_family", market_family)
+        object.__setattr__(self, "runtime_paper_cohort_id", runtime_paper_cohort_id)
+        object.__setattr__(self, "runtime_paper_cohort_kind", runtime_paper_cohort_kind)
         object.__setattr__(self, "ordered_failures", ordered_failures)
         object.__setattr__(self, "g7_failures", g7_failures)
         object.__setattr__(self, "trade_blocked_reason", blocked_reason)
@@ -499,6 +543,8 @@ class G7SkipEvidenceRecord:
             "market_ticker": self.market_ticker,
             "intended_side": self.intended_side,
             "market_family": self.market_family,
+            "runtime_paper_cohort_id": self.runtime_paper_cohort_id,
+            "runtime_paper_cohort_kind": self.runtime_paper_cohort_kind,
             "ordered_failures": list(self.ordered_failures),
             "g7_failures": list(self.g7_failures),
             "trade_blocked_reason": self.trade_blocked_reason,
@@ -555,18 +601,107 @@ def _schema_contract_matches(conn: sqlite3.Connection) -> bool:
         ).fetchall()
         if meta_rows != [(G7_SKIP_EVIDENCE_SCHEMA_VERSION, G7_SKIP_EVIDENCE_DDL_SHA256)]:
             return False
-        actual_sql = {
+        schema_meta_columns = tuple(
+            str(row[1]) for row in conn.execute("PRAGMA table_info(g7_skip_evidence_schema_meta)").fetchall()
+        )
+        if schema_meta_columns != _SCHEMA_META_COLUMNS:
+            return False
+        record_columns = tuple(
+            str(row[1]) for row in conn.execute("PRAGMA table_info(g7_skip_evidence_records)").fetchall()
+        )
+        if record_columns != _RECORD_COLUMNS:
+            return False
+        actual_trigger_sql = {
             str(name): _normalized_schema_sql(str(sql))
             for name, sql in conn.execute(
                 "SELECT name, sql FROM sqlite_master "
-                "WHERE type IN ('table', 'trigger') AND "
-                "(name LIKE 'g7_skip_evidence_%' OR name LIKE 'immutable_g7_skip_evidence_%')"
+                "WHERE type = 'trigger' AND name LIKE 'immutable_g7_skip_evidence_%'"
             ).fetchall()
             if sql is not None
         }
-        return actual_sql == _EXPECTED_SCHEMA_SQL
+        expected_trigger_sql = {
+            name: sql
+            for name, sql in _EXPECTED_SCHEMA_SQL.items()
+            if name.startswith("immutable_g7_skip_evidence_")
+        }
+        return actual_trigger_sql == expected_trigger_sql
     except sqlite3.DatabaseError:
         return False
+
+
+def _migrate_schema(conn: sqlite3.Connection, *, applied_at: datetime) -> None:
+    try:
+        columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(g7_skip_evidence_records)").fetchall()
+        }
+    except sqlite3.DatabaseError as exc:
+        raise G7SkipEvidenceSchemaError("G7 skip evidence schema contract does not match") from exc
+    if columns and (
+        "runtime_paper_cohort_id" not in columns
+        or "runtime_paper_cohort_kind" not in columns
+    ):
+        conn.execute(
+            """
+            CREATE TABLE g7_skip_evidence_records_migrated (
+                evidence_id TEXT PRIMARY KEY,
+                receipt_version INTEGER NOT NULL,
+                decision_key TEXT NOT NULL UNIQUE,
+                payload_sha256 TEXT NOT NULL,
+                decision_at TEXT NOT NULL,
+                captured_at TEXT NOT NULL,
+                lifecycle_id TEXT NOT NULL,
+                venue TEXT NOT NULL,
+                market_ticker TEXT NOT NULL,
+                intended_side TEXT,
+                market_family TEXT,
+                runtime_paper_cohort_id TEXT,
+                runtime_paper_cohort_kind TEXT,
+                ordered_failures_json TEXT NOT NULL,
+                g7_failures_json TEXT NOT NULL,
+                trade_blocked_reason TEXT NOT NULL,
+                g7_inputs_json TEXT NOT NULL,
+                g7_results_json TEXT NOT NULL,
+                liquidity_evidence_status TEXT NOT NULL
+                    CHECK (liquidity_evidence_status IN ('observed', 'unavailable', 'not_queried')),
+                execution_liquidity_json TEXT NOT NULL,
+                diagnostic_only INTEGER NOT NULL CHECK (diagnostic_only = 1)
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO g7_skip_evidence_records_migrated (
+                evidence_id, receipt_version, decision_key, payload_sha256, decision_at,
+                captured_at, lifecycle_id, venue, market_ticker, intended_side,
+                market_family, runtime_paper_cohort_id, runtime_paper_cohort_kind,
+                ordered_failures_json, g7_failures_json, trade_blocked_reason,
+                g7_inputs_json, g7_results_json, liquidity_evidence_status,
+                execution_liquidity_json, diagnostic_only
+            )
+            SELECT evidence_id, receipt_version, decision_key, payload_sha256, decision_at,
+                   captured_at, lifecycle_id, venue, market_ticker, intended_side,
+                   market_family, NULL, NULL, ordered_failures_json, g7_failures_json,
+                   trade_blocked_reason, g7_inputs_json, g7_results_json,
+                   liquidity_evidence_status, execution_liquidity_json, diagnostic_only
+            FROM g7_skip_evidence_records
+            """
+        )
+        conn.execute("DROP TABLE g7_skip_evidence_records")
+        conn.execute(
+            "ALTER TABLE g7_skip_evidence_records_migrated RENAME TO g7_skip_evidence_records"
+        )
+    current = [(G7_SKIP_EVIDENCE_SCHEMA_VERSION, G7_SKIP_EVIDENCE_DDL_SHA256)]
+    existing = conn.execute(
+        "SELECT schema_version, ddl_sha256 FROM g7_skip_evidence_schema_meta"
+    ).fetchall()
+    if existing != current:
+        conn.execute("DELETE FROM g7_skip_evidence_schema_meta")
+        conn.execute(
+            "INSERT INTO g7_skip_evidence_schema_meta (schema_version, ddl_sha256, applied_at) "
+            "VALUES (?, ?, ?)",
+            (G7_SKIP_EVIDENCE_SCHEMA_VERSION, G7_SKIP_EVIDENCE_DDL_SHA256, _utc_iso(applied_at)),
+        )
 
 
 class G7SkipEvidenceStore:
@@ -591,17 +726,9 @@ class G7SkipEvidenceStore:
         with _open_writable(self.db_path) as conn:
             for statement in _SCHEMA_STATEMENTS:
                 conn.execute(statement)
+            _migrate_schema(conn, applied_at=applied)
             for _, statement in _immutable_triggers():
                 conn.execute(statement)
-            existing = conn.execute(
-                "SELECT schema_version, ddl_sha256 FROM g7_skip_evidence_schema_meta"
-            ).fetchall()
-            if not existing:
-                conn.execute(
-                    "INSERT INTO g7_skip_evidence_schema_meta (schema_version, ddl_sha256, applied_at) "
-                    "VALUES (?, ?, ?)",
-                    (G7_SKIP_EVIDENCE_SCHEMA_VERSION, G7_SKIP_EVIDENCE_DDL_SHA256, _utc_iso(applied)),
-                )
             if not _schema_contract_matches(conn):
                 raise G7SkipEvidenceSchemaError("G7 skip evidence schema contract does not match")
         return True
@@ -638,10 +765,11 @@ class G7SkipEvidenceStore:
                     INSERT INTO g7_skip_evidence_records (
                         evidence_id, receipt_version, decision_key, payload_sha256, decision_at,
                         captured_at, lifecycle_id, venue, market_ticker, intended_side,
-                        market_family, ordered_failures_json, g7_failures_json, trade_blocked_reason,
+                        market_family, runtime_paper_cohort_id, runtime_paper_cohort_kind,
+                        ordered_failures_json, g7_failures_json, trade_blocked_reason,
                         g7_inputs_json, g7_results_json, liquidity_evidence_status,
                         execution_liquidity_json, diagnostic_only
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         record.evidence_id,
@@ -655,6 +783,8 @@ class G7SkipEvidenceStore:
                         record.market_ticker,
                         record.intended_side,
                         record.market_family,
+                        record.runtime_paper_cohort_id,
+                        record.runtime_paper_cohort_kind,
                         canonical_json(payload["ordered_failures"]),
                         canonical_json(payload["g7_failures"]),
                         record.trade_blocked_reason,
@@ -689,6 +819,8 @@ def _record_from_row(row: tuple[object, ...]) -> G7SkipEvidenceRecord:
         market_ticker,
         intended_side,
         market_family,
+        runtime_paper_cohort_id,
+        runtime_paper_cohort_kind,
         ordered_failures_json,
         g7_failures_json,
         trade_blocked_reason,
@@ -714,6 +846,12 @@ def _record_from_row(row: tuple[object, ...]) -> G7SkipEvidenceRecord:
             market_ticker=str(market_ticker),
             intended_side=None if intended_side is None else str(intended_side),
             market_family=None if market_family is None else str(market_family),
+            runtime_paper_cohort_id=(
+                None if runtime_paper_cohort_id is None else str(runtime_paper_cohort_id)
+            ),
+            runtime_paper_cohort_kind=(
+                None if runtime_paper_cohort_kind is None else str(runtime_paper_cohort_kind)
+            ),
             ordered_failures=json.loads(str(ordered_failures_json)),
             g7_failures=json.loads(str(g7_failures_json)),
             trade_blocked_reason=str(trade_blocked_reason),
@@ -734,7 +872,8 @@ def _record_from_row(row: tuple[object, ...]) -> G7SkipEvidenceRecord:
 _RECORD_SELECT = """
 SELECT evidence_id, receipt_version, decision_key, payload_sha256, decision_at,
        captured_at, lifecycle_id, venue, market_ticker, intended_side,
-       market_family, ordered_failures_json, g7_failures_json, trade_blocked_reason,
+       market_family, runtime_paper_cohort_id, runtime_paper_cohort_kind,
+       ordered_failures_json, g7_failures_json, trade_blocked_reason,
        g7_inputs_json, g7_results_json, liquidity_evidence_status,
        execution_liquidity_json, diagnostic_only
 FROM g7_skip_evidence_records

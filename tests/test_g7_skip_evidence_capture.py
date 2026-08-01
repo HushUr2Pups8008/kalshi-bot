@@ -92,6 +92,8 @@ def _envelope(
         market_family="KXG7",
         lifecycle_id="g7-lifecycle-1",
         decision_at=NOW,
+        runtime_paper_cohort_id="legacy-pending-20260729",
+        runtime_paper_cohort_kind="legacy_pending",
     )
 
 
@@ -182,3 +184,5 @@ async def test_capture_preserves_observed_executable_liquidity_metadata(
     }
     assert record.g7_inputs["minimum_market_liquidity_dollars"] > 0.0
     assert record.g7_results["ordered_failures"] == ["G7_zero_liquidity"]
+    assert record.runtime_paper_cohort_id == "legacy-pending-20260729"
+    assert record.runtime_paper_cohort_kind == "legacy_pending"

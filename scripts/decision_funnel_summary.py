@@ -385,6 +385,8 @@ def _same_window_lifecycle_attribution(
     ids_by_event: dict[str, set[str]] = {event_type: set() for event_type in _LIFECYCLE_ATTRIBUTION_EVENT_TYPES}
     skip_terminal_by_id: dict[str, set[str]] = {}
     skip_semantics_by_id: dict[str, set[str]] = {}
+    skip_reasons_by_id: dict[str, set[str]] = {}
+    skip_categories_by_id: dict[str, set[str]] = {}
     identity_by_id: dict[str, tuple[str, str, str]] = {}
     conflicted_lifecycle_ids: set[str] = set()
     identity_incomplete_lifecycle_ids: set[str] = set()
@@ -448,6 +450,12 @@ def _same_window_lifecycle_attribution(
         if event_type == "SKIPPED":
             skip_terminal_by_id.setdefault(lifecycle_id, set()).add(_skip_lifecycle_terminal(record))
             skip_semantics_by_id.setdefault(lifecycle_id, set()).add(_skip_semantic_key(record))
+            reason = _record_text(record, "reason")
+            if reason is not None:
+                skip_reasons_by_id.setdefault(lifecycle_id, set()).add(reason)
+            skip_category = _record_text(record, "skip_category")
+            if skip_category is not None:
+                skip_categories_by_id.setdefault(lifecycle_id, set()).add(skip_category)
         elif event_type in terminal_semantics_by_event_and_id:
             terminal_semantics_by_event_and_id[event_type].setdefault(lifecycle_id, set()).add(
                 _terminal_semantic_key(event_type, record)
@@ -560,9 +568,19 @@ def _same_window_lifecycle_attribution(
     else:
         paper_trade_lifecycle_status = "unavailable"
 
+    g7_skip_lifecycle_details = tuple(
+        {
+            "lifecycle_id": lifecycle_id,
+            "reasons": tuple(sorted(skip_reasons_by_id.get(lifecycle_id, ()))),
+            "skip_categories": tuple(sorted(skip_categories_by_id.get(lifecycle_id, ()))),
+        }
+        for lifecycle_id in sorted(g7_skip_ids)
+    )
+
     return {
         "opportunity_lifecycle_count": len(opportunity_ids),
         "g7_skip_lifecycle_count": len(g7_skip_ids),
+        "g7_skip_lifecycle_details": g7_skip_lifecycle_details,
         "zero_cap_skip_lifecycle_count": len(zero_cap_skip_ids),
         "other_skip_lifecycle_count": len(other_skip_ids),
         "pending_opportunity_lifecycle_count": len(
@@ -1438,6 +1456,10 @@ def summarize(
         for match_key in fresh_pass_keys_without_tracked_route_signal
     )
     stats["same_window_lifecycle_attribution"] = _same_window_lifecycle_attribution(lifecycle_records)
+    stats["g7_skip_lifecycle_details"] = stats["same_window_lifecycle_attribution"].get(
+        "g7_skip_lifecycle_details",
+        (),
+    )
 
     return stats
 
