@@ -122,6 +122,27 @@ class SpyG7SkipEvidenceCaptureSink:
             raise self.failure
 
 
+class SpySideCalibrationQuarantineCaptureSink:
+    def __init__(
+        self,
+        *,
+        result: object | None = None,
+        failure: BaseException | None = None,
+    ) -> None:
+        self.result = result or SimpleNamespace(
+            status="inserted",
+            disposition="candidate",
+        )
+        self.failure = failure
+        self.envelopes: list[object] = []
+
+    async def capture(self, envelope):  # noqa: ANN001
+        self.envelopes.append(envelope)
+        if self.failure is not None:
+            raise self.failure
+        return self.result
+
+
 class NonProcessControlCaptureFailure(BaseException):
     pass
 
@@ -486,6 +507,150 @@ async def test_prequeue_book_provenance_provider_absent_preserves_ready_candidat
 
 
 @pytest.mark.asyncio
+async def test_side_calibration_quarantine_sink_absent_preserves_baseline_enqueue():
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(),
+        logger=SpyLogger(),
+        is_paper_mode=True,
+        side_calibration_quarantine_sink=None,
+    )
+
+    result = await task.process_fast_lane_result(
+        _analysis(market=_market(liquidity_dollars=Decimal("1")))
+    )
+
+    assert result.enqueued is True
+    assert result.trade_blocked_reason is None
+    assert queue.qsize() == 1
+
+
+@pytest.mark.asyncio
+async def test_side_calibration_quarantine_complete_capture_is_terminal_nonadmitting():
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    sink = SpySideCalibrationQuarantineCaptureSink()
+    expected_book = PrequeueBookProvenanceResult(
+        status="available",
+        venue="kalshi",
+        requested_market_id="KXBLEND-1",
+        native_market_id="KXBLEND-1",
+        book_market_id="KXBLEND-1",
+        book_observed_at=datetime(2026, 4, 18, 12, tzinfo=UTC),
+        book_payload_hash="p" * 64,
+    )
+
+    async def provider(_analysis: SignalAnalysis) -> PrequeueBookProvenanceResult:
+        return expected_book
+
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(
+            dossier=_dossier(),
+            evidence=[
+                _evidence("ev-1", source_class="news"),
+                _evidence("ev-2", source_class="official"),
+            ],
+        ),
+        logger=SpyLogger(),
+        is_paper_mode=True,
+        prequeue_book_provenance_provider=provider,
+        side_calibration_quarantine_sink=sink,
+        now=lambda: datetime(2026, 4, 18, 12, tzinfo=UTC),
+    )
+
+    result = await task.process_fast_lane_result(
+        _analysis(
+            market=_market(liquidity_dollars=Decimal("1")),
+            signal_meta={"lifecycle_id": "lc-side-calibration"},
+        )
+    )
+
+    assert result.enqueued is False
+    assert result.candidate is None
+    assert result.trade_blocked_reason == "paper_side_calibration_unvalidated"
+    assert queue.empty()
+    assert len(sink.envelopes) == 1
+    envelope = sink.envelopes[0]
+    assert envelope.decision_at == datetime(2026, 4, 18, 12, tzinfo=UTC)
+    assert envelope.candidate.venue == "kalshi"
+    assert envelope.candidate.side == "yes"
+    assert envelope.evidence_ids == ("ev-1", "ev-2")
+    assert envelope.prequeue_book_provenance.as_metadata() == expected_book.as_metadata()
+
+
+@pytest.mark.asyncio
+async def test_side_calibration_quarantine_capture_failure_is_terminal_nonadmitting():
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    sink = SpySideCalibrationQuarantineCaptureSink(
+        result=SimpleNamespace(status="unscorable", disposition="unscorable"),
+    )
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(),
+        logger=SpyLogger(),
+        is_paper_mode=True,
+        side_calibration_quarantine_sink=sink,
+    )
+
+    result = await task.process_fast_lane_result(
+        _analysis(market=_market(liquidity_dollars=Decimal("1")))
+    )
+
+    assert result.enqueued is False
+    assert result.candidate is None
+    assert result.trade_blocked_reason == "paper_side_calibration_capture_failed"
+    assert queue.empty()
+    assert len(sink.envelopes) == 1
+
+
+@pytest.mark.asyncio
+async def test_side_calibration_quarantine_capture_error_is_terminal_nonadmitting():
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    sink = SpySideCalibrationQuarantineCaptureSink(failure=RuntimeError("store unavailable"))
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(),
+        logger=SpyLogger(),
+        is_paper_mode=True,
+        side_calibration_quarantine_sink=sink,
+    )
+
+    result = await task.process_fast_lane_result(
+        _analysis(market=_market(liquidity_dollars=Decimal("1")))
+    )
+
+    assert result.enqueued is False
+    assert result.candidate is None
+    assert result.trade_blocked_reason == "paper_side_calibration_capture_failed"
+    assert queue.empty()
+    assert len(sink.envelopes) == 1
+
+
+@pytest.mark.asyncio
+async def test_side_calibration_quarantine_capture_cancelled_is_terminal_nonadmitting():
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    sink = SpySideCalibrationQuarantineCaptureSink(failure=asyncio.CancelledError())
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(),
+        logger=SpyLogger(),
+        is_paper_mode=True,
+        side_calibration_quarantine_sink=sink,
+    )
+
+    result = await task.process_fast_lane_result(
+        _analysis(market=_market(liquidity_dollars=Decimal("1")))
+    )
+
+    assert result.enqueued is False
+    assert result.candidate is None
+    assert result.trade_blocked_reason == "paper_side_calibration_capture_failed"
+    assert queue.empty()
+    assert len(sink.envelopes) == 1
+
+
+@pytest.mark.asyncio
 async def test_prequeue_book_provenance_projects_result_only_on_ready_queued_candidate():
     queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
     calls: list[SignalAnalysis] = []
@@ -711,7 +876,10 @@ async def test_prequeue_book_provenance_uses_one_provider_for_concurrent_candida
     second_process = asyncio.create_task(task.process_fast_lane_result(second_analysis))
 
     await started.wait()
-    await asyncio.sleep(0)
+    for _ in range(20):
+        if sum(process.done() for process in (first_process, second_process)) == 1:
+            break
+        await asyncio.sleep(0)
 
     assert len(calls) == 1
     assert provider_loops == [loop]
