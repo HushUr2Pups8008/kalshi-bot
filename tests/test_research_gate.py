@@ -11681,3 +11681,779 @@ async def test_run_research_gate_fails_closed_when_counter_budget_is_exhausted(
     assert verdict.status == ResearchStatus.CONTINUE_RESEARCHING
     assert verdict.skip_reason == "research_timeout"
     assert verdict.research_timeout_stage == "counter_adjudication"
+
+def _strict_gdp_countercheck_market(**overrides):
+    payload = {
+        "ticker": "KXGDP-26JUL30-T2.0",
+        "title": "Will real GDP increase by more than 2.0% in Q2 2026?",
+        "rules_primary": (
+            "This market resolves Yes only if the BEA seasonally adjusted annual "
+            "rate (SAAR) of real GDP growth for Q2 2026 is greater than 2.0%."
+        ),
+        "rules_secondary": ("The BEA Advance Estimate for Q2 2026 is the settlement source."),
+        "contract_terms_url": "",
+        "settlement_sources": (),
+    }
+    payload.update(overrides)
+    return SimpleNamespace(**payload)
+
+
+def _verified_gdpnow_observation(
+    market,
+    *,
+    value: float = 1.1889,
+    source_class: str = "specialized_data",
+    source_name: str = "FRED GDPNow",
+    source_url: str = "https://fred.stlouisfed.org/series/GDPNOW",
+    title: str = "GDPNow forecast for Q2 2026",
+    snippet: str | None = None,
+    metric_unit: str = "percent_saar",
+    retrieved_at: str | None = None,
+    published_at: str | None = None,
+    contract_fingerprint: str | None = None,
+) -> ResearchEvidence:
+    observed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    if snippet is None:
+        snippet = f"Verified FRED GDPNow forecast for real GDP growth in Q2 2026 is {value}% SAAR."
+    return ResearchEvidence(
+        source_class=source_class,
+        source_name=source_name,
+        source_url=source_url,
+        title=title,
+        snippet=snippet,
+        claim_type="base_rate",
+        supports_direction="neutral",
+        supports_confidence=0.3,
+        published_at=published_at or observed_at,
+        retrieved_at=retrieved_at or observed_at,
+        metric_name="gdpnow_real_gdp_growth_saar",
+        metric_value=value,
+        metric_unit=metric_unit,
+        extraction_confidence=0.95,
+        contract_fingerprint=contract_fingerprint or _contract_fingerprint(market),
+    )
+
+
+def _gdp_countercheck_support(
+    market,
+    direction: str,
+) -> ResearchEvidence:
+    expectation = "clear" if direction == "yes" else "fall below"
+    observed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return ResearchEvidence(
+        source_class="reputable_secondary",
+        source_name="Reuters",
+        source_url=(f"https://www.reuters.com/markets/us/q2-2026-real-gdp-{direction}-case"),
+        title=f"Independent Q2 2026 real GDP {direction.upper()} case",
+        snippet=(
+            "Reuters independently reports that economists expect Q2 2026 real "
+            f"GDP growth to {expectation} the 2.0% threshold."
+        ),
+        claim_type="supporting",
+        supports_direction=direction,
+        supports_confidence=0.82,
+        retrieved_at=observed_at,
+        contract_fingerprint=_contract_fingerprint(market),
+    )
+
+
+def _gdp_countercheck_official_pending(market) -> ResearchEvidence:
+    observed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return ResearchEvidence(
+        source_class="official_primary",
+        source_name="BEA GDP data",
+        source_url=("https://www.bea.gov/data/gdp/gross-domestic-product#pending-2026-q2"),
+        title="BEA Q2 2026 Advance Estimate pending",
+        snippet="The official BEA Advance Estimate for Q2 2026 remains pending.",
+        claim_type="official_resolution",
+        supports_direction="neutral",
+        supports_confidence=0.0,
+        metric_name="economic_stat_data_pending",
+        metric_unit="period_status",
+        extraction_confidence=0.9,
+        retrieved_at=observed_at,
+        contract_fingerprint=_contract_fingerprint(market),
+    )
+
+
+def _gdp_counterchecks(verdict: ResearchVerdict) -> list[ResearchEvidence]:
+    return [
+        item
+        for item in verdict.evidence
+        if item.claim_type == "contradiction_check" and item.metric_name == "gdpnow_real_gdp_growth_saar"
+    ]
+
+
+def _gdp_countercheck_signature(item: ResearchEvidence) -> tuple[object, ...]:
+    return (
+        item.source_class,
+        item.source_name,
+        item.source_url,
+        item.title,
+        item.snippet,
+        item.claim_type,
+        item.supports_direction,
+        item.supports_confidence,
+        item.metric_name,
+        item.metric_value,
+        item.metric_unit,
+        item.extraction_confidence,
+        item.contract_fingerprint,
+    )
+
+
+def _derived_gdp_countercheck(
+    raw_observation: ResearchEvidence,
+) -> ResearchEvidence:
+    return replace(
+        raw_observation,
+        source_url=f"{raw_observation.source_url}#countercheck",
+        title="Derived GDPNow countercheck for Q2 2026",
+        snippet=(
+            "Derived countercheck: 1.1889% SAAR is below the strict 2.0% "
+            "Q2 2026 threshold."
+        ),
+        claim_type="contradiction_check",
+        supports_direction="no",
+        supports_confidence=0.95,
+    )
+
+
+async def _run_gdp_countercheck_case(
+    monkeypatch,
+    *,
+    market=None,
+    observation: ResearchEvidence | None = None,
+    provisional_side: str = "yes",
+    include_independent_support: bool = True,
+    yes_ask: float | None = 0.47,
+    no_ask: float | None = 0.54,
+    live_mode: bool = False,
+):
+    market = market or _strict_gdp_countercheck_market()
+    observation = observation or _verified_gdpnow_observation(market)
+    support = _gdp_countercheck_support(market, provisional_side)
+    official_pending = _gdp_countercheck_official_pending(market)
+    seen_queries: list[ResearchQuery] = []
+    initial_query_texts = {
+        query.query
+        for query in research_gate_module._select_research_queries(
+            build_research_queries(
+                SimpleNamespace(
+                    headline="Q2 2026 real GDP outlook",
+                    source="Reuters",
+                ),
+                market,
+            ),
+            max_queries=7,
+            require_decision_grade=True,
+        )
+    }
+    side_aware_calls = 0
+    original_side_aware_counter_query = research_gate_module._side_aware_counter_query
+
+    def count_side_aware_counter_query(*args, **kwargs):
+        nonlocal side_aware_calls
+        side_aware_calls += 1
+        return original_side_aware_counter_query(*args, **kwargs)
+
+    monkeypatch.setattr(
+        research_gate_module,
+        "_side_aware_counter_query",
+        count_side_aware_counter_query,
+    )
+    # Hold the adjudicated provisional side fixed so the countercheck contract,
+    # rather than the legacy raw GDPNow normalizer, decides whether to enrich.
+    monkeypatch.setattr(
+        research_gate_module,
+        "_deterministic_decision_signal",
+        lambda *_args, **_kwargs: None,
+    )
+    adjudicator_calls = 0
+
+    async def search_provider(query: ResearchQuery):
+        seen_queries.append(query)
+        if query.query_intent == "base_rate":
+            return [observation]
+        if query.query_intent == "supporting" and include_independent_support:
+            return [support]
+        if query.query_intent == "official_resolution":
+            return [official_pending]
+        return []
+
+    async def adjudicator(**_kwargs):
+        nonlocal adjudicator_calls
+        adjudicator_calls += 1
+        return {
+            "direction": provisional_side,
+            "estimated_probability_yes": (0.70 if provisional_side == "yes" else 0.30),
+            "confidence": 0.82 if provisional_side in {"yes", "no"} else 0.0,
+            "reason": (
+                f"Independent contract-relevant reporting supports the provisional {provisional_side.upper()} case."
+            ),
+        }
+
+    verdict = await run_research_gate(
+        SimpleNamespace(
+            headline="Q2 2026 real GDP outlook",
+            source="Reuters",
+        ),
+        market,
+        model_direction=provisional_side,
+        model_confidence=0.82 if provisional_side in {"yes", "no"} else 0.0,
+        model_reason=f"Provisional {provisional_side.upper()} case.",
+        yes_ask=yes_ask,
+        no_ask=no_ask,
+        live_mode=live_mode,
+        search_provider=search_provider,
+        direct_fetcher=lambda *_args, **_kwargs: None,
+        adjudicator=adjudicator,
+        max_queries=7,
+        require_decision_grade=True,
+    )
+    seed_evidence = [observation, official_pending]
+    if include_independent_support:
+        seed_evidence.append(support)
+    return SimpleNamespace(
+        verdict=verdict,
+        seed_evidence=seed_evidence,
+        seen_queries=seen_queries,
+        initial_query_texts=initial_query_texts,
+        adjudicator_calls=adjudicator_calls,
+        side_aware_calls=side_aware_calls,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provisional_side", "gdpnow_value", "expected_counter_side"),
+    [
+        pytest.param("yes", 1.1889, "no", id="yes-below-threshold"),
+        pytest.param("no", 3.2, "yes", id="no-above-threshold"),
+    ],
+)
+async def test_gdpnow_countercheck_derives_only_strict_opposite_evidence(
+    monkeypatch,
+    provisional_side,
+    gdpnow_value,
+    expected_counter_side,
+):
+    market = _strict_gdp_countercheck_market()
+    raw_observation = _verified_gdpnow_observation(
+        market,
+        value=gdpnow_value,
+    )
+    result = await _run_gdp_countercheck_case(
+        monkeypatch,
+        market=market,
+        observation=raw_observation,
+        provisional_side=provisional_side,
+    )
+
+    raw = [
+        item
+        for item in result.verdict.evidence
+        if item.source_url == raw_observation.source_url and item.claim_type == "base_rate"
+    ]
+    assert len(raw) == 1
+    assert raw[0] == raw_observation
+
+    derived = _gdp_counterchecks(result.verdict)
+    assert len(derived) == 1
+    countercheck = derived[0]
+    assert countercheck.supports_direction == expected_counter_side
+    assert countercheck.metric_value == pytest.approx(gdpnow_value)
+    assert countercheck.metric_unit == "percent_saar"
+    assert countercheck.contract_fingerprint == _contract_fingerprint(market)
+
+    assert len(result.verdict.evidence) == len(result.seed_evidence) + 1
+    assert {item for item in result.verdict.evidence if item.claim_type != "contradiction_check"} == set(
+        result.seed_evidence
+    )
+    assert result.side_aware_calls == 0
+    assert result.adjudicator_calls == 1
+    assert {query.query for query in result.seen_queries} <= result.initial_query_texts
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    (
+        "market_overrides",
+        "observation_overrides",
+        "provisional_side",
+        "include_independent_support",
+        "yes_ask",
+        "no_ask",
+        "timestamp_case",
+    ),
+    [
+        pytest.param({}, {"value": 2.0}, "yes", True, 0.47, 0.54, None, id="equality"),
+        pytest.param({}, {}, "no", True, 0.47, 0.54, None, id="matching-direction"),
+        pytest.param({}, {}, "neutral", True, 0.47, 0.54, None, id="unavailable-side"),
+        pytest.param({}, {}, "yes", False, 0.47, 0.54, None, id="no-independent-support"),
+        pytest.param({}, {}, "yes", True, None, None, None, id="missing-price"),
+        pytest.param({}, {}, "yes", True, 0.90, 0.54, None, id="no-positive-edge"),
+        pytest.param(
+            {
+                "title": "Will real GDP increase by at least 2.0% in Q2 2026?",
+                "rules_primary": ("This market resolves Yes if Q2 2026 real GDP SAAR is at least 2.0%."),
+            },
+            {},
+            "yes",
+            True,
+            0.47,
+            0.54,
+            None,
+            id="at-least",
+        ),
+        pytest.param(
+            {
+                "title": "Will real GDP increase by less than 2.0% in Q2 2026?",
+                "rules_primary": ("This market resolves Yes if Q2 2026 real GDP SAAR is less than 2.0%."),
+            },
+            {},
+            "yes",
+            True,
+            0.47,
+            0.54,
+            None,
+            id="less-than",
+        ),
+        pytest.param(
+            {
+                "title": ("Will Q2 2026 real GDP growth fall in the 1.0% to 2.0% bucket?"),
+                "rules_primary": (
+                    "This market resolves based on whether Q2 2026 real GDP SAAR is between 1.0% and 2.0%."
+                ),
+            },
+            {},
+            "yes",
+            True,
+            0.47,
+            0.54,
+            None,
+            id="range-bucket",
+        ),
+        pytest.param(
+            {
+                "title": "Will the economic market resolve Yes?",
+                "rules_primary": "The published settlement measurement resolves the market.",
+                "rules_secondary": "",
+            },
+            {},
+            "yes",
+            True,
+            0.47,
+            0.54,
+            None,
+            id="ticker-only",
+        ),
+        pytest.param(
+            {
+                "title": "Will real GDP increase by more than 2.0%?",
+                "rules_primary": ("This market resolves Yes only if real GDP SAAR is greater than 2.0%."),
+                "rules_secondary": "The BEA Advance Estimate is the settlement source.",
+            },
+            {},
+            "yes",
+            True,
+            0.47,
+            0.54,
+            None,
+            id="missing-quarter-year",
+        ),
+        pytest.param(
+            {
+                "rules_primary": ("This market resolves Yes only if Q2 2026 real GDP SAAR is greater than 3.0%."),
+            },
+            {},
+            "yes",
+            True,
+            0.47,
+            0.54,
+            None,
+            id="conflicting-threshold-text",
+        ),
+        pytest.param(
+            {},
+            {"metric_unit": "percent_change"},
+            "yes",
+            True,
+            0.47,
+            0.54,
+            None,
+            id="wrong-unit",
+        ),
+        pytest.param(
+            {},
+            {"value": float("nan")},
+            "yes",
+            True,
+            0.47,
+            0.54,
+            None,
+            id="nonfinite-nan",
+        ),
+        pytest.param(
+            {},
+            {"value": float("inf")},
+            "yes",
+            True,
+            0.47,
+            0.54,
+            None,
+            id="nonfinite-infinity",
+        ),
+        pytest.param({}, {}, "yes", True, 0.47, 0.54, "stale", id="stale-time"),
+        pytest.param({}, {}, "yes", True, 0.47, 0.54, "future", id="future-time"),
+        pytest.param(
+            {},
+            {
+                "title": "GDPNow forecast for Q1 2026",
+                "snippet": ("Verified FRED GDPNow forecast for real GDP growth in Q1 2026 is 1.1889% SAAR."),
+            },
+            "yes",
+            True,
+            0.47,
+            0.54,
+            None,
+            id="wrong-source-period",
+        ),
+        pytest.param(
+            {},
+            {"source_url": "https://spoof.invalid/series/GDPNOW"},
+            "yes",
+            True,
+            0.47,
+            0.54,
+            None,
+            id="spoofed-provenance",
+        ),
+    ],
+)
+async def test_gdpnow_countercheck_rejects_ambiguous_or_untrusted_inputs(
+    monkeypatch,
+    market_overrides,
+    observation_overrides,
+    provisional_side,
+    include_independent_support,
+    yes_ask,
+    no_ask,
+    timestamp_case,
+):
+    market = _strict_gdp_countercheck_market(**market_overrides)
+    raw_observation = _verified_gdpnow_observation(
+        market,
+        **observation_overrides,
+    )
+    if timestamp_case:
+        offset = -timedelta(days=365) if timestamp_case == "stale" else timedelta(days=365)
+        timestamp = (datetime.now(timezone.utc) + offset).isoformat().replace("+00:00", "Z")
+        raw_observation = replace(
+            raw_observation,
+            published_at=timestamp,
+            retrieved_at=timestamp,
+        )
+
+    result = await _run_gdp_countercheck_case(
+        monkeypatch,
+        market=market,
+        observation=raw_observation,
+        provisional_side=provisional_side,
+        include_independent_support=include_independent_support,
+        yes_ask=yes_ask,
+        no_ask=no_ask,
+    )
+
+    assert _gdp_counterchecks(result.verdict) == []
+
+
+@pytest.mark.asyncio
+async def test_gdpnow_countercheck_is_idempotent_across_repeated_current_runs(
+    monkeypatch,
+):
+    market = _strict_gdp_countercheck_market()
+    first = await _run_gdp_countercheck_case(
+        monkeypatch,
+        market=market,
+        observation=_verified_gdpnow_observation(market),
+    )
+    second = await _run_gdp_countercheck_case(
+        monkeypatch,
+        market=market,
+        observation=_verified_gdpnow_observation(market),
+    )
+
+    first_counterchecks = _gdp_counterchecks(first.verdict)
+    second_counterchecks = _gdp_counterchecks(second.verdict)
+    assert len(first_counterchecks) == 1
+    assert len(second_counterchecks) == 1
+    assert _gdp_countercheck_signature(first_counterchecks[0]) == _gdp_countercheck_signature(second_counterchecks[0])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cached_fingerprint",
+    [
+        pytest.param("missing", id="missing-fingerprint-and-current-context"),
+        pytest.param("wrong", id="wrong-fingerprint"),
+        pytest.param("matching", id="matching-fingerprint-without-current-context"),
+    ],
+)
+async def test_gdpnow_countercheck_does_not_synthesize_from_raw_cached_evidence(
+    tmp_path,
+    cached_fingerprint,
+):
+    market = _strict_gdp_countercheck_market()
+    raw_observation = _verified_gdpnow_observation(market)
+    if cached_fingerprint == "missing":
+        raw_observation = replace(raw_observation, contract_fingerprint=None)
+    elif cached_fingerprint == "wrong":
+        raw_observation = replace(
+            raw_observation,
+            contract_fingerprint="other-contract-fingerprint",
+        )
+    support = _gdp_countercheck_support(market, "yes")
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    await store.record_research_run(
+        market.ticker,
+        "gdpnow-raw-cache",
+        trigger_headline="Q2 2026 real GDP outlook",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Raw cached GDPNow evidence only.",
+        verdict_status=ResearchStatus.TRADE_CANDIDATE.value,
+        force_side="yes",
+        estimated_probability=0.70,
+        confidence=0.82,
+        contract_fingerprint=_contract_fingerprint(market),
+        market_price=0.47,
+        estimated_edge=0.23,
+        evidence=[raw_observation, support],
+        queries=[
+            ResearchQuery(
+                query="FRED GDPNow Q2 2026 real GDP",
+                query_intent="base_rate",
+                source_class="specialized_data",
+            ),
+            ResearchQuery(
+                query="Q2 2026 real GDP countercase",
+                query_intent="disconfirming",
+                source_class="reputable_secondary",
+            ),
+        ],
+    )
+    provider_calls = 0
+
+    async def search_provider(_query):
+        nonlocal provider_calls
+        provider_calls += 1
+        raise AssertionError("cache-only replay must not issue a provider query")
+
+    async def adjudicator(**_kwargs):
+        return {
+            "direction": "yes",
+            "estimated_probability_yes": 0.70,
+            "confidence": 0.82,
+            "reason": "Cached evidence remains provisional.",
+        }
+
+    verdict = await run_research_gate(
+        SimpleNamespace(
+            headline="Q2 2026 real GDP outlook",
+            source="research_prewarm",
+        ),
+        market,
+        model_direction="yes",
+        model_confidence=0.82,
+        model_reason="Cached provisional YES case.",
+        yes_ask=0.47,
+        no_ask=0.54,
+        live_mode=False,
+        search_provider=search_provider,
+        adjudicator=adjudicator,
+        dossier_store=store,
+        cache_only=True,
+        require_decision_grade=True,
+    )
+
+    assert provider_calls == 0
+    assert verdict.skip_reason != "cached_dossier_unvetted"
+    assert _gdp_counterchecks(verdict) == []
+
+
+@pytest.mark.asyncio
+async def test_gdpnow_countercheck_replays_one_persisted_derived_record(
+    tmp_path,
+):
+    market = _strict_gdp_countercheck_market()
+    raw_observation = _verified_gdpnow_observation(market)
+    support = _gdp_countercheck_support(market, "yes")
+    stored_countercheck = _derived_gdp_countercheck(raw_observation)
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    await store.record_research_run(
+        market.ticker,
+        "gdpnow-derived-cache",
+        trigger_headline="Q2 2026 real GDP outlook",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="One persisted GDPNow countercheck.",
+        verdict_status=ResearchStatus.TRADE_CANDIDATE.value,
+        force_side="yes",
+        estimated_probability=0.70,
+        confidence=0.82,
+        contract_fingerprint=_contract_fingerprint(market),
+        market_price=0.47,
+        estimated_edge=0.23,
+        evidence=[raw_observation, support, stored_countercheck],
+        queries=[
+            ResearchQuery(
+                query="FRED GDPNow Q2 2026 real GDP",
+                query_intent="base_rate",
+                source_class="specialized_data",
+            ),
+            ResearchQuery(
+                query="Q2 2026 real GDP countercase",
+                query_intent="disconfirming",
+                source_class="reputable_secondary",
+            ),
+        ],
+    )
+
+    stored = await store.get_recent_evidence(market.ticker)
+    stored_counterchecks = [item for item in stored if item.claim_type == "contradiction_check"]
+    assert len(stored_counterchecks) == 1
+    assert _gdp_countercheck_signature(stored_counterchecks[0]) == _gdp_countercheck_signature(stored_countercheck)
+
+    async def search_provider(_query):
+        raise AssertionError("cache-only replay must not issue a provider query")
+
+    async def adjudicator(**_kwargs):
+        return {
+            "direction": "yes",
+            "estimated_probability_yes": 0.70,
+            "confidence": 0.82,
+            "reason": "Cached evidence remains provisional.",
+        }
+
+    verdict = await run_research_gate(
+        SimpleNamespace(
+            headline="Q2 2026 real GDP outlook",
+            source="research_prewarm",
+        ),
+        market,
+        model_direction="yes",
+        model_confidence=0.82,
+        model_reason="Cached provisional YES case.",
+        yes_ask=0.47,
+        no_ask=0.54,
+        live_mode=False,
+        search_provider=search_provider,
+        adjudicator=adjudicator,
+        dossier_store=store,
+        cache_only=True,
+        require_decision_grade=True,
+    )
+
+    assert verdict.skip_reason != "cached_dossier_unvetted"
+    replayed_counterchecks = _gdp_counterchecks(verdict)
+    assert len(replayed_counterchecks) == 1
+    assert _gdp_countercheck_signature(replayed_counterchecks[0]) == _gdp_countercheck_signature(stored_countercheck)
+
+
+@pytest.mark.asyncio
+async def test_gdpnow_countercheck_is_disabled_for_live_mode(monkeypatch):
+    market = _strict_gdp_countercheck_market()
+    result = await _run_gdp_countercheck_case(
+        monkeypatch,
+        market=market,
+        observation=_verified_gdpnow_observation(market),
+        live_mode=True,
+    )
+
+    assert _gdp_counterchecks(result.verdict) == []
+
+
+@pytest.mark.asyncio
+async def test_gdpnow_countercheck_live_mode_rejects_replayed_derived_evidence(
+    tmp_path,
+    monkeypatch,
+):
+    market = _strict_gdp_countercheck_market()
+    raw_observation = _verified_gdpnow_observation(market)
+    support = _gdp_countercheck_support(market, "yes")
+    stored_countercheck = _derived_gdp_countercheck(raw_observation)
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    await store.record_research_run(
+        market.ticker,
+        "gdpnow-live-derived-cache",
+        trigger_headline="Q2 2026 real GDP outlook",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="One persisted GDPNow countercheck.",
+        verdict_status=ResearchStatus.TRADE_CANDIDATE.value,
+        force_side="yes",
+        estimated_probability=0.70,
+        confidence=0.82,
+        contract_fingerprint=_contract_fingerprint(market),
+        market_price=0.47,
+        estimated_edge=0.23,
+        evidence=[raw_observation, support, stored_countercheck],
+        queries=[
+            ResearchQuery(
+                query="FRED GDPNow Q2 2026 real GDP",
+                query_intent="base_rate",
+                source_class="specialized_data",
+            ),
+            ResearchQuery(
+                query="Q2 2026 real GDP countercase",
+                query_intent="disconfirming",
+                source_class="reputable_secondary",
+            ),
+        ],
+    )
+    monkeypatch.setattr(
+        research_gate_module,
+        "_deterministic_decision_signal",
+        lambda *_args, **_kwargs: None,
+    )
+
+    async def search_provider(_query):
+        raise AssertionError("cache-only replay must not issue a provider query")
+
+    async def adjudicator(**_kwargs):
+        return {
+            "direction": "yes",
+            "estimated_probability_yes": 0.70,
+            "confidence": 0.82,
+            "reason": "Cached evidence remains provisional.",
+        }
+
+    verdict = await run_research_gate(
+        SimpleNamespace(
+            headline="Q2 2026 real GDP outlook",
+            source="research_prewarm",
+        ),
+        market,
+        model_direction="yes",
+        model_confidence=0.82,
+        model_reason="Cached provisional YES case.",
+        yes_ask=0.47,
+        no_ask=0.54,
+        live_mode=True,
+        search_provider=search_provider,
+        adjudicator=adjudicator,
+        dossier_store=store,
+        cache_only=True,
+        require_decision_grade=True,
+    )
+
+    assert verdict.skip_reason != "cached_dossier_unvetted"
+    assert verdict.force_side is None
+    assert verdict.status not in {
+        ResearchStatus.TRADE_CANDIDATE,
+        ResearchStatus.DECISION_GRADE_CANDIDATE,
+    }
