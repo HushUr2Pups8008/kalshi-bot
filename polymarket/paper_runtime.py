@@ -32,6 +32,7 @@ from config import (
 )
 from feeds import NewsItem
 from polymarket.candidate_adapter import adapt_polymarket_analysis
+from polymarket.horizon_selection import select_polymarket_horizon_band
 from polymarket.models import PolymarketMarket
 from polymarket.public_client import PolymarketPublicClient
 from trading.fees import INITIAL_ORDER_FEE_ACCUMULATOR
@@ -1513,23 +1514,18 @@ def _horizon_shadow_market_sets(
     shadow_horizon_end_days: float,
 ) -> tuple[list[PolymarketMarket], list[PolymarketMarket]]:
     """Return current admission candidates and the disjoint next horizon band."""
-    production: list[PolymarketMarket] = []
-    shadow: list[PolymarketMarket] = []
-    for market in markets:
-        if not _is_pre_admission_matchable_market(market):
-            continue
-        if _is_within_admission_horizon(
-            market,
-            now=now,
-            admission_horizon_days=production_horizon_days,
-        ):
-            production.append(market)
-        elif _is_within_admission_horizon(
-            market,
-            now=now,
-            admission_horizon_days=shadow_horizon_end_days,
-        ):
-            shadow.append(market)
+    production = select_polymarket_horizon_band(
+        markets,
+        now=now,
+        lower_exclusive_days=0.0,
+        upper_inclusive_days=production_horizon_days,
+    )
+    shadow = select_polymarket_horizon_band(
+        markets,
+        now=now,
+        lower_exclusive_days=production_horizon_days,
+        upper_inclusive_days=shadow_horizon_end_days,
+    )
     return production, shadow
 
 
