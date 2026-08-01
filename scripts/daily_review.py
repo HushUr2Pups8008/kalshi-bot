@@ -38,6 +38,7 @@ from scripts import paper_performance_drilldown
 from scripts import since_restart_money_path
 from scripts import signal_edge_diagnostics
 from scripts import source_scorecard
+from scripts.observability import paper_trade_journal_reconcile
 from scripts.runtime_paper_cohort_scope import (
     RuntimePaperCohortScopeError,
     derive_runtime_paper_cohort_db_path,
@@ -1446,6 +1447,26 @@ def _build_daily_review_from_paths(
             mark_provider=mark_provider,
             as_of=mark_as_of,
         )
+    try:
+        with stage_timer("paper trade journal parity", enabled=show_profile):
+            paper_trade_journal_parity = paper_trade_journal_reconcile.reconcile_paper_trade_journal(
+                trade_log_root=display_trades_path or trades_path,
+                paper_db_path=paper_db_path,
+                repo_root=REPO_ROOT,
+                runtime_paper_cohort_id=runtime_paper_cohort_id,
+                runtime_paper_cohort_kind=runtime_paper_cohort_kind,
+                since=since,
+                until=until,
+            )
+        paper_trade_journal_parity_lines = (
+            paper_trade_journal_reconcile.format_daily_review_parity_lines(
+                paper_trade_journal_parity
+            )
+        )
+    except Exception as exc:  # Reporting must surface an unavailable trust control, not abort.
+        paper_trade_journal_parity_lines = (
+            paper_trade_journal_reconcile.format_daily_review_parity_error_lines(exc)
+        )
     with stage_timer("matcher weight status", enabled=show_profile):
         matcher_weight_status = _matcher_weight_runtime_status()
     with stage_timer("match suppression audit", enabled=show_profile):
@@ -1549,6 +1570,7 @@ def _build_daily_review_from_paths(
             "all structured-log readers and paper DB are lineage-filtered"
         )
         lines.append("System health and gate state      : global runtime state; not cohort P&L")
+    lines.extend(paper_trade_journal_parity_lines)
     if since or until:
         since_text = since.date().isoformat() if since else "(beginning)"
         until_text = until.date().isoformat() if until else "(latest)"
