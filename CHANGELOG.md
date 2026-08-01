@@ -19,6 +19,37 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.39] - 2026-07-31
+
+### Added
+
+- **Runtime-owned OOS corpus materialization.** The replay materializer now
+  takes its source only from the current launchd-attested paper cohort, creates
+  a private SQLite backup, verifies exact fee-net parent linkage, and accepts
+  only protected registrations. It binds the receipt hash to one safe read and
+  rejects stale or PID-reused runtime receipts.
+- **Durable pending-edge attribution.** Research runs and dossier snapshots
+  now retain whether an `official_data_pending` result originated from
+  `no_edge` or `negative_net_edge_after_costs`, with a backward-compatible
+  SQLite migration. This is diagnostic-only and does not change research or
+  trade admission.
+
+### Changed
+
+- **Fee-net canonical settlement delivery.** Exact typed evidence now produces
+  one durable fee-net settlement event whose generic cost and P&L fields are
+  net of entry, settlement, and refund fees. Outbox consumers, bankroll
+  conservation, reporting, and delivery completion use the same net values.
+  The typed API remains unwired and fail-closed without valid evidence; startup
+  fee-net accounting remains disabled.
+
+### Verification
+
+- `CI=1 .venv/bin/python -m pytest -q tests/test_materialize_runtime_corpus.py tests/test_build_corpus.py tests/test_runtime_paper_cohort_attestation.py tests/test_paper_canonical_settlement.py tests/test_settlement_outbox_task.py tests/test_paper_accounting.py tests/test_settlement_economics.py tests/test_research_gate.py tests/test_research_prewarm_task.py tests/test_research_paper_admission.py tests/test_profit_evidence_report.py tests/test_performance_analysis_settlement_scope.py tests/test_paper_performance_drilldown.py tests/test_source_scorecard.py tests/test_daily_review.py tests/test_research_profit_validation_loop.py`
+- `CI=1 .venv/bin/python -m pytest -q tests/test_research_dossier.py tests/test_research_gate.py tests/test_research_prewarm_task.py tests/test_research_paper_admission.py tests/test_research_profit_validation_loop.py`
+- Independent review covered fee-net accounting and outbox delivery, runtime
+  corpus receipt/process binding, and pending-origin persistence/migration.
+
 ## [0.33.38] - 2026-08-01
 
 ### Added
