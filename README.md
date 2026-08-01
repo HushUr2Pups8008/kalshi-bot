@@ -1,6 +1,6 @@
 # kalshi-bot
 
-[![Version](https://img.shields.io/badge/version-0.33.39-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.33.40-blue)](CHANGELOG.md)
 [![Mode](https://img.shields.io/badge/default-paper%20trading-orange)](.env.example)
 
 Automated Kalshi paper-trading research bot for geopolitical and US-political
@@ -14,7 +14,7 @@ configuration, paper-readiness evidence, and operator approval.
 
 ## Current State
 
-As of `v0.33.39`:
+As of `v0.33.40`:
 
 - Runtime host: Mac Studio via macOS `launchd`.
 - Default mode: paper trading.
@@ -26,7 +26,7 @@ As of `v0.33.39`:
 - Current readiness posture: the bot can reach the paper-trade path, but live
   readiness remains blocked by a structurally small edge surface and low
   realized opportunity throughput. The next readout is opportunity/day over the
-  `v0.33.39` soak.
+  `v0.33.40` soak.
 
 Canonical project tracking lives in
 [docs/profit_path_debt_log.md](docs/profit_path_debt_log.md). Do not create new

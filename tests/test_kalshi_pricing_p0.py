@@ -79,6 +79,74 @@ def test_p0_market_007_valid_yes_no_bidask_invariant_holds():
     assert m.is_tradeable() is True
 
 
+@pytest.mark.parametrize(
+    "price_fields",
+    [
+        {
+            "yes_bid_cents": 0,
+            "yes_ask_cents": 0,
+            "no_bid_cents": 58,
+            "no_ask_cents": 62,
+        },
+        {
+            "yes_bid_cents": 38,
+            "yes_ask_cents": 40,
+            "no_bid_cents": 0,
+            "no_ask_cents": 0,
+        },
+        {
+            "yes_bid_cents": 98,
+            "yes_ask_cents": 100,
+            "no_bid_cents": 0,
+            "no_ask_cents": 2,
+        },
+        {
+            "yes_bid_cents": 0,
+            "yes_ask_cents": 2,
+            "no_bid_cents": 98,
+            "no_ask_cents": 100,
+        },
+    ],
+    ids=["zero_yes_ask", "zero_no_ask", "hundred_yes_ask", "hundred_no_ask"],
+)
+def test_p0_market_non_executable_ask_is_not_tradeable(price_fields):
+    """A zero or 100-cent ask cannot be sent to the opportunity pipeline."""
+    assert _make_post_p0_market(**price_fields).is_tradeable() is False
+
+
+@pytest.mark.parametrize(
+    ("accessor", "price_fields"),
+    [
+        (
+            "executable_yes_price",
+            {
+                "yes_bid_cents": 0,
+                "yes_ask_cents": 0,
+                "no_bid_cents": 58,
+                "no_ask_cents": 62,
+            },
+        ),
+        (
+            "executable_no_price",
+            {
+                "yes_bid_cents": 0,
+                "yes_ask_cents": 2,
+                "no_bid_cents": 98,
+                "no_ask_cents": 100,
+            },
+        ),
+    ],
+)
+def test_p0_market_non_executable_ask_blocks_executable_price_accessor(
+    accessor,
+    price_fields,
+):
+    market = _make_post_p0_market(**price_fields)
+
+    with pytest.raises(ValueError, match="not executable"):
+        getattr(market, accessor)()
+
+
 # ---------------------------------------------------------------------------
 # P0-MARKET-008 — unavailable price short-circuits, no 50 fallback (CR-C)
 # ---------------------------------------------------------------------------
@@ -108,12 +176,12 @@ def test_p0_market_008_price_unavailable_blocks_executable_price():
 # ---------------------------------------------------------------------------
 
 def test_p0_side_009_side_selector_picks_yes_when_yes_edge_dominant():
-    """yes_edge = 0.58 - 0.38 = +0.20; no_edge = 0.42 - 0.65 = -0.23. YES wins."""
+    """yes_edge = 0.58 - 0.38 = +0.20; no_edge = 0.42 - 0.64 = -0.22. YES wins."""
     from analysis.side_selection import select_side  # type: ignore[import-not-found]
 
     m = _make_post_p0_market(
         yes_bid_cents=36, yes_ask_cents=38,
-        no_bid_cents=60, no_ask_cents=65,
+        no_bid_cents=60, no_ask_cents=64,
     )
     side, executable_cents = select_side(m, blended_yes_prob=0.58)
     assert side == "yes"
@@ -140,6 +208,21 @@ def test_p0_side_010_side_selector_picks_no_when_no_edge_dominant():
         f"expected NO executable ask 30¢, got {executable_cents}. "
         "Anything other than 30 (especially 28) indicates legacy midpoint logic."
     )
+
+
+def test_p0_side_selector_rejects_non_executable_market():
+    """Direct callers share the main-path executable-price invariant."""
+    from analysis.side_selection import select_side  # type: ignore[import-not-found]
+
+    market = _make_post_p0_market(
+        yes_bid_cents=0,
+        yes_ask_cents=0,
+        no_bid_cents=58,
+        no_ask_cents=62,
+    )
+
+    with pytest.raises(ValueError, match="market_not_tradeable"):
+        select_side(market, blended_yes_prob=0.80)
 
 
 # ---------------------------------------------------------------------------

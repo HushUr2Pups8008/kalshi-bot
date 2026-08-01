@@ -66,12 +66,13 @@ def select_side(
     ``"no"`` and ``executable_cents`` is the chosen side's ask.
 
     Fail-closed:
-      - raises ``ValueError("market_not_tradeable: ...")`` when the market
-        is not tradeable (``price_available=False`` or any cents field
-        missing).
+       - raises ``ValueError("market_not_tradeable: ...")`` when the market
+         is not tradeable (unavailable, missing, or non-executable prices).
       - raises ``ValueError("no_positive_edge: ...")`` when neither side
         has positive edge.
     """
+    if not market.is_tradeable():
+        raise ValueError(f"market_not_tradeable: ticker={market.ticker!r}")
     edges = compute_edge(market, blended_yes_prob)
     if edges.yes_edge <= 0 and edges.no_edge <= 0:
         raise ValueError(
