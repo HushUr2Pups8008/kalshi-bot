@@ -10,10 +10,32 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Mapping, Sequence
+
+from scripts.reconcile_legacy_paper_receipts import (
+    LegacyReceiptReconciliationError,
+    _capture_plain_file_identity,
+    _require_absolute_path_without_symlinks,
+    _require_expected_hash,
+    _require_quiescent_sqlite_artifacts,
+    _sha256_file,
+)
+from trading.paper_cohorts import (
+    LEGACY_PENDING_BASELINE_COHORT_ID,
+    discover_legacy_pending_paper_risk_cohorts,
+    legacy_open_exposure_fingerprint,
+    validate_legacy_pending_paper_cohort_manifest,
+)
+from trading.settlement_store import (
+    _LEGACY_RECEIPT_APPLICATION_TABLE,
+    _validate_existing_legacy_receipt_application,
+    LegacyReceiptApplicationError,
+    SettlementStore,
+)
 
 
 FINALIZATION_PLAN_SCHEMA_VERSION = 1
@@ -653,6 +675,307 @@ def _require_operator_confirmation(
     if text != expected:
         raise ValueError("finalization certificate operator_confirmation is invalid")
     return text
+
+
+def plan_legacy_pending_finalization(
+    *,
+    db_path: Path | str,
+    pending_root: Path | str,
+    finalization_id: str,
+    expected_root_sha256: str,
+    expected_pending_manifest_sha256s: Sequence[str],
+    expected_legacy_snapshot_sha256: str,
+    expected_baseline_open_rows_sha256: str,
+    expected_baseline_trade_ids: Sequence[str],
+) -> SealedLegacyPendingFinalizationPlan:
+    archive_target = LegacyPendingArchiveTarget(
+        archived_root_relative_to_storage_root=(
+            f"finalized_legacy_pending_paper_cohorts/{_require_finalization_id(finalization_id)}"
+        )
+    )
+    root_path = _require_read_only_sqlite_path(
+        db_path,
+        label="legacy root",
+        expected_sha256=expected_root_sha256,
+    )
+    pending_root_path = _require_directory_without_symlinks(
+        pending_root,
+        label="legacy pending root",
+    )
+    cohorts = discover_legacy_pending_paper_risk_cohorts(root_path.parent)
+    if len(cohorts) < 2 or cohorts[0].cohort_id != LEGACY_PENDING_BASELINE_COHORT_ID:
+        raise ValueError("legacy pending family is invalid")
+    if pending_root_path != root_path.parent / "legacy_pending_paper_cohorts":
+        raise ValueError("legacy pending root is invalid")
+
+    validated_bindings = tuple(
+        validate_legacy_pending_paper_cohort_manifest(
+            cohort,
+            max_days_to_close=_manifest_max_days_to_close(cohort),
+            legacy_db_path=root_path,
+            legacy_starting_bankroll=None,
+        )
+        for cohort in cohorts[1:]
+    )
+    if not validated_bindings:
+        raise ValueError("legacy pending family is invalid")
+    _require_shared_pending_binding_agreement(validated_bindings)
+
+    actual_manifest_sha256s = tuple(
+        sorted(binding.manifest_sha256 for binding in validated_bindings)
+    )
+    expected_manifests = _require_canonical_sha256_sequence(
+        expected_pending_manifest_sha256s,
+        "expected_pending_manifest_sha256s",
+    )
+    if actual_manifest_sha256s != expected_manifests:
+        raise ValueError("legacy pending manifest proof is invalid")
+
+    baseline_binding = validated_bindings[0]
+    snapshot_path = _require_read_only_sqlite_path(
+        baseline_binding.legacy_snapshot_path,
+        label="legacy pending baseline snapshot",
+        expected_sha256=expected_legacy_snapshot_sha256,
+    )
+    snapshot_fingerprint = legacy_open_exposure_fingerprint(snapshot_path)
+    if snapshot_fingerprint.rows_sha256 != baseline_binding.legacy_open_exposure.rows_sha256:
+        raise ValueError("legacy pending baseline open rows proof is invalid")
+    if snapshot_fingerprint.rows_sha256 != _require_sha256(
+        expected_baseline_open_rows_sha256,
+        "expected_baseline_open_rows_sha256",
+    ):
+        raise ValueError("legacy pending baseline open rows proof is invalid")
+    frozen_trade_ids = _frozen_trade_ids(snapshot_path)
+    expected_trade_ids_value = _require_canonical_string_sequence(
+        expected_baseline_trade_ids,
+        "expected_baseline_trade_ids",
+    )
+    if frozen_trade_ids != expected_trade_ids_value:
+        raise ValueError("legacy pending baseline trade proof is invalid")
+    if _unresolved_trade_count(root_path) != 0:
+        raise ValueError("legacy root unresolved trade proof is invalid")
+
+    receipt_sha256s = _validated_receipt_sha256s_for_frozen_trades(
+        root_path,
+        frozen_trade_ids,
+    )
+    with SettlementStore(root_path, read_only=True) as store:
+        if not store.conservation(now=datetime.now(timezone.utc)).ok:
+            raise ValueError("legacy root conservation proof is invalid")
+
+    pending_root_relative = _relative_to_storage_root(
+        pending_root_path,
+        root_path.parent,
+    )
+    root_relative = _relative_to_storage_root(root_path, root_path.parent)
+    payload_inventory = _deterministic_payload_inventory(
+        validated_bindings,
+        storage_root=root_path.parent,
+    )
+    return SealedLegacyPendingFinalizationPlan(
+        family_summary=LegacyPendingFamilySummary(
+            pending_root_relative_to_storage_root=pending_root_relative,
+            legacy_db_relative_to_storage_root=root_relative,
+            shared_legacy_snapshot_sha256=baseline_binding.legacy_snapshot_sha256,
+            shared_legacy_baseline_attestation=baseline_binding.legacy_baseline_attestation,
+            shared_legacy_open_rows_sha256=baseline_binding.legacy_open_exposure.rows_sha256,
+            shared_legacy_open_trade_count=baseline_binding.legacy_open_exposure.unresolved_trade_count,
+            pending_manifest_sha256s=actual_manifest_sha256s,
+            pending_cohort_ids=tuple(binding.cohort.cohort_id for binding in validated_bindings),
+            frozen_trade_ids=frozen_trade_ids,
+            applied_receipt_sha256s=receipt_sha256s,
+            root_db_sha256=_require_sha256(expected_root_sha256, "expected_root_sha256"),
+        ),
+        archive_target=archive_target,
+        payload_inventory=payload_inventory,
+    )
+
+
+def _manifest_max_days_to_close(cohort: object) -> float:
+    manifest_path = Path(getattr(cohort, "db_path")).parent / "cohort.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    value = payload.get("max_days_to_close")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("legacy pending manifest horizon is invalid")
+    return float(value)
+
+
+def _require_directory_without_symlinks(value: Path | str, *, label: str) -> Path:
+    path = _require_absolute_path_without_symlinks(value, label)
+    if not path.is_dir():
+        raise ValueError(f"{label} directory is invalid")
+    return path
+
+
+def _require_read_only_sqlite_path(
+    value: Path | str,
+    *,
+    label: str,
+    expected_sha256: str,
+) -> Path:
+    try:
+        path = _require_absolute_path_without_symlinks(value, label)
+        if not path.is_file():
+            raise ValueError(f"{label} database is invalid")
+        _capture_plain_file_identity(path, label)
+        _require_quiescent_sqlite_artifacts(path, label)
+        _require_expected_hash(path, expected_sha256, label)
+        uri = f"{path.as_uri()}?mode=ro"
+        with sqlite3.connect(uri, uri=True) as conn:
+            integrity = conn.execute("PRAGMA integrity_check").fetchone()
+            if integrity is None or integrity[0] != "ok":
+                raise ValueError(f"{label} database is invalid")
+    except LegacyReceiptReconciliationError as exc:
+        raise ValueError(str(exc)) from exc
+    except sqlite3.Error as exc:
+        raise ValueError(f"{label} database is invalid") from exc
+    return path
+
+
+def _require_shared_pending_binding_agreement(bindings: Sequence[object]) -> None:
+    shared = {
+        (
+            Path(binding.legacy_db_path).resolve(),
+            binding.legacy_starting_bankroll,
+            binding.legacy_baseline_attestation,
+            binding.legacy_snapshot_sha256,
+            binding.legacy_open_exposure.unresolved_trade_count,
+            binding.legacy_open_exposure.rows_sha256,
+        )
+        for binding in bindings
+    }
+    if len(shared) != 1:
+        raise ValueError("legacy pending family binding agreement is invalid")
+
+
+def _frozen_trade_ids(snapshot_path: Path) -> tuple[str, ...]:
+    uri = f"{snapshot_path.as_uri()}?mode=ro"
+    try:
+        with sqlite3.connect(uri, uri=True) as conn:
+            rows = conn.execute(
+                """
+                SELECT trade_id
+                FROM paper_trades
+                WHERE resolved = 0
+                ORDER BY trade_id
+                """
+            ).fetchall()
+    except sqlite3.Error as exc:
+        raise ValueError("legacy pending baseline trade proof is invalid") from exc
+    trade_ids = tuple(str(row[0]) for row in rows)
+    if not trade_ids or any(not item for item in trade_ids):
+        raise ValueError("legacy pending baseline trade proof is invalid")
+    return trade_ids
+
+
+def _unresolved_trade_count(root_path: Path) -> int:
+    uri = f"{root_path.as_uri()}?mode=ro"
+    try:
+        with sqlite3.connect(uri, uri=True) as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM paper_trades WHERE COALESCE(resolved, 0) = 0"
+            ).fetchone()
+    except sqlite3.Error as exc:
+        raise ValueError("legacy root unresolved trade proof is invalid") from exc
+    assert row is not None
+    return int(row[0])
+
+
+def _validated_receipt_sha256s_for_frozen_trades(
+    root_path: Path,
+    frozen_trade_ids: Sequence[str],
+) -> tuple[str, ...]:
+    with SettlementStore(root_path, read_only=True) as store:
+        conn = store._conn
+        rows = conn.execute(
+            f"""
+            SELECT trade_id, observation_sha256, receipt_schema_version,
+                   receipt_json, receipt_sha256, applied_at
+            FROM {_LEGACY_RECEIPT_APPLICATION_TABLE}
+            WHERE trade_id IN ({",".join("?" for _ in frozen_trade_ids)})
+            ORDER BY trade_id
+            """,
+            tuple(frozen_trade_ids),
+        ).fetchall()
+        if len(rows) != len(frozen_trade_ids):
+            raise ValueError("legacy pending receipt proof is invalid")
+        receipt_sha256s: list[str] = []
+        observation_ids: set[str] = set()
+        seen_receipts: set[str] = set()
+        for expected_trade_id, row in zip(frozen_trade_ids, rows, strict=True):
+            if str(row["trade_id"]) != expected_trade_id:
+                raise ValueError("legacy pending receipt proof is invalid")
+            try:
+                result = _validate_existing_legacy_receipt_application(
+                    conn,
+                    row,
+                    _load_receipt_from_row(row),
+                    applied_at=_parse_datetime(row["applied_at"]),
+                )
+            except (LegacyReceiptApplicationError, ValueError) as exc:
+                raise ValueError("legacy pending receipt proof is invalid") from exc
+            receipt_sha = str(row["receipt_sha256"])
+            observation_sha = str(row["observation_sha256"])
+            if receipt_sha in seen_receipts or observation_sha in observation_ids:
+                raise ValueError("legacy pending receipt proof is invalid")
+            seen_receipts.add(receipt_sha)
+            observation_ids.add(observation_sha)
+            receipt_sha256s.append(result.observation_sha256 and receipt_sha)
+        return tuple(sorted(receipt_sha256s))
+
+
+def _load_receipt_from_row(row: Mapping[str, object]):
+    from trading.settlement_store import _load_legacy_receipt_application
+
+    return _load_legacy_receipt_application(row).receipt
+
+
+def _parse_datetime(value: object) -> datetime:
+    if not isinstance(value, str) or not value:
+        raise ValueError("legacy pending receipt proof is invalid")
+    return datetime.fromisoformat(value)
+
+
+def _deterministic_payload_inventory(
+    bindings: Sequence[object],
+    *,
+    storage_root: Path,
+) -> tuple[PayloadInventoryEntry, ...]:
+    entries: list[PayloadInventoryEntry] = []
+    for binding in bindings:
+        cohort_dir = Path(binding.cohort.db_path).parent
+        for source_path in (
+            cohort_dir / "cohort.json",
+            cohort_dir / "legacy_cutover.db",
+            Path(binding.cohort.db_path),
+        ):
+            entries.append(
+                PayloadInventoryEntry(
+                    path_relative_to_archive_root=(
+                        "payload/"
+                        + _relative_to_storage_root(source_path, storage_root)
+                    ),
+                    file_type="file",
+                    size_bytes=source_path.stat().st_size,
+                    sha256=_sha256_file(
+                        source_path,
+                        expected_identity=_capture_plain_file_identity(
+                            source_path,
+                            "pending payload file",
+                        ),
+                        label="pending payload file",
+                    ),
+                )
+            )
+    return tuple(entries)
+
+
+def _relative_to_storage_root(path: Path, storage_root: Path) -> str:
+    try:
+        relative = path.resolve().relative_to(storage_root.resolve())
+    except ValueError as exc:
+        raise ValueError("legacy pending path is invalid") from exc
+    return PurePosixPath(relative.as_posix()).as_posix()
 
 
 def _canonical_json(value: object) -> str:
