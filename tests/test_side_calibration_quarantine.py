@@ -93,6 +93,32 @@ def test_schema_rejects_a_second_attempt_for_the_same_capture_id(tmp_path):
             )
 
 
+def test_initialize_rejects_unversioned_v1_attempt_schema(tmp_path):
+    path = tmp_path / "quarantine.db"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE capture_attempts (
+                attempt_id INTEGER PRIMARY KEY,
+                capture_id TEXT NOT NULL,
+                payload_sha256 TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                unscorable_reason TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(capture_id, payload_sha256)
+            )
+            """
+        )
+
+    with pytest.raises(SideCalibrationQuarantineError, match="unique capture_id"):
+        SideCalibrationQuarantineStore(path)
+
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT value FROM schema_metadata WHERE key = 'schema_version'"
+        ).fetchone() is None
+
+
 def test_incomplete_capture_is_recorded_as_attempt_not_candidate(tmp_path):
     store = SideCalibrationQuarantineStore(tmp_path / "quarantine.db")
 

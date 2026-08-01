@@ -227,6 +227,10 @@ class SideCalibrationQuarantineStore:
             );
             """
         )
+        if not _has_unique_capture_id_constraint(connection):
+            raise SideCalibrationQuarantineError(
+                "capture_attempts schema must enforce unique capture_id"
+            )
         metadata = connection.execute(
             "SELECT value FROM schema_metadata WHERE key = 'schema_version'"
         ).fetchone()
@@ -431,3 +435,18 @@ def _finite_number(value: Any) -> bool:
 
 def _row_count(connection: sqlite3.Connection, table: str) -> int:
     return int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+
+
+def _has_unique_capture_id_constraint(connection: sqlite3.Connection) -> bool:
+    """Require the fresh-schema identity constraint before writing metadata."""
+    indexes = connection.execute("PRAGMA index_list(capture_attempts)").fetchall()
+    for index in indexes:
+        if not index[2]:
+            continue
+        columns = [
+            column[2]
+            for column in connection.execute(f"PRAGMA index_info({index[1]!r})").fetchall()
+        ]
+        if columns == ["capture_id"]:
+            return True
+    return False
