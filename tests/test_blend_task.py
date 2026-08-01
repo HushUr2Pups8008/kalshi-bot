@@ -876,7 +876,10 @@ async def test_prequeue_book_provenance_uses_one_provider_for_concurrent_candida
     second_process = asyncio.create_task(task.process_fast_lane_result(second_analysis))
 
     await started.wait()
-    await asyncio.sleep(0)
+    for _ in range(20):
+        if sum(process.done() for process in (first_process, second_process)) == 1:
+            break
+        await asyncio.sleep(0)
 
     assert len(calls) == 1
     assert provider_loops == [loop]
