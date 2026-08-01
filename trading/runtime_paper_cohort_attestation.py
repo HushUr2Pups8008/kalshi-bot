@@ -171,6 +171,22 @@ def read_runtime_paper_cohort_attestation(
 ) -> RuntimePaperCohortAttestation:
     """Read a receipt without following symlinks and validate its lineage shape."""
 
+    receipt, _ = read_runtime_paper_cohort_attestation_with_bytes(
+        path,
+        storage_root=storage_root,
+        expected_pid=expected_pid,
+    )
+    return receipt
+
+
+def read_runtime_paper_cohort_attestation_with_bytes(
+    path: Path,
+    *,
+    storage_root: Path,
+    expected_pid: int | None = None,
+) -> tuple[RuntimePaperCohortAttestation, bytes]:
+    """Read a validated receipt and return the exact bytes that authorized it."""
+
     target = Path(path)
     _reject_unsafe_existing_target(target)
     raw = _read_regular_file(target)
@@ -185,7 +201,7 @@ def read_runtime_paper_cohort_attestation(
         raise RuntimePaperCohortAttestationError(
             "receipt PID does not match the current bot process"
         )
-    return receipt
+    return receipt, raw
 
 
 def _format_utc(value: datetime) -> str:

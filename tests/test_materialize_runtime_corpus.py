@@ -46,11 +46,27 @@ from trading.settlement_store import (
 )
 
 
+_CURRENT_RUNTIME_IDENTITY = materialize_runtime_corpus._current_runtime_identity
+
+
 WINDOW_START = datetime(2026, 7, 14, 0, 0, tzinfo=UTC)
 WINDOW_END = datetime(2026, 7, 16, 0, 0, tzinfo=UTC)
 MATERIALIZED_AT = datetime(2026, 7, 17, 0, 0, tzinfo=UTC)
 REGISTRATION_ID = "profit-oos-runtime-a"
 COHORT_ID = "active-20260714"
+
+
+@pytest.fixture(autouse=True)
+def _current_runtime_pid(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        materialize_runtime_corpus,
+        "_current_runtime_identity",
+        lambda _root: materialize_runtime_corpus._CurrentRuntimeIdentity(
+            pid=12345,
+            started_utc=MATERIALIZED_AT,
+            observed_at_utc=MATERIALIZED_AT,
+        ),
+    )
 
 
 def _utc_text(value: datetime) -> str:
@@ -443,6 +459,199 @@ def test_materializes_only_attested_active_snapshot_with_fee_net_ledger(
         assert row["protected_registration_commit"] == "a" * 40
         assert row["protected_registration_integrated_at_utc"] == "2026-07-02T00:00:00Z"
     assert paths["runtime_db"].read_bytes() == runtime_before
+
+
+def test_binds_provenance_hash_to_exact_runtime_receipt_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _runtime_fixture(tmp_path)
+    authorizing_bytes = paths["receipt"].read_bytes()
+    original_reader = materialize_runtime_corpus.read_runtime_paper_cohort_attestation_with_bytes
+    expected_pids: list[int | None] = []
+
+    def read_then_replace(path: Path, **kwargs):
+        expected_pids.append(kwargs.get("expected_pid"))
+        receipt, raw = original_reader(path, **kwargs)
+        replacement = json.loads(paths["receipt"].read_text(encoding="utf-8"))
+        replacement["started_utc"] = "2026-07-17T00:00:01.000000Z"
+        paths["receipt"].write_text(json.dumps(replacement), encoding="utf-8")
+        return receipt, raw
+
+    monkeypatch.setattr(
+        materialize_runtime_corpus,
+        "read_runtime_paper_cohort_attestation_with_bytes",
+        read_then_replace,
+    )
+
+    result = _materialize(paths)
+
+    assert expected_pids == [12345]
+    assert result.runtime_attestation_sha256 == hashlib.sha256(authorizing_bytes).hexdigest()
+    assert result.runtime_attestation_sha256 != _snapshot_sha256(paths["receipt"])
+
+
+def test_rejects_runtime_receipt_not_owned_by_current_bot_process(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _runtime_fixture(tmp_path)
+    monkeypatch.setattr(
+        materialize_runtime_corpus,
+        "_current_runtime_identity",
+        lambda _root: materialize_runtime_corpus._CurrentRuntimeIdentity(
+            pid=12346,
+            started_utc=MATERIALIZED_AT,
+            observed_at_utc=MATERIALIZED_AT,
+        ),
+    )
+
+    with pytest.raises(
+        materialize_runtime_corpus.RuntimeCorpusMaterializationError,
+        match="PID does not match the current bot process",
+    ):
+        _materialize(paths)
+
+    assert not (paths["repo_root"] / "data" / "edge_replay_snapshots").exists()
+    assert not (paths["repo_root"] / "logs" / "edge_replay").exists()
+
+
+def test_rejects_runtime_receipt_from_prior_process_with_reused_pid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _runtime_fixture(tmp_path)
+    current_process_started = MATERIALIZED_AT + timedelta(seconds=6)
+    monkeypatch.setattr(
+        materialize_runtime_corpus,
+        "_current_runtime_identity",
+        lambda _root: materialize_runtime_corpus._CurrentRuntimeIdentity(
+            pid=12345,
+            started_utc=current_process_started,
+            observed_at_utc=current_process_started + timedelta(seconds=1),
+        ),
+    )
+
+    with pytest.raises(
+        materialize_runtime_corpus.RuntimeCorpusMaterializationError,
+        match="predates the current main.py process",
+    ):
+        _materialize(paths)
+
+    assert not (paths["repo_root"] / "data" / "edge_replay_snapshots").exists()
+    assert not (paths["repo_root"] / "logs" / "edge_replay").exists()
+
+
+def test_derives_current_identity_from_launchd_managed_main_process(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts import botcheck
+
+    launchd_labels: list[str] = []
+
+    def launchd_print(label: str) -> str:
+        launchd_labels.append(label)
+        return "pid = 4321"
+
+    rows = [
+        botcheck.ProcessInfo(pid=4321, ppid=1, cpu="0", mem="0", etimes=1, command="launchd"),
+        botcheck.ProcessInfo(
+            pid=12345,
+            ppid=4321,
+            cpu="0",
+            mem="0",
+            etimes=1,
+            command="/usr/bin/python3 /tmp/kalshi-bot/main.py",
+        ),
+    ]
+    monkeypatch.delenv("KALSHI_LAUNCHD_LABEL", raising=False)
+    monkeypatch.setattr(botcheck, "launchd_print", launchd_print)
+    monkeypatch.setattr(botcheck, "process_table", lambda: rows)
+
+    current_runtime = _CURRENT_RUNTIME_IDENTITY(tmp_path / "repo")
+
+    assert current_runtime.pid == 12345
+    assert current_runtime.observed_at_utc - current_runtime.started_utc == timedelta(seconds=1)
+    assert launchd_labels == ["com.jake.kalshi-bot"]
+
+
+def test_fsyncs_provenance_stamped_corpus_before_publish(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _runtime_fixture(tmp_path)
+    events: list[tuple[str, Path | str]] = []
+    original_stamp = materialize_runtime_corpus._stamp_materialization_provenance
+    original_fsync_file = materialize_runtime_corpus._fsync_file
+    original_fsync_directory = materialize_runtime_corpus._fsync_directory
+
+    def stamp(output_path: Path, **kwargs) -> None:
+        original_stamp(output_path, **kwargs)
+        events.append(("stamp", output_path))
+
+    def fsync_file(path: Path, *, label: str) -> None:
+        events.append((f"file:{label}", path))
+        original_fsync_file(path, label=label)
+
+    def fsync_directory(path: Path, *, label: str) -> None:
+        events.append((f"directory:{label}", path))
+        original_fsync_directory(path, label=label)
+
+    monkeypatch.setattr(materialize_runtime_corpus, "_stamp_materialization_provenance", stamp)
+    monkeypatch.setattr(materialize_runtime_corpus, "_fsync_file", fsync_file)
+    monkeypatch.setattr(materialize_runtime_corpus, "_fsync_directory", fsync_directory)
+
+    result = _materialize(paths)
+
+    stamp_index = events.index(("stamp", result.output_path.with_name(result.output_path.name + ".materializing")))
+    staged_file_index = events.index(
+        ("file:staged corpus", result.output_path.with_name(result.output_path.name + ".materializing"))
+    )
+    output_directory_index = events.index(("directory:corpus output directory", result.output_path.parent))
+    assert stamp_index < staged_file_index < output_directory_index
+
+
+def test_failed_output_directory_fsync_cleans_published_corpus_and_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _runtime_fixture(tmp_path)
+    original_fsync_directory = materialize_runtime_corpus._fsync_directory
+
+    def fail_output_directory_fsync(path: Path, *, label: str) -> None:
+        if label == "corpus output directory":
+            raise materialize_runtime_corpus.RuntimeCorpusMaterializationError("forced corpus directory fsync failure")
+        original_fsync_directory(path, label=label)
+
+    monkeypatch.setattr(materialize_runtime_corpus, "_fsync_directory", fail_output_directory_fsync)
+    with pytest.raises(
+        materialize_runtime_corpus.RuntimeCorpusMaterializationError,
+        match="forced corpus directory fsync failure",
+    ):
+        _materialize(paths)
+
+    output_dir = paths["repo_root"] / "logs" / "edge_replay"
+    assert list(output_dir.glob("*")) == []
+    snapshot_dir = paths["repo_root"] / "data" / "edge_replay_snapshots" / COHORT_ID
+    assert list(snapshot_dir.glob("*")) == []
+
+
+def test_rejects_existing_corpus_without_deleting_it(
+    tmp_path: Path,
+) -> None:
+    paths = _runtime_fixture(tmp_path)
+    output = paths["repo_root"] / "logs" / "edge_replay" / "corpus_existing.jsonl"
+    output.parent.mkdir(parents=True)
+    previous = b"previous materialization\n"
+    output.write_bytes(previous)
+
+    with pytest.raises(materialize_runtime_corpus.RuntimeCorpusMaterializationError, match="already exists"):
+        _materialize(paths, output_path=output)
+
+    assert output.read_bytes() == previous
+    snapshot_dir = paths["repo_root"] / "data" / "edge_replay_snapshots" / COHORT_ID
+    assert list(snapshot_dir.glob("*")) == []
 
 
 def test_public_interface_never_accepts_snapshot_or_database_paths() -> None:

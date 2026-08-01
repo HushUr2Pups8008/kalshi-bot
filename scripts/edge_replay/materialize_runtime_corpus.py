@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
@@ -20,6 +20,7 @@ import re
 import sqlite3
 import stat
 import sys
+import time
 from typing import Final
 from uuid import uuid4
 
@@ -45,7 +46,7 @@ from trading.paper_accounting import (
 from trading.paper_cohorts import active_cohort_binding_for_db
 from trading.runtime_paper_cohort_attestation import (
     RuntimePaperCohortAttestation,
-    read_runtime_paper_cohort_attestation,
+    read_runtime_paper_cohort_attestation_with_bytes,
 )
 
 
@@ -103,6 +104,13 @@ class RuntimeCorpusMaterializationResult:
 RegistrationAttestor = Callable[..., OOSRegistrationAttestation]
 
 
+@dataclass(frozen=True)
+class _CurrentRuntimeIdentity:
+    pid: int
+    started_utc: datetime
+    observed_at_utc: datetime
+
+
 def materialize_runtime_corpus(
     *,
     repo_root: Path = REPO_ROOT,
@@ -153,14 +161,17 @@ def materialize_runtime_corpus(
         root=root,
         label="runtime attestation",
     )
-    attestation_sha256 = _sha256_file(receipt_path)
+    current_runtime = _current_runtime_identity(root)
     try:
-        receipt = read_runtime_paper_cohort_attestation(
+        receipt, receipt_bytes = read_runtime_paper_cohort_attestation_with_bytes(
             receipt_path,
             storage_root=data_root,
+            expected_pid=current_runtime.pid,
         )
     except (OSError, ValueError) as exc:
         raise RuntimeCorpusMaterializationError(f"runtime cohort attestation is unverified: {exc}") from exc
+    _assert_receipt_matches_current_runtime(receipt, current_runtime=current_runtime)
+    attestation_sha256 = hashlib.sha256(receipt_bytes).hexdigest()
     runtime_db = _validated_active_runtime_database(
         root=root,
         data_root=data_root,
@@ -178,6 +189,7 @@ def materialize_runtime_corpus(
         receipt=receipt,
     )
     staged_output: Path | None = None
+    published_output: Path | None = None
     try:
         resolved_output = _validated_output_path(
             root=root,
@@ -214,13 +226,18 @@ def materialize_runtime_corpus(
                 "protected_registration_integrated_at_utc": registration_proof.integrated_at_utc,
             },
         )
+        _fsync_file(staged_output, label="staged corpus")
         os.replace(staged_output, resolved_output)
+        published_output = resolved_output
+        _fsync_directory(resolved_output.parent, label="corpus output directory")
     except RuntimeCorpusMaterializationError:
         _cleanup_staged_output(staged_output)
+        _cleanup_published_output(published_output)
         _cleanup_owned_snapshot(snapshot)
         raise
     except (OSError, sqlite3.Error, ValueError, RuntimeError) as exc:
         _cleanup_staged_output(staged_output)
+        _cleanup_published_output(published_output)
         _cleanup_owned_snapshot(snapshot)
         raise RuntimeCorpusMaterializationError(f"registered corpus build failed: {exc}") from exc
 
@@ -266,6 +283,60 @@ def _attest_registration(
             "protected registration attestation does not match the requested registration"
         )
     return proof
+
+
+def _current_runtime_identity(root: Path) -> _CurrentRuntimeIdentity:
+    """Derive the launchd-managed main.py identity before trusting a receipt."""
+
+    from scripts.botcheck import (
+        _attested_main_process,
+        _launchd_manages_attested_process,
+        launchd_pid,
+        launchd_print,
+        process_start_utc,
+        process_table,
+    )
+
+    label = os.environ.get("KALSHI_LAUNCHD_LABEL", "com.jake.kalshi-bot")
+    launchd_runtime_pid = launchd_pid(launchd_print(label))
+    if launchd_runtime_pid is None:
+        raise RuntimeCorpusMaterializationError("current bot process is not launchd-attested")
+    now_epoch = time.time()
+    observed_at_utc = datetime.fromtimestamp(now_epoch, tz=timezone.utc)
+    rows = process_table()
+    current_main_processes = [
+        process
+        for process in rows
+        if _attested_main_process(rows, pid=process.pid, main_path=root / "main.py") is not None
+        and _launchd_manages_attested_process(
+            rows,
+            launchd_pid=launchd_runtime_pid,
+            attested_pid=process.pid,
+        )
+    ]
+    if len(current_main_processes) != 1:
+        raise RuntimeCorpusMaterializationError(
+            "expected exactly one current launchd-managed main.py process"
+        )
+    current_main_process = current_main_processes[0]
+    return _CurrentRuntimeIdentity(
+        pid=current_main_process.pid,
+        started_utc=process_start_utc(current_main_process, now_epoch),
+        observed_at_utc=observed_at_utc,
+    )
+
+
+def _assert_receipt_matches_current_runtime(
+    receipt: RuntimePaperCohortAttestation,
+    *,
+    current_runtime: _CurrentRuntimeIdentity,
+) -> None:
+    if receipt.started_utc < current_runtime.started_utc - timedelta(seconds=5):
+        raise RuntimeCorpusMaterializationError(
+            "runtime cohort attestation predates the current main.py process"
+        )
+    if receipt.started_utc > current_runtime.observed_at_utc + timedelta(seconds=5):
+        raise RuntimeCorpusMaterializationError("runtime cohort attestation start time is in the future")
 
 
 def _validated_active_runtime_database(
@@ -368,10 +439,10 @@ def _create_owned_runtime_snapshot(
         _assert_immutable_snapshot_file(staging, root=data_root, require_readonly=False)
         if _same_file(staging, runtime_db):
             raise RuntimeCorpusMaterializationError("owned snapshot aliases the mutable attested runtime database")
-        _fsync_file(staging)
+        _fsync_file(staging, label="owned snapshot")
         os.chmod(staging, 0o444)
         _assert_immutable_snapshot_file(staging, root=data_root, require_readonly=True)
-        _fsync_file(staging)
+        _fsync_file(staging, label="owned snapshot")
         _validate_snapshot_contract(
             staging,
             registration=registration,
@@ -379,7 +450,7 @@ def _create_owned_runtime_snapshot(
         )
         snapshot_sha256 = _sha256_file(staging)
         os.replace(staging, snapshot)
-        _fsync_directory(snapshot_directory)
+        _fsync_directory(snapshot_directory, label="owned snapshot directory")
         snapshot = _validated_owned_snapshot(
             snapshot,
             data_root=data_root,
@@ -462,28 +533,28 @@ def _cleanup_owned_snapshot(snapshot: Path) -> None:
             pass
 
 
-def _fsync_file(path: Path) -> None:
+def _fsync_file(path: Path, *, label: str) -> None:
     try:
         descriptor = os.open(path, os.O_RDONLY)
     except OSError as exc:
-        raise RuntimeCorpusMaterializationError(f"cannot open snapshot for fsync: {path}") from exc
+        raise RuntimeCorpusMaterializationError(f"cannot open {label} for fsync: {path}") from exc
     try:
         os.fsync(descriptor)
     except OSError as exc:
-        raise RuntimeCorpusMaterializationError(f"cannot fsync snapshot: {path}") from exc
+        raise RuntimeCorpusMaterializationError(f"cannot fsync {label}: {path}") from exc
     finally:
         os.close(descriptor)
 
 
-def _fsync_directory(directory: Path) -> None:
+def _fsync_directory(directory: Path, *, label: str) -> None:
     try:
         descriptor = os.open(directory, os.O_RDONLY)
     except OSError as exc:
-        raise RuntimeCorpusMaterializationError("cannot open snapshot directory for fsync") from exc
+        raise RuntimeCorpusMaterializationError(f"cannot open {label} for fsync") from exc
     try:
         os.fsync(descriptor)
     except OSError as exc:
-        raise RuntimeCorpusMaterializationError("cannot fsync snapshot directory") from exc
+        raise RuntimeCorpusMaterializationError(f"cannot fsync {label}") from exc
     finally:
         os.close(descriptor)
 
@@ -724,8 +795,10 @@ def _validated_output_path(
     if not _OUTPUT_NAME_RE.fullmatch(resolved.name):
         raise RuntimeCorpusMaterializationError("corpus output must be named corpus_*.jsonl")
     _assert_no_symlink_components(root, resolved, allow_missing=True)
-    if resolved.exists() and resolved.is_symlink():
+    if resolved.is_symlink():
         raise RuntimeCorpusMaterializationError("corpus output must not be a symlink")
+    if resolved.exists():
+        raise RuntimeCorpusMaterializationError("corpus output already exists")
     return resolved
 
 
@@ -751,6 +824,15 @@ def _cleanup_staged_output(staged_output: Path | None) -> None:
             candidate.unlink(missing_ok=True)
         except OSError:
             pass
+
+
+def _cleanup_published_output(output_path: Path | None) -> None:
+    if output_path is None:
+        return
+    try:
+        output_path.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def _repository_root(value: Path) -> Path:
