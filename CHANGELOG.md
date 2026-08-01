@@ -19,6 +19,33 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.38] - 2026-08-01
+
+### Added
+
+- **Runtime-attested profit evidence report.**
+  `scripts/runtime_profit_evidence_report.py` reuses `botcheck`'s live
+  process and cohort-manifest checks before inspecting a paper database. It
+  fails closed rather than falling back to the legacy root and labels the view
+  as a current read-only database view, not a quiescent settlement snapshot.
+
+### Changed
+
+- **Replay provenance is now explicit.** Tier-0/no-corpus receipts, explicit
+  corpus subsets, production proxies, and historical cycles cannot satisfy
+  current OOS replay proof. A scored failed `HEAD` replay is reported as
+  current negative evidence rather than being mislabeled as missing evidence.
+- **Replay inventory separates candidates from proof.** Top-level corpus files
+  are counted only as candidates; they do not make a report replay-ready.
+
+### Verification
+
+- `CI=1 .venv/bin/python -m pytest -q tests/test_profit_evidence_report.py tests/test_runtime_profit_evidence_report.py`
+- `CI=1 .venv/bin/python -m ruff check scripts/profit_evidence_report.py scripts/runtime_profit_evidence_report.py tests/test_profit_evidence_report.py tests/test_runtime_profit_evidence_report.py`
+- Independent review covered live-process/manifest binding, database path
+  safety, Tier-0 and explicit-subset replay classification, failed current
+  replay handling, and corrupt SQLite error reporting.
+
 ## [0.33.37] - 2026-08-01
 
 ### Added
