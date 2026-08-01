@@ -273,6 +273,31 @@ ledger row, and writes one `POLYMARKET_HORIZON_STUDY_EXECUTION` receipt. A
 retry/restart reconciles the unique ledger link; ambiguity aborts rather than
 opening a second simulated position.
 
+Task 4 also implements the only study-ledger interface available to the
+artifact store:
+
+```text
+StudyLedgerExecutionLookup.lookup_study_trade_links(
+    *, study_id: str, admission_id: str
+) -> tuple[StudyLedgerExecutionLink, ...]
+
+StudyLedgerExecutionLink(
+    study_trade_id: str,
+    study_id: str,
+    admission_id: str,
+)
+```
+
+The implementation opens only the manifest-derived `study_ledger.db` in
+read-only mode and returns a deterministic tuple of links for that exact
+`(study_id, admission_id)`, ordered by `study_trade_id`. It never accepts a
+caller-provided database path and never opens `data/paper_trades.db` or another
+primary path. Task 3 receives
+only this narrow protocol, not a ledger connection or a write callback. During
+execution recovery, an unavailable lookup, zero links, multiple links, or a
+single link whose study ID/admission ID does not match the claim is a fatal
+abort. It must not create another claim, ledger row, or simulated position.
+
 `trading/horizon_paper_study_accounting.py` owns modeled study accounting. It
 does not invoke `PaperAccountingHandlers`, the fee-net runtime flag, existing
 paper-trade settlement economics, or a primary outbox. It receives only the
@@ -282,27 +307,89 @@ mistaken for the primary fee-net pipeline.
 
 ### Artifact Integrity and Deduplication
 
-`study_state.db` is the authoritative atomic journal for artifact IDs, hashes,
-payloads, and execution claims. It inserts each input or shadow-admission
-record and its canonical hash in one SQLite transaction before emitting the
-matching JSONL audit mirror. A crash after the state transaction and before the
-mirror is repaired by regenerating the one missing canonical line; a crash
-before commit leaves neither an authoritative record nor an executable
-admission. It has exactly these constrained keys:
+`study_state.db` is the authoritative atomic journal for every study artifact
+payload, hash, ID, and execution claim. It has one generic payload journal and
+the four typed indexes/claims below. The generic journal is the sole recovery
+source for every JSONL mirror; a mirror is never an execution authority.
 
-- `input_receipts(input_id PRIMARY KEY, record_sha256 NOT NULL, observed_at_utc NOT NULL)`;
-- `shadow_admissions(admission_id PRIMARY KEY, input_id NOT NULL, market_id NOT NULL, policy_snapshot_sha256 NOT NULL, record_sha256 NOT NULL, UNIQUE(input_id, market_id, policy_snapshot_sha256))`;
-- `execution_claims(admission_id PRIMARY KEY, state NOT NULL, study_trade_id UNIQUE, claimed_at_utc NOT NULL, updated_at_utc NOT NULL)`;
-- `settlement_receipts(study_trade_id PRIMARY KEY, settlement_observation_sha256 NOT NULL, record_sha256 NOT NULL)`.
+```text
+artifact_payload_journal(
+  journal_sequence INTEGER PRIMARY KEY,
+  record_type TEXT NOT NULL CHECK (record_type IN (
+    'POLYMARKET_HORIZON_STUDY_INPUT',
+    'POLYMARKET_HORIZON_STUDY_SHADOW_ADMISSION',
+    'POLYMARKET_HORIZON_STUDY_DECISION',
+    'POLYMARKET_HORIZON_STUDY_EXECUTION',
+    'POLYMARKET_HORIZON_STUDY_SETTLEMENT',
+    'POLYMARKET_HORIZON_STUDY_ABORT'
+  )),
+  record_id TEXT NOT NULL,
+  manifest_sha256 TEXT NOT NULL,
+  record_sha256 TEXT NOT NULL,
+  mirror_relative_path TEXT NOT NULL CHECK (mirror_relative_path IN (
+    'artifacts/inputs.jsonl',
+    'artifacts/shadow_admissions.jsonl',
+    'artifacts/decisions.jsonl',
+    'artifacts/executions.jsonl',
+    'artifacts/settlements.jsonl',
+    'artifacts/aborts.jsonl'
+  )),
+  canonical_payload_json TEXT NOT NULL,
+  committed_at_utc TEXT NOT NULL,
+  UNIQUE(record_type, record_id),
+  UNIQUE(record_sha256)
+)
+```
+
+`record_id` is the payload's `input_id`, `admission_id`, `decision_id`,
+`execution_id`, `settlement_id`, or `abort_id`, according to `record_type`.
+Every stored payload has the common immutable envelope `schema_version`,
+`record_type`, `study_id`, `manifest_sha256`, `routing_prohibited=true`, and
+`record_sha256`; type-specific IDs and fields remain in that canonical payload.
+A decision additionally binds its input/admission, `analysis_input_sha256`,
+`research_snapshot_sha256`, `counter_evidence_status`, market-price snapshot,
+and estimated edge. An execution binds its admission, decision, execution ID,
+and eventual study trade ID. A settlement binds its settlement ID, study trade
+ID, and settlement-observation hash. An abort binds its abort ID, timestamp,
+reason, and manifest hash. Later Task 4/Task 6 semantic fields may be added to
+those payload contracts only with corresponding canonical-schema tests; they
+must not replace the common envelope or generic journal.
+
+The four typed tables are indexes/claims into this journal, not alternate
+payload stores:
+
+- `input_receipts(input_id PRIMARY KEY, journal_sequence INTEGER NOT NULL UNIQUE, record_sha256 NOT NULL, observed_at_utc NOT NULL)`;
+- `shadow_admissions(admission_id PRIMARY KEY, input_id NOT NULL, market_id NOT NULL, policy_snapshot_sha256 NOT NULL, journal_sequence INTEGER NOT NULL UNIQUE, record_sha256 NOT NULL, UNIQUE(input_id, market_id, policy_snapshot_sha256))`;
+- `execution_claims(admission_id PRIMARY KEY, state NOT NULL, study_trade_id UNIQUE, execution_journal_sequence INTEGER UNIQUE, claimed_at_utc NOT NULL, updated_at_utc NOT NULL)`;
+- `settlement_receipts(study_trade_id PRIMARY KEY, settlement_observation_sha256 NOT NULL, journal_sequence INTEGER NOT NULL UNIQUE, record_sha256 NOT NULL)`.
+
+Every non-null `journal_sequence` references exactly one
+`artifact_payload_journal` row of the corresponding type. A transaction first
+inserts or verifies the generic row and then its typed index/claim. Repeating
+the same `(record_type, record_id)` and canonical hash is idempotent and emits
+no second mirror line. The same key with a different hash, the same hash with
+another key, a typed-index mismatch, or a changed canonical payload is fatal.
+
+Before any state migration or write, the artifact store runs full manifest
+validation, captures the Task 2 `study_state.db` application ID and exact
+`horizon_study_bootstrap` metadata/preimage binding, and verifies that no
+`-journal`, `-shm`, or `-wal` sidecar exists. It must set and verify
+`PRAGMA journal_mode=DELETE`; WAL is prohibited. Each migration/write preserves
+the exact application ID and logically identical bootstrap table/row values,
+commits, closes, confirms no sidecar remains, and reruns full manifest
+validation. It must never recreate, replace, hardlink, or alter the bootstrap table, database
+identity, or manifest preimage.
 
 The artifact writer is single-process and lock-protected by
-`locks/runtime.lock`, created with `O_CREAT|O_EXCL`. Before every transaction
-it validates schema, manifest hash, record hash, and ID. It writes one
-canonical JSON audit line with `O_APPEND` and `fsync` only after the
-authoritative state commit. If a restart sees a committed state record without
-its mirror line, it reconstructs the identical line. If the same ID has another
-hash, an invalid line, an orphaned execution claim, or multiple candidate
-study-ledger rows, startup aborts and never records another simulated position.
+`locks/runtime.lock`, created with `O_CREAT|O_EXCL` and `O_NOFOLLOW` where
+available. Before every transaction it validates schema, manifest hash, record
+hash, ID, and path confinement. It writes one canonical JSON audit line with
+`O_APPEND` and `fsync` only after the authoritative state commit. If a restart
+sees a committed journal row without its mirror line, it reconstructs the
+identical line from `canonical_payload_json`. If the same ID has another hash,
+an invalid/extra mirror line, a typed-index mismatch, an orphaned execution
+claim, or any invalid/multiple study-ledger lookup result, startup aborts and
+never records another simulated position.
 
 An input is deduplicated by canonical source identity and content hashes. An
 admission is deduplicated by the five-part `admission_id`. Primary and study

@@ -180,7 +180,18 @@ launchd, pytest.
   duplicate same ID/different hash abort; input/admission uniqueness; lock
   collision; atomic state-transaction-before-JSONL-mirror persistence; restart
   regeneration of a missing mirror line; invalid JSON/hash abort; and ambiguous
-  execution recovery abort.
+  execution recovery abort. Assert the authoritative
+  `artifact_payload_journal` stores canonical payload, record type/ID/hash,
+  manifest hash, and exact derived mirror path for all six record types, while
+  the four domain tables remain typed indexes/claims into its journal sequence.
+  Cover rejection of a generic/typed index mismatch, duplicate hash under a
+  second ID, wrong mirror path, and a changed canonical payload. Cover
+  sidecar-free `DELETE` journaling plus preservation and post-write revalidation
+  of the Task 2 `study_state.db` application ID and
+  `horizon_study_bootstrap` metadata/preimage. Use a fake
+  `StudyLedgerExecutionLookup` to prove missing, zero, multiple, or mismatched
+  study-ledger links abort recovery with no new claim, receipt, or position;
+  the artifact store must not open a ledger path directly.
 
 - [ ] **Step 2: Run the focused test and verify failure.**
   ```bash
@@ -188,10 +199,15 @@ launchd, pytest.
   ```
 
 - [ ] **Step 3: Implement the writer.**
-  Implement `HorizonStudyArtifactStore` with the four exact tables in the
+  Implement `HorizonStudyArtifactStore` with the authoritative generic
+  `artifact_payload_journal` and the four typed domain indexes/claims in the
   design, exclusive `runtime.lock`, canonical JSON serializer, state-first
-  SQLite transaction, `O_APPEND` plus `fsync` audit mirror, and deterministic
-  mirror reconstruction from committed state. Expose only
+  sidecar-free SQLite `DELETE`-journal transaction, `O_APPEND` plus `fsync`
+  audit mirror, and deterministic mirror reconstruction from committed state.
+  Before every migration/write, preserve and after every close revalidate the
+  Task 2 bootstrap application ID, metadata row, manifest preimage, and absence
+  of SQLite sidecars. Accept only the injected read-only
+  `StudyLedgerExecutionLookup` protocol for execution reconciliation. Expose only
   `record_input`, `record_shadow_admission`, `record_decision`,
   `claim_execution`, `record_execution`, `record_settlement`, and `abort`.
   Every public method validates its caller-supplied manifest hash and writes
@@ -220,7 +236,11 @@ launchd, pytest.
   Assert the ledger creates only `study_trades` and its study-local auxiliary
   tables in `study_ledger.db`; it must never create or query `paper_trades`.
   Cover unique `(study_id, admission_id)` linkage, idempotent recovery of one
-  inserted simulated position, and abort on ambiguous recovery. Assert the
+  inserted simulated position, and abort on ambiguous recovery. Cover the
+  read-only `StudyLedgerExecutionLookup` protocol used by Task 3: it accepts
+  only manifest-derived study ledger paths and returns deterministic links for
+  the exact `(study_id, admission_id)` pair; missing, zero, multiple, or
+  mismatched links are fail-closed and never consult primary state. Assert the
   accounting module imports neither `PaperTrader`, `PaperAccountingHandlers`,
   `settlement_economics`, nor the fee-net runtime configuration. Cover absent,
   expired, partial, and fully covering manifest-pinned schedules.
@@ -239,7 +259,10 @@ launchd, pytest.
 
 - [ ] **Step 3: Implement the isolated boundary.**
   Implement `HorizonStudyLedger` with a separate schema and a single transaction
-  that binds a claimed admission to exactly one simulated `study_trade_id`.
+  that binds a claimed admission to exactly one simulated `study_trade_id`, plus
+  the read-only `StudyLedgerExecutionLookup` implementation required by Task 3.
+  It derives only `study_ledger.db` from the validated study manifest and never
+  exposes a primary DB path or a write callback through the lookup protocol.
   Implement `HorizonStudyAccounting` as a pure schedule evaluator returning
   `unscorable` or `modeled_pinned_schedule`, never an authoritative receipt.
   Implement study-only attestation with an internal expected-path constructor
