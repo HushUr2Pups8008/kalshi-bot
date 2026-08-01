@@ -3392,6 +3392,7 @@ class TradingBot:
         store: ResearchBackedBlendStore,
     ):
         """Route research proof through blend without feed-only side effects."""
+        runtime_cohort = getattr(self, "paper_cohort", None)
         task = BlendTask(
             trading_queue=self._trading_queue,
             store=store,
@@ -3412,8 +3413,10 @@ class TradingBot:
                 "_g7_skip_evidence_capture_sink",
                 None,
             ),
-            runtime_paper_cohort_id=self.paper_cohort.cohort_id,
-            runtime_paper_cohort_kind=_configured_paper_cohort_kind(),
+            runtime_paper_cohort_id=getattr(runtime_cohort, "cohort_id", None),
+            runtime_paper_cohort_kind=(
+                _configured_paper_cohort_kind() if runtime_cohort is not None else None
+            ),
         )
         return await self._route_analysis_through_blend(
             analysis,
