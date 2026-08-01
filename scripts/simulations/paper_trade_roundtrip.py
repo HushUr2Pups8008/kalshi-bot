@@ -2,7 +2,7 @@
 
 Drives a *real* :class:`trading.paper_trader.PaperTrader` against a temp
 SQLite database, wired to a paper-mode :class:`trading.executor.TradeExecutor`,
-and pushes each canonical LLM-positive event through ``execute()``.
+and pushes each decision-grade LLM-positive event through ``execute()``.
 
 Each event runs on a freshly-instantiated executor + DB. That isolates
 ticker-cooldown / opposing-position interactions (which already have
@@ -10,7 +10,7 @@ their own coverage in ``executor_validate.py``) and makes the contract
 under test purely the INSERT path:
 
     1. ``executor.execute(SignalAnalysis)``
-    2. → ``executor._validate(...)`` (paper gates)
+    2. → decision-grade research admission + ``executor._validate(...)``
     3. → ``executor._execute_paper(...)``
     4. → ``paper_trader.record_trade(analysis)``
     5. → SQLite INSERT into ``paper_trades`` + bankroll debit
@@ -131,7 +131,8 @@ def _signal_analysis(event: LLMPositiveEvent, headline: str) -> SignalAnalysis:
         llm_direction=event.side,
         llm_magnitude="small",
         llm_confidence=event.fast_conf,
-        signal_meta={},
+        # This harness covers the post-research LLM-only persistence path.
+        signal_meta={"research_admission_status": "decision_grade_candidate"},
     )
 
 

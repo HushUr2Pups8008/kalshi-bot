@@ -6,6 +6,7 @@ import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -147,6 +148,24 @@ async def _audit_snapshot(
         source,
         now=now,
         snapshot_sha256=_artifact_hashes(db)[db.name],
+    )
+
+
+def _open_row(*, venue: str, ticker: str, canonical_market_id: str) -> audit_module.OpenPaperRow:
+    return audit_module.OpenPaperRow(
+        trade_id="trade",
+        ticker=ticker,
+        venue=venue,
+        canonical_market_id=canonical_market_id,
+        identity_status="mapped",
+        quarantine_reason=None,
+        snapshot_close_time="2027-01-01T00:00:00Z",
+        snapshot_close_at=datetime(2027, 1, 1, tzinfo=timezone.utc),
+        market_snapshot_sha256="a" * 64,
+        market_snapshot_malformed=False,
+        trade_id_malformed=False,
+        identity_status_malformed=False,
+        persisted_terminal_fields=(),
     )
 
 
@@ -407,7 +426,7 @@ async def test_audit_marks_nontext_market_snapshot_invalid_without_fetching(
 
 
 @pytest.mark.asyncio
-async def test_audit_skips_invalid_unmapped_quarantined_and_other_venue_rows(
+async def test_audit_skips_invalid_unmapped_quarantined_and_unsupported_venue_rows(
     tmp_path: Path,
 ) -> None:
     db = tmp_path / "paper.db"
@@ -420,7 +439,7 @@ async def test_audit_skips_invalid_unmapped_quarantined_and_other_venue_rows(
         identity_status="quarantined",
         quarantine_reason="identity_mismatch",
     )
-    _insert(db, "other-venue", venue="kalshi")
+    _insert(db, "other-venue", venue="unsupported_venue")
     source = FakeSettlementSource({})
 
     report = await _audit_snapshot(db, source, now=NOW)
@@ -432,6 +451,127 @@ async def test_audit_skips_invalid_unmapped_quarantined_and_other_venue_rows(
         "quarantined": "quarantined",
         "other-venue": "unsupported_venue",
     }
+
+
+@pytest.mark.asyncio
+async def test_audit_fetches_mapped_kalshi_row_with_exact_identity(tmp_path: Path) -> None:
+    db = tmp_path / "paper.db"
+    _create_db(db)
+    ticker = "KXTEST-26AUG05"
+    _insert(
+        db,
+        "kalshi-trade",
+        ticker=ticker,
+        venue="kalshi",
+        venue_market_id=ticker,
+    )
+    source = FakeSettlementSource({(ticker, ticker): None})
+
+    report = await _audit_snapshot(db, source, now=NOW)
+
+    assert source.calls == [MarketRef(Venue.KALSHI, ticker, ticker)]
+    assert report.fetched_markets == 1
+    assert report.rows[0].status == "pending_receipt"
+
+
+@pytest.mark.asyncio
+async def test_main_async_constructs_authoritative_clients_for_kalshi_and_polymarket(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeKalshiClient:
+        pass
+
+    class FakePolymarketClient:
+        pass
+
+    class CapturingSource:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+
+    async def fake_audit_database(*_args, **_kwargs):
+        return SimpleNamespace(to_json=lambda: "{}")
+
+    monkeypatch.setattr(audit_module, "KalshiRestClient", FakeKalshiClient, raising=False)
+    monkeypatch.setattr(audit_module, "PolymarketPublicClient", FakePolymarketClient)
+    monkeypatch.setattr(audit_module, "AuthoritativeSettlementSource", CapturingSource)
+    monkeypatch.setattr(audit_module, "audit_database", fake_audit_database)
+    monkeypatch.setattr(
+        audit_module,
+        "_load_open_rows_from_quiescent_snapshot",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            rows=(_open_row(
+                venue="kalshi",
+                ticker="KXTEST-26AUG05",
+                canonical_market_id="KXTEST-26AUG05",
+            ),),
+        ),
+    )
+
+    result = await audit_module._main_async(
+        SimpleNamespace(
+            snapshot_db=tmp_path / "snapshot.db",
+            snapshot_sha256="0" * 64,
+            timeout_seconds=2.5,
+        )
+    )
+
+    assert result == 0
+    assert isinstance(captured["kalshi_client"], FakeKalshiClient)
+    assert isinstance(captured["polymarket_client"], FakePolymarketClient)
+    assert captured["timeout_seconds"] == 2.5
+
+
+@pytest.mark.asyncio
+async def test_main_async_avoids_kalshi_client_for_polymarket_only_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class UnexpectedKalshiClient:
+        def __init__(self) -> None:
+            pytest.fail("Kalshi client must not initialize for a Polymarket-only snapshot")
+
+    class FakePolymarketClient:
+        pass
+
+    class CapturingSource:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+
+    async def fake_audit_database(*_args, **_kwargs):
+        return SimpleNamespace(to_json=lambda: "{}")
+
+    monkeypatch.setattr(audit_module, "KalshiRestClient", UnexpectedKalshiClient, raising=False)
+    monkeypatch.setattr(audit_module, "PolymarketPublicClient", FakePolymarketClient)
+    monkeypatch.setattr(audit_module, "AuthoritativeSettlementSource", CapturingSource)
+    monkeypatch.setattr(audit_module, "audit_database", fake_audit_database)
+    monkeypatch.setattr(
+        audit_module,
+        "_load_open_rows_from_quiescent_snapshot",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            rows=(_open_row(
+                venue="polymarket_us",
+                ticker="exact-market",
+                canonical_market_id="42",
+            ),),
+        ),
+    )
+
+    result = await audit_module._main_async(
+        SimpleNamespace(
+            snapshot_db=tmp_path / "snapshot.db",
+            snapshot_sha256="0" * 64,
+            timeout_seconds=2.5,
+        )
+    )
+
+    assert result == 0
+    assert captured["kalshi_client"] is None
+    assert isinstance(captured["polymarket_client"], FakePolymarketClient)
 
 
 @pytest.mark.asyncio

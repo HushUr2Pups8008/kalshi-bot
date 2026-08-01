@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from kalshi.rest_client import KalshiRestClient  # noqa: E402
 from polymarket.public_client import PolymarketPublicClient  # noqa: E402
 from polymarket.settlement_reconciler import SettlementNotFound  # noqa: E402
 from trading.authoritative_settlement_source import (  # noqa: E402
@@ -421,13 +422,23 @@ def _nonfetchable_status(row: OpenPaperRow) -> str | None:
         or row.identity_status_malformed
     ):
         return "invalid_identity"
-    if row.venue != Venue.POLYMARKET_US.value:
+    if row.venue not in {Venue.KALSHI.value, Venue.POLYMARKET_US.value}:
         return "unsupported_venue"
     if row.identity_status == "quarantined":
         return "quarantined"
     if row.identity_status != "mapped":
         return "unmapped_identity"
-    if row.canonical_market_id is None or _NUMERIC_MARKET_ID.fullmatch(row.canonical_market_id) is None:
+    if row.canonical_market_id is None:
+        return "invalid_identity"
+    if (
+        row.venue == Venue.POLYMARKET_US.value
+        and _NUMERIC_MARKET_ID.fullmatch(row.canonical_market_id) is None
+    ):
+        return "invalid_identity"
+    if (
+        row.venue == Venue.KALSHI.value
+        and row.canonical_market_id != row.ticker
+    ):
         return "invalid_identity"
     return None
 
@@ -540,7 +551,7 @@ async def _audit_rows(
     snapshot_artifacts: tuple[AuditSnapshotArtifact, ...],
     open_rows_sha256: str,
 ) -> SettlementAuditReport:
-    by_market: dict[tuple[str, str], list[OpenPaperRow]] = {}
+    by_market: dict[tuple[Venue, str, str], list[OpenPaperRow]] = {}
     skipped: dict[int, SettlementAuditRow] = {}
     for index, row in enumerate(rows):
         status = _nonfetchable_status(row)
@@ -560,12 +571,19 @@ async def _audit_rows(
         assert row.trade_id is not None
         assert row.canonical_market_id is not None
         assert row.ticker is not None
-        by_market.setdefault((row.canonical_market_id, row.ticker), []).append(row)
+        assert row.venue is not None
+        by_market.setdefault(
+            (Venue(row.venue), row.canonical_market_id, row.ticker),
+            [],
+        ).append(row)
 
-    market_results: dict[tuple[str, str], _MarketAudit] = {}
-    for canonical_market_id, ticker in sorted(by_market):
-        market_ref = MarketRef(Venue.POLYMARKET_US, canonical_market_id, ticker)
-        market_results[(canonical_market_id, ticker)] = await _audit_market(market_ref, source)
+    market_results: dict[tuple[Venue, str, str], _MarketAudit] = {}
+    for venue, canonical_market_id, ticker in sorted(
+        by_market,
+        key=lambda key: (key[0].value, key[1], key[2]),
+    ):
+        market_ref = MarketRef(venue, canonical_market_id, ticker)
+        market_results[(venue, canonical_market_id, ticker)] = await _audit_market(market_ref, source)
 
     audit_rows: list[SettlementAuditRow] = []
     for index, row in enumerate(rows):
@@ -574,10 +592,11 @@ async def _audit_rows(
             audit_rows.append(skipped_row)
             continue
         assert row.canonical_market_id is not None
+        assert row.venue is not None
         audit_rows.append(
             _row_from_market_audit(
                 row,
-                market_results[(row.canonical_market_id, row.ticker)],
+                market_results[(Venue(row.venue), row.canonical_market_id, row.ticker)],
                 now=now,
             )
         )
@@ -617,6 +636,13 @@ async def audit_database(
     )
 
 
+def _snapshot_requires_kalshi_client(rows: tuple[OpenPaperRow, ...]) -> bool:
+    return any(
+        row.venue == Venue.KALSHI.value and _nonfetchable_status(row) is None
+        for row in rows
+    )
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Read-only audit of authoritative receipts for open paper positions.")
     parser.add_argument(
@@ -640,8 +666,16 @@ def _parse_args() -> argparse.Namespace:
 
 
 async def _main_async(args: argparse.Namespace) -> int:
+    snapshot = _load_open_rows_from_quiescent_snapshot(
+        args.snapshot_db,
+        expected_sha256=args.snapshot_sha256,
+    )
     source = AuthoritativeSettlementSource(
-        kalshi_client=None,
+        kalshi_client=(
+            KalshiRestClient()
+            if _snapshot_requires_kalshi_client(snapshot.rows)
+            else None
+        ),
         polymarket_client=PolymarketPublicClient(),
         timeout_seconds=args.timeout_seconds,
     )

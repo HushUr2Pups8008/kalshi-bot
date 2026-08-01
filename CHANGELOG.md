@@ -19,6 +19,35 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.37] - 2026-08-01
+
+### Added
+
+- **Decision-grade LLM-only paper admission.** Raw paper candidates with an
+  LLM signal but no matched keywords now stop before pricing, fee admission, or
+  persistence unless the existing decision-grade research bridge supplied its
+  admission marker. Live and keyword-backed paths are unchanged.
+- **Kalshi settlement audit coverage.** The caller-attested, read-only open
+  paper-settlement audit now performs exact bounded Kalshi lookups as well as
+  Polymarket lookups. It reports evidence only and never resolves trades or
+  writes a ledger.
+
+### Changed
+
+- **Runtime-cohort settlement status.** `botcheck` now reads canonical
+  settlement backlog from the attested runtime cohort DB and fails closed when
+  that binding is unavailable, rather than presenting legacy-root DB state as
+  current runtime state.
+- **Decision-grade round-trip simulation.** The offline LLM-only persistence
+  harness now supplies the explicit decision-grade admission marker required
+  by production before it asserts a paper-row insert.
+
+### Verification
+
+- `CI=1 .venv/bin/python -m pytest -q tests/test_executor.py tests/test_open_paper_settlement_audit.py tests/test_botcheck.py tests/test_authoritative_settlement_clients.py tests/test_research_paper_admission.py tests/test_main_pipeline.py tests/test_simulations_smoke.py`
+- Independent reviews covered LLM-only admission scope, exact Kalshi identity,
+  lazy venue-client construction, and runtime-attestation fail-closed behavior.
+
 ## [0.33.36] - 2026-08-01
 
 ### Added
