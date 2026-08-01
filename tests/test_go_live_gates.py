@@ -156,29 +156,30 @@ def test_gate_requires_independent_realized_profit_evidence():
     assert any("Independent realized-profit evidence unavailable" in failure for failure in failures)
 
 
-def test_archived_legacy_receipt_cannot_satisfy_profit_attestation_or_live_readiness(
+def test_archived_legacy_receipt_path_hard_blocks_go_live_when_profit_predicate_passes(
     tmp_path: Path,
 ):
-    archived_receipt = (
+    archived_db_path = (
         tmp_path
         / "finalized_legacy_pending_paper_cohorts"
         / "finalization-20260801t180000z"
         / "payload"
         / "legacy_receipts"
-        / "receipt-1.json"
+        / "paper_trades.db"
     )
-    archived_receipt.parent.mkdir(parents=True)
-    archived_receipt.write_text('{"receipt":"legacy-only"}', encoding="utf-8")
+    archived_db_path.parent.mkdir(parents=True)
+    archived_db_path.touch()
     paper = _paper(notional=60.0, resolved_trades=_passing_resolved())
-    paper.db_path = archived_receipt
+    paper.db_path = archived_db_path
 
-    assert not main.independent_realized_profit_evidence_available(
-        db_path=archived_receipt
-    )
     with patch.object(main, "cfg", _cfg()), patch.object(
         main,
         "_provisioned_cohort_live_risk_gate_failures",
         return_value=(True, []),
+    ), patch.object(
+        main,
+        "independent_realized_profit_evidence_available",
+        return_value=True,
     ), patch(
         "scripts.mark_open_positions.compute_open_position_marks",
         return_value={"marked_value": 0.0, "unpriced_count": 0},
@@ -186,7 +187,8 @@ def test_archived_legacy_receipt_cannot_satisfy_profit_attestation_or_live_readi
         failures = main._check_go_live_gates(paper)
 
     assert failures == [
-        "Independent realized-profit evidence unavailable -- gate fails closed"
+        "Archived legacy-pending finalization payload cannot qualify for live "
+        "readiness -- gate fails closed"
     ]
 
 
