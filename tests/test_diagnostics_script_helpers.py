@@ -10,6 +10,7 @@ from utils.diagnostics_script_helpers import (
     add_top_arg,
     add_until_arg,
     in_window,
+    is_replay_or_test_paper_trade,
     is_test_record_source_only,
     is_test_record_source_or_signal_source,
     parse_date_end,
@@ -99,6 +100,33 @@ def test_is_test_record_source_or_signal_source_prefers_source_when_present():
     assert is_test_record_source_or_signal_source(record) is False
 
 
+def test_is_replay_or_test_paper_trade_recognizes_explicit_replay_and_existing_test_markers():
+    assert (
+        is_replay_or_test_paper_trade(
+            {"type": "PAPER_TRADE", "signal_source": "paper-trade-roundtrip"}
+        )
+        is True
+    )
+    assert (
+        is_replay_or_test_paper_trade(
+            {
+                "type": "PAPER_TRADE",
+                "source": "Reuters",
+                "signal_source": "r/test",
+            }
+        )
+        is True
+    )
+    assert is_replay_or_test_paper_trade({"type": "PAPER_TRADE", "source": "r/test"}) is True
+    assert is_replay_or_test_paper_trade({"type": "PAPER_TRADE", "source": "Reuters"}) is False
+    assert (
+        is_replay_or_test_paper_trade(
+            {"type": "OPPORTUNITY", "signal_source": "paper-trade-roundtrip"}
+        )
+        is False
+    )
+
+
 def test_argparse_adders_preserve_expected_flags_and_defaults():
     parser = argparse.ArgumentParser()
     add_path_arg(parser, default="logs/trades", help_text="path help")
@@ -114,4 +142,3 @@ def test_argparse_adders_preserve_expected_flags_and_defaults():
     assert args.until is None
     assert args.exclude_test is True
     assert args.top == 9
-

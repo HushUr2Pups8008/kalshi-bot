@@ -36,6 +36,7 @@ from utils.diagnostics_script_helpers import (
     add_since_arg,
     add_top_arg,
     add_until_arg,
+    is_replay_or_test_paper_trade,
     is_test_record_source_or_signal_source as is_test_record,
     parse_date_end,
     parse_date_start,
@@ -983,6 +984,11 @@ def summarize(
         "runtime_paper_cohort_excluded_untagged_records": 0,
         "runtime_paper_cohort_excluded_other_cohort_records": 0,
         "runtime_paper_cohort_excluded_malformed_records": 0,
+        "paper_trade_window_raw_rows": 0,
+        "paper_trade_scope_rows": 0,
+        "paper_trade_admission_rows": 0,
+        "paper_trade_replay_or_test_rows": 0,
+        "paper_trade_replay_or_test_sources": Counter(),
         "event_counts": Counter(),
         "skip_reasons": Counter(),
         "skip_categories": Counter(),
@@ -1066,6 +1072,14 @@ def summarize(
     for record in iter_trade_records(path, since=since, until=until, stats=read_stats):
         if progress_tracker is not None:
             progress_tracker.tick()
+        event_type = str(record.get("type") or "UNKNOWN").strip() or "UNKNOWN"
+        replay_or_test_paper_trade = is_replay_or_test_paper_trade(record)
+        if event_type == "PAPER_TRADE":
+            stats["paper_trade_window_raw_rows"] += 1
+            if replay_or_test_paper_trade:
+                stats["paper_trade_replay_or_test_rows"] += 1
+                source = str(record.get("signal_source") or record.get("source") or "(unknown)").strip()
+                stats["paper_trade_replay_or_test_sources"][source or "(unknown)"] += 1
         if exclude_test and is_test_record(record):
             continue
         if runtime_paper_cohort_id is not None:
@@ -1086,9 +1100,12 @@ def summarize(
                 continue
 
         stats["records_kept"] += 1
-        event_type = str(record.get("type") or "UNKNOWN").strip() or "UNKNOWN"
         stats["event_counts"][event_type] += 1
-        if event_type in _LIFECYCLE_ATTRIBUTION_EVENT_TYPES:
+        if event_type == "PAPER_TRADE":
+            stats["paper_trade_scope_rows"] += 1
+            if not replay_or_test_paper_trade:
+                stats["paper_trade_admission_rows"] += 1
+        if event_type in _LIFECYCLE_ATTRIBUTION_EVENT_TYPES and not replay_or_test_paper_trade:
             lifecycle_records.append((event_type, record))
 
         signal_type = infer_signal_type(record)
@@ -1495,6 +1512,28 @@ def print_summary(stats: dict[str, Any], top: int, since: datetime | None, until
             f"{stats['runtime_paper_cohort_excluded_malformed_records']}"
         )
 
+    paper_trade_window_raw_rows = int(stats.get("paper_trade_window_raw_rows", 0) or 0)
+    paper_trade_scope_rows = int(stats.get("paper_trade_scope_rows", 0) or 0)
+    paper_trade_admission_rows = int(stats.get("paper_trade_admission_rows", 0) or 0)
+    paper_trade_replay_or_test_rows = int(stats.get("paper_trade_replay_or_test_rows", 0) or 0)
+    paper_trade_replay_or_test_sources = Counter(stats.get("paper_trade_replay_or_test_sources") or {})
+    if paper_trade_window_raw_rows or paper_trade_replay_or_test_rows:
+        print()
+        print("Paper-trade admission attribution")
+        print(f"  Raw PAPER_TRADE rows          : {paper_trade_window_raw_rows}")
+        print(f"  Report-scope PAPER_TRADE rows : {paper_trade_scope_rows}")
+        if runtime_paper_cohort_id is not None:
+            print(f"  Runtime paper admissions      : {paper_trade_admission_rows}")
+        else:
+            print(f"  Non-replay paper admissions   : {paper_trade_admission_rows}")
+        print(f"  Replay/test PAPER_TRADE rows  : {paper_trade_replay_or_test_rows}")
+        if paper_trade_replay_or_test_sources:
+            source_summary = ", ".join(
+                f"{source}: {count}"
+                for source, count in paper_trade_replay_or_test_sources.most_common(top)
+            )
+            print(f"  Replay/test sources           : {source_summary}")
+
     if stats["records_kept"] == 0:
         print()
         print("No matching log records found.")
@@ -1533,7 +1572,7 @@ def print_summary(stats: dict[str, Any], top: int, since: datetime | None, until
     else:
         print("  No-signal exits               : not directly observable in trades.jsonl")
     print(f"  Executor skips               : {skipped}")
-    print(f"  Paper-trade records          : {paper_trades}")
+    print(f"  Paper-trade admission rows   : {paper_trade_admission_rows}")
     print(f"  Live submission intents      : {live_submission_intents}")
     print(f"  Live order submissions       : {live_orders}")
 
