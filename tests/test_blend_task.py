@@ -628,6 +628,29 @@ async def test_side_calibration_quarantine_capture_error_is_terminal_nonadmittin
 
 
 @pytest.mark.asyncio
+async def test_side_calibration_quarantine_capture_cancelled_is_terminal_nonadmitting():
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    sink = SpySideCalibrationQuarantineCaptureSink(failure=asyncio.CancelledError())
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(),
+        logger=SpyLogger(),
+        is_paper_mode=True,
+        side_calibration_quarantine_sink=sink,
+    )
+
+    result = await task.process_fast_lane_result(
+        _analysis(market=_market(liquidity_dollars=Decimal("1")))
+    )
+
+    assert result.enqueued is False
+    assert result.candidate is None
+    assert result.trade_blocked_reason == "paper_side_calibration_capture_failed"
+    assert queue.empty()
+    assert len(sink.envelopes) == 1
+
+
+@pytest.mark.asyncio
 async def test_prequeue_book_provenance_projects_result_only_on_ready_queued_candidate():
     queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
     calls: list[SignalAnalysis] = []

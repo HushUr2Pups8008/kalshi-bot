@@ -277,6 +277,49 @@ def test_paper_side_calibration_quarantine_factory_propagates_startup_failure():
             )
 
 
+def test_paper_side_calibration_quarantine_factory_builds_qualified_paper_runtime(
+    tmp_path,
+):
+    runtime = SimpleNamespace(
+        sink=object(),
+        prequeue_book_provenance_provider=object(),
+    )
+    cohort_attestation = object()
+    kalshi_reader = object()
+    polymarket_reader = object()
+
+    with patch(
+        "tasks.side_calibration_quarantine.build_side_calibration_quarantine_runtime",
+        return_value=runtime,
+    ) as build_runtime:
+        result = main_module._build_paper_side_calibration_quarantine_runtime(
+            True,
+            is_paper_trading=True,
+            live_trading_enabled=False,
+            cohort_attestation=cohort_attestation,
+            kalshi_reader=kalshi_reader,
+            paper_cohort_id="paper-cohort",
+            paper_cohort_kind="paper",
+            polymarket_reader=polymarket_reader,
+            db_path=tmp_path / "side-calibration.db",
+        )
+
+    assert result is runtime
+    build_runtime.assert_called_once()
+    kwargs = build_runtime.call_args.kwargs
+    assert kwargs["db_path"] == tmp_path / "side-calibration.db"
+    assert kwargs["software_version"] == main_module.VERSION
+    assert kwargs["cohort_attestation"] is cohort_attestation
+    assert kwargs["kalshi_reader"] is kalshi_reader
+    assert kwargs["polymarket_reader"] is polymarket_reader
+    startup_config = kwargs["startup_config"]
+    assert startup_config.feature_enabled is True
+    assert startup_config.is_paper_trading is True
+    assert startup_config.live_trading_enabled is False
+    assert startup_config.paper_cohort_id == "paper-cohort"
+    assert startup_config.paper_cohort_kind == "paper"
+
+
 def test_create_research_prewarm_runtime_task_enabled(monkeypatch):
     monkeypatch.setattr(_cfg_module.cfg, "enable_research_prewarm_task", True, raising=False)
     monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_interval_seconds", 900.0, raising=False)
