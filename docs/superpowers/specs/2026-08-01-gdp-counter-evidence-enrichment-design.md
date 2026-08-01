@@ -25,10 +25,20 @@ eligibility rule below holds. No new network request, market admission bypass,
 or trade action is introduced.
 
 The builder runs once after ordinary evidence normalization and provisional
-direction selection, but before the final existing `decide_research_verdict()`
-call. The final verdict is always recomputed through the existing gates. If the
-new record is not valid, nothing is appended and `missing_counter_evidence`
-remains the result.
+direction selection, and before the existing side-aware counter-query fallback
+and its re-adjudication path. The final verdict is recomputed through the
+existing gates immediately after enrichment. Only if that recomputation still
+needs counter evidence may the existing fallback issue a counter query and
+perform its normal second adjudication. A qualifying enrichment therefore adds
+no counter-provider call and no second adjudicator call.
+
+Until a separately reviewed, operator-approved live rollout is implemented,
+`live_mode=True` is an explicit exclusion: the builder must not append derived
+GDPNow countercheck evidence, and neither raw nor previously derived GDPNow
+countercheck evidence may satisfy the counter-evidence gate or promote a live
+decision. Raw GDPNow can remain visible as research context, but a live verdict
+that would otherwise rely on this enrichment stays fail-closed. This is a code
+path guard, not a deployment convention.
 
 ## Supported GDP Contract Semantics
 
@@ -88,7 +98,8 @@ current run. It must not infer a target period from a ticker or reuse a cached
 GDPNow observation for another contract. A replay without the stored derived
 countercheck does not synthesize one from cached raw evidence; it remains
 fail-closed. A replay with the derived record revalidates its normal evidence
-freshness and contract fingerprint.
+freshness and contract fingerprint. In `live_mode=True`, either replay form is
+excluded from counter qualification until the separate rollout approval exists.
 
 Spoofed source names/URLs, missing timestamps, stale/future data, missing
 contract fingerprint, nonfinite values, low-confidence extraction, or an
@@ -179,7 +190,13 @@ Implementation must add focused `tests/test_research_gate.py` coverage for:
    record fields, no duplicate, no cross-contract reuse; and
 7. explicit checks that raw GDPNow stays `base_rate`, derived evidence is not
    directional support/probability input, and non-GDP counter behavior is
-   unchanged.
+   unchanged;
+8. caller-level `run_research_gate(..., live_mode=True)` coverage for a case
+   that qualifies in paper/prewarm mode: no derived record, no GDPNow counter
+   qualification, and no live status promotion; and
+9. provider/adjudicator spy coverage for a qualifying paper/prewarm enrichment:
+   zero extra side-aware counter-query calls and no second adjudicator call,
+   while a nonqualifying case still follows the existing fallback exactly once.
 
 ## Rollout Metrics And Safe Runtime Boundary
 
@@ -199,8 +216,9 @@ The implementation stays inside the existing decision-grade research gate and
 uses an already-fetched source. It changes no API credentials, launchd service,
 database schema, runtime sizing, order placement, or live-mode configuration.
 Initial deployment is paper/prewarm observation with normal fail-closed verdicts
-and a sampled evidence audit. Extending the same path to live decision use
-requires a separate operator-approved rollout after those metrics and replay
+and a sampled evidence audit. The `live_mode=True` code-path exclusion remains
+in force even after merge. Extending the same path to live decision use requires
+a separate reviewed, operator-approved change after these metrics and replay
 checks are reviewed.
 
 ## Non-Goals

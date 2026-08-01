@@ -7,6 +7,11 @@ research gate. It must retain `missing_counter_evidence` as the default
 fail-closed result. It does not add a data provider, change market selection,
 modify settlement/accounting state, alter order sizing, or restart a service.
 
+Until a separate reviewed, operator-approved rollout lands, `live_mode=True`
+must hard-exclude raw and derived GDPNow countercheck evidence from satisfying
+the counter-evidence gate or promoting a live decision. This is enforced in
+`run_research_gate`, not left to deployment procedure.
+
 The only eventual code ownership is the existing research surface:
 
 - `analysis/research_gate.py`
@@ -38,6 +43,14 @@ research pipeline.
 5. Add RED idempotence/replay tests: repeated enrichment and persisted/replayed
    evidence produce one stable derived record and never derive from a raw cache
    without current-run context.
+6. Add a caller-level `run_research_gate(..., live_mode=True)` RED test using a
+   scenario that would qualify in paper/prewarm mode. Assert no derived record,
+   no GDPNow counter qualification, and the same fail-closed live verdict as
+   before enrichment.
+7. Add provider/adjudicator spy RED tests. A qualifying paper/prewarm
+   countercheck must make zero extra side-aware counter-provider calls and no
+   second adjudicator call; a nonqualifying case must retain the one existing
+   fallback/re-adjudication sequence.
 
 Run the focused tests and confirm that only the new contract expectations fail.
 
@@ -78,13 +91,20 @@ integration work begins.
    value, contract fingerprint, strict threshold/period, and proposed side.
    Preserve the original FRED `base_rate` record unchanged.
 4. Integrate the builder once after ordinary structured normalization and
-   provisional selection, before the final normal `decide_research_verdict()`.
-   Re-run the existing verdict only; do not add an extra network query or a
-   recursive enrichment pass.
+   provisional selection, before the existing `_side_aware_counter_query()`
+   fallback and counter re-adjudication path. Re-run the ordinary verdict after
+   enrichment. If it now qualifies, return through the normal finalization path
+   without a counter-provider call or a second adjudication; if it does not,
+   invoke the unchanged fallback exactly once. Do not add a recursive enrichment
+   pass.
 5. Exclude derived counterchecks from structured-signal selection, probability
    calculation, and primary directional support. Let the existing
    `_has_counter_evidence()` relevance/confidence checks decide whether it is a
    counter result.
+6. Enforce the `live_mode=True` exclusion at this integration point: do not
+   derive or qualify raw/derived GDPNow countercheck evidence for a live
+   decision. Existing live fail-closed behavior must remain unchanged until a
+   separate rollout change is approved.
 
 Run the GDPNow-focused tests. Assert the legacy non-GDP counter path is
 unchanged.
@@ -123,9 +143,10 @@ countercheck contract tests pass.
    plus focused dossier/replay tests if Task 4 touched those surfaces.
 4. Run a deterministic replay fixture twice and assert identical evidence order,
    identities, verdict, and telemetry reason code.
-5. Deploy only to paper/prewarm observation first. Review the metrics and a
-   sampled evidence audit before any separately approved live-mode use. No
-   restart, config edit, size change, or order action belongs to this plan.
+5. Deploy only to paper/prewarm observation first. The explicit live-mode guard
+   remains active; review the metrics and a sampled evidence audit before any
+   separately approved live-mode change. No restart, config edit, size change,
+   or order action belongs to this plan.
 
 ## Completion Criteria
 
@@ -135,5 +156,11 @@ countercheck contract tests pass.
   independently supported side for an exact strict GDP contract.
 - The raw observation is never relabeled or double counted.
 - Dossier/replay behavior is deterministic and cross-contract safe.
+- Qualifying enrichment bypasses no normal final gate and incurs neither an
+  extra counter query nor a second adjudication; nonqualifying cases retain the
+  existing fallback behavior.
+- `live_mode=True` cannot use raw or derived GDPNow countercheck evidence to
+  clear `missing_counter_evidence` until a separate reviewed rollout changes
+  that explicit guard.
 - Focused tests, full research-gate tests, and replay checks pass before any
   runtime rollout decision.
