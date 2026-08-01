@@ -36,6 +36,7 @@ from utils.diagnostics_script_helpers import (
     parse_date_start,
 )
 from utils.keyword_diagnostics_helpers import (
+    BUCKET_COUNTER_EVIDENCE_REVIEW,
     BUCKET_PROMOTE,
     BUCKET_REJECT,
     BUCKET_SHADOW,
@@ -44,6 +45,7 @@ from utils.keyword_diagnostics_helpers import (
     PROMOTE_MIN_HITS,
     PROMOTE_MIN_SCORE,
     PROMOTE_MIN_SOURCES,
+    apply_keyword_shadow_counter_evidence,
     evaluate_keyword_shadow_evidence,
     evaluate_shadow_phrases as evaluate_phrases,
     load_keyword_shadow_replay_evidence,
@@ -58,6 +60,7 @@ from utils.reporting_helpers import warn_if_full_trade_root_scan
 # Re-exports for tests/test_keyword_shadow_eval.py. Ruff F401 flags these as
 # unused within this script, but they are part of its public re-export surface.
 __all__ = [
+    "BUCKET_COUNTER_EVIDENCE_REVIEW",
     "BUCKET_PROMOTE",
     "BUCKET_REJECT",
     "BUCKET_SHADOW",
@@ -67,6 +70,7 @@ __all__ = [
     "PROMOTE_MIN_SCORE",
     "PROMOTE_MIN_SOURCES",
     "_phrase_matches",
+    "apply_keyword_shadow_counter_evidence",
     "evaluate_keyword_shadow_evidence",
     "evaluate_phrases",
     "load_keyword_shadow_replay_evidence",
@@ -149,6 +153,10 @@ def _pct(numerator: int, denominator: int) -> str:
     return f"{numerator / denominator * 100:.1f}%"
 
 
+def _format_optional_rate(value: float | None) -> str:
+    return f"{value:.3f}" if value is not None else "n/a"
+
+
 def _print_phrase_block(pr: dict[str, Any], total: int, max_examples: int) -> None:
     """Print one phrase's stats block. Called once per phrase in the grouped report."""
     hits = pr["hits"]
@@ -227,10 +235,14 @@ def print_report(
         print(f"  '{p}'")
     print()
 
-    # Grouped by bucket (promote -> shadow -> reject)
-    bucket_order = [BUCKET_PROMOTE, BUCKET_SHADOW, BUCKET_REJECT]
+    # Legacy order is unchanged; modern proxy-blocked rows get their own group.
+    bucket_order = [BUCKET_PROMOTE]
+    if any(pr.get("bucket") == BUCKET_COUNTER_EVIDENCE_REVIEW for pr in result["phrases"]):
+        bucket_order.append(BUCKET_COUNTER_EVIDENCE_REVIEW)
+    bucket_order.extend([BUCKET_SHADOW, BUCKET_REJECT])
     bucket_labels = {
         BUCKET_PROMOTE: "PROMOTE CANDIDATES",
+        BUCKET_COUNTER_EVIDENCE_REVIEW: "REQUIRES COUNTER-EVIDENCE REVIEW",
         BUCKET_SHADOW:  "CONTINUE SHADOWING",
         BUCKET_REJECT:  "REJECT FOR NOW",
     }
@@ -318,6 +330,8 @@ def build_json_result(
             ],
             "precision_risk_is_proxy": True,
             "precision_risk_label": result["precision_risk_label"],
+            "precision_risk_rates_are_not_precision_truth": True,
+            "automatic_promotion": False,
         }
         for output_row, phrase_row in zip(payload["phrase_results"], result["phrases"], strict=True):
             for field in (
@@ -326,9 +340,17 @@ def build_json_result(
                 "coverage_unique_ticker_count",
                 "coverage_unique_source_count",
                 "precision_risk_hits",
-                "precision_risk_rate",
+                "precision_risk_hit_rate",
+                "precision_risk_corpus_rate",
                 "precision_risk_unique_ticker_count",
                 "precision_risk_unique_source_count",
+                "coverage_score",
+                "coverage_bucket",
+                "coverage_reason",
+                "counter_evidence_status",
+                "promotion_eligible",
+                "promotion_status",
+                "automatic_promotion",
             ):
                 output_row[field] = phrase_row[field]
     return payload
@@ -349,7 +371,7 @@ def _print_modern_target_evidence(result: dict[str, Any]) -> None:
         f"{result['excluded_legacy_or_malformed_count']}"
     )
     print(f"  Precision-risk proxy reviews    : {result['precision_risk_count']}")
-    print("  Precision-risk is not precision truth and never changes promotion scoring.")
+    print("  Precision-risk is not precision truth or runtime approval.")
     for phrase in result["phrases"]:
         print(f"  {phrase['phrase']}")
         print(
@@ -360,9 +382,26 @@ def _print_modern_target_evidence(result: dict[str, Any]) -> None:
         )
         print(
             "    precision-risk proxy: "
-            f"{phrase['precision_risk_hits']} ({phrase['precision_risk_rate']:.3f}), "
+            f"hits={phrase['precision_risk_hits']}, "
+            f"paired-hit-rate(proxy/coverage)={_format_optional_rate(phrase['precision_risk_hit_rate'])}, "
+            f"corpus-rate={phrase['precision_risk_corpus_rate']:.3f}, "
             f"tickers={phrase['precision_risk_unique_ticker_count']}, "
             f"sources={phrase['precision_risk_unique_source_count']}"
+        )
+        print(
+            "    coverage-only scoring (not final promotion): "
+            f"score={phrase['coverage_score']}, bucket={phrase['coverage_bucket']}"
+        )
+        print(f"    counter-evidence status: {phrase['counter_evidence_status']}")
+        promotion_label = (
+            "manual evidence only; not runtime approval"
+            if phrase["promotion_status"] == "manual_evidence_only_not_runtime_approval"
+            else phrase["promotion_status"]
+        )
+        print(
+            "    promotion: "
+            f"eligible={phrase['promotion_eligible']}, "
+            f"status={promotion_label}, automatic_promotion={phrase['automatic_promotion']}"
         )
 
 
@@ -405,6 +444,8 @@ def main() -> int:
         )
         result = evaluate_phrases(records, phrases, max_examples=args.max_examples)
     score_phrases(result["phrases"])
+    if modern_evidence is not None:
+        apply_keyword_shadow_counter_evidence(result["phrases"])
 
     if args.materialize_snapshot is not None:
         try:

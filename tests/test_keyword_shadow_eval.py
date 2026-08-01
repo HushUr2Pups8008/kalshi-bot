@@ -13,6 +13,7 @@ import sys
 import pytest
 
 from scripts.keyword_shadow_eval import (
+    BUCKET_COUNTER_EVIDENCE_REVIEW,
     BUCKET_PROMOTE,
     BUCKET_REJECT,
     BUCKET_SHADOW,
@@ -22,6 +23,7 @@ from scripts.keyword_shadow_eval import (
     PROMOTE_MIN_SCORE,
     PROMOTE_MIN_SOURCES,
     _phrase_matches,
+    apply_keyword_shadow_counter_evidence,
     evaluate_keyword_shadow_evidence,
     evaluate_phrases,
     load_keyword_shadow_replay_evidence,
@@ -466,6 +468,9 @@ class TestScorePhrases:
 REPLAY_EVIDENCE_FIXTURE = (
     Path(__file__).resolve().parent / "fixtures" / "keyword_shadow_replay_evidence.jsonl"
 )
+COUNTER_EVIDENCE_FIXTURE = (
+    Path(__file__).resolve().parent / "fixtures" / "keyword_shadow_counter_evidence.jsonl"
+)
 
 
 def _modern_replay_evidence() -> dict:
@@ -475,6 +480,25 @@ def _modern_replay_evidence() -> dict:
         until=None,
         exclude_test=False,
     )
+
+
+def _counter_evidence() -> dict:
+    return load_keyword_shadow_replay_evidence(
+        COUNTER_EVIDENCE_FIXTURE,
+        since=None,
+        until=None,
+        exclude_test=False,
+    )
+
+
+def _scored_counter_evidence_result() -> dict:
+    result = evaluate_keyword_shadow_evidence(
+        _counter_evidence(),
+        ["russia sanctions", "energy embargo", "proxy only"],
+    )
+    score_phrases(result["phrases"])
+    apply_keyword_shadow_counter_evidence(result["phrases"])
+    return result
 
 
 def test_modern_replay_evidence_filters_target_slice_and_counts_excluded_rows():
@@ -509,15 +533,106 @@ def test_modern_replay_evidence_emits_coverage_breadth_and_precision_risk_proxy(
     assert strait["coverage_unique_ticker_count"] == 1
     assert strait["coverage_unique_source_count"] == 1
     assert strait["precision_risk_hits"] == 1
-    assert strait["precision_risk_rate"] == 0.5
+    assert strait["precision_risk_hit_rate"] == 1.0
+    assert strait["precision_risk_corpus_rate"] == 0.5
+    assert "precision_risk_rate" not in strait
 
     proxy_only = phrase_rows["rare proxy"]
     assert proxy_only["coverage_hits"] == 0
     assert proxy_only["precision_risk_hits"] == 1
+    assert proxy_only["precision_risk_hit_rate"] is None
+    assert proxy_only["precision_risk_corpus_rate"] == 0.5
     score_phrases(result["phrases"])
     assert proxy_only["bucket"] == BUCKET_REJECT
     assert result["precision_risk_is_proxy"] is True
     assert result["precision_risk_label"] == "not_precision_truth"
+
+
+def test_modern_counter_evidence_blocks_paired_promote_candidate_and_keeps_coverage_score():
+    result = _scored_counter_evidence_result()
+    phrase_rows = {row["phrase"]: row for row in result["phrases"]}
+    russia = phrase_rows["russia sanctions"]
+
+    assert result["target_coverage_count"] == 10
+    assert result["precision_risk_count"] == 11
+    assert russia["coverage_hits"] == 5
+    assert russia["precision_risk_hits"] == 5
+    assert russia["precision_risk_hit_rate"] == 1.0
+    assert russia["precision_risk_corpus_rate"] == 0.454545
+    assert "precision_risk_rate" not in russia
+    assert russia["score"] == 59
+    assert russia["coverage_score"] == 59
+    assert russia["coverage_bucket"] == BUCKET_PROMOTE
+    assert russia["bucket"] == BUCKET_COUNTER_EVIDENCE_REVIEW
+    assert russia["counter_evidence_status"] == BUCKET_COUNTER_EVIDENCE_REVIEW
+    assert russia["promotion_eligible"] is False
+    assert russia["automatic_promotion"] is False
+    assert russia["promotion_status"] == "blocked_pending_independent_manual_evidence"
+    assert "not precision truth" in russia["reason"]
+    assert "blocks automatic promotion" in russia["reason"]
+
+
+def test_modern_zero_risk_coverage_promotion_stays_manual_only_and_rate_denominators_are_explicit():
+    result = _scored_counter_evidence_result()
+    phrase_rows = {row["phrase"]: row for row in result["phrases"]}
+    energy = phrase_rows["energy embargo"]
+    proxy_only = phrase_rows["proxy only"]
+
+    assert energy["coverage_hits"] == 5
+    assert energy["precision_risk_hits"] == 0
+    assert energy["precision_risk_hit_rate"] == 0.0
+    assert energy["precision_risk_corpus_rate"] == 0.0
+    assert energy["coverage_bucket"] == BUCKET_PROMOTE
+    assert energy["bucket"] == BUCKET_PROMOTE
+    assert energy["counter_evidence_status"] == "no paired false-positive-neutral proxy hits"
+    assert energy["promotion_eligible"] is True
+    assert energy["automatic_promotion"] is False
+    assert energy["promotion_status"] == "manual_evidence_only_not_runtime_approval"
+
+    assert proxy_only["coverage_hits"] == 0
+    assert proxy_only["precision_risk_hits"] == 1
+    assert proxy_only["precision_risk_hit_rate"] is None
+    assert proxy_only["precision_risk_corpus_rate"] == 0.090909
+    assert proxy_only["promotion_eligible"] is False
+
+
+def test_modern_cli_text_and_json_label_counter_evidence_without_rewriting_legacy_default(
+    monkeypatch, capsys, tmp_path
+):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "keyword_shadow_eval.py",
+            "--path",
+            str(COUNTER_EVIDENCE_FIXTURE),
+            "--modern-target-slice",
+            "--phrases",
+            "russia sanctions",
+            "energy embargo",
+            "proxy only",
+            "--json",
+        ],
+    )
+
+    assert main() == 0
+
+    output = capsys.readouterr().out
+    assert "requires counter-evidence review" in output
+    assert "not precision truth" in output
+    assert "blocks automatic promotion pending independent/manual evidence" in output
+    assert "manual evidence only; not runtime approval" in output
+    assert "coverage-only scoring (not final promotion)" in output
+    payload = json.loads(output.split("JSON Output:\n", maxsplit=1)[1])
+    phrase_rows = {row["phrase"]: row for row in payload["phrase_results"]}
+    assert phrase_rows["russia sanctions"]["bucket"] == BUCKET_COUNTER_EVIDENCE_REVIEW
+    assert phrase_rows["russia sanctions"]["promotion_eligible"] is False
+    assert phrase_rows["russia sanctions"]["coverage_score"] == 59
+    assert phrase_rows["energy embargo"]["bucket"] == BUCKET_PROMOTE
+    assert phrase_rows["energy embargo"]["promotion_status"] == "manual_evidence_only_not_runtime_approval"
+    assert phrase_rows["energy embargo"]["automatic_promotion"] is False
+    assert "precision_risk_rate" not in phrase_rows["russia sanctions"]
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_snapshot_is_deterministic_and_only_freezes_whitelisted_decision_time_fields(tmp_path):
