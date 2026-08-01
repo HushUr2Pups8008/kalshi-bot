@@ -38,6 +38,7 @@ PROMOTE_MIN_SCORE = 20
 BUCKET_PROMOTE = "promote candidate"
 BUCKET_SHADOW = "continue shadowing"
 BUCKET_REJECT = "reject for now"
+BUCKET_COUNTER_EVIDENCE_REVIEW = "requires counter-evidence review"
 
 KEYWORD_SHADOW_REPLAY_SNAPSHOT_SCHEMA_VERSION = 1
 _MODERN_TARGET_SELECTOR = {
@@ -215,7 +216,10 @@ def evaluate_keyword_shadow_evidence(
         row["coverage_unique_ticker_count"] = len(row["tickers"])
         row["coverage_unique_source_count"] = len(row["sources"])
         row["precision_risk_hits"] = risk_row["hits"]
-        row["precision_risk_rate"] = _rate(risk_row["hits"], precision_risk_total)
+        row["precision_risk_hit_rate"] = (
+            _rate(risk_row["hits"], row["coverage_hits"]) if row["coverage_hits"] else None
+        )
+        row["precision_risk_corpus_rate"] = _rate(risk_row["hits"], precision_risk_total)
         row["precision_risk_unique_ticker_count"] = len(risk_row["tickers"])
         row["precision_risk_unique_source_count"] = len(risk_row["sources"])
 
@@ -537,5 +541,54 @@ def score_shadow_phrases(phrase_results: list[dict[str, Any]]) -> list[dict[str,
         pr["score"] = score
         pr["bucket"] = bucket
         pr["reason"] = reason
+
+    return phrase_results
+
+
+def apply_keyword_shadow_counter_evidence(phrase_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Apply modern proxy-only review status after unchanged coverage scoring.
+
+    The false-positive-neutral rows are not precision truth. They only prevent
+    automatic presentation of a coverage promotion until independent/manual
+    evidence is reviewed.
+    """
+
+    for phrase_result in phrase_results:
+        coverage_bucket = phrase_result.get("bucket", BUCKET_SHADOW)
+        coverage_reason = phrase_result.get("reason", "")
+        raw_proxy_hits = phrase_result.get("precision_risk_hits")
+        proxy_hits_available = (
+            isinstance(raw_proxy_hits, int) and not isinstance(raw_proxy_hits, bool) and raw_proxy_hits >= 0
+        )
+        proxy_hits = raw_proxy_hits if proxy_hits_available else 0
+
+        phrase_result["coverage_bucket"] = coverage_bucket
+        phrase_result["coverage_reason"] = coverage_reason
+        phrase_result["coverage_score"] = phrase_result.get("score")
+        phrase_result["automatic_promotion"] = False
+
+        if coverage_bucket == BUCKET_PROMOTE and (not proxy_hits_available or proxy_hits > 0):
+            phrase_result["bucket"] = BUCKET_COUNTER_EVIDENCE_REVIEW
+            phrase_result["counter_evidence_status"] = BUCKET_COUNTER_EVIDENCE_REVIEW
+            phrase_result["promotion_eligible"] = False
+            phrase_result["promotion_status"] = "blocked_pending_independent_manual_evidence"
+            proxy_detail = (
+                f"{proxy_hits} paired false-positive-neutral proxy hit(s)"
+                if proxy_hits_available
+                else "unavailable false-positive-neutral proxy hit count"
+            )
+            phrase_result["reason"] = (
+                f"coverage scoring met promote criteria, but {proxy_detail} require counter-evidence review; "
+                "the proxy is not precision truth and blocks automatic promotion pending "
+                "independent/manual evidence"
+            )
+        elif coverage_bucket == BUCKET_PROMOTE:
+            phrase_result["counter_evidence_status"] = "no paired false-positive-neutral proxy hits"
+            phrase_result["promotion_eligible"] = True
+            phrase_result["promotion_status"] = "manual_evidence_only_not_runtime_approval"
+        else:
+            phrase_result["counter_evidence_status"] = "coverage scoring not promotion eligible"
+            phrase_result["promotion_eligible"] = False
+            phrase_result["promotion_status"] = "not_coverage_promotion_eligible"
 
     return phrase_results
