@@ -20,6 +20,7 @@ from scripts.daily_review import (
     write_report,
 )
 from scripts.throughput_operator_metrics import ThroughputOperatorSummary
+from utils.output_paths import RAW_TRADES_DIR
 
 
 def test_format_fresh_pass_conversion_lines_labels_raw_stages_noncausal():
@@ -137,6 +138,66 @@ def test_main_forwards_runtime_paper_cohort_scope(monkeypatch, tmp_path):
     assert captured["runtime_paper_cohort_id"] == "legacy-pending-20260729"
     assert captured["runtime_paper_cohort_kind"] == "legacy_pending"
     assert captured["paper_db_path"] == tmp_path / "data" / "legacy_pending_paper_cohorts" / "legacy-pending-20260729" / "paper_trades.db"
+
+
+def test_default_trade_log_root_includes_archived_and_live_cohort_paper_trades(monkeypatch, tmp_path):
+    cohort_id = "legacy-pending-20260730"
+    cohort_kind = "legacy_pending"
+    trades_root = tmp_path / "logs" / "trades"
+    archive_path = trades_root / "archive" / "2026-07-30.jsonl"
+    live_path = trades_root / "live" / "trades.jsonl"
+    archive_path.parent.mkdir(parents=True)
+    live_path.parent.mkdir(parents=True)
+
+    archive_path.write_text(
+        json.dumps(
+            {
+                "type": "PAPER_TRADE",
+                "ts": "2026-07-30T12:00:00+00:00",
+                "runtime_paper_cohort_id": cohort_id,
+                "runtime_paper_cohort_kind": cohort_kind,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    live_path.write_text(
+        json.dumps(
+            {
+                "type": "PAPER_TRADE",
+                "ts": "2026-07-31T12:00:00+00:00",
+                "runtime_paper_cohort_id": cohort_id,
+                "runtime_paper_cohort_kind": cohort_kind,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(daily_review, "REPO_ROOT", tmp_path)
+
+    assert daily_review.DEFAULT_TRADES_LOG_PATH == RAW_TRADES_DIR
+
+    lines = build_daily_review(
+        trades_path=trades_root,
+        paper_db_path=(
+            tmp_path
+            / "data"
+            / "legacy_pending_paper_cohorts"
+            / cohort_id
+            / "paper_trades.db"
+        ),
+        since=datetime(2026, 7, 30, tzinfo=timezone.utc),
+        until=datetime(2026, 7, 31, 23, 59, 59, tzinfo=timezone.utc),
+        top=5,
+        exclude_test=False,
+        runtime_paper_cohort_id=cohort_id,
+        runtime_paper_cohort_kind=cohort_kind,
+    )
+
+    rendered = "\n".join(lines)
+    assert f"Trades log: {trades_root}" in rendered
+    assert "Date range: 2026-07-30 -> 2026-07-31" in rendered
+    assert "2 raw paper-trade events" in rendered
 
 
 def test_parse_args_rejects_blank_runtime_paper_cohort_id(monkeypatch, capsys):

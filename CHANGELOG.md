@@ -19,6 +19,20 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.33] - 2026-08-01
+
+### Fixed
+
+- **Daily report archive coverage.** Daily review now reads the trade-log root
+  by default, including both archived and live structured records inside its
+  requested date window. An explicit file `--path` remains available for a
+  deliberately narrowed report.
+
+### Verification
+
+- `CI=1 .venv/bin/python -m pytest tests/test_daily_review.py tests/test_trade_log_store.py tests/test_report_default_paths.py -q` (`59 passed, 1 skipped`)
+- `git diff --check -- scripts/daily_review.py tests/test_daily_review.py tests/test_report_default_paths.py`
+
 ## [0.33.32] - 2026-08-01
 
 ### Fixed
