@@ -60,7 +60,7 @@ from utils.output_paths import (
     DAILY_REPORTS_DIR,
     DERIVED_STATE_DIR,
     PAPER_TRADES_DB,
-    RAW_TRADES_LIVE_DIR,
+    RAW_TRADES_DIR,
 )
 from utils.diagnostic_reporting_helpers import format_counter
 from utils.diagnostics_script_helpers import is_test_record_source_only
@@ -75,9 +75,10 @@ HEALTH_REPORTS_DIR = REPORTS_DIR.parent / "health"
 # Two-deep history (current + previous) so same-day reruns don't blow away
 # yesterday's reference.
 SOURCE_TIER_STATE_PATH = DERIVED_STATE_DIR / "source_tier_state.json"
-# Default to the active live file -- daily review is a current-state report.
-# Pass --path logs/trades to include archive data for historical analysis.
-DEFAULT_TRADES_LOG_PATH = RAW_TRADES_LIVE_DIR / "trades.jsonl"
+# Read the trade-log root by default so a date-window review includes both
+# archived partitions and the active live log. A specific file remains valid
+# for callers that intentionally want a narrower source.
+DEFAULT_TRADES_LOG_PATH = RAW_TRADES_DIR
 DEFAULT_PAPER_DB_PATH = PAPER_TRADES_DB
 VERSION_FILE = REPO_ROOT / "VERSION"
 RECENT_MATCH_EXAMPLES = 5
@@ -112,7 +113,7 @@ def parse_args() -> argparse.Namespace:
         "--path",
         default=str(DEFAULT_TRADES_LOG_PATH),
         help=(
-            "Trade log path -- default: logs/trades/live/trades.jsonl; pass logs/trades to include archive "
+            "Trade log path -- default: logs/trades (archive + live); pass a specific .jsonl file to scope to one log "
             f"(default window: last {DEFAULT_CURRENT_STATE_WINDOW_HOURS} hours when dates omitted)"
         ),
     )

@@ -6,7 +6,7 @@ after the trade-log restructure moved active data to logs/trades/live/.
 
 Rules:
   - Current-state scripts  -> live file   (logs/trades/live/trades.jsonl)
-  - Cross-window audit     -> root dir    (logs/trades)
+  - Cross-window reports   -> root dir    (logs/trades)
   - Anything with --path   -> can override the default; tests only cover defaults
 """
 
@@ -34,12 +34,6 @@ class TestCurrentStateScriptsDefaultToLiveFile:
     """Scripts whose default purpose is current-state reporting must point
     to logs/trades/live/trades.jsonl so they only scan the active log."""
 
-    def test_daily_review_default_is_live_file(self):
-        assert _ends_with(daily_review.DEFAULT_TRADES_LOG_PATH, _LIVE_FILE_SUFFIX), (
-            f"daily_review default {daily_review.DEFAULT_TRADES_LOG_PATH!r} "
-            f"should end with {_LIVE_FILE_SUFFIX!r}"
-        )
-
     def test_freshness_diagnostics_default_is_live_file(self):
         assert _ends_with(freshness_diagnostics.DEFAULT_LOG_PATH, _LIVE_FILE_SUFFIX)
 
@@ -57,6 +51,12 @@ class TestArchiveAwareScriptsDefaultToRoot:
     """Scripts that compare across day boundaries must keep the root directory
     default so iter_trade_records can reach archived partitions."""
 
+    def test_daily_review_default_is_trades_root(self):
+        assert daily_review.DEFAULT_TRADES_LOG_PATH == output_paths.RAW_TRADES_DIR, (
+            f"daily_review default {daily_review.DEFAULT_TRADES_LOG_PATH!r} "
+            f"should equal the configured trade root {output_paths.RAW_TRADES_DIR!r}"
+        )
+
     def test_pipeline_impact_audit_default_is_trades_root(self):
         path_str = pipeline_impact_audit.DEFAULT_LOG_PATH.__fspath__().replace("\\", "/")
         assert path_str.endswith("logs/trades"), (
@@ -70,8 +70,7 @@ class TestArchiveAwareScriptsDefaultToRoot:
 
 
 class TestDailyReviewHasPathArg:
-    """daily_review.py previously had no --path argument; adding it lets users
-    override to logs/trades for historical analysis without changing the default."""
+    """An explicit --path may narrow daily review to a single live log file."""
 
     def test_daily_review_parse_args_accepts_path(self, monkeypatch):
         monkeypatch.setattr(
@@ -81,13 +80,13 @@ class TestDailyReviewHasPathArg:
         args = daily_review.parse_args()
         assert args.path == "logs/trades/live/trades.jsonl"
 
-    def test_daily_review_parse_args_path_default_is_live_file(self, monkeypatch):
+    def test_daily_review_parse_args_path_default_is_trades_root(self, monkeypatch):
         monkeypatch.setattr("sys.argv", ["daily_review"])
         args = daily_review.parse_args()
-        assert _ends_with(
-            type("_P", (), {"__fspath__": lambda _: args.path})(),
-            _LIVE_FILE_SUFFIX,
-        ), f"--path default {args.path!r} should end with {_LIVE_FILE_SUFFIX!r}"
+        assert args.path == str(output_paths.RAW_TRADES_DIR), (
+            f"--path default {args.path!r} should equal "
+            f"{str(output_paths.RAW_TRADES_DIR)!r}"
+        )
 
 
 class TestReportArtifactDefaults:
