@@ -1,3 +1,5 @@
+.worktrees/
+
 # Environment / secrets
 .env
 

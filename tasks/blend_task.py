@@ -31,6 +31,10 @@ from tasks.g7_skip_evidence_capture import (
     G7SkipEvidenceCaptureEnvelope,
     decision_time_at_or_after_execution_observation,
 )
+from tasks.prequeue_book_provenance import (
+    PrequeueBookProvenanceResult,
+    unavailable_prequeue_book_provenance,
+)
 from tasks.trade_readiness_gate import (
     G1_CONFIDENCE_THRESHOLD,
     G1_FAILSAFE_CONFIDENCE_THRESHOLD,
@@ -47,6 +51,7 @@ from utils.lifecycle import strict_optional_bool
 log = get_logger("blend_task")
 _PROCESS_CONTROL_EXCEPTIONS = (KeyboardInterrupt, SystemExit, GeneratorExit)
 _READINESS_LIQUIDITY_UNSET = object()
+_PREQUEUE_BOOK_PROVENANCE_TIMEOUT_SECONDS = 1.0
 
 
 def _log_capital_guard_capture_diagnostic_noexcept(
@@ -69,6 +74,18 @@ def _log_g7_skip_evidence_capture_diagnostic_noexcept(
         log.warning(message, *args)
     except _PROCESS_CONTROL_EXCEPTIONS:
         raise
+    except BaseException:
+        return
+
+
+def _current_task_is_cancelling() -> bool:
+    task = asyncio.current_task()
+    return task is not None and task.cancelling() > 0
+
+
+def _observe_prequeue_provider_result(task: asyncio.Future[object]) -> None:
+    try:
+        task.exception()
     except BaseException:
         return
 
@@ -236,6 +253,11 @@ ExecutionLiquidityProvider = Callable[
     ExecutableLiquidity | Awaitable[ExecutableLiquidity],
 ]
 
+PrequeueBookProvenanceProvider = Callable[
+    [SignalAnalysis],
+    PrequeueBookProvenanceResult | Awaitable[PrequeueBookProvenanceResult],
+]
+
 
 class CapitalGuardCaptureSinkLike(Protocol):
     async def capture(self, envelope: CapitalGuardShadowCaptureEnvelope) -> object: ...
@@ -269,6 +291,7 @@ class BlendTask:
         execution_liquidity_provider: ExecutionLiquidityProvider | None = None,
         runtime_paper_cohort_id: str | None = None,
         runtime_paper_cohort_kind: str | None = None,
+        prequeue_book_provenance_provider: PrequeueBookProvenanceProvider | None = None,
     ) -> None:
         self._trading_queue = trading_queue
         self._store = store if store is not None else evidence_store.default_store()
@@ -283,6 +306,10 @@ class BlendTask:
         self._execution_liquidity_provider = execution_liquidity_provider
         self._runtime_paper_cohort_id = runtime_paper_cohort_id
         self._runtime_paper_cohort_kind = runtime_paper_cohort_kind
+        self._prequeue_book_provenance_provider = prequeue_book_provenance_provider
+        self._prequeue_book_provenance_provider_task: (
+            asyncio.Future[PrequeueBookProvenanceResult] | None
+        ) = None
         self._is_paper_mode = cfg.is_paper_trading if is_paper_mode is None else is_paper_mode
         self._now = now if now is not None else lambda: datetime.now(UTC)
         # PROFIT-EXEC-002 series-correlation guard state. Maps series prefix
@@ -485,6 +512,7 @@ class BlendTask:
             regime_weights=regime_weights,
             regime_confidence=regime_confidence,
         )
+        await self._project_prequeue_book_provenance(candidate)
         # PROFIT-EXEC-002: record this enqueue as the latest for the series
         # prefix BEFORE the queue put so the guard reflects state-on-attempt.
         # If we recorded AFTER the put, a CancelledError (or other exception)
@@ -620,6 +648,83 @@ class BlendTask:
             },
         )
         return liquidity
+
+    async def _project_prequeue_book_provenance(self, candidate: TradeCandidate) -> None:
+        provider = self._prequeue_book_provenance_provider
+        if provider is None:
+            return
+        analysis = candidate.fast_lane_analysis
+        if self._prequeue_book_provenance_provider_is_pending():
+            candidate.signal_meta["prequeue_book_provenance"] = (
+                unavailable_prequeue_book_provenance(
+                    analysis,
+                    reason="provider_busy",
+                ).as_metadata()
+            )
+            return
+        try:
+            result = provider(analysis)
+            provenance = await self._await_prequeue_book_provenance(result)
+            if not isinstance(provenance, PrequeueBookProvenanceResult):
+                raise TypeError("prequeue book provenance provider returned an invalid result")
+            metadata = provenance.as_metadata()
+        except asyncio.CancelledError:
+            if _current_task_is_cancelling():
+                raise
+            metadata = unavailable_prequeue_book_provenance(
+                analysis,
+                reason="provider_cancelled",
+            ).as_metadata()
+        except TimeoutError:
+            metadata = unavailable_prequeue_book_provenance(
+                analysis,
+                reason="provider_timeout",
+            ).as_metadata()
+        except Exception as exc:
+            metadata = unavailable_prequeue_book_provenance(
+                analysis,
+                reason=f"provider_error:{type(exc).__name__}",
+            ).as_metadata()
+        candidate.signal_meta["prequeue_book_provenance"] = metadata
+
+    async def _await_prequeue_book_provenance(
+        self,
+        result: PrequeueBookProvenanceResult | Awaitable[PrequeueBookProvenanceResult],
+    ) -> PrequeueBookProvenanceResult:
+        if not inspect.isawaitable(result):
+            return result
+        provider_task = asyncio.ensure_future(result)
+        self._prequeue_book_provenance_provider_task = provider_task
+        provider_task.add_done_callback(self._on_prequeue_book_provenance_provider_done)
+        try:
+            done, _ = await asyncio.wait(
+                {provider_task},
+                timeout=_PREQUEUE_BOOK_PROVENANCE_TIMEOUT_SECONDS,
+            )
+        except asyncio.CancelledError:
+            provider_task.cancel()
+            raise
+        if not done:
+            # Retain ownership: cancelling a provider awaiting to_thread cannot stop its worker.
+            raise TimeoutError("prequeue book provenance provider timed out")
+        return provider_task.result()
+
+    def _prequeue_book_provenance_provider_is_pending(self) -> bool:
+        provider_task = self._prequeue_book_provenance_provider_task
+        if provider_task is None:
+            return False
+        if provider_task.done():
+            self._prequeue_book_provenance_provider_task = None
+            return False
+        return True
+
+    def _on_prequeue_book_provenance_provider_done(
+        self,
+        provider_task: asyncio.Future[PrequeueBookProvenanceResult],
+    ) -> None:
+        _observe_prequeue_provider_result(provider_task)
+        if self._prequeue_book_provenance_provider_task is provider_task:
+            self._prequeue_book_provenance_provider_task = None
 
     @staticmethod
     def _validate_execution_liquidity(

@@ -25,6 +25,7 @@ from tasks.blend_task import (
     process_fast_lane_result,
 )
 from tasks.g7_skip_evidence_capture import G7SkipEvidenceCaptureSink
+from tasks.prequeue_book_provenance import PrequeueBookProvenanceResult
 from tasks.trade_readiness_gate import ReadinessDecision, evaluate_readiness
 from tasks.evidence_store import DossierState, EvidenceRecord, StructuralPriorRecord
 from trading.g7_skip_evidence import G7SkipEvidenceStore, read_g7_skip_evidence_records
@@ -457,6 +458,339 @@ async def test_execution_orderbook_failure_fails_closed_at_g7():
         "status": "unavailable",
         "reason": "RuntimeError",
     }
+
+
+@pytest.mark.asyncio
+async def test_prequeue_book_provenance_provider_absent_preserves_ready_candidate_metadata():
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    source_meta = {
+        "lifecycle_id": "lc-prequeue-absent",
+        "g7_execution_liquidity": {"status": "observed", "raw_payload_hash": "g" * 64},
+    }
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(),
+        logger=SpyLogger(),
+        is_paper_mode=True,
+    )
+
+    result = await task.process_fast_lane_result(
+        _analysis(market=_market(liquidity_dollars=Decimal("1")), signal_meta=source_meta)
+    )
+
+    assert result.ready is True
+    assert result.enqueued is True
+    candidate = await queue.get()
+    assert "prequeue_book_provenance" not in candidate.signal_meta
+    assert candidate.signal_meta["g7_execution_liquidity"] == source_meta["g7_execution_liquidity"]
+
+
+@pytest.mark.asyncio
+async def test_prequeue_book_provenance_projects_result_only_on_ready_queued_candidate():
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    calls: list[SignalAnalysis] = []
+    source_meta = {
+        "lifecycle_id": "lc-prequeue-success",
+        "g7_execution_liquidity": {"status": "observed", "raw_payload_hash": "g" * 64},
+    }
+    expected = PrequeueBookProvenanceResult(
+        status="available",
+        venue="kalshi",
+        requested_market_id="KXBLEND-1",
+        native_market_id="KXBLEND-1",
+        book_market_id="KXBLEND-1",
+        book_observed_at=datetime(2026, 4, 18, 12, tzinfo=UTC),
+        book_payload_hash="p" * 64,
+    )
+
+    async def provider(analysis: SignalAnalysis) -> PrequeueBookProvenanceResult:
+        calls.append(analysis)
+        return expected
+
+    analysis = _analysis(
+        market=_market(liquidity_dollars=Decimal("1")), signal_meta=source_meta
+    )
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(),
+        logger=SpyLogger(),
+        is_paper_mode=True,
+        prequeue_book_provenance_provider=provider,
+    )
+
+    result = await task.process_fast_lane_result(analysis)
+
+    assert result.ready is True
+    assert result.enqueued is True
+    assert calls == [analysis]
+    candidate = await queue.get()
+    assert candidate.signal_meta["prequeue_book_provenance"] == expected.as_metadata()
+    assert analysis.signal_meta == source_meta
+    assert candidate.signal_meta["g7_execution_liquidity"] == source_meta["g7_execution_liquidity"]
+
+
+@pytest.mark.asyncio
+async def test_prequeue_book_provenance_provider_failure_is_metadata_only():
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+
+    async def provider(_analysis: SignalAnalysis) -> PrequeueBookProvenanceResult:
+        raise RuntimeError("book reader unavailable")
+
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(),
+        logger=SpyLogger(),
+        is_paper_mode=True,
+        prequeue_book_provenance_provider=provider,
+    )
+
+    result = await task.process_fast_lane_result(
+        _analysis(market=_market(liquidity_dollars=Decimal("1")))
+    )
+
+    assert result.ready is True
+    assert result.enqueued is True
+    candidate = await queue.get()
+    assert candidate.signal_meta["prequeue_book_provenance"] == {
+        "status": "unavailable",
+        "venue": "kalshi",
+        "requested_market_id": "KXBLEND-1",
+        "native_market_id": "KXBLEND-1",
+        "book_market_id": None,
+        "book_observed_at": None,
+        "book_payload_hash": None,
+        "reason": "provider_error:RuntimeError",
+    }
+
+
+@pytest.mark.asyncio
+async def test_prequeue_book_provenance_provider_cancellation_is_metadata_only():
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+
+    async def provider(_analysis: SignalAnalysis) -> PrequeueBookProvenanceResult:
+        raise asyncio.CancelledError()
+
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(),
+        logger=SpyLogger(),
+        is_paper_mode=True,
+        prequeue_book_provenance_provider=provider,
+    )
+
+    result = await task.process_fast_lane_result(
+        _analysis(market=_market(liquidity_dollars=Decimal("1")))
+    )
+
+    assert result.ready is True
+    assert result.enqueued is True
+    candidate = await queue.get()
+    assert candidate.signal_meta["prequeue_book_provenance"]["reason"] == "provider_cancelled"
+
+
+@pytest.mark.asyncio
+async def test_prequeue_book_provenance_provider_timeout_is_metadata_only(monkeypatch):
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    release = asyncio.Event()
+    finished = asyncio.Event()
+    calls: list[SignalAnalysis] = []
+    monkeypatch.setattr(
+        blend_task_module,
+        "_PREQUEUE_BOOK_PROVENANCE_TIMEOUT_SECONDS",
+        0.01,
+        raising=False,
+    )
+
+    def expected_for(analysis: SignalAnalysis) -> PrequeueBookProvenanceResult:
+        ticker = analysis.market.ticker
+        return PrequeueBookProvenanceResult(
+            status="available",
+            venue="kalshi",
+            requested_market_id=ticker,
+            native_market_id=ticker,
+            book_market_id=ticker,
+            book_observed_at=datetime(2026, 4, 18, 12, tzinfo=UTC),
+            book_payload_hash="p" * 64,
+        )
+
+    async def provider(analysis: SignalAnalysis) -> PrequeueBookProvenanceResult:
+        calls.append(analysis)
+        try:
+            await release.wait()
+        finally:
+            finished.set()
+        return expected_for(analysis)
+
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(),
+        logger=SpyLogger(),
+        is_paper_mode=True,
+        prequeue_book_provenance_provider=provider,
+    )
+
+    result = await asyncio.wait_for(
+        task.process_fast_lane_result(_analysis(market=_market(liquidity_dollars=Decimal("1")))),
+        timeout=0.1,
+    )
+
+    assert result.ready is True
+    assert result.enqueued is True
+    candidate = await queue.get()
+    assert candidate.signal_meta["prequeue_book_provenance"]["reason"] == "provider_timeout"
+
+    busy_result = await task.process_fast_lane_result(
+        _analysis(market=_market("KXTIMEOUT-1", liquidity_dollars=Decimal("1")))
+    )
+
+    assert busy_result.ready is True
+    assert busy_result.enqueued is True
+    busy_candidate = await queue.get()
+    assert busy_candidate.signal_meta["prequeue_book_provenance"]["reason"] == "provider_busy"
+    assert len(calls) == 1
+
+    release.set()
+    await asyncio.wait_for(finished.wait(), timeout=0.1)
+
+    recovered_analysis = _analysis(
+        market=_market("KXRECOVER-1", liquidity_dollars=Decimal("1"))
+    )
+    recovered_result = await task.process_fast_lane_result(recovered_analysis)
+
+    assert recovered_result.ready is True
+    assert recovered_result.enqueued is True
+    recovered_candidate = await queue.get()
+    assert recovered_candidate.signal_meta["prequeue_book_provenance"] == expected_for(
+        recovered_analysis
+    ).as_metadata()
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_prequeue_book_provenance_uses_one_provider_for_concurrent_candidates():
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    release = asyncio.Event()
+    started = asyncio.Event()
+    calls: list[SignalAnalysis] = []
+    provider_loops: list[asyncio.AbstractEventLoop] = []
+    loop = asyncio.get_running_loop()
+
+    def expected_for(analysis: SignalAnalysis) -> PrequeueBookProvenanceResult:
+        ticker = analysis.market.ticker
+        return PrequeueBookProvenanceResult(
+            status="available",
+            venue="kalshi",
+            requested_market_id=ticker,
+            native_market_id=ticker,
+            book_market_id=ticker,
+            book_observed_at=datetime(2026, 4, 18, 12, tzinfo=UTC),
+            book_payload_hash="p" * 64,
+        )
+
+    async def provider(analysis: SignalAnalysis) -> PrequeueBookProvenanceResult:
+        calls.append(analysis)
+        provider_loops.append(asyncio.get_running_loop())
+        started.set()
+        await release.wait()
+        return expected_for(analysis)
+
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(),
+        logger=SpyLogger(),
+        is_paper_mode=True,
+        prequeue_book_provenance_provider=provider,
+    )
+    first_analysis = _analysis(
+        market=_market("KXCONCURRENTONE-1", liquidity_dollars=Decimal("1"))
+    )
+    second_analysis = _analysis(
+        market=_market("KXCONCURRENTTWO-1", liquidity_dollars=Decimal("1"))
+    )
+    first_process = asyncio.create_task(task.process_fast_lane_result(first_analysis))
+    second_process = asyncio.create_task(task.process_fast_lane_result(second_analysis))
+
+    await started.wait()
+    await asyncio.sleep(0)
+
+    assert len(calls) == 1
+    assert provider_loops == [loop]
+    assert sum(process.done() for process in (first_process, second_process)) == 1
+
+    release.set()
+    first_result, second_result = await asyncio.gather(first_process, second_process)
+
+    assert first_result.ready is True
+    assert second_result.ready is True
+    candidates = [await queue.get(), await queue.get()]
+    metadata = [candidate.signal_meta["prequeue_book_provenance"] for candidate in candidates]
+    assert sum(item["reason"] == "provider_busy" for item in metadata) == 1
+    assert sum(item["status"] == "available" for item in metadata) == 1
+
+
+@pytest.mark.asyncio
+async def test_prequeue_book_provenance_preserves_external_task_cancellation():
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    started = asyncio.Event()
+    never = asyncio.Event()
+
+    async def provider(_analysis: SignalAnalysis) -> PrequeueBookProvenanceResult:
+        started.set()
+        await never.wait()
+        raise AssertionError("unreachable")
+
+    task = BlendTask(
+        trading_queue=queue,
+        store=FakeStore(),
+        logger=SpyLogger(),
+        is_paper_mode=True,
+        prequeue_book_provenance_provider=provider,
+    )
+    process = asyncio.create_task(
+        task.process_fast_lane_result(_analysis(market=_market(liquidity_dollars=Decimal("1"))))
+    )
+
+    await started.wait()
+    process.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await process
+    assert queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_prequeue_book_provenance_provider_is_not_called_for_blocked_or_invalid_price():
+    calls: list[SignalAnalysis] = []
+
+    async def provider(analysis: SignalAnalysis) -> PrequeueBookProvenanceResult:
+        calls.append(analysis)
+        raise AssertionError("prequeue provider must not run")
+
+    blocked = BlendTask(
+        trading_queue=asyncio.Queue(),
+        store=FakeStore(),
+        logger=SpyLogger(),
+        is_paper_mode=True,
+        prequeue_book_provenance_provider=provider,
+    )
+    blocked_result = await blocked.process_fast_lane_result(
+        _analysis(market=_market(liquidity_dollars=Decimal("0")))
+    )
+
+    invalid_analysis = _analysis(market=_market(liquidity_dollars=Decimal("1")))
+    invalid_analysis.executed_price_cents = 0
+    invalid = BlendTask(
+        trading_queue=asyncio.Queue(),
+        store=FakeStore(),
+        logger=SpyLogger(),
+        is_paper_mode=True,
+        prequeue_book_provenance_provider=provider,
+    )
+    invalid_result = await invalid.process_fast_lane_result(invalid_analysis)
+
+    assert blocked_result.enqueued is False
+    assert invalid_result.enqueued is False
+    assert calls == []
 
 
 @pytest.mark.asyncio
