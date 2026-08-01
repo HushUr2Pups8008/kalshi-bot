@@ -15,6 +15,9 @@ from typing import Any
 
 from tasks.stats.source_credibility import record_outcome_in_transaction
 from trading.settlement_store import (
+    PAPER_FEE_NET_ENTRY_PROVENANCE_MODELED,
+    PAPER_FEE_NET_SETTLEMENT_PROVENANCE_MODELED,
+    PAPER_FEE_NET_SETTLEMENT_PROVENANCE_RECEIPT,
     PAPER_TRADE_FEE_NET_SETTLED_EVENT_KIND,
     PAPER_TRADE_SETTLED_EVENT_KIND,
     PendingRequirement,
@@ -78,10 +81,12 @@ _FEE_NET_REQUIRED_FIELDS = frozenset(
     {
         "accounting_basis",
         "accounting_version",
+        "entry_fee_provenance",
         "gross_entry_debit_cents",
         "net_entry_debit_cents",
         "entry_fee_cents",
         "settlement_fee_cents",
+        "settlement_fee_provenance",
         "settlement_refund_cents",
         "net_settlement_payout_cents",
         "fee_net_pnl_cents",
@@ -203,6 +208,13 @@ def _validate_payload(payload: object) -> dict[str, Any]:
             raise ValueError("unsupported fee-net accounting basis")
         if payload["accounting_version"] != 1:
             raise ValueError("unsupported fee-net accounting version")
+        if payload["entry_fee_provenance"] != PAPER_FEE_NET_ENTRY_PROVENANCE_MODELED:
+            raise ValueError("unsupported fee-net entry fee provenance")
+        if payload["settlement_fee_provenance"] not in {
+            PAPER_FEE_NET_SETTLEMENT_PROVENANCE_MODELED,
+            PAPER_FEE_NET_SETTLEMENT_PROVENANCE_RECEIPT,
+        }:
+            raise ValueError("unsupported fee-net settlement fee provenance")
         fee_net_values: dict[str, Decimal] = {}
         for field in (
             "gross_entry_debit_cents",

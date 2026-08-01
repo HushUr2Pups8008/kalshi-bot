@@ -61,6 +61,7 @@ def normalize_kalshi_settlement(
 
     authoritative_payload = {
         "expiration_time": market.expiration_time,
+        "market_type": getattr(market, "market_type", None),
         "raw_payload_hash": market.raw_payload_hash,
         "result": market.result,
         "status": market.status,

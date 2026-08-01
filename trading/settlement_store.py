@@ -42,6 +42,11 @@ PAPER_TRADE_SETTLED_DIRECTIONAL_REQUIREMENTS = (
     "calibration_state",
     "keyword_outcomes",
 )
+PAPER_FEE_NET_ENTRY_PROVENANCE_MODELED = "modeled_pinned_entry_schedule"
+PAPER_FEE_NET_SETTLEMENT_PROVENANCE_MODELED = (
+    "documented_binary_zero_settlement_policy"
+)
+PAPER_FEE_NET_SETTLEMENT_PROVENANCE_RECEIPT = "authoritative_fee_receipt"
 
 SETTLEMENT_PAPER_TRADE_COLUMNS: tuple[tuple[str, str], ...] = (
     (
@@ -713,6 +718,7 @@ def paper_trade_fee_net_settled_outbox_contract(
         {
             "accounting_basis": "fee_net_v1",
             "accounting_version": PAPER_ACCOUNTING_VERSION,
+            "entry_fee_provenance": PAPER_FEE_NET_ENTRY_PROVENANCE_MODELED,
             "gross_entry_debit_cents": _settlement_decimal_text(
                 fee_net_record.gross_entry_debit * Decimal("100")
             ),
@@ -726,6 +732,11 @@ def paper_trade_fee_net_settled_outbox_contract(
             "gross_pnl_cents": _settlement_decimal_text(gross_pnl_cents),
             "settlement_fee_cents": _settlement_decimal_text(
                 fee_net_record.settlement_fee * Decimal("100")
+            ),
+            "settlement_fee_provenance": (
+                PAPER_FEE_NET_SETTLEMENT_PROVENANCE_MODELED
+                if observation.source_id == "kalshi-market-api"
+                else PAPER_FEE_NET_SETTLEMENT_PROVENANCE_RECEIPT
             ),
             "settlement_refund_cents": _settlement_decimal_text(
                 fee_net_record.settlement_refund * Decimal("100")

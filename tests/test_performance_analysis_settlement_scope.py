@@ -1,9 +1,21 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timedelta
 
 from scripts import performance_analysis as performance_analysis
 from scripts.performance_analysis import section_golive_readiness, section_placed_performance
+from tests.test_paper_canonical_settlement import (
+    _active_runtime_fee_net_trader,
+    _kalshi_market_api_binary_payload,
+    _make_mock_analysis,
+    _observation,
+    _record_analysis,
+    _resolve,
+)
+from trading.venue import MarketRef, Venue
+from trading.settlement import MarketOutcome
+from trading.settlement_store import settlement_result_sha256
 
 
 def test_placed_performance_separates_delivery_complete_paper_from_profit_evidence():
@@ -154,5 +166,96 @@ def test_golive_readiness_never_promotes_paper_delivery_to_realized_profit(monke
     report = section_golive_readiness(trades, {"notional_bankroll": "100.00"})
 
     assert "Canonical delivery-complete resolved: 20 / 20 required  [PASS]" in report
+    assert "Independent realized-profit evidence: unavailable  [FAIL]" in report
+    assert "OVERALL: READY FOR LIVE TRADING" not in report
+
+
+def test_load_db_trades_keeps_modeled_fee_net_delivery_unattested(
+    monkeypatch,
+    tmp_path,
+):
+    trader = _active_runtime_fee_net_trader(
+        monkeypatch,
+        tmp_path,
+        cohort_id="active-modeled-readiness",
+    )
+    market_ref = MarketRef(
+        Venue.KALSHI,
+        "KX-ACCT-MODELED-READINESS",
+        "KX-ACCT-MODELED-READINESS",
+    )
+    analysis = _make_mock_analysis(ticker=market_ref.alias, capped_dollars=12.0)
+    analysis.venue = market_ref.venue.value
+    analysis.market.venue = market_ref.venue.value
+    analysis.market.market_id = market_ref.alias
+    analysis.market.venue_market_id = market_ref.venue_market_id
+    trade_id = _record_analysis(
+        trader,
+        analysis,
+        trade_id="acctfee00011",
+        entry_request_id="paper-entry:v1:active-modeled-readiness:lc-" + "r" * 32,
+    )
+    observation = _observation(
+        market_ref,
+        MarketOutcome.YES,
+        payload=_kalshi_market_api_binary_payload(market_ref, MarketOutcome.YES),
+        source_id="kalshi-market-api",
+    )
+    assert _resolve(trader, observation) is True
+    with sqlite3.connect(trader.db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        outbox = conn.execute(
+            """
+            SELECT outbox_id, created_at
+            FROM paper_settlement_outbox
+            WHERE trade_id=?
+            """,
+            (trade_id,),
+        ).fetchone()
+        assert outbox is not None
+        created_at = datetime.fromisoformat(str(outbox["created_at"]))
+        processed_at = (created_at + timedelta(seconds=1)).isoformat()
+        requirements = conn.execute(
+            """
+            SELECT consumer_name
+            FROM paper_settlement_outbox_requirements
+            WHERE outbox_id=?
+            ORDER BY consumer_name
+            """,
+            (outbox["outbox_id"],),
+        ).fetchall()
+        conn.executemany(
+            """
+            INSERT INTO paper_settlement_consumer_receipts (
+                consumer_name, outbox_id, processed_at, result_sha256
+            ) VALUES (?, ?, ?, ?)
+            """,
+            [
+                (
+                    str(row["consumer_name"]),
+                    str(outbox["outbox_id"]),
+                    processed_at,
+                    settlement_result_sha256(
+                        str(outbox["outbox_id"]),
+                        str(row["consumer_name"]),
+                    ),
+                )
+                for row in requirements
+            ],
+        )
+        conn.commit()
+    monkeypatch.setattr(performance_analysis, "DB_PATH", trader.db_path)
+
+    trades = performance_analysis.load_db_trades()
+
+    assert len(trades) == 1
+    assert trades[0]["trade_id"] == trade_id
+    assert trades[0]["settlement_canonical_delivery_complete"] is True
+    assert trades[0]["settlement_profit_receipt_attested"] is False
+
+    report = section_golive_readiness(
+        trades,
+        {"notional_bankroll": "125.00"},
+    )
     assert "Independent realized-profit evidence: unavailable  [FAIL]" in report
     assert "OVERALL: READY FOR LIVE TRADING" not in report

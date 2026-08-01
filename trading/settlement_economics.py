@@ -121,7 +121,7 @@ class SettlementFeeReceiptProfile:
     receipt_field: Literal["settlement_fee_receipt"] = "settlement_fee_receipt"
     message_field: Literal["message"] = "message"
     message_sha256_field: Literal["message_sha256"] = "message_sha256"
-    market_id_field: Literal["market_id"] = "market_id"
+    market_id_field: Literal["market_id", "ticker"] = "market_id"
     message_market_id_field: Literal["Symbol"] = "Symbol"
     fee_field: Literal["MiscFeeAmt"] = "MiscFeeAmt"
 
@@ -136,7 +136,7 @@ class SettlementFeeReceiptProfile:
             self.receipt_field != "settlement_fee_receipt"
             or self.message_field != "message"
             or self.message_sha256_field != "message_sha256"
-            or self.market_id_field != "market_id"
+            or self.market_id_field not in {"market_id", "ticker"}
             or self.message_market_id_field != "Symbol"
             or self.fee_field != "MiscFeeAmt"
         ):
@@ -152,8 +152,26 @@ KALSHI_FIX_MISC_FEE_RECEIPT_V1 = SettlementFeeReceiptProfile(
     source_url="https://docs.kalshi.com/fix/market-settlement.md",
     artifact_sha256="ad87e8ea51113c7abf8c86e2e4916c1a5f0dcd61661b84532c06df1df68b1788",
 )
+KALSHI_MARKET_API_SIMPLE_BINARY_ZERO_FEE_POLICY_V1 = SettlementFeeReceiptProfile(
+    name="kalshi-market-api-simple-binary-zero-fee-policy-v1",
+    venue=Venue.KALSHI,
+    source_id="kalshi-market-api",
+    source_url="https://docs.kalshi.com/getting_started/settlement",
+    artifact_sha256=hashlib.sha256(
+        b"kalshi-market-api-simple-binary-zero-fee-policy-v1"
+    ).hexdigest(),
+    market_id_field="ticker",
+)
+MODELED_BINARY_ZERO_POLICY_ACCOUNT_PARTY_ID_SHA256 = hashlib.sha256(
+    b"modeled-binary-zero-settlement-policy"
+).hexdigest()
 
-_SUPPORTED_SETTLEMENT_FEE_RECEIPT_PROFILES = frozenset((KALSHI_FIX_MISC_FEE_RECEIPT_V1,))
+_SUPPORTED_SETTLEMENT_FEE_RECEIPT_PROFILES = frozenset(
+    (
+        KALSHI_FIX_MISC_FEE_RECEIPT_V1,
+        KALSHI_MARKET_API_SIMPLE_BINARY_ZERO_FEE_POLICY_V1,
+    )
+)
 
 
 def settlement_fee_receipt_profile_record(
@@ -489,6 +507,56 @@ def derive_settlement_fee_receipt(
     )
     if source_market_id != binding.venue_market_id:
         raise SettlementEconomicsUnscorableError("settlement fee receipt market identity does not match binding")
+    if profile is KALSHI_MARKET_API_SIMPLE_BINARY_ZERO_FEE_POLICY_V1:
+        if (
+            binding.account_party_id_sha256
+            != MODELED_BINARY_ZERO_POLICY_ACCOUNT_PARTY_ID_SHA256
+        ):
+            raise SettlementEconomicsUnscorableError(
+                "modeled binary zero-fee policy binding is unsupported"
+            )
+        market_type = _require_text(
+            "settlement fee receipt source payload market_type",
+            payload.get("market_type"),
+        ).lower()
+        if market_type != "binary":
+            raise SettlementEconomicsUnscorableError(
+                "settlement fee receipt source payload is not a binary market"
+            )
+        status = _require_text(
+            "settlement fee receipt source payload status",
+            payload.get("status"),
+        ).lower()
+        if status not in {"finalized", "settled"}:
+            raise SettlementEconomicsUnscorableError(
+                "settlement fee receipt source payload is nonterminal"
+            )
+        result = _require_text(
+            "settlement fee receipt source payload result",
+            payload.get("result"),
+        ).lower()
+        if result not in {"yes", "no"}:
+            raise SettlementEconomicsUnscorableError(
+                "settlement fee receipt source payload does not prove a directional binary result"
+            )
+        policy_payload = canonical_json(
+            {
+                "market_type": market_type,
+                "policy": profile.name,
+                "result": result,
+                "source_payload_sha256": payload_sha256,
+                "status": status,
+                "ticker": source_market_id,
+            }
+        )
+        return SettlementFeeReceipt(
+            profile=profile,
+            source_payload_sha256=payload_sha256,
+            fee_message_sha256=hashlib.sha256(
+                policy_payload.encode("utf-8")
+            ).hexdigest(),
+            settlement_fee=_ZERO,
+        )
     receipt_value = payload.get(profile.receipt_field)
     if not isinstance(receipt_value, Mapping):
         raise SettlementEconomicsUnscorableError("settlement fee receipt source payload has no fee receipt")
@@ -819,4 +887,56 @@ def deserialize_settlement_economics_evidence(
         binding=_deserialize_settlement_economics_binding(record["binding"]),
         fee_receipt=_deserialize_settlement_fee_receipt(record["fee_receipt"]),
         cashflows=_deserialize_settlement_cashflows(record["cashflows"]),
+    )
+
+
+def modeled_kalshi_binary_zero_evidence(
+    *,
+    venue_market_id: str,
+    authoritative_observation_sha256: str,
+    authoritative_payload_sha256: str,
+    source_payload_json: str,
+    outcome: MarketOutcome,
+    held_side: str,
+    quantity: Decimal,
+    entry_price: Decimal,
+    entry_fee: Decimal,
+    void_refund: VoidRefundContract | None,
+) -> SettlementEconomicsEvidence:
+    contract = SettlementEconomicsContract(
+        settlement_fee_receipt_profile=KALSHI_MARKET_API_SIMPLE_BINARY_ZERO_FEE_POLICY_V1,
+        void_refund_policy=None,
+    )
+    binding = SettlementEconomicsBinding(
+        venue=Venue.KALSHI,
+        venue_market_id=venue_market_id,
+        account_party_id_sha256=MODELED_BINARY_ZERO_POLICY_ACCOUNT_PARTY_ID_SHA256,
+        contract_fingerprint=settlement_economics_contract_sha256(contract),
+        rules_fingerprint=contract.settlement_fee_receipt_profile.artifact_sha256,
+        settlement_fingerprint=authoritative_payload_sha256,
+        authoritative_observation_sha256=authoritative_observation_sha256,
+        authoritative_payload_sha256=authoritative_payload_sha256,
+        source_id=contract.settlement_fee_receipt_profile.source_id,
+    )
+    fee_receipt = derive_settlement_fee_receipt(
+        contract=contract,
+        binding=binding,
+        source_payload_json=source_payload_json,
+    )
+    cashflows = derive_settlement_cashflows(
+        contract=contract,
+        binding=binding,
+        outcome=outcome,
+        held_side=held_side,
+        quantity=quantity,
+        entry_price=entry_price,
+        entry_fee=entry_fee,
+        void_refund=void_refund,
+        fee_receipt=fee_receipt,
+    )
+    return SettlementEconomicsEvidence(
+        contract=contract,
+        binding=binding,
+        fee_receipt=fee_receipt,
+        cashflows=cashflows,
     )
