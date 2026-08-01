@@ -19,6 +19,25 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.34] - 2026-08-01
+
+### Added
+
+- **Kalshi source-hint capture shadow.** A default-off, bounded monitor now
+  records Kalshi-only source-hint article provenance in an immutable dedicated
+  SQLite store. It has a separate checkpoint and cannot enqueue news, alter
+  candidate processing, admit paper trades, or place orders.
+- **Locked promotion protocol.** Source-hint promotion remains fail-closed on
+  a prospective, matched holdout with offline-only joins and settled paper
+  outcome requirements.
+
+### Verification
+
+- `CI=1 .venv/bin/python -m pytest tests/test_market_source_hint_shadow_monitor.py tests/test_search_news_monitor.py tests/test_market_first_shadow_plan.py tests/test_market_source_hints.py tests/test_market_source_hints_diagnostics.py -q`
+- `.venv/bin/ruff check config.py main.py feeds/market_source_hint_shadow_monitor.py tasks/market_source_hint_shadow_store.py tests/test_market_source_hint_shadow_monitor.py`
+- Independent safety review found and verified fixes for venue contamination
+  and SQLite append-only enforcement.
+
 ## [0.33.33] - 2026-08-01
 
 ### Fixed

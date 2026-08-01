@@ -1641,6 +1641,74 @@ class TradingBot:
             name="weather_shadow_capture",
         )
 
+    def _create_market_source_hint_shadow_capture_task(
+        self,
+    ) -> asyncio.Task | None:
+        """Start isolated source-hint evidence capture only after explicit opt-in."""
+        if not bool(getattr(cfg, "enable_market_source_hint_shadow_capture", False)):
+            return None
+
+        try:
+            from feeds.market_source_hint_shadow_monitor import (
+                MarketSourceHintShadowMonitor,
+            )
+            from tasks.market_source_hint_shadow_store import MarketSourceHintShadowStore
+
+            metadata_cache = getattr(self.matcher, "_cache", None)
+            get_series_metadata = getattr(
+                metadata_cache,
+                "get_series_metadata_snapshot",
+                lambda: {},
+            )
+            monitor = MarketSourceHintShadowMonitor(
+                store=MarketSourceHintShadowStore(
+                    DATA_DIR / "market_source_hint_shadow.db"
+                ),
+                get_markets=lambda: tuple(self.matcher._cache._markets),
+                get_series_metadata=get_series_metadata,
+                interval_seconds=float(
+                    getattr(
+                        cfg,
+                        "market_source_hint_shadow_capture_interval_seconds",
+                        900.0,
+                    )
+                ),
+                max_markets=int(
+                    getattr(cfg, "market_source_hint_shadow_capture_max_markets", 5)
+                ),
+                max_queries_per_market=int(
+                    getattr(
+                        cfg,
+                        "market_source_hint_shadow_capture_max_queries_per_market",
+                        2,
+                    )
+                ),
+                max_records_per_cycle=int(
+                    getattr(
+                        cfg,
+                        "market_source_hint_shadow_capture_max_records_per_cycle",
+                        20,
+                    )
+                ),
+                max_concurrency=int(
+                    getattr(cfg, "market_source_hint_shadow_capture_concurrency", 2)
+                ),
+                feed_timeout_seconds=float(
+                    getattr(
+                        cfg,
+                        "market_source_hint_shadow_capture_timeout_seconds",
+                        20.0,
+                    )
+                ),
+            )
+        except Exception:
+            log.exception("[SOURCE_HINT_SHADOW] capture inactive: setup failed")
+            return None
+        return asyncio.create_task(
+            monitor.run(),
+            name="market_source_hint_shadow_capture",
+        )
+
     def _create_capital_guard_shadow_settlement_collection_task(
         self,
     ) -> asyncio.Task | None:
@@ -4543,6 +4611,11 @@ class TradingBot:
         weather_shadow_task = self._create_weather_shadow_runtime_task()
         if weather_shadow_task is not None:
             tasks.append(weather_shadow_task)
+        market_source_hint_shadow_task = (
+            self._create_market_source_hint_shadow_capture_task()
+        )
+        if market_source_hint_shadow_task is not None:
+            tasks.append(market_source_hint_shadow_task)
         capital_guard_shadow_settlement_task = (
             self._create_capital_guard_shadow_settlement_collection_task()
         )
