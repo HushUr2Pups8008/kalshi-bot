@@ -105,6 +105,52 @@ def test_gdp_threshold_contract_accepts_only_strict_real_gdp_saar_threshold() ->
         ),
         pytest.param(
             {
+                "rules_primary": (
+                    "This market resolves Yes only if real GDP is greater than "
+                    "2.0% in Q2 2026. CPI is reported at a seasonally adjusted "
+                    "annual rate."
+                ),
+            },
+            id="mixed-unbound-saar",
+        ),
+        pytest.param(
+            {
+                "title": "Will real GDP increase by more than 2 in Q2 2026?",
+            },
+            id="unbound-verbal-comparator",
+        ),
+        pytest.param(
+            {
+                "rules_primary": (
+                    "This market resolves Yes only if Q2 2026 real GDP SAAR is "
+                    "greater than 2.0%. A conflicting real GDP SAAR condition is "
+                    "> 3.0% in Q2 2026."
+                ),
+            },
+            id="symbolic-greater-than",
+        ),
+        pytest.param(
+            {
+                "rules_primary": (
+                    "This market resolves Yes only if Q2 2026 real GDP SAAR is "
+                    "greater than 2.0%. A conflicting real GDP SAAR condition is "
+                    "＞ 3.0% in Q2 2026."
+                ),
+            },
+            id="unicode-greater-than",
+        ),
+        pytest.param(
+            {
+                "rules_primary": (
+                    "This market resolves Yes only if Q2 2026 real GDP SAAR is "
+                    "greater than 2.0%. Another clause defines a 1.0%–2.0% GDP "
+                    "range."
+                ),
+            },
+            id="unicode-range",
+        ),
+        pytest.param(
+            {
                 "title": "Will Q2 2026 real GDP growth fall in the 1.0% to 2.0% bucket?",
                 "rules_primary": "Settlement uses the Q2 2026 real GDP SAAR bucket.",
             },
@@ -205,6 +251,11 @@ def test_current_run_gdpnow_context_binds_verified_observation_to_exact_contract
             {"metric_unit": "percent_change"},
             _gdpnow_query(),
             id="wrong-metric-unit",
+        ),
+        pytest.param(
+            {"published_at": 123},
+            _gdpnow_query(),
+            id="malformed-published-at",
         ),
         pytest.param(
             {
@@ -335,3 +386,19 @@ def test_gdpnow_provisional_side_requires_independent_fresh_support_and_positive
         live_mode=True,
         **kwargs,
     )
+    for probability_yes in (float("nan"), float("inf"), float("-inf")):
+        assert not research_gate_module._gdpnow_provisional_side_is_independently_justified(
+            evidence=[raw_gdpnow, independent_support],
+            estimated_probability_yes=probability_yes,
+            **{
+                key: value
+                for key, value in kwargs.items()
+                if key != "estimated_probability_yes"
+            },
+        )
+    for yes_ask in (float("nan"), float("inf"), float("-inf")):
+        assert not research_gate_module._gdpnow_provisional_side_is_independently_justified(
+            evidence=[raw_gdpnow, independent_support],
+            yes_ask=yes_ask,
+            **{key: value for key, value in kwargs.items() if key != "yes_ask"},
+        )

@@ -4495,21 +4495,39 @@ _GDPNOW_SOURCE_NAME = "FRED GDPNow"
 _GDPNOW_CANONICAL_SOURCE_URL = "https://fred.stlouisfed.org/series/GDPNOW"
 _GDPNOW_METRIC_NAME = "gdpnow_real_gdp_growth_saar"
 _GDPNOW_METRIC_UNIT = "percent_saar"
+_GDP_REAL_GDP_RE = re.compile(
+    r"\breal\s+(?:gdp|gross\s+domestic\s+product)\b",
+    flags=re.I,
+)
+_GDP_SAAR_RE = re.compile(
+    r"\bSAAR\b|\bseasonally\s+adjusted\s+annual(?:ized)?\s+"
+    r"(?:rate|percent)\b",
+    flags=re.I,
+)
+_GDP_COMPARATOR_TOKEN_RE = re.compile(
+    r"\b(?:more\s+than|above|over|greater\s+than)\b",
+    flags=re.I,
+)
 _GDP_STRICT_THRESHOLD_RE = re.compile(
     r"\b(?:more\s+than|above|over|greater\s+than)\s+"
     r"(-?(?:\d+(?:\.\d+)?|\.\d+))\s*(?:%|percent\b)",
     flags=re.I,
 )
+_GDP_PERCENT_VALUE_RE = re.compile(
+    r"(?<![\w.])(-?(?:\d+(?:\.\d+)?|\.\d+))\s*(?:%|percent\b)",
+    flags=re.I,
+)
 _GDP_UNSUPPORTED_COMPARATOR_RE = re.compile(
     r"\b(?:at\s+least|at\s+most|less\s+than|below|under|"
-    r"no\s+more\s+than|equal\s+to|exactly|bucket|range)\b|(?:<=|>=|<|=)",
+    r"no\s+more\s+than|equal\s+to|exactly|bucket|range)\b|"
+    r"(?:<=|>=|<|>|=|≤|≥|＜|＞|＝|≦|≧|≠)",
     flags=re.I,
 )
 _GDP_RANGE_RE = re.compile(
     r"\b(?:between|from)\s+-?(?:\d+(?:\.\d+)?|\.\d+)\s*"
     r"(?:%|percent)\s+(?:and|to)\s+-?(?:\d+(?:\.\d+)?|\.\d+)"
     r"\s*(?:%|percent)\b|"
-    r"\b-?(?:\d+(?:\.\d+)?|\.\d+)\s*%\s*(?:to|-)\s*"
+    r"\b-?(?:\d+(?:\.\d+)?|\.\d+)\s*%\s*(?:to|through|-|–|—|−)\s*"
     r"-?(?:\d+(?:\.\d+)?|\.\d+)\s*%\b",
     flags=re.I,
 )
@@ -4519,53 +4537,133 @@ _GDP_TARGET_QUARTER_YEAR_RE = re.compile(
 )
 
 
+def _gdp_target_periods(text: str) -> set[tuple[int, int]]:
+    periods: set[tuple[int, int]] = set()
+    for match in _GDP_TARGET_QUARTER_YEAR_RE.finditer(text):
+        quarter_text, year_text = match.group(1), match.group(2)
+        if quarter_text is None or year_text is None:
+            year_text, quarter_text = match.group(3), match.group(4)
+        periods.add((int(quarter_text), int(year_text)))
+    return periods
+
+
+def _gdp_contract_clauses(text: str) -> tuple[str, ...]:
+    return tuple(
+        cleaned
+        for clause in re.split(r"(?:[!?;]|\.(?!\d)|\n)+", text)
+        if (cleaned := _clean(clause))
+    )
+
+
+def _strict_gdp_settlement_clause(
+    clause: str,
+) -> tuple[float, int, int] | None:
+    if not _GDP_REAL_GDP_RE.search(clause) or not _GDP_SAAR_RE.search(clause):
+        return None
+    threshold_matches = list(_GDP_STRICT_THRESHOLD_RE.finditer(clause))
+    percent_matches = list(_GDP_PERCENT_VALUE_RE.finditer(clause))
+    periods = _gdp_target_periods(clause)
+    if len(threshold_matches) != 1 or len(percent_matches) != 1 or len(periods) != 1:
+        return None
+    try:
+        threshold = float(threshold_matches[0].group(1))
+        percent_value = float(percent_matches[0].group(1))
+    except ValueError:
+        return None
+    if not math.isfinite(threshold) or percent_value != threshold:
+        return None
+    token_matches = [
+        *list(_GDP_REAL_GDP_RE.finditer(clause)),
+        *list(_GDP_SAAR_RE.finditer(clause)),
+        threshold_matches[0],
+        *list(_GDP_TARGET_QUARTER_YEAR_RE.finditer(clause)),
+    ]
+    if max(match.end() for match in token_matches) - min(
+        match.start() for match in token_matches
+    ) > 220:
+        return None
+    quarter, year = next(iter(periods))
+    return threshold, quarter, year
+
+
+def _gdp_title_clause_matches_contract(
+    clause: str,
+    *,
+    threshold: float,
+    target_period: tuple[int, int],
+) -> bool:
+    if not _GDP_REAL_GDP_RE.search(clause):
+        return True
+    has_threshold_syntax = bool(
+        _GDP_COMPARATOR_TOKEN_RE.search(clause)
+        or _GDP_STRICT_THRESHOLD_RE.search(clause)
+        or _GDP_PERCENT_VALUE_RE.search(clause)
+    )
+    if not has_threshold_syntax and not _GDP_SAAR_RE.search(clause):
+        return True
+    if _GDP_SAAR_RE.search(clause):
+        parsed = _strict_gdp_settlement_clause(clause)
+        return parsed == (threshold, *target_period)
+    threshold_matches = list(_GDP_STRICT_THRESHOLD_RE.finditer(clause))
+    percent_matches = list(_GDP_PERCENT_VALUE_RE.finditer(clause))
+    if len(threshold_matches) != 1 or len(percent_matches) != 1:
+        return False
+    try:
+        title_threshold = float(threshold_matches[0].group(1))
+        title_percent = float(percent_matches[0].group(1))
+    except ValueError:
+        return False
+    if (
+        not math.isfinite(title_threshold)
+        or title_percent != title_threshold
+        or title_threshold != threshold
+    ):
+        return False
+    periods = _gdp_target_periods(clause)
+    return not periods or periods == {target_period}
+
+
 def _parse_gdp_threshold_contract(market: Any) -> GDPThresholdContract | None:
     """Parse the narrow GDPNow countercheck contract surface, fail-closed."""
     contract_text = _market_text(market)
     rules_text = _market_rules_text(market)
     if not contract_text or not rules_text:
         return None
-    if not re.search(
-        r"\breal\s+(?:gdp|gross\s+domestic\s+product)\b",
-        contract_text,
-        flags=re.I,
-    ):
-        return None
-    if not re.search(
-        r"\bSAAR\b|\bseasonally\s+adjusted\s+annual(?:ized)?\s+"
-        r"(?:rate|percent)\b",
-        contract_text,
-        flags=re.I,
-    ):
-        return None
     if _GDP_UNSUPPORTED_COMPARATOR_RE.search(contract_text) or _GDP_RANGE_RE.search(
         contract_text
     ):
         return None
-
-    threshold_matches = list(_GDP_STRICT_THRESHOLD_RE.finditer(contract_text))
-    rule_matches = list(_GDP_STRICT_THRESHOLD_RE.finditer(rules_text))
-    if not threshold_matches or not rule_matches:
+    target_periods = _gdp_target_periods(contract_text)
+    if len(target_periods) != 1:
         return None
-    try:
-        thresholds = {float(match.group(1)) for match in threshold_matches}
-    except ValueError:
+    target_period = next(iter(target_periods))
+    parsed_rules: list[tuple[float, int, int]] = []
+    for clause in _gdp_contract_clauses(rules_text):
+        if not _GDP_REAL_GDP_RE.search(clause):
+            continue
+        if (
+            _GDP_SAAR_RE.search(clause)
+            or _GDP_COMPARATOR_TOKEN_RE.search(clause)
+            or _GDP_STRICT_THRESHOLD_RE.search(clause)
+            or _GDP_PERCENT_VALUE_RE.search(clause)
+        ):
+            parsed = _strict_gdp_settlement_clause(clause)
+            if parsed is None:
+                return None
+            parsed_rules.append(parsed)
+    if not parsed_rules or len(set(parsed_rules)) != 1:
         return None
-    if len(thresholds) != 1:
+    threshold, target_quarter, target_year = parsed_rules[0]
+    if (target_quarter, target_year) != target_period:
         return None
-    threshold = next(iter(thresholds))
-    if not math.isfinite(threshold):
-        return None
-
-    periods: set[tuple[int, int]] = set()
-    for match in _GDP_TARGET_QUARTER_YEAR_RE.finditer(contract_text):
-        quarter_text, year_text = match.group(1), match.group(2)
-        if quarter_text is None or year_text is None:
-            year_text, quarter_text = match.group(3), match.group(4)
-        periods.add((int(quarter_text), int(year_text)))
-    if len(periods) != 1:
-        return None
-    target_quarter, target_year = next(iter(periods))
+    for attr in ("title", "subtitle"):
+        for clause in _gdp_contract_clauses(_clean(getattr(market, attr, ""))):
+            if not _gdp_title_clause_matches_contract(
+                clause,
+                threshold=threshold,
+                target_period=target_period,
+            ):
+                return None
     return GDPThresholdContract(
         metric_name=_GDPNOW_METRIC_NAME,
         metric_unit=_GDPNOW_METRIC_UNIT,
@@ -4735,10 +4833,15 @@ def _gdpnow_provisional_side_is_independently_justified(
         return False
     probability_yes = _coerce_probability(estimated_probability_yes)
     market_price = _market_price_for_side(side, yes_ask, no_ask)
-    if probability_yes is None or market_price is None:
+    if (
+        probability_yes is None
+        or not math.isfinite(probability_yes)
+        or market_price is None
+    ):
         return False
     side_probability = probability_yes if side == "yes" else 1.0 - probability_yes
-    if side_probability - market_price - 0.01 < 0.02:
+    side_edge = side_probability - market_price - 0.01
+    if not math.isfinite(side_edge) or side_edge < 0.02:
         return False
 
     now = now or datetime.now(timezone.utc)
@@ -7554,8 +7657,8 @@ def _timestamp_is_fresh(
     return -_DECISION_EVIDENCE_CLOCK_SKEW_SECONDS <= age_seconds <= max_age_seconds
 
 
-def _parse_timestamp(value: str | None) -> datetime | None:
-    if not value:
+def _parse_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str):
         return None
     cleaned = value.strip()
     if cleaned.endswith("Z"):
