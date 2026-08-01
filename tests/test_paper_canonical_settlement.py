@@ -35,7 +35,11 @@ from trading.settlement import (
     VoidRefundContract,
     build_settlement_observation,
 )
-from trading.settlement_store import SettlementStore, settlement_schema_contract_matches
+from trading.settlement_store import (
+    PAPER_TRADE_FEE_NET_SETTLED_EVENT_KIND,
+    SettlementStore,
+    settlement_schema_contract_matches,
+)
 from trading.settlement_economics import (
     KALSHI_FIX_MISC_FEE_RECEIPT_V1,
     SettlementEconomicsBinding,
@@ -1337,15 +1341,65 @@ def test_fee_net_entry_settles_atomically_with_exact_typed_evidence(
     assert _bankroll_cents(trader) == (
         before["bankroll_cents"] + evidence.cashflows.net_payout * Decimal("100")
     )
-    assert trader._conn.execute(
-        "SELECT COUNT(*) FROM paper_settlement_quarantine"
-    ).fetchone()[0] == 0
-    assert trader._conn.execute(
-        "SELECT COUNT(*) FROM paper_settlement_outbox"
-    ).fetchone()[0] == 0
+    parent = trader._conn.execute(
+        """
+        SELECT cost_dollars, pnl_dollars, gross_payout_cents, gross_pnl_cents
+        FROM paper_trades
+        WHERE trade_id=?
+        """,
+        (trade_id,),
+    ).fetchone()
+    assert Decimal(str(parent["cost_dollars"])) == entry.net_entry_debit
+    assert Decimal(str(parent["pnl_dollars"])) == entry.fee_net_pnl
+    assert Decimal(parent["gross_payout_cents"]) == (
+        evidence.cashflows.gross_payout * Decimal("100")
+    )
+    assert Decimal(parent["gross_pnl_cents"]) == (
+        evidence.cashflows.gross_payout - entry.gross_entry_debit
+    ) * Decimal("100")
+    outbox = trader._conn.execute(
+        """
+        SELECT event_version, event_kind, payload_json
+        FROM paper_settlement_outbox
+        WHERE trade_id=?
+        """,
+        (trade_id,),
+    ).fetchone()
+    assert outbox["event_version"] == 1
+    assert outbox["event_kind"] == PAPER_TRADE_FEE_NET_SETTLED_EVENT_KIND
+    payload = json.loads(outbox["payload_json"])
+    assert Decimal(payload["net_settlement_payout_cents"]) == (
+        evidence.cashflows.net_payout * Decimal("100")
+    )
+    assert Decimal(payload["fee_net_pnl_cents"]) == entry.fee_net_pnl * Decimal("100")
+    assert Decimal(payload["net_entry_debit_cents"]) == entry.net_entry_debit * Decimal("100")
+    assert trader._conn.execute("SELECT COUNT(*) FROM paper_settlement_quarantine").fetchone()[0] == 0
     with SettlementStore(trader.db_path, read_only=True) as settlement_store:
         check = settlement_store.conservation(now=datetime.now(timezone.utc))
     assert check.ok, check.failures
+
+    from tasks.calibration_task import CalibrationTask
+    from tasks.settlement_outbox_task import SettlementOutboxTask
+
+    trade_logger = MagicMock()
+    outbox_task = SettlementOutboxTask(
+        db_path=trader.db_path,
+        calibration_task=CalibrationTask(),
+        trade_logger=trade_logger,
+        clock=lambda: datetime.now(timezone.utc),
+        token_factory=lambda: "fee-net-settlement-worker",
+        lease_seconds=60,
+    )
+    assert asyncio.run(outbox_task.run_once(limit=100)) == 4
+    resolution_kwargs = trade_logger.log_paper_resolution.call_args.kwargs
+    assert resolution_kwargs["pnl_dollars"] == pytest.approx(float(entry.fee_net_pnl))
+    assert resolution_kwargs["bankroll_delta_dollars"] == pytest.approx(
+        float(entry.net_settlement_payout)
+    )
+    with SettlementStore(trader.db_path, read_only=True) as settlement_store:
+        assert settlement_store.canonical_delivery_complete_trade_ids(
+            now=datetime.now(timezone.utc)
+        ) == (trade_id,)
 
 
 def test_fee_net_typed_evidence_rejects_wrong_observation_binding(

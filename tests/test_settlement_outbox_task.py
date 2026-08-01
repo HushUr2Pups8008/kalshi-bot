@@ -24,7 +24,11 @@ from tests.test_paper_canonical_settlement import (
 )
 from tests.test_paper_trader import _cfg_module, _make_mock_analysis
 from trading.settlement import MarketOutcome, VoidRefundContract
-from trading.settlement_store import SettlementStore, settlement_result_sha256
+from trading.settlement_store import (
+    PAPER_TRADE_FEE_NET_SETTLED_EVENT_KIND,
+    SettlementStore,
+    settlement_result_sha256,
+)
 from trading.venue import MarketRef, Venue
 from utils.logger import TradeLogger
 
@@ -579,6 +583,81 @@ def _insert_invalid_event(seed: SeededEvent, invalid_case: str) -> SeededEvent:
         ("paper_trade_log", "calibration_state"),
     )
     return invalid_seed
+
+
+@pytest.mark.asyncio
+async def test_run_once_uses_fee_net_event_cashflows_for_paper_log(
+    monkeypatch,
+    tmp_path,
+):
+    seed = _seed_directional_event(monkeypatch, tmp_path)
+    _record_receipts(seed, DIRECTIONAL_CONSUMERS)
+    payload = dict(seed.payload)
+    payload["event_kind"] = PAPER_TRADE_FEE_NET_SETTLED_EVENT_KIND
+    payload["outbox_id"] = _outbox_id(
+        event_version=1,
+        event_kind=PAPER_TRADE_FEE_NET_SETTLED_EVENT_KIND,
+        observation_sha256=str(payload["observation_sha256"]),
+        trade_id=seed.trade_id,
+    )
+    gross_payout_cents = Decimal(str(payload["gross_payout_cents"]))
+    payload.update(
+        {
+            "accounting_basis": "fee_net_v1",
+            "accounting_version": 1,
+            "gross_entry_debit_cents": "1200",
+            "entry_fee_cents": "50",
+            "net_entry_debit_cents": "1250",
+            "settlement_fee_cents": "10",
+            "settlement_refund_cents": "0",
+            "net_settlement_payout_cents": str(gross_payout_cents - Decimal("10")),
+            "fee_net_pnl_cents": str(gross_payout_cents - Decimal("1260")),
+        }
+    )
+    with sqlite3.connect(seed.db_path) as conn:
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute(
+            """
+            INSERT INTO paper_settlement_outbox (
+                outbox_id, event_version, event_kind, observation_sha256,
+                trade_id, payload_json, created_at
+            ) VALUES (?, 1, ?, ?, ?, ?, ?)
+            """,
+            (
+                payload["outbox_id"],
+                PAPER_TRADE_FEE_NET_SETTLED_EVENT_KIND,
+                payload["observation_sha256"],
+                seed.trade_id,
+                _canonical_json(payload),
+                payload["settled_at"],
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO paper_settlement_outbox_requirements (outbox_id, consumer_name)
+            VALUES (?, 'paper_trade_log')
+            """,
+            (payload["outbox_id"],),
+        )
+    fee_seed = SeededEvent(
+        db_path=seed.db_path,
+        outbox_id=str(payload["outbox_id"]),
+        trade_id=seed.trade_id,
+        payload=payload,
+    )
+    trade_logger = MagicMock()
+
+    processed = await _task(fee_seed, trade_logger=trade_logger).run_once(limit=100)
+
+    assert processed == 1
+    resolution_kwargs = trade_logger.log_paper_resolution.call_args.kwargs
+    assert resolution_kwargs["pnl_dollars"] == pytest.approx(
+        float(Decimal(payload["fee_net_pnl_cents"]) / 100)
+    )
+    assert resolution_kwargs["bankroll_delta_dollars"] == pytest.approx(
+        float(Decimal(payload["net_settlement_payout_cents"]) / 100)
+    )
+    assert _pending_consumers(fee_seed) == ()
 
 
 @pytest.mark.asyncio

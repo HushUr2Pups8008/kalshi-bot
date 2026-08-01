@@ -85,6 +85,7 @@ from trading.settlement_store import (
     StoreCheck,
     canonical_entry_schema_ready,
     enable_and_verify_foreign_keys,
+    paper_trade_fee_net_settled_outbox_contract,
     initialize_fresh_settlement_schema,
     paper_trade_settled_outbox_contract,
     settlement_keyword_directions,
@@ -1918,7 +1919,7 @@ class PaperTrader:
         except Exception:  # noqa: BLE001 — additive join key, never block a trade
             llm_capture_row_id = None
 
-        remaining_values = (
+        remaining_values = [
             analysis.market.title,
             side,
             contracts,
@@ -1957,7 +1958,7 @@ class PaperTrader:
             1,
             cohort_extension,
             llm_capture_row_id,
-        )
+        ]
         if canonical_identity:
             columns = """
                 (trade_id, ts, ticker, venue, venue_market_id, identity_status,
@@ -2026,6 +2027,9 @@ class PaperTrader:
                         filled_at=filled_at,
                     )
                     entry_debit_dollars = float(fee_net_entry.net_entry_debit)
+                    # The generic parent cost is the actual capital debit. Its
+                    # labelled gross fields remain the immutable price-only fact.
+                    remaining_values[4] = entry_debit_dollars
                     sizing_bankroll = self.get_effective_sizing_bankroll()
                     if entry_debit_dollars > sizing_bankroll:
                         self._conn.rollback()
@@ -2142,6 +2146,9 @@ class PaperTrader:
             self._conn.commit()
 
         # Keep portfolio in sync with DB
+        recorded_cost_dollars = (
+            entry_debit_dollars if fee_net_entry is not None else cost_dollars
+        )
         self.portfolio.add(Position(
             trade_id=trade_id,
             ticker=analysis.market.ticker,
@@ -2149,7 +2156,7 @@ class PaperTrader:
             venue_market_id=venue_market_id,
             side=side,
             contracts=contracts,
-            cost_dollars=cost_dollars,
+            cost_dollars=recorded_cost_dollars,
             price_cents=price_cents,
             estimated_prob=analysis.estimated_probability,
             entry_price_cents=float(analysis.executed_price_cents) if analysis.executed_price_cents is not None else 0.0,
@@ -2166,7 +2173,7 @@ class PaperTrader:
             "side": side,
             "contracts": contracts,
             "price_cents": price_cents,
-            "cost_dollars": cost_dollars,
+            "cost_dollars": recorded_cost_dollars,
             "estimated_probability": analysis.estimated_probability,
             "entry_price_cents": float(analysis.executed_price_cents) if analysis.executed_price_cents is not None else 0.0,
             "edge": executed_edge,
@@ -2187,7 +2194,7 @@ class PaperTrader:
             "[PAPER] %s: BUY %d%s %s @ %dc | cost=$%.2f | edge=%+.3f | "
             "bankroll=$%.2f->$%.2f | src_mult=%.2fx | %s",
             trade_id, contracts, kelly_note, side.upper(), price_cents,
-            cost_dollars, executed_edge,
+            recorded_cost_dollars, executed_edge,
             bankroll_before, bankroll_after,
             source_mult, analysis.market.ticker,
         )
@@ -2347,6 +2354,13 @@ class PaperTrader:
                 applied_at=applied_at,
             )
             for outcome in outcomes:
+                fee_net_settlement = fee_net_settlements.get(
+                    str(outcome["trade_id"])
+                )
+                realized_pnl_cents = outcome["gross_pnl_cents"]
+                if fee_net_settlement is not None:
+                    assert fee_net_settlement.fee_net_pnl is not None
+                    realized_pnl_cents = fee_net_settlement.fee_net_pnl * Decimal("100")
                 cursor = self._conn.execute(
                     """
                     UPDATE paper_trades
@@ -2358,7 +2372,7 @@ class PaperTrader:
                     """,
                     (
                         outcome["resolved_yes"],
-                        float(outcome["gross_pnl_cents"] / Decimal("100")),
+                        float(realized_pnl_cents / Decimal("100")),
                         applied_at,
                         outcome["terminal_state"],
                         observation.observation_sha256,
@@ -2378,9 +2392,6 @@ class PaperTrader:
                             "updated_rows": cursor.rowcount,
                         },
                     )
-                fee_net_settlement = fee_net_settlements.get(
-                    str(outcome["trade_id"])
-                )
                 if fee_net_settlement is not None:
                     self._dispatch_fee_net_settlement(fee_net_settlement)
 
@@ -2406,12 +2417,14 @@ class PaperTrader:
                 )
 
             for outcome in outcomes:
-                if str(outcome["trade_id"]) not in fee_net_settlements:
-                    self._insert_canonical_outbox(
-                        observation,
-                        outcome,
-                        created_at=applied_at,
-                    )
+                self._insert_canonical_outbox(
+                    observation,
+                    outcome,
+                    created_at=applied_at,
+                    fee_net_settlement=fee_net_settlements.get(
+                        str(outcome["trade_id"])
+                    ),
+                )
             self._conn.commit()
         except _SettlementObservationAlreadyApplied:
             if transaction_started:
@@ -2672,6 +2685,10 @@ class PaperTrader:
             or entry.quantity != contracts
             or entry.price * Decimal("100") != price_cents
             or entry.gross_entry_debit != contracts * price_cents / Decimal("100")
+            or _settlement_decimal(
+                trade["cost_dollars"], f"{trade['trade_id']}.cost_dollars"
+            )
+            != entry.net_entry_debit
         ):
             raise ValueError("fee-net accounting entry does not match parent trade")
 
@@ -2831,14 +2848,18 @@ class PaperTrader:
                 )
                 * Decimal("100")
             )
-            expected_cost_cents = Decimal(contracts) * price_cents
-            if cost_cents != expected_cost_cents:
+            expected_gross_cost_cents = Decimal(contracts) * price_cents
+            fee_net_accounting = (
+                "fee_net_accounting_version" in trade.keys()
+                and trade["fee_net_accounting_version"] is not None
+            )
+            if not fee_net_accounting and cost_cents != expected_gross_cost_cents:
                 raise _SettlementQuarantineRequired(
                     "invalid_financial_state",
                     {
                         "field": f"{trade['trade_id']}.cost_dollars",
                         "expected_cents": _settlement_decimal_text(
-                            expected_cost_cents
+                            expected_gross_cost_cents
                         ),
                         "value_cents": _settlement_decimal_text(cost_cents),
                     },
@@ -2872,7 +2893,7 @@ class PaperTrader:
                     if won
                     else Decimal("0")
                 )
-            gross_pnl_cents = gross_payout_cents - cost_cents
+            gross_pnl_cents = gross_payout_cents - expected_gross_cost_cents
             total_payout_cents += gross_payout_cents
             outcomes.append(
                 {
@@ -2959,13 +2980,23 @@ class PaperTrader:
         outcome: dict[str, Any],
         *,
         created_at: str,
+        fee_net_settlement: PaperAccountingRecord | None = None,
     ) -> None:
-        contract = paper_trade_settled_outbox_contract(
-            observation,
-            outcome,
-            created_at=created_at,
-            keyword_directions=settlement_keyword_directions(),
-        )
+        if fee_net_settlement is None:
+            contract = paper_trade_settled_outbox_contract(
+                observation,
+                outcome,
+                created_at=created_at,
+                keyword_directions=settlement_keyword_directions(),
+            )
+        else:
+            contract = paper_trade_fee_net_settled_outbox_contract(
+                observation,
+                outcome,
+                fee_net_record=fee_net_settlement,
+                created_at=created_at,
+                keyword_directions=settlement_keyword_directions(),
+            )
         self._conn.execute(
             """
             INSERT INTO paper_settlement_outbox (

@@ -34,6 +34,7 @@ _SQLITE_CONNECT = sqlite3.connect
 SETTLEMENT_SCHEMA_VERSION = 1
 SETTLEMENT_EVENT_VERSION = 1
 PAPER_TRADE_SETTLED_EVENT_KIND = "paper_trade_settled"
+PAPER_TRADE_FEE_NET_SETTLED_EVENT_KIND = "paper_trade_fee_net_settled"
 PAPER_TRADE_SETTLED_VOID_REQUIREMENTS = ("paper_trade_log",)
 PAPER_TRADE_SETTLED_DIRECTIONAL_REQUIREMENTS = (
     "paper_trade_log",
@@ -548,16 +549,17 @@ def settlement_keyword_directions() -> dict[str, str]:
     }
 
 
-def paper_trade_settled_outbox_contract(
+def _paper_trade_settled_outbox_base(
     observation: SettlementObservation,
     trade: Mapping[str, object],
     *,
     created_at: str,
     keyword_directions: Mapping[str, str],
-) -> PaperTradeSettledOutboxContract:
-    """Build the canonical durable event for one settled paper trade."""
+    event_kind: str,
+) -> tuple[str, dict[str, object], tuple[str, ...]]:
+    """Build the immutable identity and common fields of a settled event."""
     event_identity = {
-        "event_kind": PAPER_TRADE_SETTLED_EVENT_KIND,
+        "event_kind": event_kind,
         "event_version": SETTLEMENT_EVENT_VERSION,
         "observation_sha256": observation.observation_sha256,
         "trade_id": trade["trade_id"],
@@ -585,13 +587,9 @@ def paper_trade_settled_outbox_contract(
 
     payload = {
         "alias": observation.market_ref.alias,
-        "event_kind": PAPER_TRADE_SETTLED_EVENT_KIND,
+        "event_kind": event_kind,
         "event_version": SETTLEMENT_EVENT_VERSION,
         "outbox_id": outbox_id,
-        "gross_payout_cents": _settlement_decimal_text(
-            trade["gross_payout_cents"]
-        ),
-        "gross_pnl_cents": _settlement_decimal_text(trade["gross_pnl_cents"]),
         "observation_sha256": observation.observation_sha256,
         "outcome": observation.outcome.value,
         "ticker": trade["ticker"],
@@ -623,10 +621,127 @@ def paper_trade_settled_outbox_contract(
         if observation.outcome is MarketOutcome.VOID
         else PAPER_TRADE_SETTLED_DIRECTIONAL_REQUIREMENTS
     )
+    return outbox_id, payload, requirements
+
+
+def paper_trade_settled_outbox_contract(
+    observation: SettlementObservation,
+    trade: Mapping[str, object],
+    *,
+    created_at: str,
+    keyword_directions: Mapping[str, str],
+) -> PaperTradeSettledOutboxContract:
+    """Build the legacy gross-v1 durable event for one settled paper trade."""
+    outbox_id, payload, requirements = _paper_trade_settled_outbox_base(
+        observation,
+        trade,
+        created_at=created_at,
+        keyword_directions=keyword_directions,
+        event_kind=PAPER_TRADE_SETTLED_EVENT_KIND,
+    )
+    payload.update(
+        {
+            "gross_payout_cents": _settlement_decimal_text(
+                trade["gross_payout_cents"]
+            ),
+            "gross_pnl_cents": _settlement_decimal_text(trade["gross_pnl_cents"]),
+        }
+    )
     return PaperTradeSettledOutboxContract(
         outbox_id=outbox_id,
         event_version=SETTLEMENT_EVENT_VERSION,
         event_kind=PAPER_TRADE_SETTLED_EVENT_KIND,
+        observation_sha256=observation.observation_sha256,
+        trade_id=str(trade["trade_id"]),
+        payload_json=canonical_payload_json(payload),
+        created_at=created_at,
+        requirements=requirements,
+    )
+
+
+def paper_trade_fee_net_settled_outbox_contract(
+    observation: SettlementObservation,
+    trade: Mapping[str, object],
+    *,
+    fee_net_record: object,
+    created_at: str,
+    keyword_directions: Mapping[str, str],
+) -> PaperTradeSettledOutboxContract:
+    """Build one fee-net-v1 event bound to the settled immutable ledger row."""
+    # Kept local because paper_accounting imports this module for its base
+    # settlement schema contract.
+    from trading.paper_accounting import PAPER_ACCOUNTING_VERSION, PaperAccountingRecord
+
+    if not isinstance(fee_net_record, PaperAccountingRecord):
+        raise ValueError("fee-net outbox requires a typed accounting record")
+    fee_net_record.validate_record()
+    if (
+        fee_net_record.accounting_version != PAPER_ACCOUNTING_VERSION
+        or fee_net_record.trade_id != str(trade["trade_id"])
+        or fee_net_record.settlement_observation_sha256
+        != observation.observation_sha256
+        or fee_net_record.settled_at is None
+        or fee_net_record.settled_at.isoformat() != created_at
+        or fee_net_record.gross_settlement_payout is None
+        or fee_net_record.net_settlement_payout is None
+        or fee_net_record.fee_net_pnl is None
+        or fee_net_record.settlement_fee is None
+        or fee_net_record.settlement_refund is None
+    ):
+        raise ValueError("fee-net outbox record is not bound to its settlement")
+
+    gross_payout_cents = fee_net_record.gross_settlement_payout * Decimal("100")
+    gross_pnl_cents = (
+        fee_net_record.gross_settlement_payout - fee_net_record.gross_entry_debit
+    ) * Decimal("100")
+    if (
+        _parse_legacy_decimal(trade["gross_payout_cents"]) != gross_payout_cents
+        or _parse_legacy_decimal(trade["gross_pnl_cents"]) != gross_pnl_cents
+        or _parse_legacy_decimal(trade["cost_dollars"])
+        != fee_net_record.net_entry_debit
+    ):
+        raise ValueError("fee-net outbox parent trade does not match immutable ledger")
+
+    outbox_id, payload, requirements = _paper_trade_settled_outbox_base(
+        observation,
+        trade,
+        created_at=created_at,
+        keyword_directions=keyword_directions,
+        event_kind=PAPER_TRADE_FEE_NET_SETTLED_EVENT_KIND,
+    )
+    payload.update(
+        {
+            "accounting_basis": "fee_net_v1",
+            "accounting_version": PAPER_ACCOUNTING_VERSION,
+            "gross_entry_debit_cents": _settlement_decimal_text(
+                fee_net_record.gross_entry_debit * Decimal("100")
+            ),
+            "net_entry_debit_cents": _settlement_decimal_text(
+                fee_net_record.net_entry_debit * Decimal("100")
+            ),
+            "entry_fee_cents": _settlement_decimal_text(
+                fee_net_record.quote.net_fee * Decimal("100")
+            ),
+            "gross_payout_cents": _settlement_decimal_text(gross_payout_cents),
+            "gross_pnl_cents": _settlement_decimal_text(gross_pnl_cents),
+            "settlement_fee_cents": _settlement_decimal_text(
+                fee_net_record.settlement_fee * Decimal("100")
+            ),
+            "settlement_refund_cents": _settlement_decimal_text(
+                fee_net_record.settlement_refund * Decimal("100")
+            ),
+            "net_settlement_payout_cents": _settlement_decimal_text(
+                fee_net_record.net_settlement_payout * Decimal("100")
+            ),
+            "fee_net_pnl_cents": _settlement_decimal_text(
+                fee_net_record.fee_net_pnl * Decimal("100")
+            ),
+        }
+    )
+    return PaperTradeSettledOutboxContract(
+        outbox_id=outbox_id,
+        event_version=SETTLEMENT_EVENT_VERSION,
+        event_kind=PAPER_TRADE_FEE_NET_SETTLED_EVENT_KIND,
         observation_sha256=observation.observation_sha256,
         trade_id=str(trade["trade_id"]),
         payload_json=canonical_payload_json(payload),
@@ -731,16 +846,16 @@ def canonical_entry_schema_ready(conn: sqlite3.Connection) -> bool:
     ) == ("TEXT", 0, 0)
 
 
-def _fee_net_settlement_credit_cents(
+def _fee_net_settlement_record(
     conn: sqlite3.Connection,
     *,
     observation_sha256: str,
     trades: list[sqlite3.Row],
-) -> tuple[Decimal | None, str | None]:
-    """Return the exact net bankroll credit for a fee-net observation.
+) -> tuple[object | None, str | None]:
+    """Return the exact ledger record for one fee-net observation.
 
     Gross v1 fields remain the parent observation record. The accounting ledger
-    is the only source allowed to change the applied bankroll credit.
+    is the only source allowed to change the applied bankroll credit or net P&L.
     """
 
     fee_net_trades = [
@@ -809,9 +924,32 @@ def _fee_net_settlement_credit_cents(
             != _parse_decimal(trade["gross_payout_cents"])
         ):
             return None, "linkage"
-        assert entry.net_settlement_payout is not None
-        return entry.net_settlement_payout * Decimal("100"), None
+        return entry, None
     except (TypeError, ValueError, sqlite3.DatabaseError):
+        return None, "invalid"
+
+
+def _fee_net_settlement_credit_cents(
+    conn: sqlite3.Connection,
+    *,
+    observation_sha256: str,
+    trades: list[sqlite3.Row],
+) -> tuple[Decimal | None, str | None]:
+    """Return the exact net bankroll credit for a fee-net observation."""
+
+    entry, error = _fee_net_settlement_record(
+        conn,
+        observation_sha256=observation_sha256,
+        trades=trades,
+    )
+    if entry is None:
+        return None, error
+    try:
+        net_settlement_payout = entry.net_settlement_payout
+        if net_settlement_payout is None:
+            return None, "invalid"
+        return net_settlement_payout * Decimal("100"), None
+    except (AttributeError, TypeError):
         return None, "invalid"
 
 
@@ -2269,7 +2407,7 @@ class SettlementStore:
             str, tuple[SettlementObservation, datetime]
         ] = {}
         expected_outbox_inputs: dict[
-            tuple[str, str], tuple[SettlementObservation, dict[str, object], str]
+            tuple[str, str], tuple[SettlementObservation, dict[str, object], str, object | None]
         ] = {}
         legacy_receipt_candidates: dict[
             tuple[str, str], _LegacyReceiptApplication
@@ -2380,15 +2518,22 @@ class SettlementStore:
                 for row in trades
             )
             fee_net_credit_cents: Decimal | None = None
+            fee_net_record: object | None = None
             fee_net_accounting_error: str | None = None
             if fee_net_marker_available:
-                fee_net_credit_cents, fee_net_accounting_error = (
-                    _fee_net_settlement_credit_cents(
-                        self._conn,
-                        observation_sha256=observation_id,
-                        trades=trades,
-                    )
+                fee_net_record, fee_net_accounting_error = _fee_net_settlement_record(
+                    self._conn,
+                    observation_sha256=observation_id,
+                    trades=trades,
                 )
+                if fee_net_record is not None:
+                    try:
+                        net_settlement_payout = fee_net_record.net_settlement_payout
+                        if net_settlement_payout is None:
+                            raise ValueError("missing net settlement payout")
+                        fee_net_credit_cents = net_settlement_payout * Decimal("100")
+                    except (AttributeError, TypeError, ValueError):
+                        fee_net_accounting_error = "invalid"
                 if fee_net_accounting_error is not None:
                     failures.append(
                         f"fee_net_accounting:{observation_id}:"
@@ -2444,7 +2589,25 @@ class SettlementStore:
                         or price_cents > 99
                     ):
                         financials_invalid = True
-                    if cost_cents != contracts * price_cents:
+                    gross_entry_cost_cents = contracts * price_cents
+                    expected_parent_pnl_cents = gross_pnl
+                    if fee_net_observation:
+                        try:
+                            if fee_net_record is None:
+                                raise ValueError("missing fee-net ledger")
+                            if (
+                                cost_cents
+                                != fee_net_record.net_entry_debit * Decimal("100")
+                                or fee_net_record.fee_net_pnl is None
+                            ):
+                                financials_invalid = True
+                            else:
+                                expected_parent_pnl_cents = (
+                                    fee_net_record.fee_net_pnl * Decimal("100")
+                                )
+                        except (AttributeError, TypeError, ValueError):
+                            financials_invalid = True
+                    elif cost_cents != gross_entry_cost_cents:
                         financials_invalid = True
 
                     if canonical_observation is None:
@@ -2466,11 +2629,11 @@ class SettlementStore:
                         )
                         if gross_payout != expected_payout:
                             financials_invalid = True
-                    if gross_pnl != gross_payout - cost_cents:
+                    if gross_pnl != gross_payout - gross_entry_cost_cents:
                         financials_invalid = True
                     if row["pnl_dollars"] is None or (
                         _parse_legacy_decimal(row["pnl_dollars"]) * 100
-                        != gross_pnl
+                        != expected_parent_pnl_cents
                     ):
                         financials_invalid = True
                     trade_payout += gross_payout
@@ -2507,11 +2670,6 @@ class SettlementStore:
                     invalid_trade_outcomes += 1
 
                 if canonical_observation is not None:
-                    # Gross-only event consumers cannot safely represent a
-                    # fee-net settlement. The exact ledger remains canonical
-                    # until a versioned net event contract is available.
-                    if fee_net_observation:
-                        continue
                     trade_event = dict(row)
                     trade_event["won"] = (
                         None
@@ -2553,6 +2711,7 @@ class SettlementStore:
                         canonical_observation,
                         trade_event,
                         str(observation["applied_at"]),
+                        fee_net_record,
                     )
 
             try:
@@ -2670,18 +2829,27 @@ class SettlementStore:
 
             outbox = linked_outboxes[0]
             outbox_contract_invalid = False
-            observation, trade_event, expected_created_at = expected_input
+            observation, trade_event, expected_created_at, fee_net_record = expected_input
             try:
                 keyword_directions = _persisted_keyword_directions(
                     str(outbox["payload_json"]),
                     trade_event,
                 )
-                expected = paper_trade_settled_outbox_contract(
-                    observation,
-                    trade_event,
-                    created_at=expected_created_at,
-                    keyword_directions=keyword_directions,
-                )
+                if fee_net_record is None:
+                    expected = paper_trade_settled_outbox_contract(
+                        observation,
+                        trade_event,
+                        created_at=expected_created_at,
+                        keyword_directions=keyword_directions,
+                    )
+                else:
+                    expected = paper_trade_fee_net_settled_outbox_contract(
+                        observation,
+                        trade_event,
+                        fee_net_record=fee_net_record,
+                        created_at=expected_created_at,
+                        keyword_directions=keyword_directions,
+                    )
             except (KeyError, RuntimeError, TypeError, ValueError):
                 expected = None
                 outbox_contract_invalid = True

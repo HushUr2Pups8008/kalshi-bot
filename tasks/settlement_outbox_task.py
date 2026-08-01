@@ -15,7 +15,10 @@ from typing import Any
 
 from tasks.stats.source_credibility import record_outcome_in_transaction
 from trading.settlement_store import (
+    PAPER_TRADE_FEE_NET_SETTLED_EVENT_KIND,
+    PAPER_TRADE_SETTLED_EVENT_KIND,
     PendingRequirement,
+    SETTLEMENT_EVENT_VERSION,
     SettlementStore,
     settlement_result_sha256,
 )
@@ -23,8 +26,9 @@ from trading.settlement_store import (
 
 log = logging.getLogger(__name__)
 
-_EVENT_KIND = "paper_trade_settled"
-_EVENT_VERSION = 1
+_EVENT_KIND = PAPER_TRADE_SETTLED_EVENT_KIND
+_FEE_NET_EVENT_KIND = PAPER_TRADE_FEE_NET_SETTLED_EVENT_KIND
+_EVENT_VERSION = SETTLEMENT_EVENT_VERSION
 _KNOWN_CONSUMERS = frozenset(
     {
         "paper_trade_log",
@@ -68,6 +72,19 @@ _REQUIRED_FIELDS = frozenset(
         "lane_estimates",
         "gross_payout_cents",
         "gross_pnl_cents",
+    }
+)
+_FEE_NET_REQUIRED_FIELDS = frozenset(
+    {
+        "accounting_basis",
+        "accounting_version",
+        "gross_entry_debit_cents",
+        "net_entry_debit_cents",
+        "entry_fee_cents",
+        "settlement_fee_cents",
+        "settlement_refund_cents",
+        "net_settlement_payout_cents",
+        "fee_net_pnl_cents",
     }
 )
 
@@ -132,7 +149,7 @@ def _validate_payload(payload: object) -> dict[str, Any]:
         raise ValueError(f"payload missing fields: {sorted(missing)}")
     if type(payload["event_version"]) is not int or payload["event_version"] != 1:
         raise ValueError("unsupported event version")
-    if payload["event_kind"] != _EVENT_KIND:
+    if payload["event_kind"] not in {_EVENT_KIND, _FEE_NET_EVENT_KIND}:
         raise ValueError("unsupported event kind")
     for field in (
         "outbox_id",
@@ -175,6 +192,48 @@ def _validate_payload(payload: object) -> dict[str, Any]:
                 raise ValueError(f"{field} must be finite")
         except InvalidOperation as exc:
             raise ValueError(f"{field} must be decimal text") from exc
+
+    if payload["event_kind"] == _FEE_NET_EVENT_KIND:
+        missing_fee_net = _FEE_NET_REQUIRED_FIELDS - payload.keys()
+        if missing_fee_net:
+            raise ValueError(
+                f"fee-net payload missing fields: {sorted(missing_fee_net)}"
+            )
+        if payload["accounting_basis"] != "fee_net_v1":
+            raise ValueError("unsupported fee-net accounting basis")
+        if payload["accounting_version"] != 1:
+            raise ValueError("unsupported fee-net accounting version")
+        fee_net_values: dict[str, Decimal] = {}
+        for field in (
+            "gross_entry_debit_cents",
+            "net_entry_debit_cents",
+            "entry_fee_cents",
+            "settlement_fee_cents",
+            "settlement_refund_cents",
+            "net_settlement_payout_cents",
+            "fee_net_pnl_cents",
+        ):
+            value = _require_string(payload, field)
+            try:
+                parsed = Decimal(value)
+            except InvalidOperation as exc:
+                raise ValueError(f"{field} must be decimal text") from exc
+            if not parsed.is_finite():
+                raise ValueError(f"{field} must be finite")
+            fee_net_values[field] = parsed
+        if (
+            fee_net_values["gross_entry_debit_cents"]
+            + fee_net_values["entry_fee_cents"]
+            != fee_net_values["net_entry_debit_cents"]
+            or Decimal(str(payload["gross_payout_cents"]))
+            - fee_net_values["settlement_fee_cents"]
+            + fee_net_values["settlement_refund_cents"]
+            != fee_net_values["net_settlement_payout_cents"]
+            or fee_net_values["net_settlement_payout_cents"]
+            - fee_net_values["net_entry_debit_cents"]
+            != fee_net_values["fee_net_pnl_cents"]
+        ):
+            raise ValueError("fee-net payload cashflows are incoherent")
 
     resolved_yes = payload["resolved_yes"]
     won = payload["won"]
@@ -224,6 +283,24 @@ def _validate_payload(payload: object) -> dict[str, Any]:
         if value is not None:
             _require_number({lane: value}, lane)
     return payload
+
+
+def _realized_pnl_cents(payload: dict[str, Any]) -> Decimal:
+    field = (
+        "fee_net_pnl_cents"
+        if payload["event_kind"] == _FEE_NET_EVENT_KIND
+        else "gross_pnl_cents"
+    )
+    return Decimal(payload[field])
+
+
+def _realized_bankroll_delta_cents(payload: dict[str, Any]) -> Decimal:
+    field = (
+        "net_settlement_payout_cents"
+        if payload["event_kind"] == _FEE_NET_EVENT_KIND
+        else "gross_payout_cents"
+    )
+    return Decimal(payload[field])
 
 
 class SettlementOutboxTask:
@@ -310,7 +387,7 @@ class SettlementOutboxTask:
     ) -> None:
         self._fault("before_effect")
         if requirement.consumer_name == "paper_trade_log":
-            pnl_dollars = float(Decimal(payload["gross_pnl_cents"]) / 100)
+            pnl_dollars = float(_realized_pnl_cents(payload) / 100)
             settled_at = payload["settled_at"]
             self._trade_logger.log_paper_resolution(
                 trade_id=payload["trade_id"],
@@ -318,9 +395,7 @@ class SettlementOutboxTask:
                 resolved_yes=payload["resolved_yes"],
                 terminal_state=payload["terminal_state"],
                 pnl_dollars=pnl_dollars,
-                bankroll_delta_dollars=float(
-                    Decimal(payload["gross_payout_cents"]) / 100
-                ),
+                bankroll_delta_dollars=float(_realized_bankroll_delta_cents(payload) / 100),
                 venue=payload["venue"],
                 outbox_id=payload["outbox_id"],
                 ts=settled_at,
