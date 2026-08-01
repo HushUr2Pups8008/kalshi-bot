@@ -5680,10 +5680,12 @@ def _event_window_pending_search(
 ) -> list[ResearchEvidence]:
     if not _query_mentions_generic_event_window(query.query):
         return []
-    deadline = _event_deadline_from_text(query.query) or _monthly_event_window_end_from_text(
-        query.query
-    )
-    if deadline is None and _query_mentions_confirmation_event_window(query.query):
+    confirmation_event_window = _query_mentions_confirmation_event_window(query.query)
+    deadline = _event_deadline_from_text(
+        query.query,
+        prefer_textual_date=confirmation_event_window,
+    ) or _monthly_event_window_end_from_text(query.query)
+    if deadline is None and confirmation_event_window:
         deadline = _month_end_from_text(query.query)
     if deadline is None:
         return []
@@ -5885,13 +5887,18 @@ def _query_mentions_market_data_event_window(query: str) -> bool:
     ) and _event_deadline_from_text(text) is not None
 
 
-def _event_deadline_from_text(text: str) -> date | None:
+def _event_deadline_from_text(
+    text: str,
+    *,
+    prefer_textual_date: bool = False,
+) -> date | None:
     cleaned = _clean(text)
     ticker_match = re.search(
         r"\bKX[A-Z0-9]+-(\d{2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\d{2})(?:[A-Z0-9]*)?\b",
         cleaned,
         flags=re.I,
     )
+    ticker_deadline = None
     if ticker_match:
         month_name = {
             "JAN": "january",
@@ -5908,13 +5915,13 @@ def _event_deadline_from_text(text: str) -> date | None:
             "DEC": "december",
         }[ticker_match.group(2).upper()]
         try:
-            return date(
+            ticker_deadline = date(
                 2000 + int(ticker_match.group(1)),
                 _MONTH_NAME_TO_NUMBER[month_name],
                 int(ticker_match.group(3)),
             )
         except ValueError:
-            return None
+            ticker_deadline = None
     month_pattern = "|".join(_MONTH_NAME_TO_NUMBER)
     matches = list(re.finditer(
         rf"\b({month_pattern}|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)"
@@ -5922,14 +5929,15 @@ def _event_deadline_from_text(text: str) -> date | None:
         cleaned,
         flags=re.I,
     ))
-    if not matches:
-        return None
     parsed_dates = [
         parsed
         for match in matches
         if (parsed := _fed_meeting_date_from_text(match.group(0))) is not None
     ]
-    return max(parsed_dates) if parsed_dates else None
+    textual_deadline = max(parsed_dates) if parsed_dates else None
+    if prefer_textual_date:
+        return textual_deadline or ticker_deadline
+    return ticker_deadline or textual_deadline
 
 
 async def _run_generic_search(query: ResearchQuery) -> list[ResearchEvidence]:

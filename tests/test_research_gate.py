@@ -3059,6 +3059,24 @@ def test_event_window_pending_search_marks_confirmation_deadline_pending():
     assert "August 1, 2026" in evidence[0].snippet
 
 
+def test_event_window_pending_search_prefers_confirmation_title_deadline_over_series_ticker():
+    evidence = _event_window_pending_search(
+        ResearchQuery(
+            (
+                "KXSENATECONFIRM-26APR29-CMEA Will Casey Means be confirmed as "
+                "Surgeon General before Aug 8, 2026? supporting evidence current"
+            ),
+            "supporting",
+            "reputable_secondary",
+        ),
+        now=datetime(2026, 8, 1, tzinfo=timezone.utc),
+    )
+
+    assert len(evidence) == 1
+    assert evidence[0].metric_name == "event_window_pending"
+    assert "August 8, 2026" in evidence[0].snippet
+
+
 def test_event_window_pending_search_marks_year_first_confirmation_month_pending():
     evidence = _event_window_pending_search(
         ResearchQuery(
