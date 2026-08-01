@@ -93,6 +93,27 @@ DEFAULT_DB = Path("data/paper_trades.db")
 DEFAULT_REGIMES_DOC = Path("docs/governance/corpus-regimes.md")
 DEFAULT_OUTPUT_DIR = Path("logs/edge_replay")
 
+# Canonical replay economics live in the immutable accounting ledger, not in
+# ``paper_trades``. Keep this projection optional so historical diagnostics
+# against pre-accounting databases remain readable; runtime-bound callers
+# require every field below before materializing a registered corpus.
+FEE_NET_REPLAY_FIELDS = (
+    "accounting_version",
+    "entry_request_id",
+    "filled_at",
+    "recorded_at",
+    "net_fee_dollars",
+    "gross_entry_debit_dollars",
+    "net_entry_debit_dollars",
+    "settlement_observation_sha256",
+    "settled_at",
+    "settlement_fee_dollars",
+    "settlement_refund_dollars",
+    "gross_settlement_payout_dollars",
+    "net_settlement_payout_dollars",
+    "fee_net_pnl_dollars",
+)
+
 CORPUS_STAMP_FIELDS = (
     "corpus_window_start_utc",
     "corpus_window_end_utc",
@@ -229,6 +250,38 @@ def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     return {key: row[key] for key in row.keys()}
 
 
+def _fee_net_replay_projection(
+    conn: sqlite3.Connection,
+    *,
+    paper_trade_columns: set[str],
+) -> tuple[str, str]:
+    """Return a safe optional ledger projection for ``paper_trades`` rows.
+
+    The general builder remains usable for legacy historical diagnostics. A
+    runtime-bound materializer validates the complete ledger contract before
+    calling us; this helper only joins it when the canonical fields are all
+    available, avoiding a partial-schema false claim.
+    """
+
+    table = conn.execute(
+        "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?",
+        ("paper_trade_accounting",),
+    ).fetchone()
+    if table is None:
+        return "", ""
+    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(paper_trade_accounting)")}
+    if not set(FEE_NET_REPLAY_FIELDS).issubset(columns) or "trade_id" not in columns:
+        return "", ""
+    fields = ", ".join(
+        f"paper_trade_accounting.{field} AS {'fee_net_ledger_' if field in paper_trade_columns else ''}{field}"
+        for field in FEE_NET_REPLAY_FIELDS
+    )
+    return (
+        f", {fields}",
+        " LEFT JOIN paper_trade_accounting ON paper_trade_accounting.trade_id = paper_trades.trade_id",
+    )
+
+
 def _stamp_row(
     row: dict[str, Any],
     *,
@@ -341,6 +394,7 @@ def build_corpus(
     include_contamination: bool = False,
     llm_capture_path: Path | None = None,
     llm_capture_max_age_seconds: int = DEFAULT_CAPTURE_MAX_AGE_SECONDS,
+    include_fee_net_ledger: bool = False,
     oos_registration_id: str | None = None,
     oos_registry_path: Path | None = None,
 ) -> BuildResult:
@@ -462,19 +516,29 @@ def build_corpus(
                 "paper_trades table missing required 'cohort_extension' column "
                 "for registered OOS contamination provenance"
             )
+        ledger_projection, ledger_join = (
+            _fee_net_replay_projection(
+                conn,
+                paper_trade_columns=cols,
+            )
+            if include_fee_net_ledger
+            else ("", "")
+        )
+        select_rows = f"SELECT paper_trades.*{ledger_projection} FROM paper_trades{ledger_join}"
         if include_contamination or not cohort_extension_present:
             rows = conn.execute(
-                "SELECT * FROM paper_trades "
-                "WHERE ts >= ? AND ts < ? ORDER BY ts ASC, trade_id ASC",
+                f"{select_rows} "
+                "WHERE paper_trades.ts >= ? AND paper_trades.ts < ? "
+                "ORDER BY paper_trades.ts ASC, paper_trades.trade_id ASC",
                 (window_start, window_end),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM paper_trades "
-                "WHERE ts >= ? AND ts < ? "
-                "AND (cohort_extension IS NULL "
-                "     OR cohort_extension NOT LIKE ?) "
-                "ORDER BY ts ASC, trade_id ASC",
+                f"{select_rows} "
+                "WHERE paper_trades.ts >= ? AND paper_trades.ts < ? "
+                "AND (paper_trades.cohort_extension IS NULL "
+                "     OR paper_trades.cohort_extension NOT LIKE ?) "
+                "ORDER BY paper_trades.ts ASC, paper_trades.trade_id ASC",
                 (window_start, window_end, f"{_CONTAMINATION_TAG_PREFIX}%"),
             ).fetchall()
             # Count what we excluded so the BuildResult.notes can report
