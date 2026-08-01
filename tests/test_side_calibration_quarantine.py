@@ -86,6 +86,45 @@ def test_incomplete_capture_is_recorded_as_attempt_not_candidate(tmp_path):
     assert store.snapshot().candidate_count == 0
 
 
+def test_unscorable_capture_id_cannot_later_become_a_candidate(tmp_path):
+    store = SideCalibrationQuarantineStore(tmp_path / "quarantine.db")
+    store.append_capture(_capture_without_book_hash())
+
+    with pytest.raises(SideCalibrationQuarantineError, match="conflicting capture"):
+        store.append_capture(_complete_capture())
+
+    snapshot = store.snapshot()
+    assert snapshot.attempt_count == 1
+    assert snapshot.candidate_count == 0
+
+
+def test_invalid_book_hash_is_recorded_as_unscorable(tmp_path):
+    store = SideCalibrationQuarantineStore(tmp_path / "quarantine.db")
+
+    result = store.append_capture(
+        _complete_capture(evidence_facts={"book_hash": "A" * 64})
+    )
+
+    assert result.status == "unscorable"
+    assert result.attempt is not None
+    assert result.attempt.unscorable_reason == "invalid_book_hash"
+    assert store.snapshot().candidate_count == 0
+
+
+def test_exact_unscorable_retry_preserves_unscorable_disposition(tmp_path):
+    store = SideCalibrationQuarantineStore(tmp_path / "quarantine.db")
+    capture = _capture_without_book_hash()
+
+    first = store.append_capture(capture)
+    second = store.append_capture(capture)
+
+    assert first.status == "unscorable"
+    assert second.status == "unscorable"
+    assert second.attempt == first.attempt
+    assert second.candidate is None
+    assert store.snapshot().attempt_count == 1
+
+
 def test_payload_identity_is_canonical_across_mapping_order(tmp_path):
     store = SideCalibrationQuarantineStore(tmp_path / "quarantine.db")
     first = _complete_capture()
@@ -118,4 +157,3 @@ def test_evidence_tables_reject_update_and_delete(tmp_path):
         for table in ("capture_attempts", "candidates", "lifecycle_events"):
             with pytest.raises(sqlite3.IntegrityError, match="append-only"):
                 connection.execute(f"DELETE FROM {table}")
-

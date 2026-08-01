@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import sqlite3
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -19,6 +20,7 @@ _REQUIRED_DECISION_FACTS = (
     "market_price",
     "gross_edge",
 )
+_SHA256_HEX_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
 class SideCalibrationQuarantineError(RuntimeError):
@@ -95,12 +97,28 @@ class SideCalibrationQuarantineStore:
 
         with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            candidate = self._candidate_for_capture_id(connection, capture.capture_id)
-            if candidate is not None:
-                if candidate.payload_sha256 != payload_sha256:
+            existing_attempt = self._attempt_for_capture_id(connection, capture.capture_id)
+            if existing_attempt is not None:
+                if existing_attempt.payload_sha256 != payload_sha256:
                     raise SideCalibrationQuarantineError(
                         "conflicting capture for immutable capture_id "
                         f"{capture.capture_id!r}"
+                    )
+                candidate = self._candidate_for_capture_id(connection, capture.capture_id)
+                if candidate is None:
+                    if existing_attempt.unscorable_reason is None:
+                        raise SideCalibrationQuarantineError(
+                            "scorable capture attempt is missing its immutable candidate"
+                        )
+                    return SideCalibrationCaptureResult(
+                        status="unscorable",
+                        payload_sha256=payload_sha256,
+                        attempt=existing_attempt,
+                        candidate=None,
+                    )
+                if candidate.attempt_id != existing_attempt.attempt_id:
+                    raise SideCalibrationQuarantineError(
+                        "candidate is bound to a different immutable capture attempt"
                     )
                 attempt = self._attempt_for_id(connection, candidate.attempt_id)
                 return SideCalibrationCaptureResult(
@@ -108,17 +126,6 @@ class SideCalibrationQuarantineStore:
                     payload_sha256=payload_sha256,
                     attempt=attempt,
                     candidate=candidate,
-                )
-
-            existing_attempt = self._attempt_for_identity(
-                connection, capture.capture_id, payload_sha256
-            )
-            if existing_attempt is not None:
-                return SideCalibrationCaptureResult(
-                    status="duplicate",
-                    payload_sha256=payload_sha256,
-                    attempt=existing_attempt,
-                    candidate=None,
                 )
 
             attempt_id = self._insert_attempt(
@@ -267,16 +274,16 @@ class SideCalibrationQuarantineStore:
         return SideCalibrationCaptureAttempt(*row)
 
     @staticmethod
-    def _attempt_for_identity(
-        connection: sqlite3.Connection, capture_id: str, payload_sha256: str
+    def _attempt_for_capture_id(
+        connection: sqlite3.Connection, capture_id: str
     ) -> SideCalibrationCaptureAttempt | None:
         row = connection.execute(
             """
             SELECT attempt_id, capture_id, payload_sha256, payload_json, unscorable_reason
             FROM capture_attempts
-            WHERE capture_id = ? AND payload_sha256 = ?
+            WHERE capture_id = ?
             """,
-            (capture_id, payload_sha256),
+            (capture_id,),
         ).fetchone()
         return None if row is None else SideCalibrationCaptureAttempt(*row)
 
@@ -397,8 +404,11 @@ def _unscorable_reason(capture: SideCalibrationCapture) -> str | None:
     for field in _REQUIRED_DECISION_FACTS:
         if _missing(capture.decision_facts.get(field)):
             return f"missing_{field}"
-    if _missing(capture.evidence_facts.get("book_hash")):
+    book_hash = capture.evidence_facts.get("book_hash")
+    if _missing(book_hash):
         return "missing_book_hash"
+    if not isinstance(book_hash, str) or _SHA256_HEX_PATTERN.fullmatch(book_hash) is None:
+        return "invalid_book_hash"
     if str(capture.decision_facts["side"]).lower() not in {"yes", "no"}:
         return "invalid_side"
     if not _finite_number(capture.decision_facts["market_price"]):
