@@ -79,7 +79,11 @@ def canonical_json(value: object) -> str:
 
 
 def _normalized_schema_sql(value: str) -> str:
-    return " ".join(value.strip().rstrip(";").lower().split()).replace(" if not exists ", " ")
+    return (
+        " ".join(value.strip().rstrip(";").lower().split())
+        .replace(" if not exists ", " ")
+        .replace('"', "")
+    )
 
 
 _SCHEMA_STATEMENTS = (
@@ -601,35 +605,53 @@ def _schema_contract_matches(conn: sqlite3.Connection) -> bool:
         ).fetchall()
         if meta_rows != [(G7_SKIP_EVIDENCE_SCHEMA_VERSION, G7_SKIP_EVIDENCE_DDL_SHA256)]:
             return False
-        schema_meta_columns = tuple(
-            str(row[1]) for row in conn.execute("PRAGMA table_info(g7_skip_evidence_schema_meta)").fetchall()
-        )
-        if schema_meta_columns != _SCHEMA_META_COLUMNS:
-            return False
-        record_columns = tuple(
-            str(row[1]) for row in conn.execute("PRAGMA table_info(g7_skip_evidence_records)").fetchall()
-        )
-        if record_columns != _RECORD_COLUMNS:
-            return False
-        actual_trigger_sql = {
+        actual_sql = {
             str(name): _normalized_schema_sql(str(sql))
             for name, sql in conn.execute(
                 "SELECT name, sql FROM sqlite_master "
-                "WHERE type = 'trigger' AND name LIKE 'immutable_g7_skip_evidence_%'"
+                "WHERE type IN ('table', 'trigger') AND "
+                "(name LIKE 'g7_skip_evidence_%' OR name LIKE 'immutable_g7_skip_evidence_%')"
             ).fetchall()
             if sql is not None
         }
-        expected_trigger_sql = {
-            name: sql
-            for name, sql in _EXPECTED_SCHEMA_SQL.items()
-            if name.startswith("immutable_g7_skip_evidence_")
-        }
-        return actual_trigger_sql == expected_trigger_sql
+        return actual_sql == _EXPECTED_SCHEMA_SQL
     except sqlite3.DatabaseError:
         return False
 
 
 def _migrate_schema(conn: sqlite3.Connection, *, applied_at: datetime) -> None:
+    existing_meta_sql_row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'g7_skip_evidence_schema_meta'"
+    ).fetchone()
+    existing_meta_sql = (
+        _normalized_schema_sql(str(existing_meta_sql_row[0]))
+        if existing_meta_sql_row and existing_meta_sql_row[0] is not None
+        else ""
+    )
+    expected_meta_sql = _EXPECTED_SCHEMA_SQL["g7_skip_evidence_schema_meta"]
+    if existing_meta_sql and existing_meta_sql != expected_meta_sql:
+        conn.execute(
+            """
+            CREATE TABLE g7_skip_evidence_schema_meta_migrated (
+                schema_version INTEGER PRIMARY KEY,
+                ddl_sha256 TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO g7_skip_evidence_schema_meta_migrated (
+                schema_version, ddl_sha256, applied_at
+            )
+            SELECT schema_version, ddl_sha256, applied_at
+            FROM g7_skip_evidence_schema_meta
+            """
+        )
+        conn.execute("DROP TABLE g7_skip_evidence_schema_meta")
+        conn.execute(
+            "ALTER TABLE g7_skip_evidence_schema_meta_migrated RENAME TO g7_skip_evidence_schema_meta"
+        )
     try:
         columns = {
             str(row[1])
@@ -637,10 +659,26 @@ def _migrate_schema(conn: sqlite3.Connection, *, applied_at: datetime) -> None:
         }
     except sqlite3.DatabaseError as exc:
         raise G7SkipEvidenceSchemaError("G7 skip evidence schema contract does not match") from exc
-    if columns and (
-        "runtime_paper_cohort_id" not in columns
-        or "runtime_paper_cohort_kind" not in columns
-    ):
+    existing_table_sql_row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'g7_skip_evidence_records'"
+    ).fetchone()
+    existing_table_sql = (
+        _normalized_schema_sql(str(existing_table_sql_row[0]))
+        if existing_table_sql_row and existing_table_sql_row[0] is not None
+        else ""
+    )
+    expected_table_sql = _EXPECTED_SCHEMA_SQL["g7_skip_evidence_records"]
+    if columns and existing_table_sql != expected_table_sql:
+        runtime_paper_cohort_id_expr = (
+            "runtime_paper_cohort_id"
+            if "runtime_paper_cohort_id" in columns
+            else "NULL"
+        )
+        runtime_paper_cohort_kind_expr = (
+            "runtime_paper_cohort_kind"
+            if "runtime_paper_cohort_kind" in columns
+            else "NULL"
+        )
         conn.execute(
             """
             CREATE TABLE g7_skip_evidence_records_migrated (
@@ -681,11 +719,15 @@ def _migrate_schema(conn: sqlite3.Connection, *, applied_at: datetime) -> None:
             )
             SELECT evidence_id, receipt_version, decision_key, payload_sha256, decision_at,
                    captured_at, lifecycle_id, venue, market_ticker, intended_side,
-                   market_family, NULL, NULL, ordered_failures_json, g7_failures_json,
+                   market_family, {runtime_paper_cohort_id_expr}, {runtime_paper_cohort_kind_expr},
+                   ordered_failures_json, g7_failures_json,
                    trade_blocked_reason, g7_inputs_json, g7_results_json,
                    liquidity_evidence_status, execution_liquidity_json, diagnostic_only
             FROM g7_skip_evidence_records
-            """
+            """.format(
+                runtime_paper_cohort_id_expr=runtime_paper_cohort_id_expr,
+                runtime_paper_cohort_kind_expr=runtime_paper_cohort_kind_expr,
+            )
         )
         conn.execute("DROP TABLE g7_skip_evidence_records")
         conn.execute(

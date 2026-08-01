@@ -117,11 +117,16 @@ def test_summarize_g7_receipt_reconciliation_separates_non_drawdown_drawdown_and
     capital_db_path = tmp_path / "capital_guard_shadow.db"
     with sqlite3.connect(g7_db_path) as conn:
         conn.execute(
-            "CREATE TABLE g7_skip_evidence_records (lifecycle_id TEXT NOT NULL, trade_blocked_reason TEXT NOT NULL)"
+            "CREATE TABLE g7_skip_evidence_records (lifecycle_id TEXT NOT NULL, trade_blocked_reason TEXT NOT NULL, runtime_paper_cohort_id TEXT, runtime_paper_cohort_kind TEXT)"
         )
         conn.execute(
-            "INSERT INTO g7_skip_evidence_records (lifecycle_id, trade_blocked_reason) VALUES (?, ?)",
-            ("lc-nondrawdown", "G7_adverse_price_momentum"),
+            "INSERT INTO g7_skip_evidence_records (lifecycle_id, trade_blocked_reason, runtime_paper_cohort_id, runtime_paper_cohort_kind) VALUES (?, ?, ?, ?)",
+            (
+                "lc-nondrawdown",
+                "G7_adverse_price_momentum",
+                "legacy-pending-20260729",
+                "legacy_pending",
+            ),
         )
     with sqlite3.connect(capital_db_path) as conn:
         conn.execute(
@@ -140,6 +145,8 @@ def test_summarize_g7_receipt_reconciliation_separates_non_drawdown_drawdown_and
                 {"lifecycle_id": "lc-missing", "reasons": ("G7_zero_liquidity",)},
             )
         },
+        runtime_paper_cohort_id="legacy-pending-20260729",
+        runtime_paper_cohort_kind="legacy_pending",
         g7_skip_evidence_db_path=g7_db_path,
         capital_guard_shadow_db_path=capital_db_path,
     )
@@ -165,12 +172,49 @@ def test_format_g7_receipt_reconciliation_lines_surfaces_drift_examples():
     )
 
     assert lines == [
-        "    G7 receipt reconciliation     : exact lifecycle join only; report buckets and receipt stores are not treated as equivalent by default",
+        "    G7 receipt reconciliation     : non-drawdown receipts require exact lifecycle plus exact active cohort id/kind; drawdown rows are evidence-only support, not cohort receipt parity",
         "    Non-drawdown receipt matches  : 1/3",
-        "    Drawdown evidence-only matches: 1/3",
+        "    Drawdown evidence-only support: 1/3",
         "    Unmatched G7 lifecycles       : 1/3",
         "    Unmatched G7 lifecycle IDs    : lc-missing[G7_zero_liquidity]",
     ]
+
+
+def test_summarize_g7_receipt_reconciliation_rejects_other_cohort_and_null_legacy_lineage(tmp_path):
+    g7_db_path = tmp_path / "g7_skip_evidence.db"
+    g7_db_path.write_text("", encoding="utf-8")
+    capital_db_path = tmp_path / "capital_guard_shadow.db"
+    with sqlite3.connect(g7_db_path) as conn:
+        conn.execute(
+            "CREATE TABLE g7_skip_evidence_records (lifecycle_id TEXT NOT NULL, trade_blocked_reason TEXT NOT NULL, runtime_paper_cohort_id TEXT, runtime_paper_cohort_kind TEXT)"
+        )
+        conn.executemany(
+            "INSERT INTO g7_skip_evidence_records (lifecycle_id, trade_blocked_reason, runtime_paper_cohort_id, runtime_paper_cohort_kind) VALUES (?, ?, ?, ?)",
+            [
+                ("lc-other-cohort", "G7_adverse_price_momentum", "legacy-pending-20260728", "legacy_pending"),
+                ("lc-null-legacy", "G7_zero_liquidity", None, None),
+            ],
+        )
+
+    summary = _summarize_g7_receipt_reconciliation(
+        {
+            "g7_skip_lifecycle_details": (
+                {"lifecycle_id": "lc-other-cohort", "reasons": ("G7_adverse_price_momentum",)},
+                {"lifecycle_id": "lc-null-legacy", "reasons": ("G7_zero_liquidity",)},
+            )
+        },
+        runtime_paper_cohort_id="legacy-pending-20260729",
+        runtime_paper_cohort_kind="legacy_pending",
+        g7_skip_evidence_db_path=g7_db_path,
+        capital_guard_shadow_db_path=capital_db_path,
+    )
+
+    assert summary["matched_non_drawdown_lifecycle_ids"] == ()
+    assert summary["supported_drawdown_lifecycle_ids"] == ()
+    assert summary["unmatched_lifecycle_details"] == (
+        {"lifecycle_id": "lc-other-cohort", "reasons": ("G7_adverse_price_momentum",)},
+        {"lifecycle_id": "lc-null-legacy", "reasons": ("G7_zero_liquidity",)},
+    )
 
 
 def test_main_forwards_runtime_paper_cohort_scope(monkeypatch, tmp_path):

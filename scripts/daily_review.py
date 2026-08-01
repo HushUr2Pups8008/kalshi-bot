@@ -490,6 +490,8 @@ def _read_capital_guard_drawdown_lifecycle_ids(db_path: Path) -> set[str]:
 def _summarize_g7_receipt_reconciliation(
     attribution: dict[str, Any],
     *,
+    runtime_paper_cohort_id: str | None,
+    runtime_paper_cohort_kind: str | None,
     g7_skip_evidence_db_path: Path,
     capital_guard_shadow_db_path: Path,
 ) -> dict[str, Any]:
@@ -512,7 +514,14 @@ def _summarize_g7_receipt_reconciliation(
             for reason in detail.get("reasons") or ()
             if str(reason).strip()
         )
-        if lifecycle_id in receipt_rows:
+        receipt = receipt_rows.get(lifecycle_id)
+        if (
+            receipt is not None
+            and runtime_paper_cohort_id is not None
+            and runtime_paper_cohort_kind is not None
+            and receipt.get("runtime_paper_cohort_id") == runtime_paper_cohort_id
+            and receipt.get("runtime_paper_cohort_kind") == runtime_paper_cohort_kind
+        ):
             matched_non_drawdown.append(lifecycle_id)
         elif lifecycle_id in drawdown_lifecycle_ids:
             supported_drawdown.append(lifecycle_id)
@@ -539,9 +548,9 @@ def _format_g7_receipt_reconciliation_lines(summary: dict[str, Any]) -> list[str
     drawdown = tuple(summary.get("supported_drawdown_lifecycle_ids") or ())
     unmatched = tuple(summary.get("unmatched_lifecycle_details") or ())
     lines = [
-        "    G7 receipt reconciliation     : exact lifecycle join only; report buckets and receipt stores are not treated as equivalent by default",
+        "    G7 receipt reconciliation     : non-drawdown receipts require exact lifecycle plus exact active cohort id/kind; drawdown rows are evidence-only support, not cohort receipt parity",
         f"    Non-drawdown receipt matches  : {len(matched)}/{total}",
-        f"    Drawdown evidence-only matches: {len(drawdown)}/{total}",
+        f"    Drawdown evidence-only support: {len(drawdown)}/{total}",
         f"    Unmatched G7 lifecycles       : {len(unmatched)}/{total}",
     ]
     if unmatched:
@@ -1776,6 +1785,8 @@ def _build_daily_review_from_paths(
             _format_g7_receipt_reconciliation_lines(
                 _summarize_g7_receipt_reconciliation(
                     attribution,
+                    runtime_paper_cohort_id=funnel_stats.get("runtime_paper_cohort_filter_id"),
+                    runtime_paper_cohort_kind=funnel_stats.get("runtime_paper_cohort_filter_kind"),
                     g7_skip_evidence_db_path=(
                         g7_skip_evidence_db_path or REPO_ROOT / "data" / "g7_skip_evidence.db"
                     ),

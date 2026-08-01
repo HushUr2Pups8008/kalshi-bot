@@ -356,6 +356,74 @@ def test_initialize_migrates_pre_lineage_receipt_store_without_backfill(tmp_path
     assert migrated.runtime_paper_cohort_kind is None
 
 
+def test_snapshot_rejects_weak_record_table_ddl_even_with_same_columns(tmp_path: Path) -> None:
+    db_path = tmp_path / "g7_skip_evidence.db"
+    store = G7SkipEvidenceStore(db_path=db_path)
+    assert store.initialize(applied_at=NOW) is True
+    assert store.append_record(_observed_record()).status == "inserted"
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DROP TRIGGER immutable_g7_skip_evidence_records_update")
+        conn.execute("DROP TRIGGER immutable_g7_skip_evidence_records_delete")
+        conn.execute("ALTER TABLE g7_skip_evidence_records RENAME TO g7_skip_evidence_records_weak")
+        conn.execute(
+            """
+            CREATE TABLE g7_skip_evidence_records (
+                evidence_id TEXT,
+                receipt_version INTEGER,
+                decision_key TEXT,
+                payload_sha256 TEXT,
+                decision_at TEXT,
+                captured_at TEXT,
+                lifecycle_id TEXT,
+                venue TEXT,
+                market_ticker TEXT,
+                intended_side TEXT,
+                market_family TEXT,
+                runtime_paper_cohort_id TEXT,
+                runtime_paper_cohort_kind TEXT,
+                ordered_failures_json TEXT,
+                g7_failures_json TEXT,
+                trade_blocked_reason TEXT,
+                g7_inputs_json TEXT,
+                g7_results_json TEXT,
+                liquidity_evidence_status TEXT,
+                execution_liquidity_json TEXT,
+                diagnostic_only INTEGER
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO g7_skip_evidence_records
+            SELECT evidence_id, receipt_version, decision_key, payload_sha256, decision_at,
+                   captured_at, lifecycle_id, venue, market_ticker, intended_side,
+                   market_family, runtime_paper_cohort_id, runtime_paper_cohort_kind,
+                   ordered_failures_json, g7_failures_json, trade_blocked_reason,
+                   g7_inputs_json, g7_results_json, liquidity_evidence_status,
+                   execution_liquidity_json, diagnostic_only
+            FROM g7_skip_evidence_records_weak
+            """
+        )
+        conn.execute("DROP TABLE g7_skip_evidence_records_weak")
+        conn.execute(
+            "CREATE TRIGGER immutable_g7_skip_evidence_records_update "
+            "BEFORE UPDATE ON g7_skip_evidence_records "
+            "BEGIN SELECT RAISE(ABORT, 'g7 skip evidence is append-only'); END"
+        )
+        conn.execute(
+            "CREATE TRIGGER immutable_g7_skip_evidence_records_delete "
+            "BEFORE DELETE ON g7_skip_evidence_records "
+            "BEGIN SELECT RAISE(ABORT, 'g7 skip evidence is append-only'); END"
+        )
+
+    snapshot = read_g7_skip_evidence_snapshot(db_path)
+
+    assert snapshot.schema_valid is False
+    assert snapshot.integrity_check == "ok"
+    assert snapshot.record_count == 0
+
+
 def test_snapshot_rejects_altered_trigger_contract_before_reporting_counts(tmp_path: Path) -> None:
     db_path = tmp_path / "g7_skip_evidence.db"
     store = G7SkipEvidenceStore(db_path=db_path)
