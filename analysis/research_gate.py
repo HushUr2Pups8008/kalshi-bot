@@ -348,6 +348,30 @@ class ResearchEvidence:
 
 
 @dataclass(frozen=True)
+class GDPThresholdContract:
+    metric_name: str
+    metric_unit: str
+    comparator: str
+    threshold: float
+    target_quarter: int
+    target_year: int
+    contract_fingerprint: str
+
+
+@dataclass(frozen=True)
+class _CurrentRunGDPNowObservationContext:
+    query: str
+    contract_fingerprint: str
+    source_url: str
+    source_observation_date: str
+    retrieved_at: str
+    metric_name: str
+    metric_value: float
+    metric_unit: str
+    extraction_confidence: float
+
+
+@dataclass(frozen=True)
 class GettyDistinctDateSpec:
     target_count: int
     start_date: date
@@ -4464,6 +4488,278 @@ def _gdp_threshold_from_text(text: str) -> float | None:
             except ValueError:
                 return None
     return None
+
+
+_GDPNOW_SOURCE_CLASS = "specialized_data"
+_GDPNOW_SOURCE_NAME = "FRED GDPNow"
+_GDPNOW_CANONICAL_SOURCE_URL = "https://fred.stlouisfed.org/series/GDPNOW"
+_GDPNOW_METRIC_NAME = "gdpnow_real_gdp_growth_saar"
+_GDPNOW_METRIC_UNIT = "percent_saar"
+_GDP_STRICT_THRESHOLD_RE = re.compile(
+    r"\b(?:more\s+than|above|over|greater\s+than)\s+"
+    r"(-?(?:\d+(?:\.\d+)?|\.\d+))\s*(?:%|percent\b)",
+    flags=re.I,
+)
+_GDP_UNSUPPORTED_COMPARATOR_RE = re.compile(
+    r"\b(?:at\s+least|at\s+most|less\s+than|below|under|"
+    r"no\s+more\s+than|equal\s+to|exactly|bucket|range)\b|(?:<=|>=|<|=)",
+    flags=re.I,
+)
+_GDP_RANGE_RE = re.compile(
+    r"\b(?:between|from)\s+-?(?:\d+(?:\.\d+)?|\.\d+)\s*"
+    r"(?:%|percent)\s+(?:and|to)\s+-?(?:\d+(?:\.\d+)?|\.\d+)"
+    r"\s*(?:%|percent)\b|"
+    r"\b-?(?:\d+(?:\.\d+)?|\.\d+)\s*%\s*(?:to|-)\s*"
+    r"-?(?:\d+(?:\.\d+)?|\.\d+)\s*%\b",
+    flags=re.I,
+)
+_GDP_TARGET_QUARTER_YEAR_RE = re.compile(
+    r"\bQ([1-4])\s*(?:of\s*)?(\d{4})\b|\b(\d{4})\s*Q([1-4])\b",
+    flags=re.I,
+)
+
+
+def _parse_gdp_threshold_contract(market: Any) -> GDPThresholdContract | None:
+    """Parse the narrow GDPNow countercheck contract surface, fail-closed."""
+    contract_text = _market_text(market)
+    rules_text = _market_rules_text(market)
+    if not contract_text or not rules_text:
+        return None
+    if not re.search(
+        r"\breal\s+(?:gdp|gross\s+domestic\s+product)\b",
+        contract_text,
+        flags=re.I,
+    ):
+        return None
+    if not re.search(
+        r"\bSAAR\b|\bseasonally\s+adjusted\s+annual(?:ized)?\s+"
+        r"(?:rate|percent)\b",
+        contract_text,
+        flags=re.I,
+    ):
+        return None
+    if _GDP_UNSUPPORTED_COMPARATOR_RE.search(contract_text) or _GDP_RANGE_RE.search(
+        contract_text
+    ):
+        return None
+
+    threshold_matches = list(_GDP_STRICT_THRESHOLD_RE.finditer(contract_text))
+    rule_matches = list(_GDP_STRICT_THRESHOLD_RE.finditer(rules_text))
+    if not threshold_matches or not rule_matches:
+        return None
+    try:
+        thresholds = {float(match.group(1)) for match in threshold_matches}
+    except ValueError:
+        return None
+    if len(thresholds) != 1:
+        return None
+    threshold = next(iter(thresholds))
+    if not math.isfinite(threshold):
+        return None
+
+    periods: set[tuple[int, int]] = set()
+    for match in _GDP_TARGET_QUARTER_YEAR_RE.finditer(contract_text):
+        quarter_text, year_text = match.group(1), match.group(2)
+        if quarter_text is None or year_text is None:
+            year_text, quarter_text = match.group(3), match.group(4)
+        periods.add((int(quarter_text), int(year_text)))
+    if len(periods) != 1:
+        return None
+    target_quarter, target_year = next(iter(periods))
+    return GDPThresholdContract(
+        metric_name=_GDPNOW_METRIC_NAME,
+        metric_unit=_GDPNOW_METRIC_UNIT,
+        comparator=">",
+        threshold=threshold,
+        target_quarter=target_quarter,
+        target_year=target_year,
+        contract_fingerprint=_contract_fingerprint(market),
+    )
+
+
+def _has_canonical_fred_gdpnow_provenance(evidence: ResearchEvidence) -> bool:
+    return (
+        _clean(evidence.source_class) == _GDPNOW_SOURCE_CLASS
+        and _clean(evidence.source_name) == _GDPNOW_SOURCE_NAME
+        and _clean(evidence.source_url) == _GDPNOW_CANONICAL_SOURCE_URL
+        and _clean(evidence.claim_type) == "base_rate"
+        and _clean(evidence.metric_name) == _GDPNOW_METRIC_NAME
+        and _clean(evidence.metric_unit) == _GDPNOW_METRIC_UNIT
+    )
+
+
+def _has_finite_gdpnow_metric_value(evidence: ResearchEvidence) -> bool:
+    try:
+        value = float(evidence.metric_value)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(value)
+
+
+def _has_valid_gdpnow_extraction_confidence(evidence: ResearchEvidence) -> bool:
+    try:
+        confidence = float(evidence.extraction_confidence)
+    except (TypeError, ValueError):
+        return False
+    return (
+        math.isfinite(confidence)
+        and MIN_COUNTER_EVIDENCE_CONFIDENCE <= confidence <= 1.0
+    )
+
+
+def _has_min_finite_directional_confidence(item: ResearchEvidence) -> bool:
+    try:
+        confidence = float(item.supports_confidence)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(confidence) and confidence >= MIN_DIRECTIONAL_SUPPORT_CONFIDENCE
+
+
+def _parse_utc_timestamp(value: str | None) -> datetime | None:
+    cleaned = _clean(value)
+    if not cleaned or not (
+        cleaned.endswith("Z") or re.search(r"[+-]00:00$", cleaned)
+    ):
+        return None
+    return _parse_timestamp(cleaned)
+
+
+def _has_fresh_gdpnow_observation(
+    evidence: ResearchEvidence,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    now = now or datetime.now(timezone.utc)
+    return (
+        _parse_timestamp(evidence.published_at) is not None
+        and _parse_utc_timestamp(evidence.retrieved_at) is not None
+        and _is_fresh_decision_evidence(evidence, now=now)
+    )
+
+
+def _build_current_run_gdpnow_observation_context(
+    evidence: ResearchEvidence,
+    *,
+    query: ResearchQuery,
+    contract: GDPThresholdContract,
+    now: datetime | None = None,
+) -> _CurrentRunGDPNowObservationContext | None:
+    """Bind one accepted FRED GDPNow observation to this run's exact contract."""
+    query_text = _clean(query.query)
+    if (
+        not query_text
+        or _clean(query.query_intent) != "base_rate"
+        or not _query_mentions_gdpnow(query_text)
+        or evidence.contract_fingerprint != contract.contract_fingerprint
+        or not _has_canonical_fred_gdpnow_provenance(evidence)
+        or not _has_finite_gdpnow_metric_value(evidence)
+        or not _has_valid_gdpnow_extraction_confidence(evidence)
+        or not _has_fresh_gdpnow_observation(evidence, now=now)
+    ):
+        return None
+    return _CurrentRunGDPNowObservationContext(
+        query=query_text,
+        contract_fingerprint=contract.contract_fingerprint,
+        source_url=evidence.source_url,
+        source_observation_date=evidence.published_at or "",
+        retrieved_at=evidence.retrieved_at or "",
+        metric_name=evidence.metric_name or "",
+        metric_value=float(evidence.metric_value),
+        metric_unit=evidence.metric_unit or "",
+        extraction_confidence=float(evidence.extraction_confidence),
+    )
+
+
+def _gdpnow_context_matches_observation(
+    context: _CurrentRunGDPNowObservationContext,
+    evidence: ResearchEvidence,
+    *,
+    query: ResearchQuery,
+    contract: GDPThresholdContract,
+    now: datetime | None = None,
+) -> bool:
+    expected = _build_current_run_gdpnow_observation_context(
+        evidence,
+        query=query,
+        contract=contract,
+        now=now,
+    )
+    return expected is not None and expected == context
+
+
+def _gdpnow_strictly_mismatches_provisional_side(
+    value: float | None,
+    *,
+    contract: GDPThresholdContract,
+    provisional_side: str | None,
+) -> bool:
+    try:
+        observed_value = float(value)
+    except (TypeError, ValueError):
+        return False
+    if not math.isfinite(observed_value):
+        return False
+    side = _clean(provisional_side).lower()
+    if side == "yes":
+        return observed_value < contract.threshold
+    if side == "no":
+        return observed_value > contract.threshold
+    return False
+
+
+def _is_gdpnow_structured_evidence(item: ResearchEvidence) -> bool:
+    return (
+        _clean(item.metric_name) == _GDPNOW_METRIC_NAME
+        or _clean(item.source_name) == _GDPNOW_SOURCE_NAME
+    )
+
+
+def _gdpnow_provisional_side_is_independently_justified(
+    evidence: Sequence[ResearchEvidence],
+    *,
+    provisional_side: str | None,
+    contract: GDPThresholdContract,
+    yes_ask: float | None,
+    no_ask: float | None,
+    estimated_probability_yes: float | None,
+    contract_ticker: str = "",
+    queries: Sequence[ResearchQuery] = (),
+    live_mode: bool = False,
+    now: datetime | None = None,
+) -> bool:
+    """Require non-GDPNow support and an independently supplied executable edge."""
+    if live_mode:
+        return False
+    side = _clean(provisional_side).lower()
+    if side not in {"yes", "no"}:
+        return False
+    probability_yes = _coerce_probability(estimated_probability_yes)
+    market_price = _market_price_for_side(side, yes_ask, no_ask)
+    if probability_yes is None or market_price is None:
+        return False
+    side_probability = probability_yes if side == "yes" else 1.0 - probability_yes
+    if side_probability - market_price - 0.01 < 0.02:
+        return False
+
+    now = now or datetime.now(timezone.utc)
+    non_gdpnow_evidence = [
+        item for item in evidence if not _is_gdpnow_structured_evidence(item)
+    ]
+    relevance_spec = _contract_relevance_spec(contract_ticker, queries)
+    supports = [
+        item
+        for item in non_gdpnow_evidence
+        if item.supports_direction == side
+        and item.contract_fingerprint == contract.contract_fingerprint
+        and _has_min_finite_directional_confidence(item)
+        and not _is_official_data_pending_evidence(item)
+        and _is_fresh_decision_evidence(item, now=now)
+        and (
+            not relevance_spec.detected
+            or _evidence_is_relevant_to_spec(item, relevance_spec)
+        )
+    ]
+    return bool(supports) and not _has_unresolved_contradiction(non_gdpnow_evidence)
 
 
 def _gdpnow_confidence(value: float, threshold: float) -> float:
