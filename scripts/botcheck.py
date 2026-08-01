@@ -30,7 +30,7 @@ import tempfile
 import time
 from collections import Counter
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, is_dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator
@@ -1308,6 +1308,180 @@ def print_g7_skip_evidence_status(
         f"rows={snapshot.record_count} statuses={status_counts} "
         f"last_capture={latest_capture} diagnostic_only=true"
     )
+
+
+_FIX_SETTLEMENT_INGRESS_STATIC_INVARIANT: dict[str, object] = {
+    "transport_authentication": "upstream_attested_not_proven_by_ledger",
+    "pagination_coverage": "unknown",
+    "canonical_settlement_binding": "absent",
+    "fee_net_pnl": "unscorable",
+    "paper_trader_updated": False,
+    "orders_changed": False,
+    "promotion_eligible": False,
+}
+_FIX_SETTLEMENT_INGRESS_STATUS_VALUES = frozenset(
+    {
+        "captured_non_authoritative",
+        "disabled_non_authoritative",
+        "absent_non_authoritative",
+        "invalid_non_authoritative",
+    }
+)
+
+
+def _fix_settlement_ingress_status(
+    status: str,
+    *,
+    raw_capture: str,
+    session_provenance: str,
+) -> dict[str, object]:
+    return {
+        "status": status,
+        "transport_authentication": _FIX_SETTLEMENT_INGRESS_STATIC_INVARIANT[
+            "transport_authentication"
+        ],
+        "raw_capture": raw_capture,
+        "session_provenance": session_provenance,
+        "pagination_coverage": _FIX_SETTLEMENT_INGRESS_STATIC_INVARIANT[
+            "pagination_coverage"
+        ],
+        "canonical_settlement_binding": _FIX_SETTLEMENT_INGRESS_STATIC_INVARIANT[
+            "canonical_settlement_binding"
+        ],
+        "fee_net_pnl": _FIX_SETTLEMENT_INGRESS_STATIC_INVARIANT["fee_net_pnl"],
+        "paper_trader_updated": _FIX_SETTLEMENT_INGRESS_STATIC_INVARIANT[
+            "paper_trader_updated"
+        ],
+        "orders_changed": _FIX_SETTLEMENT_INGRESS_STATIC_INVARIANT[
+            "orders_changed"
+        ],
+        "promotion_eligible": _FIX_SETTLEMENT_INGRESS_STATIC_INVARIANT[
+            "promotion_eligible"
+        ],
+    }
+
+
+def _validated_fix_settlement_ingress_snapshot(snapshot: object) -> dict[str, object]:
+    """Reject any diagnostic projection that could overstate receipt authority."""
+    if not is_dataclass(snapshot) or isinstance(snapshot, type):
+        raise ValueError("FIX settlement ingress snapshot must be a dataclass")
+
+    status = getattr(snapshot, "status", None)
+    raw_capture = getattr(snapshot, "raw_capture", None)
+    session_provenance = getattr(snapshot, "session_provenance", None)
+    if status not in _FIX_SETTLEMENT_INGRESS_STATUS_VALUES:
+        raise ValueError("FIX settlement ingress snapshot has an invalid status")
+    if raw_capture not in {"present", "absent"}:
+        raise ValueError("FIX settlement ingress snapshot has an invalid raw-capture state")
+    if session_provenance not in {"present", "absent"}:
+        raise ValueError(
+            "FIX settlement ingress snapshot has an invalid session-provenance state"
+        )
+    if status == "captured_non_authoritative" and (
+        raw_capture != "present" or session_provenance != "present"
+    ):
+        raise ValueError("captured FIX ingress status requires raw capture and provenance")
+    if status != "captured_non_authoritative" and (
+        raw_capture != "absent" or session_provenance != "absent"
+    ):
+        raise ValueError("non-captured FIX ingress status cannot assert receipt material")
+
+    for key, expected in _FIX_SETTLEMENT_INGRESS_STATIC_INVARIANT.items():
+        if getattr(snapshot, key, None) != expected:
+            raise ValueError(f"FIX settlement ingress snapshot violates {key}")
+
+    return _fix_settlement_ingress_status(
+        str(status),
+        raw_capture=str(raw_capture),
+        session_provenance=str(session_provenance),
+    )
+
+
+def _format_fix_settlement_ingress_status(status: dict[str, object]) -> str:
+    return " ".join(
+        f"{key}={str(value).lower()}" for key, value in status.items()
+    )
+
+
+def print_kalshi_fix_settlement_ingress_status(
+    repo_root: Path,
+    *,
+    current_proc: ProcessInfo | None = None,
+) -> None:
+    """Print configured, read-only UMS ingress state without initializing a store."""
+    flag_name = "ENABLE_KALSHI_FIX_SETTLEMENT_INGRESS"
+    if current_proc is not None:
+        runtime_value, runtime_readable = _running_process_env_value(
+            current_proc,
+            flag_name,
+        )
+        if not runtime_readable:
+            status = _fix_settlement_ingress_status(
+                "invalid_non_authoritative",
+                raw_capture="absent",
+                session_provenance="absent",
+            )
+            print(
+                "kalshi_fix_settlement_ingress: configuration-unknown "
+                "(runtime-process-env-unreadable) "
+                f"{_format_fix_settlement_ingress_status(status)}"
+            )
+            return
+        if runtime_value is not None:
+            enabled_value, source = runtime_value, "runtime-process-env"
+        else:
+            fallback = _read_env_file_value(repo_root / ".env", flag_name)
+            enabled_value = fallback or "false"
+            source = ".env fallback" if fallback else "default fallback"
+    else:
+        enabled_value, source = _research_env_value(repo_root, flag_name, "false")
+
+    enabled = _env_bool(enabled_value)
+    prefix = (
+        "kalshi_fix_settlement_ingress: "
+        f"configured-{'on' if enabled else 'off'} ({source})"
+    )
+    if not enabled:
+        status = _fix_settlement_ingress_status(
+            "disabled_non_authoritative",
+            raw_capture="absent",
+            session_provenance="absent",
+        )
+        print(f"{prefix} {_format_fix_settlement_ingress_status(status)}")
+        return
+
+    db_path = repo_root / "data" / "kalshi_fix_settlement_ingress.db"
+    if not db_path.is_file():
+        status = _fix_settlement_ingress_status(
+            "absent_non_authoritative",
+            raw_capture="absent",
+            session_provenance="absent",
+        )
+        print(
+            f"{prefix} {_format_fix_settlement_ingress_status(status)} db=missing"
+        )
+        return
+
+    try:
+        from trading.kalshi_fix_settlement_ingress import (
+            read_kalshi_fix_settlement_ingress_snapshot,
+        )
+
+        snapshot = read_kalshi_fix_settlement_ingress_snapshot(db_path)
+        status = _validated_fix_settlement_ingress_snapshot(snapshot)
+    except Exception as exc:
+        status = _fix_settlement_ingress_status(
+            "invalid_non_authoritative",
+            raw_capture="absent",
+            session_provenance="absent",
+        )
+        print(
+            f"{prefix} {_format_fix_settlement_ingress_status(status)} "
+            f"db=invalid error={type(exc).__name__}"
+        )
+        return
+
+    print(f"{prefix} {_format_fix_settlement_ingress_status(status)} db=present")
 
 
 def print_canonical_settlement_status(repo_root: Path) -> None:
@@ -2623,6 +2797,7 @@ def main() -> int:
     print_weather_shadow_status(args.home, current_proc=current_proc)
     print_capital_guard_shadow_status(args.home, current_proc=current_proc)
     print_g7_skip_evidence_status(args.home, current_proc=current_proc)
+    print_kalshi_fix_settlement_ingress_status(args.home, current_proc=current_proc)
     print_canonical_settlement_status(args.home)
     print_kalshi_drift_section(now=now)
     print_history(sessions=sessions, current_proc=current_proc, now=now)

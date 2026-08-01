@@ -19,6 +19,33 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.30] - 2026-08-01
+
+### Added
+
+- **Default-off FIX settlement ingress.** An isolated append-only SQLite ledger
+  can retain raw `35=UMS` material only through a typed, upstream-attested
+  session envelope. It preserves raw wire bytes, non-secret provenance,
+  canonical hashes, retransmits, conflicts, and quarantines without creating a
+  listener, credentials, scheduler, or runtime wiring.
+- **Passive receipt inspection.** A read-only CLI and `botcheck` surface report
+  only configuration and non-authoritative ledger status. They never create a
+  database, authenticate a transport, score fee-net P&L, update paper trades,
+  or change orders.
+
+### Fixed
+
+- **Populated receipt inspection.** The inspector now serializes captured
+  receipt timestamps as UTC ISO strings, so both status and schema checks stay
+  usable after the first captured report.
+
+### Verification
+
+- `CI=1 /Users/jacobparenti/vscode/kalshi-bot/.venv/bin/python -m pytest tests/test_kalshi_fix_settlement_ingress.py tests/test_kalshi_fix_settlement_ingress_passive_surfaces.py -q` (`22 passed`)
+- `CI=1 /Users/jacobparenti/vscode/kalshi-bot/.venv/bin/python -m pytest tests/test_botcheck.py tests/test_g7_skip_evidence_runtime_surface.py -q` (`109 passed`)
+- `/Users/jacobparenti/vscode/kalshi-bot/.venv/bin/ruff check config.py scripts/botcheck.py scripts/inspect_kalshi_fix_settlement_ingress.py tasks/kalshi_fix_settlement_ingress.py trading/kalshi_fix_settlement_ingress.py tests/test_kalshi_fix_settlement_ingress.py tests/test_kalshi_fix_settlement_ingress_passive_surfaces.py`
+- Independent review found and verified the populated-inspector serialization regression fix; no remaining P1/P2 findings.
+
 ## [0.33.29] - 2026-07-31
 
 ### Fixed
