@@ -225,14 +225,29 @@ def _parse_candidate(
         if reason == "weight_demoted_below_min_score" and parsed_post_weight_score >= pre_weight_score:
             return None
         post_weight_score = parsed_post_weight_score
+        observation["pre_weight_score"] = pre_weight_score
         observation["post_weight_score"] = post_weight_score
 
     return observation, (reason, -post_weight_score, ticker)
 
 
+def _contradicts_frozen_threshold(candidate: dict[str, Any], frozen_threshold: float | None) -> bool:
+    if frozen_threshold is None or candidate["rejection_reason"] not in SCORED_REASONS:
+        return False
+    pre_weight_score = candidate["pre_weight_score"]
+    post_weight_score = candidate["post_weight_score"]
+    if post_weight_score >= frozen_threshold:
+        return True
+    if candidate["rejection_reason"] == "weight_demoted_below_min_score":
+        return pre_weight_score < frozen_threshold
+    return pre_weight_score >= frozen_threshold
+
+
 def _parse_shadow(record: dict[str, Any]) -> dict[str, Any] | None:
     """Validate persisted shape without inventing a missing frozen threshold."""
 
+    if record.get("venue") != "polymarket_us" or record.get("reason") != "no_match":
+        return None
     value = record.get(SHADOW_FIELD)
     if type(value) is not dict or set(value) != SHADOW_FIELDS:
         return None
@@ -249,6 +264,7 @@ def _parse_shadow(record: dict[str, Any]) -> dict[str, Any] | None:
     weight_demoted_count = _nonnegative_int(record.get("post_admission_weight_demoted_below_min_score_count"))
     candidates = value.get("candidates")
     truncated = value.get("truncated")
+    frozen_threshold = _score(record.get("post_admission_min_match_score"))
     if (
         value.get("schema_version") != 1
         or type(value.get("schema_version")) is not int
@@ -287,6 +303,8 @@ def _parse_shadow(record: dict[str, Any]) -> dict[str, Any] | None:
         if parsed is None:
             return None
         observation, sort_key = parsed
+        if _contradicts_frozen_threshold(observation, frozen_threshold):
+            return None
         ticker = sort_key[2]
         if ticker in seen_tickers:
             return None

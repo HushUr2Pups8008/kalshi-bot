@@ -36,9 +36,9 @@ def test_summarize_separates_absent_malformed_truncated_and_valid_shadow_evidenc
         "untruncated": 3,
     }
     assert summary["candidate_rejection_reasons"] == {
-        "below_min_post_weight_score": 4,
+        "below_min_post_weight_score": 3,
         "no_token_overlap": 1,
-        "weight_demoted_below_min_score": 2,
+        "weight_demoted_below_min_score": 3,
     }
     assert summary["best_rejected_post_weight_score"] == {
         "available": 4,
@@ -79,27 +79,94 @@ def test_valid_shadow_with_missing_frozen_threshold_is_unavailable_not_a_match()
 
 def test_unparseable_shadow_score_or_persisted_invalid_status_is_malformed_not_a_crash(tmp_path):
     valid_record = json.loads(FIXTURE_PATH.read_text(encoding="utf-8").splitlines()[3])
-    unparseable_score = json.loads(json.dumps(valid_record))
-    unparseable_score["post_admission_counterfactual_shadow"]["candidates"][0]["post_weight_score"] = float("inf")
+    infinite_score = json.loads(json.dumps(valid_record))
+    infinite_score["post_admission_counterfactual_shadow"]["candidates"][0]["post_weight_score"] = float("inf")
+    nan_score = json.loads(json.dumps(valid_record))
+    nan_score["post_admission_counterfactual_shadow"]["candidates"][0]["post_weight_score"] = float("nan")
     persisted_invalid_status = json.loads(json.dumps(valid_record))
     persisted_invalid_status["post_admission_counterfactual_shadow_status"] = "invalid"
     path = tmp_path / "invalid.jsonl"
     path.write_text(
-        "\n".join(json.dumps(record) for record in (unparseable_score, persisted_invalid_status)) + "\n",
+        "\n".join(json.dumps(record) for record in (infinite_score, nan_score, persisted_invalid_status))
+        + "\n",
         encoding="utf-8",
     )
 
     summary = summarize(path, since=None, until=None)
 
-    assert summary["target_records"] == 2
+    assert summary["target_records"] == 3
     assert summary["shadow_counts"] == {
         "absent": 0,
-        "malformed": 2,
+        "malformed": 3,
         "valid": 0,
         "truncated": 0,
         "untruncated": 0,
     }
     assert _score(10**10000) is None
+
+
+def test_wrong_context_or_frozen_threshold_contradiction_is_malformed_and_excluded(tmp_path):
+    valid_record = json.loads(FIXTURE_PATH.read_text(encoding="utf-8").splitlines()[3])
+    wrong_venue = json.loads(json.dumps(valid_record))
+    wrong_venue["venue"] = "kalshi"
+    wrong_reason = json.loads(json.dumps(valid_record))
+    wrong_reason["reason"] = "other_reason"
+    post_score_at_or_above_threshold = json.loads(json.dumps(valid_record))
+    post_score_at_or_above_threshold["post_admission_min_match_score"] = 0.05
+    weight_demoted_pre_score_below_threshold = json.loads(json.dumps(valid_record))
+    weight_demoted_pre_score_below_threshold["post_admission_min_match_score"] = 0.1
+    candidate = weight_demoted_pre_score_below_threshold["post_admission_counterfactual_shadow"]["candidates"][0]
+    candidate["pre_weight_score"] = 0.09
+    candidate["post_weight_score"] = 0.08
+    path = tmp_path / "contradictory.jsonl"
+    path.write_text(
+        "\n".join(
+            json.dumps(record)
+            for record in (
+                wrong_venue,
+                wrong_reason,
+                post_score_at_or_above_threshold,
+                weight_demoted_pre_score_below_threshold,
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summary = summarize(path, since=None, until=None)
+
+    assert summary["target_records"] == 4
+    assert summary["shadow_counts"] == {
+        "absent": 0,
+        "malformed": 4,
+        "valid": 0,
+        "truncated": 0,
+        "untruncated": 0,
+    }
+    assert summary["candidate_rejection_reasons"] == {}
+    assert summary["best_rejected_post_weight_score"]["available"] == 0
+    assert summary["near_miss"]["at_or_above_frozen_threshold"] == 0
+
+
+def test_nonfinite_frozen_threshold_is_unavailable_without_a_match_inference(tmp_path):
+    valid_record = json.loads(FIXTURE_PATH.read_text(encoding="utf-8").splitlines()[3])
+    infinite_threshold = json.loads(json.dumps(valid_record))
+    infinite_threshold["post_admission_min_match_score"] = float("inf")
+    nan_threshold = json.loads(json.dumps(valid_record))
+    nan_threshold["post_admission_min_match_score"] = float("nan")
+    path = tmp_path / "unavailable-threshold.jsonl"
+    path.write_text(
+        "\n".join(json.dumps(record) for record in (infinite_threshold, nan_threshold)) + "\n",
+        encoding="utf-8",
+    )
+
+    summary = summarize(path, since=None, until=None)
+
+    assert summary["shadow_counts"]["valid"] == 2
+    assert summary["near_miss"]["frozen_threshold_available"] == 0
+    assert summary["near_miss"]["frozen_threshold_unavailable"] == 2
+    assert summary["near_miss"]["unavailable"] == 2
+    assert summary["near_miss"]["at_or_above_frozen_threshold"] == 0
 
 
 def test_filters_honor_explicit_date_window_and_exclude_test_records():
