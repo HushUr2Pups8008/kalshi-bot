@@ -394,6 +394,7 @@ class ResearchVerdict:
     evidence: list[ResearchEvidence] = field(default_factory=list)
     summary: str = ""
     skip_reason: str | None = None
+    research_pending_origin: str | None = None
     force_side: str | None = None
     estimated_probability: float | None = None
     confidence: float | None = None
@@ -440,6 +441,8 @@ class ResearchVerdict:
             "research_model_confidence": self.confidence,
             "research_skip_reason": self.skip_reason,
         }
+        if self.research_pending_origin:
+            fields["research_pending_origin"] = self.research_pending_origin
         if self.research_run_id:
             fields["research_run_id"] = self.research_run_id
         if self.research_contract_fingerprint:
@@ -3191,6 +3194,7 @@ def _keep_pending_no_edge_researchable(verdict: ResearchVerdict) -> ResearchVerd
             "official event window remains open; keep research queued."
         ),
         skip_reason="official_data_pending",
+        research_pending_origin=verdict.skip_reason,
         force_side=None,
     )
 
