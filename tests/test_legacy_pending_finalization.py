@@ -1168,10 +1168,29 @@ def test_apply_legacy_pending_finalization_acquires_runtime_lock_before_staging_
         assert state["lock_held"] is True
         return original_plan(**kwargs)
 
+    def wrapped_prepare_archive_parent(path: Path) -> Path:
+        assert state["lock_held"] is True
+        return original_prepare_archive_parent(path)
+
+    def wrapped_reserve_hidden_stage_root(*, archive_parent: Path, finalization_id: str) -> Path:
+        assert state["lock_held"] is True
+        return original_reserve_hidden_stage_root(
+            archive_parent=archive_parent,
+            finalization_id=finalization_id,
+        )
+
     def wrapped_stage(*args, **kwargs):
         assert state["lock_held"] is True
         return original_stage(*args, **kwargs)
 
+    original_prepare_archive_parent = getattr(
+        legacy_pending_finalization,
+        "_prepare_archive_parent",
+    )
+    original_reserve_hidden_stage_root = getattr(
+        legacy_pending_finalization,
+        "_reserve_hidden_stage_root",
+    )
     original_stage = getattr(
         legacy_pending_finalization,
         "_stage_archive_payload",
@@ -1185,6 +1204,16 @@ def test_apply_legacy_pending_finalization_acquires_runtime_lock_before_staging_
         legacy_pending_finalization,
         "plan_legacy_pending_finalization",
         wrapped_plan,
+    )
+    monkeypatch.setattr(
+        legacy_pending_finalization,
+        "_prepare_archive_parent",
+        wrapped_prepare_archive_parent,
+    )
+    monkeypatch.setattr(
+        legacy_pending_finalization,
+        "_reserve_hidden_stage_root",
+        wrapped_reserve_hidden_stage_root,
     )
     monkeypatch.setattr(
         legacy_pending_finalization,
@@ -1254,6 +1283,41 @@ def test_apply_legacy_pending_finalization_publishes_archive_before_live_root_re
     assert not fixture["pending_root"].exists()
 
 
+def test_apply_legacy_pending_finalization_fails_closed_on_preexisting_tombstone(
+    tmp_path: Path,
+) -> None:
+    import trading.legacy_pending_finalization as legacy_pending_finalization
+
+    fixture = _planner_fixture(tmp_path)
+    plan, plan_path, plan_sha256 = _write_reviewed_plan_artifact(fixture)
+    apply_legacy_pending_finalization = getattr(
+        legacy_pending_finalization,
+        "apply_legacy_pending_finalization",
+    )
+    pending_root = fixture["pending_root"]
+    tombstone = pending_root.parent / f".{pending_root.name}.removed"
+    tombstone.mkdir()
+    sentinel = tombstone / "sentinel.txt"
+    sentinel.write_text("keep", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="tombstone|removed"):
+        apply_legacy_pending_finalization(
+            db_path=fixture["root_db"],
+            pending_root=pending_root,
+            sealed_plan_path=plan_path,
+            expected_finalization_plan_sha256=plan_sha256,
+            operator_confirmation=(
+                "finalize legacy_pending "
+                f"{plan.archive_target.archived_root_relative_to_storage_root}"
+            ),
+            write=True,
+        )
+
+    assert pending_root.exists()
+    assert tombstone.is_dir()
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+
+
 def test_apply_legacy_pending_finalization_cleans_stage_on_abort_and_keeps_db_unchanged(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1292,6 +1356,63 @@ def test_apply_legacy_pending_finalization_cleans_stage_on_abort_and_keeps_db_un
     assert _db_fingerprint(fixture["root_db"]) == before
     if archive_parent.exists():
         assert [path.name for path in archive_parent.iterdir()] == []
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "kind"),
+    [
+        pytest.param(Path("control/unexpected.txt"), "file", id="extra-control-file"),
+        pytest.param(Path("archive-root-link"), "symlink", id="extra-root-symlink"),
+    ],
+)
+def test_apply_legacy_pending_finalization_replay_rejects_unexpected_archive_tree_entries(
+    tmp_path: Path,
+    relative_path: Path,
+    kind: str,
+) -> None:
+    import trading.legacy_pending_finalization as legacy_pending_finalization
+
+    fixture = _planner_fixture(tmp_path)
+    plan, plan_path, plan_sha256 = _write_reviewed_plan_artifact(fixture)
+    apply_legacy_pending_finalization = getattr(
+        legacy_pending_finalization,
+        "apply_legacy_pending_finalization",
+    )
+
+    apply_legacy_pending_finalization(
+        db_path=fixture["root_db"],
+        pending_root=fixture["pending_root"],
+        sealed_plan_path=plan_path,
+        expected_finalization_plan_sha256=plan_sha256,
+        operator_confirmation=(
+            "finalize legacy_pending "
+            f"{plan.archive_target.archived_root_relative_to_storage_root}"
+        ),
+        write=True,
+    )
+    archive_root = (
+        fixture["root_db"].parent
+        / plan.archive_target.archived_root_relative_to_storage_root
+    )
+    target = archive_root / relative_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if kind == "file":
+        target.write_text("unexpected", encoding="utf-8")
+    else:
+        target.symlink_to(archive_root / "payload", target_is_directory=True)
+
+    with pytest.raises(ValueError, match="published finalization archive is invalid"):
+        apply_legacy_pending_finalization(
+            db_path=fixture["root_db"],
+            pending_root=fixture["pending_root"],
+            sealed_plan_path=plan_path,
+            expected_finalization_plan_sha256=plan_sha256,
+            operator_confirmation=(
+                "finalize legacy_pending "
+                f"{plan.archive_target.archived_root_relative_to_storage_root}"
+            ),
+            write=True,
+        )
 
 
 def test_apply_legacy_pending_finalization_never_opens_sqlite_write_transaction(

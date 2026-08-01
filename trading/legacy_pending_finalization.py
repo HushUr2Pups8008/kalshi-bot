@@ -875,14 +875,14 @@ def apply_legacy_pending_finalization(
         raise ValueError("legacy root is invalid")
 
     finalization_id = _archive_target_finalization_id(reviewed_plan.archive_target)
-    archive_parent = _prepare_archive_parent(archive_root.parent)
-    stage_root = _reserve_hidden_stage_root(
-        archive_parent=archive_parent,
-        finalization_id=finalization_id,
-    )
-    published = False
-    try:
-        with _runtime_lock_for_finalization(root_path):
+    with _runtime_lock_for_finalization(root_path):
+        archive_parent = _prepare_archive_parent(archive_root.parent)
+        stage_root = _reserve_hidden_stage_root(
+            archive_parent=archive_parent,
+            finalization_id=finalization_id,
+        )
+        published = False
+        try:
             locked_plan = plan_legacy_pending_finalization(
                 db_path=root_path,
                 pending_root=pending_root_path,
@@ -941,9 +941,9 @@ def apply_legacy_pending_finalization(
                 certificate=published_certificate,
                 replayed=False,
             )
-    finally:
-        if not published:
-            _cleanup_stage_root(stage_root)
+        finally:
+            if not published:
+                _cleanup_stage_root(stage_root)
 
 
 def _runtime_lock_for_finalization(db_path: Path) -> object:
@@ -1084,6 +1084,10 @@ def _validate_published_archive(
         return None
     if not archive_root.is_dir():
         raise ValueError("published finalization archive is invalid")
+    _validate_archive_tree_entries(
+        archive_root=archive_root,
+        reviewed_plan=reviewed_plan,
+    )
     plan_path = archive_root / FINALIZATION_CONTROL_DIRNAME / FINALIZATION_PLAN_FILENAME
     certificate_path = (
         archive_root / FINALIZATION_CONTROL_DIRNAME / FINALIZATION_CERTIFICATE_FILENAME
@@ -1161,8 +1165,8 @@ def _remove_live_pending_root(*, pending_root: Path, archive_root: Path) -> None
     if not pending_root.exists():
         return
     tombstone = pending_root.parent / f".{pending_root.name}.removed"
-    if tombstone.exists():
-        shutil.rmtree(tombstone)
+    if tombstone.exists() or tombstone.is_symlink():
+        raise ValueError("legacy pending tombstone already exists")
     os.replace(pending_root, tombstone)
     shutil.rmtree(tombstone)
 
@@ -1170,6 +1174,47 @@ def _remove_live_pending_root(*, pending_root: Path, archive_root: Path) -> None
 def _cleanup_stage_root(stage_root: Path) -> None:
     if stage_root.exists():
         shutil.rmtree(stage_root)
+
+
+def _validate_archive_tree_entries(
+    *,
+    archive_root: Path,
+    reviewed_plan: SealedLegacyPendingFinalizationPlan,
+) -> None:
+    expected_files = {
+        f"{FINALIZATION_CONTROL_DIRNAME}/{FINALIZATION_PLAN_FILENAME}",
+        f"{FINALIZATION_CONTROL_DIRNAME}/{FINALIZATION_CERTIFICATE_FILENAME}",
+        *(entry.path_relative_to_archive_root for entry in reviewed_plan.payload_inventory),
+    }
+    expected_dirs = {
+        FINALIZATION_CONTROL_DIRNAME,
+        FINALIZATION_PAYLOAD_DIRNAME,
+    }
+    for relative_file in expected_files:
+        parent = PurePosixPath(relative_file).parent
+        while parent != PurePosixPath("."):
+            expected_dirs.add(parent.as_posix())
+            parent = parent.parent
+
+    actual_files: set[str] = set()
+    actual_dirs: set[str] = set()
+    for current_root, dirnames, filenames in os.walk(archive_root, topdown=True, followlinks=False):
+        current_path = Path(current_root)
+        for name in dirnames:
+            path = current_path / name
+            relative = path.relative_to(archive_root).as_posix()
+            if path.is_symlink() or relative not in expected_dirs:
+                raise ValueError("published finalization archive is invalid")
+            actual_dirs.add(relative)
+        for name in filenames:
+            path = current_path / name
+            relative = path.relative_to(archive_root).as_posix()
+            if path.is_symlink() or relative not in expected_files:
+                raise ValueError("published finalization archive is invalid")
+            actual_files.add(relative)
+
+    if actual_dirs != expected_dirs or actual_files != expected_files:
+        raise ValueError("published finalization archive is invalid")
 
 
 def _write_new_file(path: Path, data: bytes) -> None:
