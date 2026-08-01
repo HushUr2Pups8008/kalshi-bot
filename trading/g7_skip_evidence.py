@@ -463,6 +463,12 @@ class G7SkipEvidenceRecord:
     _g7_inputs_json: str = field(init=False, repr=False, compare=False)
     _g7_results_json: str = field(init=False, repr=False, compare=False)
     _execution_liquidity_json: str = field(init=False, repr=False, compare=False)
+    _payload_contract: Literal["current", "pre_lineage"] = field(
+        init=False,
+        default="current",
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         if self.receipt_version != G7_SKIP_EVIDENCE_RECEIPT_VERSION:
@@ -540,6 +546,7 @@ class G7SkipEvidenceRecord:
         object.__setattr__(self, "_g7_inputs_json", g7_inputs_json)
         object.__setattr__(self, "_g7_results_json", g7_results_json)
         object.__setattr__(self, "_execution_liquidity_json", execution_liquidity_json)
+        object.__setattr__(self, "_payload_contract", "current")
 
     @property
     def evidence_id(self) -> str:
@@ -551,9 +558,11 @@ class G7SkipEvidenceRecord:
         )
         return sha256(identity.encode("utf-8")).hexdigest()
 
-    @property
-    def payload(self) -> dict[str, object]:
-        return {
+    def _payload_for_contract(
+        self,
+        contract: Literal["current", "pre_lineage"],
+    ) -> dict[str, object]:
+        payload: dict[str, object] = {
             "receipt_version": self.receipt_version,
             "decision_key": self.decision_key,
             "lifecycle_id": self.lifecycle_id,
@@ -563,8 +572,6 @@ class G7SkipEvidenceRecord:
             "market_ticker": self.market_ticker,
             "intended_side": self.intended_side,
             "market_family": self.market_family,
-            "runtime_paper_cohort_id": self.runtime_paper_cohort_id,
-            "runtime_paper_cohort_kind": self.runtime_paper_cohort_kind,
             "ordered_failures": list(self.ordered_failures),
             "g7_failures": list(self.g7_failures),
             "trade_blocked_reason": self.trade_blocked_reason,
@@ -574,10 +581,24 @@ class G7SkipEvidenceRecord:
             "execution_liquidity": json.loads(self._execution_liquidity_json),
             "diagnostic_only": True,
         }
+        if contract == "current":
+            payload["runtime_paper_cohort_id"] = self.runtime_paper_cohort_id
+            payload["runtime_paper_cohort_kind"] = self.runtime_paper_cohort_kind
+        return payload
+
+    def _payload_sha256_for_contract(
+        self,
+        contract: Literal["current", "pre_lineage"],
+    ) -> str:
+        return sha256(canonical_json(self._payload_for_contract(contract)).encode("utf-8")).hexdigest()
+
+    @property
+    def payload(self) -> dict[str, object]:
+        return self._payload_for_contract(self._payload_contract)
 
     @property
     def payload_sha256(self) -> str:
-        return sha256(canonical_json(self.payload).encode("utf-8")).hexdigest()
+        return self._payload_sha256_for_contract(self._payload_contract)
 
 
 @dataclass(frozen=True)
@@ -1050,9 +1071,20 @@ def _record_from_row(row: tuple[object, ...]) -> G7SkipEvidenceRecord:
         )
     except (TypeError, ValueError, json.JSONDecodeError) as exc:
         raise G7SkipEvidenceSchemaError("stored G7 skip evidence receipt is invalid") from exc
-    if str(evidence_id) != record.evidence_id or str(payload_sha256) != record.payload_sha256:
+    if str(evidence_id) != record.evidence_id:
         raise G7SkipEvidenceSchemaError("stored G7 skip evidence receipt hash does not match")
-    return record
+    stored_payload_sha256 = str(payload_sha256)
+    if stored_payload_sha256 == record.payload_sha256:
+        return record
+    # Pre-lineage receipts omitted both cohort keys; retain their original hash contract.
+    if (
+        record.runtime_paper_cohort_id is None
+        and record.runtime_paper_cohort_kind is None
+        and stored_payload_sha256 == record._payload_sha256_for_contract("pre_lineage")
+    ):
+        object.__setattr__(record, "_payload_contract", "pre_lineage")
+        return record
+    raise G7SkipEvidenceSchemaError("stored G7 skip evidence receipt hash does not match")
 
 
 _RECORD_SELECT = """

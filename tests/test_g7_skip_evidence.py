@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timezone
+from hashlib import sha256
 import json
 from pathlib import Path
 import sqlite3
@@ -14,6 +15,7 @@ from trading.g7_skip_evidence import (
     G7SkipEvidenceStore,
     _SCHEMA_STATEMENTS,
     _immutable_triggers,
+    canonical_json,
     read_g7_skip_evidence_records,
     read_g7_skip_evidence_snapshot,
 )
@@ -21,6 +23,7 @@ from trading.g7_skip_evidence import (
 
 UTC = timezone.utc
 NOW = datetime(2026, 7, 31, 12, 30, tzinfo=UTC)
+_PRE_LINEAGE_OBSERVED_RECORD_HASH = "0efdbd901f72a6b7e9d457457291f7630f00f1b0103b7fd0154639997701a96a"
 
 
 def _observed_record(**overrides: object) -> G7SkipEvidenceRecord:
@@ -69,7 +72,19 @@ def _observed_record(**overrides: object) -> G7SkipEvidenceRecord:
     return G7SkipEvidenceRecord(**payload)
 
 
-def _create_pre_lineage_store(conn: sqlite3.Connection, record: G7SkipEvidenceRecord) -> None:
+def _pre_lineage_payload_sha256(record: G7SkipEvidenceRecord) -> str:
+    payload = record.payload
+    payload.pop("runtime_paper_cohort_id")
+    payload.pop("runtime_paper_cohort_kind")
+    return sha256(canonical_json(payload).encode("utf-8")).hexdigest()
+
+
+def _create_pre_lineage_store(
+    conn: sqlite3.Connection,
+    record: G7SkipEvidenceRecord,
+    *,
+    stored_payload_sha256: str | None = None,
+) -> None:
     conn.execute(
         """
         CREATE TABLE g7_skip_evidence_schema_meta (
@@ -122,7 +137,7 @@ def _create_pre_lineage_store(conn: sqlite3.Connection, record: G7SkipEvidenceRe
             record.evidence_id,
             record.receipt_version,
             record.decision_key,
-            record.payload_sha256,
+            stored_payload_sha256 or record.payload_sha256,
             record.payload["decision_at"],
             record.payload["captured_at"],
             record.lifecycle_id,
@@ -399,6 +414,72 @@ def test_initialize_migrates_pre_lineage_receipt_store_without_backfill(tmp_path
     [migrated] = read_g7_skip_evidence_records(db_path)
     assert migrated.runtime_paper_cohort_id is None
     assert migrated.runtime_paper_cohort_kind is None
+
+
+def test_migrated_pre_lineage_receipt_uses_its_original_payload_hash_contract(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "g7_skip_evidence.db"
+    record = _observed_record(
+        runtime_paper_cohort_id=None,
+        runtime_paper_cohort_kind=None,
+    )
+    assert _pre_lineage_payload_sha256(record) == _PRE_LINEAGE_OBSERVED_RECORD_HASH
+    assert record.payload_sha256 != _PRE_LINEAGE_OBSERVED_RECORD_HASH
+    with sqlite3.connect(db_path) as conn:
+        _create_pre_lineage_store(
+            conn,
+            record,
+            stored_payload_sha256=_PRE_LINEAGE_OBSERVED_RECORD_HASH,
+        )
+
+    assert G7SkipEvidenceStore(db_path=db_path).initialize(applied_at=NOW) is True
+    [migrated] = read_g7_skip_evidence_records(db_path)
+
+    assert migrated.runtime_paper_cohort_id is None
+    assert migrated.runtime_paper_cohort_kind is None
+    assert "runtime_paper_cohort_id" not in migrated.payload
+    assert "runtime_paper_cohort_kind" not in migrated.payload
+    assert migrated.payload_sha256 == _PRE_LINEAGE_OBSERVED_RECORD_HASH
+
+
+def test_current_null_cohort_receipt_keeps_current_payload_hash_contract(tmp_path: Path) -> None:
+    db_path = tmp_path / "g7_skip_evidence.db"
+    record = _observed_record(
+        runtime_paper_cohort_id=None,
+        runtime_paper_cohort_kind=None,
+    )
+    store = G7SkipEvidenceStore(db_path=db_path)
+    assert store.initialize(applied_at=NOW) is True
+    assert store.append_record(record).status == "inserted"
+
+    [stored] = read_g7_skip_evidence_records(db_path)
+
+    assert "runtime_paper_cohort_id" in stored.payload
+    assert "runtime_paper_cohort_kind" in stored.payload
+    assert stored.payload_sha256 == record.payload_sha256
+
+
+def test_legacy_payload_contract_fallback_requires_both_cohort_fields_to_be_null(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "g7_skip_evidence.db"
+    record = _observed_record(runtime_paper_cohort_kind=None)
+    store = G7SkipEvidenceStore(db_path=db_path)
+    assert store.initialize(applied_at=NOW) is True
+    assert store.append_record(record).status == "inserted"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DROP TRIGGER immutable_g7_skip_evidence_records_update")
+        conn.execute(
+            "UPDATE g7_skip_evidence_records SET payload_sha256 = ?",
+            (_pre_lineage_payload_sha256(record),),
+        )
+        for name, statement in _immutable_triggers():
+            if name == "immutable_g7_skip_evidence_records_update":
+                conn.execute(statement)
+
+    with pytest.raises(G7SkipEvidenceSchemaError, match="hash does not match"):
+        read_g7_skip_evidence_records(db_path)
 
 
 def test_initialize_recovers_empty_schema_meta_migration_stage(tmp_path: Path) -> None:
