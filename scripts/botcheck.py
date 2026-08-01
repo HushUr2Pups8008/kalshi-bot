@@ -1027,22 +1027,46 @@ def summarize_research_dossiers(
                     else ""
                 )
                 current_fingerprint_select = (
-                    "d.last_contract_fingerprint"
-                    if "last_contract_fingerprint" in dossier_columns
+                    "r.contract_fingerprint"
+                    if "contract_fingerprint" in run_columns
                     else "NULL"
                 )
                 if {"market_price", "estimated_edge", "force_side"} <= run_columns:
+                    run_created_expr = (
+                        "r.created_ts" if "created_ts" in run_columns else "NULL"
+                    )
+                    run_has_unusable_timestamp_sql = (
+                        "timestamp_check.created_ts IS NULL "
+                        "OR datetime(timestamp_check.created_ts) IS NULL"
+                        if "created_ts" in run_columns
+                        else "1"
+                    )
                     for row in conn.execute(
                         f"""
                         SELECT r.market_ticker, r.research_run_id, r.force_side,
                                {current_fingerprint_select} AS contract_fingerprint
-                        FROM research_runs r
+                        FROM (
+                            SELECT
+                                r.*,
+                                ROW_NUMBER() OVER (
+                                    PARTITION BY r.market_ticker
+                                    ORDER BY
+                                        CASE WHEN EXISTS (
+                                            SELECT 1
+                                            FROM research_runs AS timestamp_check
+                                            WHERE timestamp_check.market_ticker = r.market_ticker
+                                              AND ({run_has_unusable_timestamp_sql})
+                                        ) THEN r.rowid ELSE 0 END DESC,
+                                        {run_created_expr} DESC,
+                                        r.rowid DESC
+                                ) AS current_run_rank
+                            FROM research_runs AS r
+                        ) AS r
                         JOIN research_dossiers d
                           ON d.market_ticker = r.market_ticker
-                         AND d.last_research_run_id = r.research_run_id
                         {task_join}
-                        WHERE r.verdict_status = 'decision_grade_candidate'
-                          AND d.last_verdict_status = 'decision_grade_candidate'
+                        WHERE r.current_run_rank = 1
+                          AND r.verdict_status = 'decision_grade_candidate'
                           {task_candidate_filter}
                           AND r.force_side IN ('yes', 'no')
                           AND r.estimated_probability IS NOT NULL
@@ -2163,9 +2187,10 @@ def print_research_gate_section(
                 "vetted     : "
                 "historical_trade_candidate="
                 f"{dossier_stats.vetted_trade_candidate_dossiers} "
-                "decision_grade_candidate="
+                "snapshot_decision_grade_candidate="
                 f"{dossier_stats.decision_grade_candidate_dossiers} "
-                f"live_cache_eligible={dossier_stats.live_cache_eligible_dossiers}"
+                "current_live_cache_eligible="
+                f"{dossier_stats.live_cache_eligible_dossiers}"
             )
     print()
 

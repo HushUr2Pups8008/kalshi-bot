@@ -423,6 +423,7 @@ class ResearchDossierStore:
                     trigger_headline TEXT NOT NULL,
                     trigger_source TEXT NOT NULL,
                     contract_question TEXT,
+                    contract_fingerprint TEXT,
                     market_status TEXT,
                     market_close_time TEXT,
                     attempted INTEGER NOT NULL CHECK (attempted IN (0, 1)),
@@ -454,6 +455,7 @@ class ResearchDossierStore:
                 ("decision_grade_status", "TEXT"),
                 ("research_pending_origin", "TEXT"),
                 ("contract_question", "TEXT"),
+                ("contract_fingerprint", "TEXT"),
                 ("market_status", "TEXT"),
                 ("market_close_time", "TEXT"),
                 ("decision_grade_reasons_json", "TEXT NOT NULL DEFAULT '[]'"),
@@ -727,7 +729,11 @@ class ResearchDossierStore:
         final_open_questions_supplied = open_questions_supplied or bool(
             final_open_questions
         )
-        final_contract_fingerprint = contract_fingerprint or _run_contract_fingerprint(evidence)
+        final_contract_fingerprint = (
+            str(contract_fingerprint or "").strip()
+            or str(_run_contract_fingerprint(evidence) or "").strip()
+            or None
+        )
         timeout_diagnostic_json: str | None = None
         timeout_diagnostic_sha256: str | None = None
         if timeout_diagnostic is not None:
@@ -831,6 +837,9 @@ class ResearchDossierStore:
                 UPDATE research_runs
                 SET
                     contract_question=CASE WHEN ? THEN ? ELSE contract_question END,
+                    contract_fingerprint=CASE
+                        WHEN ? THEN ? ELSE contract_fingerprint
+                    END,
                     market_status=CASE WHEN ? THEN ? ELSE market_status END,
                     market_close_time=CASE WHEN ? THEN ? ELSE market_close_time END,
                     market_price=CASE WHEN ? THEN ? ELSE market_price END,
@@ -855,6 +864,8 @@ class ResearchDossierStore:
                 (
                     int(contract_question_supplied),
                     contract_question,
+                    int(bool(final_contract_fingerprint)),
+                    final_contract_fingerprint,
                     int(normalized_market_status is not _UNSET),
                     None if normalized_market_status is _UNSET else normalized_market_status,
                     int(normalized_market_close_time is not _UNSET),
@@ -1056,12 +1067,12 @@ class ResearchDossierStore:
                 """
                 INSERT OR IGNORE INTO research_runs (
                     research_run_id, market_ticker, trigger_headline, trigger_source,
-                    contract_question, market_status, market_close_time,
+                    contract_question, contract_fingerprint, market_status, market_close_time,
                     attempted, summary, verdict_status, skip_reason,
                     research_pending_origin, force_side,
                     estimated_probability, confidence, market_price, estimated_edge,
                     decision_grade_status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     research_run_id,
@@ -1069,6 +1080,7 @@ class ResearchDossierStore:
                     trigger_headline,
                     trigger_source,
                     contract_question,
+                    contract_fingerprint,
                     None if market_status is _UNSET else market_status,
                     None if market_close_time is _UNSET else market_close_time,
                     int(attempted),
@@ -1631,9 +1643,11 @@ def _normalize_market_close_time(value: object) -> str | None:
 
 def _run_contract_fingerprint(evidence: list[ResearchEvidence]) -> str | None:
     fingerprints = {
-        item.contract_fingerprint
+        normalized_fingerprint
         for item in evidence
-        if item.contract_fingerprint
+        if (
+            normalized_fingerprint := str(item.contract_fingerprint or "").strip()
+        )
     }
     if len(fingerprints) != 1:
         return None

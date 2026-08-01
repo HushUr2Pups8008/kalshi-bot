@@ -2210,7 +2210,8 @@ def _write_temporal_live_cache_db(tmp_path, *, published_at: str) -> None:
                 estimated_probability REAL,
                 confidence REAL,
                 market_price REAL,
-                estimated_edge REAL
+                estimated_edge REAL,
+                contract_fingerprint TEXT
             );
             CREATE TABLE research_evidence (
                 evidence_id TEXT PRIMARY KEY,
@@ -2238,7 +2239,8 @@ def _write_temporal_live_cache_db(tmp_path, *, published_at: str) -> None:
             );
             INSERT INTO research_runs VALUES (
                 'run-temporal', 'KXHIGHNY-26MAY10-B80',
-                'decision_grade_candidate', 'yes', 0.70, 0.80, 0.50, 0.19
+                'decision_grade_candidate', 'yes', 0.70, 0.80, 0.50, 0.19,
+                'contract-v1'
             );
             """
         )
@@ -2547,7 +2549,9 @@ def test_summarize_research_dossiers_excludes_stale_live_cache_ready_count(tmp_p
     assert stats.live_cache_eligible_dossiers == 0
 
 
-def test_summarize_research_dossiers_excludes_fresh_superseded_candidate_run(tmp_path):
+def test_summarize_research_dossiers_excludes_latest_blocker_after_retained_snapshot(
+    tmp_path,
+):
     db_path = tmp_path / "data" / "evidence_store.db"
     db_path.parent.mkdir()
     with sqlite3.connect(db_path) as conn:
@@ -2573,7 +2577,8 @@ def test_summarize_research_dossiers_excludes_fresh_superseded_candidate_run(tmp
                 estimated_probability REAL,
                 confidence REAL,
                 market_price REAL,
-                estimated_edge REAL
+                estimated_edge REAL,
+                created_ts TEXT
             );
             CREATE TABLE research_evidence (
                 evidence_id INTEGER PRIMARY KEY,
@@ -2586,11 +2591,11 @@ def test_summarize_research_dossiers_excludes_fresh_superseded_candidate_run(tmp
             );
             INSERT INTO research_dossiers VALUES (
                 'KX-MIXED',
-                'run-fresh-blocked',
+                'run-candidate-stale',
                 'fingerprint-1',
                 '2026-05-10T22:55:00+00:00',
-                'needs_counter_evidence',
-                NULL,
+                'decision_grade_candidate',
+                'yes',
                 0.7,
                 0.8,
                 0.5,
@@ -2604,7 +2609,8 @@ def test_summarize_research_dossiers_excludes_fresh_superseded_candidate_run(tmp
                 0.7,
                 0.8,
                 0.5,
-                0.19
+                0.19,
+                '2026-05-10T22:50:00+00:00'
             );
             INSERT INTO research_runs VALUES (
                 'run-fresh-blocked',
@@ -2614,7 +2620,8 @@ def test_summarize_research_dossiers_excludes_fresh_superseded_candidate_run(tmp
                 0.7,
                 0.8,
                 0.5,
-                0.19
+                0.19,
+                NULL
             );
             INSERT INTO research_evidence VALUES (
                 1,
@@ -2660,7 +2667,170 @@ def test_summarize_research_dossiers_excludes_fresh_superseded_candidate_run(tmp
         now=datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc),
     )
 
-    assert stats.decision_grade_candidate_dossiers == 0
+    assert stats.decision_grade_candidate_dossiers == 1
+    assert stats.live_cache_eligible_dossiers == 0
+
+
+def test_summarize_research_dossiers_uses_rowid_without_created_timestamp(
+    tmp_path,
+):
+    db_path = tmp_path / "data" / "evidence_store.db"
+    db_path.parent.mkdir()
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE research_dossiers (
+                market_ticker TEXT PRIMARY KEY,
+                last_research_run_id TEXT,
+                last_contract_fingerprint TEXT,
+                last_researched_ts TEXT NOT NULL,
+                last_verdict_status TEXT NOT NULL,
+                last_force_side TEXT,
+                last_estimated_probability REAL,
+                last_confidence REAL,
+                last_market_price REAL,
+                last_estimated_edge REAL
+            );
+            CREATE TABLE research_runs (
+                research_run_id TEXT PRIMARY KEY,
+                market_ticker TEXT NOT NULL,
+                verdict_status TEXT NOT NULL,
+                force_side TEXT,
+                estimated_probability REAL,
+                confidence REAL,
+                market_price REAL,
+                estimated_edge REAL
+            );
+            CREATE TABLE research_evidence (
+                evidence_id INTEGER PRIMARY KEY,
+                market_ticker TEXT NOT NULL,
+                research_run_id TEXT NOT NULL,
+                contract_fingerprint TEXT,
+                source_class TEXT NOT NULL,
+                retrieved_at TEXT,
+                inserted_at TEXT
+            );
+            INSERT INTO research_dossiers VALUES (
+                'KX-NO-CREATED-TS', 'run-z-candidate', 'fingerprint-1',
+                '2026-05-10T22:55:00+00:00', 'decision_grade_candidate',
+                'yes', 0.7, 0.8, 0.5, 0.19
+            );
+            INSERT INTO research_runs VALUES (
+                'run-z-candidate', 'KX-NO-CREATED-TS',
+                'decision_grade_candidate', 'yes', 0.7, 0.8, 0.5, 0.19
+            );
+            INSERT INTO research_runs VALUES (
+                'run-a-pending', 'KX-NO-CREATED-TS',
+                'needs_research', NULL, 0.7, 0.8, 0.5, 0.19
+            );
+            INSERT INTO research_evidence VALUES (
+                1, 'KX-NO-CREATED-TS', 'run-z-candidate', 'fingerprint-1',
+                'resolution_source', '2026-05-10T22:50:00+00:00',
+                '2026-05-10T22:50:00+00:00'
+            );
+            INSERT INTO research_evidence VALUES (
+                2, 'KX-NO-CREATED-TS', 'run-z-candidate', 'fingerprint-1',
+                'reputable_secondary', '2026-05-10T22:50:00+00:00',
+                '2026-05-10T22:50:00+00:00'
+            );
+            """
+        )
+
+    stats = summarize_research_dossiers(
+        tmp_path,
+        now=datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc),
+    )
+
+    assert stats.decision_grade_candidate_dossiers == 1
+    assert stats.live_cache_eligible_dossiers == 0
+
+
+def test_summarize_research_dossiers_uses_current_run_contract_fingerprint(
+    tmp_path,
+):
+    db_path = tmp_path / "data" / "evidence_store.db"
+    db_path.parent.mkdir()
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE research_dossiers (
+                market_ticker TEXT PRIMARY KEY,
+                last_research_run_id TEXT,
+                last_contract_fingerprint TEXT,
+                last_researched_ts TEXT NOT NULL,
+                last_verdict_status TEXT NOT NULL,
+                last_force_side TEXT,
+                last_estimated_probability REAL,
+                last_confidence REAL,
+                last_market_price REAL,
+                last_estimated_edge REAL
+            );
+            CREATE TABLE research_runs (
+                research_run_id TEXT PRIMARY KEY,
+                market_ticker TEXT NOT NULL,
+                verdict_status TEXT NOT NULL,
+                force_side TEXT,
+                estimated_probability REAL,
+                confidence REAL,
+                market_price REAL,
+                estimated_edge REAL,
+                contract_fingerprint TEXT,
+                created_ts TEXT
+            );
+            CREATE TABLE research_evidence (
+                evidence_id INTEGER PRIMARY KEY,
+                market_ticker TEXT NOT NULL,
+                research_run_id TEXT NOT NULL,
+                contract_fingerprint TEXT,
+                source_class TEXT NOT NULL,
+                retrieved_at TEXT,
+                inserted_at TEXT
+            );
+            INSERT INTO research_dossiers VALUES (
+                'KXFINGERPRINT', 'run-old', 'snapshot-fingerprint',
+                '2026-05-10T22:55:00+00:00', 'decision_grade_candidate',
+                'yes', 0.7, 0.8, 0.5, 0.19
+            );
+            INSERT INTO research_runs VALUES (
+                'run-old', 'KXFINGERPRINT', 'decision_grade_candidate',
+                'yes', 0.7, 0.8, 0.5, 0.19, 'snapshot-fingerprint',
+                '2026-05-10T22:40:00+00:00'
+            );
+            INSERT INTO research_runs VALUES (
+                'run-current', 'KXFINGERPRINT', 'decision_grade_candidate',
+                'yes', 0.72, 0.82, 0.5, 0.22, 'current-fingerprint',
+                '2026-05-10T22:50:00+00:00'
+            );
+            INSERT INTO research_evidence VALUES (
+                1, 'KXFINGERPRINT', 'run-current', 'current-fingerprint',
+                'resolution_source', '2026-05-10T22:50:00+00:00',
+                '2026-05-10T22:50:00+00:00'
+            );
+            INSERT INTO research_evidence VALUES (
+                2, 'KXFINGERPRINT', 'run-current', 'current-fingerprint',
+                'reputable_secondary', '2026-05-10T22:50:00+00:00',
+                '2026-05-10T22:50:00+00:00'
+            );
+            """
+        )
+
+    now = datetime(2026, 5, 10, 23, 0, tzinfo=timezone.utc)
+    stats = summarize_research_dossiers(tmp_path, now=now)
+
+    assert stats.decision_grade_candidate_dossiers == 1
+    assert stats.live_cache_eligible_dossiers == 1
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE research_evidence
+            SET contract_fingerprint = 'snapshot-fingerprint'
+            WHERE research_run_id = 'run-current'
+            """
+        )
+
+    stats = summarize_research_dossiers(tmp_path, now=now)
+
     assert stats.live_cache_eligible_dossiers == 0
 
 
@@ -2699,6 +2869,7 @@ def test_summarize_research_dossiers_counts_recent_candidate_run_proof(
                 confidence REAL,
                 market_price REAL,
                 estimated_edge REAL,
+                contract_fingerprint TEXT,
                 created_ts TEXT
             );
             CREATE TABLE research_evidence (
@@ -2752,6 +2923,7 @@ def test_summarize_research_dossiers_counts_recent_candidate_run_proof(
                 confidence,
                 market_price,
                 estimated_edge,
+                contract_fingerprint,
                 created_ts
             ) VALUES (
                 'run-candidate',
@@ -2766,6 +2938,7 @@ def test_summarize_research_dossiers_counts_recent_candidate_run_proof(
                 0.72,
                 0.51,
                 0.11,
+                'contract-v1',
                 '2026-05-10T22:40:00+00:00'
             );
             INSERT INTO research_evidence (
@@ -2831,9 +3004,9 @@ def test_summarize_research_dossiers_counts_recent_candidate_run_proof(
         with sqlite3.connect(db_path) as conn:
             conn.execute(
                 """
-                UPDATE research_dossiers
-                SET last_contract_fingerprint = ?
-                WHERE market_ticker = 'KXREADY'
+                UPDATE research_runs
+                SET contract_fingerprint = ?
+                WHERE research_run_id = 'run-candidate'
                 """,
                 (invalid_fingerprint,),
             )
@@ -2875,7 +3048,7 @@ def test_print_research_gate_section_surfaces_dossier_cache(capsys, tmp_path, mo
     assert "verdicts   : continue_researching=1, trade_candidate=1" in out
     assert (
         "vetted     : historical_trade_candidate=1 "
-        "decision_grade_candidate=2 live_cache_eligible=1"
+        "snapshot_decision_grade_candidate=2 current_live_cache_eligible=1"
     ) in out
 
 

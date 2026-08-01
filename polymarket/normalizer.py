@@ -215,12 +215,17 @@ def _long_book_prices(
     return None, yes_ask, None, no_ask, None, None, "pm_named_sides_v1"
 
 
+_PROVIDER_STATUS_ALIASES = {
+    "market_status_open": "open",
+}
+
+
 def _status(payload: dict[str, Any]) -> str:
-    explicit = str(payload.get("status") or "").strip().lower()
-    if explicit:
-        return explicit
     if payload.get("closed") is True:
         return "closed"
+    explicit = str(payload.get("status") or "").strip().lower()
+    if explicit:
+        return _PROVIDER_STATUS_ALIASES.get(explicit, explicit)
     if payload.get("active") is True:
         return "open"
     return ""

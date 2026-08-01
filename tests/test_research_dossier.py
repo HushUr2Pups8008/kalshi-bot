@@ -391,6 +391,192 @@ async def test_research_dossier_adds_and_persists_market_eligibility_columns(tmp
 
 
 @pytest.mark.asyncio
+async def test_research_runs_contract_fingerprint_migrates_without_backfill(tmp_path):
+    db_path = tmp_path / "legacy-research.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE research_dossiers (
+                market_ticker TEXT PRIMARY KEY,
+                last_contract_fingerprint TEXT,
+                last_researched_ts TEXT NOT NULL,
+                last_verdict_status TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE research_runs (
+                research_run_id TEXT PRIMARY KEY,
+                market_ticker TEXT NOT NULL,
+                trigger_headline TEXT NOT NULL,
+                trigger_source TEXT NOT NULL,
+                attempted INTEGER NOT NULL,
+                summary TEXT NOT NULL,
+                verdict_status TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO research_dossiers (
+                market_ticker, last_contract_fingerprint, last_researched_ts,
+                last_verdict_status
+            ) VALUES ('KXLEGACY-26', 'dossier-fingerprint', '2026-07-12T18:00:00Z', 'needs_research')
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO research_runs (
+                research_run_id, market_ticker, trigger_headline, trigger_source,
+                attempted, summary, verdict_status
+            ) VALUES ('legacy-run', 'KXLEGACY-26', 'Legacy', 'manual', 1, 'Old row.', 'needs_research')
+            """
+        )
+
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+
+    with sqlite3.connect(db_path) as conn:
+        run_columns = {row[1] for row in conn.execute("PRAGMA table_info(research_runs)")}
+        legacy_fingerprint = conn.execute(
+            "SELECT contract_fingerprint FROM research_runs WHERE research_run_id = 'legacy-run'"
+        ).fetchone()[0]
+
+    assert "contract_fingerprint" in run_columns
+    assert legacy_fingerprint is None
+
+
+@pytest.mark.asyncio
+async def test_research_runs_persist_and_preserve_contract_fingerprint(tmp_path):
+    db_path = tmp_path / "research.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+
+    await store.record_research_run(
+        "KXFRESH-26",
+        "fresh-run",
+        trigger_headline="Fresh contract",
+        trigger_source="manual",
+        attempted=True,
+        summary="Fresh fingerprint.",
+        verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+        contract_fingerprint="fresh-fingerprint",
+    )
+    await store.record_research_run(
+        "KXLATER-26",
+        "later-run",
+        trigger_headline="First observation",
+        trigger_source="manual",
+        attempted=True,
+        summary="No identity yet.",
+        verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+    )
+    await store.record_research_run(
+        "KXLATER-26",
+        "later-run",
+        trigger_headline="Evidence arrived",
+        trigger_source="manual",
+        attempted=True,
+        summary="Identity now known.",
+        verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+        evidence=[
+            ResearchEvidence(
+                source_class="rules_source",
+                source_name="Kalshi",
+                source_url="https://kalshi.com/markets/KXLATER",
+                title="Contract terms",
+                snippet="The terms identify this contract.",
+                claim_type="rules",
+                supports_direction="neutral",
+                contract_fingerprint="evidence-fingerprint",
+            )
+        ],
+    )
+    await store.record_research_run(
+        "KXLATER-26",
+        "later-run",
+        trigger_headline="Whitespace-only identity",
+        trigger_source="manual",
+        attempted=True,
+        summary="Whitespace must not erase prior identity.",
+        verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+        contract_fingerprint="  \t  ",
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        fingerprints = dict(
+            conn.execute(
+                """
+                SELECT research_run_id, contract_fingerprint
+                FROM research_runs
+                WHERE research_run_id IN ('fresh-run', 'later-run')
+                """
+            ).fetchall()
+        )
+
+    assert fingerprints == {
+        "fresh-run": "fresh-fingerprint",
+        "later-run": "evidence-fingerprint",
+    }
+
+
+@pytest.mark.asyncio
+async def test_research_runs_normalize_contract_fingerprints_before_persistence(tmp_path):
+    db_path = tmp_path / "research.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+
+    def evidence(fingerprint: str) -> ResearchEvidence:
+        return ResearchEvidence(
+            source_class="rules_source",
+            source_name="Kalshi",
+            source_url="https://kalshi.com/markets/KXTEST",
+            title="Contract terms",
+            snippet="The terms identify this contract.",
+            claim_type="rules",
+            supports_direction="neutral",
+            contract_fingerprint=fingerprint,
+        )
+
+    async def record(run_id: str, **kwargs) -> None:
+        await store.record_research_run(
+            "KXTEST-26",
+            run_id,
+            trigger_headline="Contract identity",
+            trigger_source="manual",
+            attempted=True,
+            summary="Research identity update.",
+            verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+            **kwargs,
+        )
+
+    await record("mixed-evidence", evidence=[evidence("fp-1"), evidence(" fp-1 ")])
+    await record("later-evidence")
+    await record("later-evidence", evidence=[evidence(" fp-2 ")])
+    await record("explicit-padded", contract_fingerprint=" fp-3 ")
+    await record("distinct-evidence", evidence=[evidence("fp-4"), evidence(" fp-5 ")])
+
+    with sqlite3.connect(db_path) as conn:
+        fingerprints = dict(
+            conn.execute(
+                """
+                SELECT research_run_id, contract_fingerprint
+                FROM research_runs
+                ORDER BY research_run_id
+                """
+            ).fetchall()
+        )
+
+    assert fingerprints == {
+        "distinct-evidence": None,
+        "explicit-padded": "fp-3",
+        "later-evidence": "fp-2",
+        "mixed-evidence": "fp-1",
+    }
+
+
+@pytest.mark.asyncio
 async def test_market_eligibility_metadata_updates_without_demoting_snapshot(tmp_path):
     db_path = tmp_path / "research.db"
     store = ResearchDossierStore(db_path)
