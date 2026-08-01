@@ -19,6 +19,7 @@ import pytest
 import config as _cfg_module
 import main as main_module
 from analysis import SignalAnalysis
+import analysis.signal_analyzer as signal_analyzer
 from analysis.feedback_counterfactual import (
     FEEDBACK_ALGORITHM_VERSION,
     FeedbackMultiplierReceipt,
@@ -3600,6 +3601,56 @@ async def test_process_candidate_still_rejects_when_neither_signal_source_speaks
         settlement_source_urls=["https://reuters.com"],
         contract_terms_url="https://kalshi.com/markets/KXTEST",
     )
+
+
+@pytest.mark.asyncio
+async def test_exact_title_admission_neutral_llm_cannot_reach_paper_executor(monkeypatch):
+    """An admission-only marker must not replace a scored or LLM signal."""
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(signal_analyzer.cfg, "enable_pre_llm_match_gate", True)
+    monkeypatch.setattr(signal_analyzer.cfg, "pre_llm_match_gate_diagnostics_only", False)
+    monkeypatch.setattr(signal_analyzer.cfg, "pre_llm_match_gate_keyword_override_mode", "any_hit")
+    monkeypatch.setattr(signal_analyzer.cfg, "llm_dedup_cache_ttl_seconds", 0)
+    bot = _make_bot_stub()
+    news = _make_news()
+    news.headline = "Senate leaders will vote on the CLARITY Act next week."
+    news.body = ""
+    market = replace(
+        _make_market(),
+        title="Will the Senate vote on the CLARITY Act?",
+        subtitle="",
+    )
+    match_meta = {
+        "pre_llm_quality_pass": False,
+        "pre_llm_semantic_overlap_count": 1,
+        "pre_llm_semantic_overlap_ratio": 0.2,
+        "pre_llm_gate_reason": "weak_semantic_overlap",
+    }
+
+    async def _neutral_llm(*args, **kwargs):
+        return (
+            (market.yes_prob, 0.95, "No directional evidence", "neutral", "none"),
+            {
+                "attempted": True,
+                "status": "ollama_success",
+                "provider": "ollama",
+                "result_used": True,
+            },
+        )
+
+    monkeypatch.setattr(signal_analyzer, "llm_estimate_detailed", _neutral_llm)
+    monkeypatch.setattr(main_module, "estimate_probability", signal_analyzer.estimate_probability)
+    with patch("analysis.signal_analyzer.trade_log.log_signal_analysis_detail"), \
+         patch("utils.logger.trade_log.log_analysis_rejected") as reject_mock:
+        await bot._process_candidate(news, market, 0.20, match_meta)
+
+    bot.executor.execute.assert_not_called()
+    bot._blend_task.process_fast_lane_result.assert_not_awaited()
+    assert bot.source_stats.increment_signals.call_count == 0
+    reject_mock.assert_called_once()
+    kwargs = reject_mock.call_args.kwargs
+    assert kwargs["reason"] == "no_keywords"
+    assert kwargs["keywords"] == []
 
 
 @pytest.mark.asyncio

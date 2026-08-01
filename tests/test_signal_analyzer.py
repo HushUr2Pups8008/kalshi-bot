@@ -451,6 +451,176 @@ class TestKeywordEstimate:
         assert keywords == []
 
 
+class TestExactTitleSenateVoteAdmission:
+    @staticmethod
+    def _market(title="Will the Senate vote on the CLARITY Act?"):
+        return _make_full_market(title=title, subtitle="")
+
+    @staticmethod
+    def _match_meta():
+        return {
+            "pre_llm_quality_pass": False,
+            "pre_llm_semantic_overlap_count": 1,
+            "pre_llm_semantic_overlap_ratio": 0.2,
+            "pre_llm_gate_reason": "weak_semantic_overlap",
+        }
+
+    @pytest.mark.parametrize(
+        "headline",
+        [
+            "Senate leaders will vote on the CLARITY Act next week.",
+            "CLARITY Act vote scheduled by Senate leaders.",
+            "Senate leaders will vote on the CLARITY Act before House consideration.",
+        ],
+    )
+    def test_exact_title_senate_vote_marker_requires_same_act(self, headline):
+        marker = signal_analyzer._exact_title_senate_vote_admission_keyword(
+            _make_news(headline),
+            self._market(),
+            self._match_meta(),
+        )
+
+        assert marker == "exact_title_senate_vote:clarity act"
+
+    @pytest.mark.parametrize(
+        ("market_title", "headline"),
+        [
+            (
+                "Will the Senate vote on the CLARITY Act?",
+                "Senate leaders will vote on the GENIUS Act next week.",
+            ),
+            (
+                "Will the Senate vote on the CLARITY Act?",
+                "Senate vote expected next week.",
+            ),
+            (
+                "Will the House vote on the CLARITY Act?",
+                "House leaders will vote on the CLARITY Act next week.",
+            ),
+            (
+                "Will the Senate vote on the CLARITY Act?",
+                "House leaders will vote on the CLARITY Act next week.",
+            ),
+            (
+                "Will the Senate vote on the CLARITY Act?",
+                "House leaders will vote on the CLARITY Act before Senate consideration.",
+            ),
+            (
+                "Will the Senate vote on the CLARITY Act?",
+                "CLARITY Act vote scheduled by House leaders before Senate consideration.",
+            ),
+            (
+                "Will the Senate vote on the CLARITY Act?",
+                "Leaders expect a vote on the CLARITY Act in the House next week.",
+            ),
+            (
+                "Will the Senate vote on the CLARITY Act?",
+                "Senators react to a vote on the CLARITY Act in the House.",
+            ),
+            (
+                "Will the Senate pass the CLARITY Act?",
+                "Senate leaders will pass the CLARITY Act next week.",
+            ),
+            (
+                "Will the Senate vote on the CLARITY Act?",
+                "Digital Asset Market CLARITY Act vote scheduled by Senate leaders.",
+            ),
+            (
+                "Will the Senate vote on the CLARITY Act?",
+                "Senate leaders will vote on the Digital Asset Market CLARITY Act.",
+            ),
+        ],
+    )
+    def test_exact_title_senate_vote_marker_rejects_near_matches(
+        self,
+        market_title,
+        headline,
+    ):
+        assert signal_analyzer._exact_title_senate_vote_admission_keyword(
+            _make_news(headline),
+            self._market(market_title),
+            self._match_meta(),
+        ) is None
+
+    def test_exact_title_senate_vote_marker_requires_match_metadata(self):
+        assert signal_analyzer._exact_title_senate_vote_admission_keyword(
+            _make_news("Senate leaders will vote on the CLARITY Act next week."),
+            self._market(),
+            None,
+        ) is None
+
+    @pytest.mark.asyncio
+    async def test_exact_title_marker_admits_llm_without_scored_keyword(self, monkeypatch):
+        news = _make_news("Senate leaders will vote on the CLARITY Act next week.")
+        market = self._market()
+
+        async def _fake_llm(*args, **kwargs):
+            return (
+                (0.64, 0.85, "The named Senate vote is market-moving", "yes", "moderate"),
+                {
+                    "attempted": True,
+                    "status": "ollama_success",
+                    "provider": "ollama",
+                    "result_used": True,
+                },
+            )
+
+        monkeypatch.setattr(signal_analyzer.cfg, "enable_pre_llm_match_gate", True)
+        monkeypatch.setattr(signal_analyzer.cfg, "pre_llm_match_gate_diagnostics_only", False)
+        monkeypatch.setattr(signal_analyzer.cfg, "pre_llm_match_gate_keyword_override_mode", "any_hit")
+        monkeypatch.setattr(signal_analyzer.cfg, "llm_dedup_cache_ttl_seconds", 0)
+        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate_detailed", _fake_llm)
+        with patch("analysis.signal_analyzer.trade_log.log_signal_analysis_detail") as detail_mock:
+            result = await estimate_probability(news, market, match_meta=self._match_meta())
+
+        assert result[0] == pytest.approx(0.64)
+        assert result[2] == []
+        kwargs = _detail_to_kwargs(detail_mock)
+        assert kwargs["keywords"] == []
+        assert kwargs["keyword_contributions"] == []
+        assert kwargs["pre_llm_keyword_override"] is True
+        assert kwargs["pre_llm_would_block"] is False
+
+    @pytest.mark.asyncio
+    async def test_exact_title_marker_keeps_empty_keyword_gate_when_llm_unavailable(self, monkeypatch):
+        news = _make_news("Senate leaders will vote on the CLARITY Act next week.")
+        market = self._market()
+
+        async def _no_llm(*args, **kwargs):
+            return (
+                None,
+                {
+                    "attempted": True,
+                    "status": "ollama_timeout",
+                    "provider": "ollama",
+                    "result_used": False,
+                },
+            )
+
+        monkeypatch.setattr(signal_analyzer.cfg, "enable_pre_llm_match_gate", True)
+        monkeypatch.setattr(signal_analyzer.cfg, "pre_llm_match_gate_diagnostics_only", False)
+        monkeypatch.setattr(signal_analyzer.cfg, "pre_llm_match_gate_keyword_override_mode", "any_hit")
+        monkeypatch.setattr(signal_analyzer.cfg, "llm_dedup_cache_ttl_seconds", 0)
+        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate_detailed", _no_llm)
+        with patch("analysis.signal_analyzer.trade_log.log_signal_analysis_detail") as detail_mock:
+            result = await estimate_probability(news, market, match_meta=self._match_meta())
+
+        assert result == (
+            market.yes_prob,
+            0.1,
+            [],
+            "No relevant keywords found -- no signal.",
+            None,
+            None,
+            None,
+        )
+        kwargs = _detail_to_kwargs(detail_mock)
+        assert kwargs["method"] == "keyword_gate"
+        assert kwargs["keywords"] == []
+        assert kwargs["keyword_contributions"] == []
+        assert kwargs["pre_llm_keyword_override"] is True
+
+
 class TestEstimateProbability:
     @pytest.mark.asyncio
     async def test_no_keyword_headline_can_use_llm_when_available(self, monkeypatch):

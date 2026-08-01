@@ -14,6 +14,7 @@ shift, our estimated probability is 0.45.
 import asyncio
 import json as _json
 import os
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -412,6 +413,96 @@ def _pre_llm_keyword_override_mode() -> str:
     if mode:
         return mode
     return "any_hit" if getattr(cfg, "pre_llm_match_gate_keyword_override_any_hit", True) else "disabled"
+
+
+_SENATE_VOTE_ON_ACT_MARKET_RE = re.compile(
+    r"^\s*will\s+(?:the\s+)?senate\s+vote\s+on\s+"
+    r"(?P<act>[A-Za-z0-9][A-Za-z0-9&'.,-]*(?:\s+[A-Za-z0-9][A-Za-z0-9&'.,-]*)*\s+act)"
+    r"\s*\?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _normalize_named_act_title(value: str) -> str | None:
+    """Return a canonical named-Act title, rejecting generic ``the Act``."""
+    normalized = " ".join(value.casefold().split())
+    if normalized.startswith("the "):
+        normalized = normalized[4:]
+    words = normalized.split()
+    if len(words) < 2 or words[-1] != "act":
+        return None
+    return normalized
+
+
+def _exact_title_senate_vote_admission_keyword(
+    news: NewsItem,
+    market: KalshiMarket,
+    match_meta: dict[str, Any] | None,
+) -> str | None:
+    """Return a non-scoring admission marker for one exact Senate Act vote.
+
+    This is intentionally narrower than keyword matching. It is valid only for
+    an already matched market whose title asks whether the Senate will vote on a
+    named Act, and for a headline that asserts a vote on that same title.
+    """
+    if not isinstance(match_meta, dict):
+        return None
+    market_title = getattr(market, "title", None)
+    headline = getattr(news, "headline", None)
+    if not isinstance(market_title, str) or not isinstance(headline, str):
+        return None
+
+    market_match = _SENATE_VOTE_ON_ACT_MARKET_RE.fullmatch(market_title)
+    if market_match is None:
+        return None
+    act_title = _normalize_named_act_title(market_match.group("act"))
+    if act_title is None:
+        return None
+
+    exact_title_pattern = re.escape(act_title).replace(r"\ ", r"\s+")
+    vote_on_pattern = re.compile(
+        rf"\bvote(?:s)?\s+on\s+(?:the\s+)?{exact_title_pattern}\b"
+        r"(?!\s+(?:of|for)\b)",
+        re.IGNORECASE,
+    )
+    act_vote_pattern = re.compile(
+        rf"^\s*(?:the\s+)?{exact_title_pattern}\b\s+vote\b",
+        re.IGNORECASE,
+    )
+    has_vote_on = vote_on_pattern.search(headline) is not None
+    has_act_vote = act_vote_pattern.search(headline) is not None
+    if not (has_vote_on or has_act_vote):
+        return None
+
+    # Bind a House reference to the exact vote phrase before rejecting it. A
+    # House mention elsewhere, such as Senate vote before House consideration,
+    # must not suppress the Senate-specific evidence.
+    house_vote_on_pattern = re.compile(
+        rf"\bhouse\b[^.!?]*\bvote(?:s)?\s+on\s+(?:the\s+)?{exact_title_pattern}\b",
+        re.IGNORECASE,
+    )
+    house_act_vote_pattern = re.compile(
+        rf"\bhouse\b[^.!?]*(?:the\s+)?{exact_title_pattern}\b\s+vote\b",
+        re.IGNORECASE,
+    )
+    act_vote_by_house_pattern = re.compile(
+        rf"(?:the\s+)?{exact_title_pattern}\b\s+vote\b[^.!?]*\bby\s+(?:the\s+)?house\b",
+        re.IGNORECASE,
+    )
+    house_location_pattern = re.compile(
+        rf"(?:\bvote(?:s)?\s+on\s+(?:the\s+)?{exact_title_pattern}\b"
+        rf"|(?:the\s+)?{exact_title_pattern}\b\s+vote\b)"
+        r"[^.!?]*\b(?:in|by)\s+(?:the\s+)?house\b",
+        re.IGNORECASE,
+    )
+    if (
+        house_vote_on_pattern.search(headline)
+        or house_act_vote_pattern.search(headline)
+        or act_vote_by_house_pattern.search(headline)
+        or house_location_pattern.search(headline)
+    ):
+        return None
+    return f"exact_title_senate_vote:{act_title}"
 
 
 def _count_matched_signal_groups(text: str) -> int:
@@ -1493,7 +1584,17 @@ async def estimate_probability(
         keyword_stats=keyword_stats,
         feedback_collector=feedback_collector,
     )
-    keywords_present = bool(keywords)
+    exact_title_admission_keyword = _exact_title_senate_vote_admission_keyword(
+        news,
+        market,
+        match_meta,
+    )
+    admission_keywords = list(keywords)
+    if exact_title_admission_keyword is not None:
+        admission_keywords.append(exact_title_admission_keyword)
+    # The exact-title marker can only satisfy the existing pre-LLM admission
+    # gate. It must not become a scored keyword or standalone fallback signal.
+    keywords_present = bool(admission_keywords)
     keyword_signal_strength = abs(kw_prob - base_probability)
     matched_signal_groups = _count_matched_signal_groups(combined_text) if keywords_present else 0
     keyword_override, keyword_override_mode = _should_keyword_override_pre_llm_gate(
