@@ -229,6 +229,54 @@ def test_create_research_prewarm_runtime_task_disabled(monkeypatch):
     create_task_mock.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    ("enabled", "is_paper_trading", "live_trading_enabled"),
+    [
+        (False, True, False),
+        (True, False, False),
+        (True, True, True),
+    ],
+)
+def test_paper_side_calibration_quarantine_factory_skips_unqualified_modes(
+    enabled,
+    is_paper_trading,
+    live_trading_enabled,
+):
+    with patch(
+        "tasks.side_calibration_quarantine.build_side_calibration_quarantine_runtime"
+    ) as build_runtime:
+        runtime = main_module._build_paper_side_calibration_quarantine_runtime(
+            enabled,
+            is_paper_trading=is_paper_trading,
+            live_trading_enabled=live_trading_enabled,
+            cohort_attestation=None,
+            kalshi_reader=object(),
+            paper_cohort_id="paper-cohort",
+            paper_cohort_kind="paper",
+        )
+
+    assert runtime is None
+    build_runtime.assert_not_called()
+
+
+def test_paper_side_calibration_quarantine_factory_propagates_startup_failure():
+    with patch(
+        "tasks.side_calibration_quarantine.build_side_calibration_quarantine_runtime",
+        side_effect=RuntimeError("quarantine store unavailable"),
+    ):
+        with pytest.raises(RuntimeError, match="quarantine store unavailable"):
+            main_module._build_paper_side_calibration_quarantine_runtime(
+                True,
+                is_paper_trading=True,
+                live_trading_enabled=False,
+                cohort_attestation=None,
+                kalshi_reader=object(),
+                paper_cohort_id="paper-cohort",
+                paper_cohort_kind="paper",
+                polymarket_reader=object(),
+            )
+
+
 def test_create_research_prewarm_runtime_task_enabled(monkeypatch):
     monkeypatch.setattr(_cfg_module.cfg, "enable_research_prewarm_task", True, raising=False)
     monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_interval_seconds", 900.0, raising=False)
@@ -2204,7 +2252,11 @@ async def test_research_analysis_route_uses_validated_store_without_feed_side_ef
     bot = _make_bot_stub()
     bot._calibration_task = MagicMock()
     g7_skip_evidence_capture_sink = object()
+    side_calibration_quarantine_sink = object()
+    prequeue_book_provenance_provider = object()
     bot._g7_skip_evidence_capture_sink = g7_skip_evidence_capture_sink
+    bot._side_calibration_quarantine_sink = side_calibration_quarantine_sink
+    bot._prequeue_book_provenance_provider = prequeue_book_provenance_provider
     analysis = _analysis_for_evidence()
     analysis.news_item = None
     research_store = MagicMock()
@@ -2233,6 +2285,8 @@ async def test_research_analysis_route_uses_validated_store_without_feed_side_ef
     assert kwargs["is_paper_mode"] is True
     assert kwargs["execution_liquidity_provider"] == bot._execution_liquidity_provider
     assert kwargs["g7_skip_evidence_capture_sink"] is g7_skip_evidence_capture_sink
+    assert kwargs["side_calibration_quarantine_sink"] is side_calibration_quarantine_sink
+    assert kwargs["prequeue_book_provenance_provider"] is prequeue_book_provenance_provider
     assert kwargs["runtime_paper_cohort_id"] is None
     assert kwargs["runtime_paper_cohort_kind"] is None
     research_blend_task.process_fast_lane_result.assert_awaited_once_with(analysis)

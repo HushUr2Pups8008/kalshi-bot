@@ -25,6 +25,16 @@ def _bot_config() -> config_module.BotConfig:
     )
 
 
+def test_paper_side_calibration_quarantine_defaults_off(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.delenv("ENABLE_PAPER_SIDE_CALIBRATION_QUARANTINE", raising=False)
+
+    cfg = _bot_config()
+
+    assert cfg.enable_paper_side_calibration_quarantine is False
+
+
 @pytest.mark.parametrize(
     ("cohort_id", "expected_kind"),
     [

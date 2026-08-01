@@ -145,6 +145,7 @@ from trading.paper_cohorts import (
     validate_legacy_pending_paper_cohort_manifest,
 )
 from trading.runtime_paper_cohort_attestation import (
+    RuntimePaperCohortAttestation,
     RuntimePaperCohortAttestationError,
     build_runtime_paper_cohort_attestation,
     write_runtime_paper_cohort_attestation,
@@ -1035,6 +1036,47 @@ def _build_g7_skip_evidence_capture_sink(
     return G7SkipEvidenceCaptureSink(store)
 
 
+def _build_paper_side_calibration_quarantine_runtime(
+    enabled: bool,
+    *,
+    is_paper_trading: bool,
+    live_trading_enabled: bool,
+    cohort_attestation: RuntimePaperCohortAttestation | None,
+    kalshi_reader: Any,
+    paper_cohort_id: str | None,
+    paper_cohort_kind: str | None,
+    polymarket_reader: Any | None = None,
+    db_path: os.PathLike[str] | str | None = None,
+) -> object | None:
+    """Construct isolated paper quarantine components only after explicit opt-in."""
+
+    if not enabled or not is_paper_trading or live_trading_enabled:
+        return None
+    from polymarket.public_client import PolymarketPublicClient
+    from tasks.side_calibration_quarantine import (
+        SideCalibrationStartupConfig,
+        build_side_calibration_quarantine_runtime,
+    )
+
+    path = DATA_DIR / "side_calibration_quarantine.db" if db_path is None else db_path
+    return build_side_calibration_quarantine_runtime(
+        db_path=path,
+        startup_config=SideCalibrationStartupConfig(
+            feature_enabled=True,
+            is_paper_trading=True,
+            live_trading_enabled=False,
+            paper_cohort_id=paper_cohort_id,
+            paper_cohort_kind=paper_cohort_kind,
+        ),
+        software_version=VERSION,
+        cohort_attestation=cohort_attestation,
+        kalshi_reader=kalshi_reader,
+        polymarket_reader=(
+            PolymarketPublicClient() if polymarket_reader is None else polymarket_reader
+        ),
+    )
+
+
 CAPITAL_GUARD_SHADOW_SETTLEMENT_COLLECTION_INTERVAL_SECONDS = 300.0
 
 
@@ -1093,13 +1135,15 @@ class TradingBot:
             live_transition_block_reason=_live_transition_block_reason,
             paper_cohort_storage_root=self.paper_cohort.storage_root,
         )
+        runtime_paper_cohort_attestation: RuntimePaperCohortAttestation | None = None
         try:
+            runtime_paper_cohort_attestation = build_runtime_paper_cohort_attestation(
+                self.paper_cohort,
+                cohort_kind=runtime_cohort_kind,
+                binding=paper_cohort_binding,
+            )
             write_runtime_paper_cohort_attestation(
-                build_runtime_paper_cohort_attestation(
-                    self.paper_cohort,
-                    cohort_kind=runtime_cohort_kind,
-                    binding=paper_cohort_binding,
-                ),
+                runtime_paper_cohort_attestation,
                 _RUNTIME_PAPER_COHORT_ATTESTATION_PATH,
             )
         except (OSError, RuntimePaperCohortAttestationError):
@@ -1166,6 +1210,25 @@ class TradingBot:
         self._g7_skip_evidence_capture_sink = _build_g7_skip_evidence_capture_sink(
             cfg.enable_g7_skip_evidence_capture
         )
+        side_calibration_quarantine_runtime = _build_paper_side_calibration_quarantine_runtime(
+            cfg.enable_paper_side_calibration_quarantine,
+            is_paper_trading=cfg.is_paper_trading,
+            live_trading_enabled=cfg.live_trading_enabled,
+            cohort_attestation=runtime_paper_cohort_attestation,
+            kalshi_reader=self.rest,
+            paper_cohort_id=self.paper_cohort.cohort_id,
+            paper_cohort_kind=runtime_cohort_kind,
+        )
+        self._side_calibration_quarantine_sink = (
+            None
+            if side_calibration_quarantine_runtime is None
+            else side_calibration_quarantine_runtime.sink
+        )
+        self._prequeue_book_provenance_provider = (
+            None
+            if side_calibration_quarantine_runtime is None
+            else side_calibration_quarantine_runtime.prequeue_book_provenance_provider
+        )
         self._blend_task = BlendTask(
             trading_queue=self._trading_queue,
             calibration=self._calibration_task,
@@ -1177,6 +1240,8 @@ class TradingBot:
             g7_skip_evidence_capture_sink=self._g7_skip_evidence_capture_sink,
             runtime_paper_cohort_id=self.paper_cohort.cohort_id,
             runtime_paper_cohort_kind=runtime_cohort_kind,
+            prequeue_book_provenance_provider=self._prequeue_book_provenance_provider,
+            side_calibration_quarantine_sink=self._side_calibration_quarantine_sink,
         )
         self._research_paper_admission_bridge = ResearchPaperAdmissionBridge(
             research_store=default_research_dossier_store(),
@@ -3411,6 +3476,16 @@ class TradingBot:
             g7_skip_evidence_capture_sink=getattr(
                 self,
                 "_g7_skip_evidence_capture_sink",
+                None,
+            ),
+            prequeue_book_provenance_provider=getattr(
+                self,
+                "_prequeue_book_provenance_provider",
+                None,
+            ),
+            side_calibration_quarantine_sink=getattr(
+                self,
+                "_side_calibration_quarantine_sink",
                 None,
             ),
             runtime_paper_cohort_id=getattr(runtime_cohort, "cohort_id", None),

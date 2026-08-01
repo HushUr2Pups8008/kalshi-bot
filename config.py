@@ -1235,6 +1235,12 @@ class BotConfig:
             "false",
         )
     )
+    enable_paper_side_calibration_quarantine: bool = field(
+        default_factory=lambda: _parse_bool_env(
+            "ENABLE_PAPER_SIDE_CALIBRATION_QUARANTINE",
+            "false",
+        )
+    )
     enable_kalshi_fix_settlement_ingress: bool = field(
         default_factory=lambda: _parse_bool_env(
             "ENABLE_KALSHI_FIX_SETTLEMENT_INGRESS",

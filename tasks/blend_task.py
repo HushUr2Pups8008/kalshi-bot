@@ -35,6 +35,10 @@ from tasks.prequeue_book_provenance import (
     PrequeueBookProvenanceResult,
     unavailable_prequeue_book_provenance,
 )
+from tasks.side_calibration_quarantine import (
+    SideCalibrationQuarantineDecisionContext,
+    build_side_calibration_decision_context,
+)
 from tasks.trade_readiness_gate import (
     G1_CONFIDENCE_THRESHOLD,
     G1_FAILSAFE_CONFIDENCE_THRESHOLD,
@@ -67,6 +71,18 @@ def _log_capital_guard_capture_diagnostic_noexcept(
 
 
 def _log_g7_skip_evidence_capture_diagnostic_noexcept(
+    message: str,
+    *args: object,
+) -> None:
+    try:
+        log.warning(message, *args)
+    except _PROCESS_CONTROL_EXCEPTIONS:
+        raise
+    except BaseException:
+        return
+
+
+def _log_side_calibration_quarantine_diagnostic_noexcept(
     message: str,
     *args: object,
 ) -> None:
@@ -267,6 +283,13 @@ class G7SkipEvidenceCaptureSinkLike(Protocol):
     async def capture(self, envelope: G7SkipEvidenceCaptureEnvelope) -> object: ...
 
 
+class SideCalibrationQuarantineSinkLike(Protocol):
+    async def capture(
+        self,
+        context: SideCalibrationQuarantineDecisionContext,
+    ) -> object: ...
+
+
 class BlendTask:
     """Read lane context, blend, gate, log, and enqueue approved candidates."""
 
@@ -292,6 +315,7 @@ class BlendTask:
         runtime_paper_cohort_id: str | None = None,
         runtime_paper_cohort_kind: str | None = None,
         prequeue_book_provenance_provider: PrequeueBookProvenanceProvider | None = None,
+        side_calibration_quarantine_sink: SideCalibrationQuarantineSinkLike | None = None,
     ) -> None:
         self._trading_queue = trading_queue
         self._store = store if store is not None else evidence_store.default_store()
@@ -307,6 +331,7 @@ class BlendTask:
         self._runtime_paper_cohort_id = runtime_paper_cohort_id
         self._runtime_paper_cohort_kind = runtime_paper_cohort_kind
         self._prequeue_book_provenance_provider = prequeue_book_provenance_provider
+        self._side_calibration_quarantine_sink = side_calibration_quarantine_sink
         self._prequeue_book_provenance_provider_task: (
             asyncio.Future[PrequeueBookProvenanceResult] | None
         ) = None
@@ -513,6 +538,30 @@ class BlendTask:
             regime_confidence=regime_confidence,
         )
         await self._project_prequeue_book_provenance(candidate)
+        quarantine_reason = await self._capture_side_calibration_quarantine(
+            candidate=candidate,
+            decision_at=decision_at,
+            dossier=dossier,
+            evidence_ids=tuple(evidence_ids),
+        )
+        if quarantine_reason is not None:
+            await self._emit_skipped(
+                ticker=ticker,
+                blend_result=blend_result,
+                readiness=readiness,
+                trade_blocked_reason=quarantine_reason,
+                fast_lane_result=fast_lane_result,
+                venue=venue,
+                g7_mark_snapshot=g7_mark_snapshot,
+            )
+            return BlendTaskResult(
+                market_ticker=ticker,
+                blend_result=blend_result,
+                readiness_decision=readiness,
+                trade_blocked_reason=quarantine_reason,
+                candidate=None,
+                enqueued=False,
+            )
         # PROFIT-EXEC-002: record this enqueue as the latest for the series
         # prefix BEFORE the queue put so the guard reflects state-on-attempt.
         # If we recorded AFTER the put, a CancelledError (or other exception)
@@ -542,6 +591,57 @@ class BlendTask:
             candidate=candidate,
             enqueued=True,
         )
+
+    async def _capture_side_calibration_quarantine(
+        self,
+        *,
+        candidate: TradeCandidate,
+        decision_at: datetime,
+        dossier: DossierState | None,
+        evidence_ids: tuple[str, ...],
+    ) -> str | None:
+        """Capture the frozen candidate or block admission when capture cannot complete."""
+
+        sink = self._side_calibration_quarantine_sink
+        if sink is None:
+            return None
+        context = build_side_calibration_decision_context(
+            decision_at=decision_at,
+            candidate=candidate,
+            dossier=dossier,
+            evidence_ids=evidence_ids,
+        )
+        try:
+            result = await sink.capture(context)
+        except _PROCESS_CONTROL_EXCEPTIONS:
+            raise
+        except asyncio.CancelledError:
+            if _current_task_is_cancelling():
+                raise
+            _log_side_calibration_quarantine_diagnostic_noexcept(
+                "paper side-calibration capture cancelled for %s",
+                candidate.market.ticker,
+            )
+            return "paper_side_calibration_capture_failed"
+        except BaseException as exc:
+            _log_side_calibration_quarantine_diagnostic_noexcept(
+                "paper side-calibration capture failed for %s: %s",
+                candidate.market.ticker,
+                exc,
+            )
+            return "paper_side_calibration_capture_failed"
+        if (
+            getattr(result, "status", None) in {"inserted", "duplicate"}
+            and getattr(result, "disposition", None) == "candidate"
+        ):
+            return "paper_side_calibration_unvalidated"
+        _log_side_calibration_quarantine_diagnostic_noexcept(
+            "paper side-calibration capture unscorable for %s: status=%r disposition=%r",
+            candidate.market.ticker,
+            getattr(result, "status", None),
+            getattr(result, "disposition", None),
+        )
+        return "paper_side_calibration_capture_failed"
 
     async def _invalid_executed_price_result(
         self,
