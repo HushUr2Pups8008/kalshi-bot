@@ -6504,6 +6504,7 @@ async def run_research_gate(
                         summary=verdict.summary,
                         verdict_status=verdict.status.value,
                         skip_reason=verdict.skip_reason,
+                        research_pending_origin=verdict.research_pending_origin,
                         force_side=verdict.force_side,
                         estimated_probability=verdict.estimated_probability,
                         confidence=verdict.confidence,

@@ -286,6 +286,11 @@ class ResearchPrewarmTask:
                     summary=str(getattr(verdict, "summary", "") or ""),
                     verdict_status=_status_value(getattr(verdict, "status", "")),
                     skip_reason=getattr(verdict, "skip_reason", None),
+                    research_pending_origin=getattr(
+                        verdict,
+                        "research_pending_origin",
+                        None,
+                    ),
                     force_side=getattr(verdict, "force_side", None),
                     estimated_probability=getattr(
                         verdict,
@@ -918,6 +923,11 @@ async def _reconcile_prewarm_persisted_status(
             **getattr(verdict, "__dict__", {}),
             "status": stored_status,
             "skip_reason": getattr(snapshot, "last_skip_reason", None),
+            "research_pending_origin": getattr(
+                snapshot,
+                "last_research_pending_origin",
+                None,
+            ),
             "force_side": getattr(snapshot, "last_force_side", None),
             "estimated_probability": getattr(
                 snapshot,

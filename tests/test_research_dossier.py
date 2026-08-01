@@ -2351,6 +2351,93 @@ async def test_research_dossier_records_run_contract_fingerprint_without_evidenc
 
 
 @pytest.mark.asyncio
+async def test_research_dossier_persists_pending_edge_origin(tmp_path):
+    db_path = tmp_path / "research_dossier.db"
+    store = ResearchDossierStore(db_path)
+    await store.initialize()
+
+    await store.record_research_run(
+        "KXEDGE-26AUG01",
+        "run-pending-edge",
+        trigger_headline="Current predictive evidence",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Official event window remains open.",
+        verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+        skip_reason="official_data_pending",
+        research_pending_origin="negative_net_edge_after_costs",
+        contract_fingerprint="contract-pending-edge",
+    )
+
+    snapshot = await store.get_dossier_snapshot("KXEDGE-26AUG01")
+    with sqlite3.connect(db_path) as conn:
+        run_origin = conn.execute(
+            """
+            SELECT research_pending_origin
+            FROM research_runs
+            WHERE research_run_id = 'run-pending-edge'
+            """
+        ).fetchone()
+        dossier_origin = conn.execute(
+            """
+            SELECT last_research_pending_origin
+            FROM research_dossiers
+            WHERE market_ticker = 'KXEDGE-26AUG01'
+            """
+        ).fetchone()
+
+    assert run_origin == ("negative_net_edge_after_costs",)
+    assert dossier_origin == ("negative_net_edge_after_costs",)
+    assert snapshot is not None
+    assert snapshot.last_research_pending_origin == "negative_net_edge_after_costs"
+
+
+@pytest.mark.asyncio
+async def test_research_dossier_migrates_pending_edge_origin_columns(tmp_path):
+    db_path = tmp_path / "research_dossier.db"
+    current_store = ResearchDossierStore(db_path)
+    await current_store.initialize()
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("ALTER TABLE research_dossiers DROP COLUMN last_research_pending_origin")
+        conn.execute("ALTER TABLE research_runs DROP COLUMN research_pending_origin")
+
+    upgraded_store = ResearchDossierStore(db_path)
+    await upgraded_store.initialize()
+
+    with sqlite3.connect(db_path) as conn:
+        dossier_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(research_dossiers)")
+        }
+        run_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(research_runs)")
+        }
+
+    assert "last_research_pending_origin" in dossier_columns
+    assert "research_pending_origin" in run_columns
+
+
+@pytest.mark.asyncio
+async def test_research_dossier_rejects_invalid_pending_edge_origin(tmp_path):
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+
+    with pytest.raises(ValueError, match="research_pending_origin"):
+        await store.record_research_run(
+            "KXEDGE-26AUG01",
+            "run-invalid-pending-edge",
+            trigger_headline="Current predictive evidence",
+            trigger_source="research_prewarm",
+            attempted=True,
+            summary="Official event window remains open.",
+            verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+            skip_reason="official_data_pending",
+            research_pending_origin="untrusted_origin",
+            contract_fingerprint="contract-pending-edge",
+        )
+
+
+@pytest.mark.asyncio
 async def test_research_gate_reuses_dossier_before_fresh_search(tmp_path):
     store = ResearchDossierStore(tmp_path / "research_dossier.db")
     await store.initialize()

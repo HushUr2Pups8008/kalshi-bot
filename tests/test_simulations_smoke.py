@@ -672,9 +672,14 @@ def test_match_audit_kxpsl_does_not_match_geo_news():
     for r in reports:
         top_tickers = {t for t, _ in r.top_3_matches}
         if r.event_name in kxpsl_allowlist:
-            assert "KXPSL-26-PZA" in top_tickers, (
-                f"{r.event_name}: canonical KXPSL anchor missing from top-3 ({top_tickers})"
-            )
+            if r.target_horizon_status == "tradeable":
+                assert "KXPSL-26-PZA" in top_tickers, (
+                    f"{r.event_name}: canonical KXPSL anchor missing from top-3 "
+                    f"({top_tickers})"
+                )
+            else:
+                assert r.target_horizon_status == "untradeable:market_too_far"
+                assert top_tickers == set()
             continue
         if r.event_name not in geo_event_names:
             continue
