@@ -74,7 +74,7 @@ def test_market_first_queries_use_topic_terms_not_exact_full_title_or_kalshi_pla
     assert not any("kalshi.com" in query for query in queries)
 
 
-def test_markets_to_queries_keeps_shadow_queries_default_off_and_budgeted():
+def test_markets_to_queries_keeps_shadow_query_intake_default_off():
     market = _market()
     meta = KalshiSeriesMetadata(
         series_ticker="KXTRUMPIRAN",
@@ -90,17 +90,20 @@ def test_markets_to_queries_keeps_shadow_queries_default_off_and_budgeted():
     )
 
     assert "site:apnews.com trump iran" not in default_queries
-    assert "site:apnews.com trump iran" in shadow_queries
+    assert "site:apnews.com trump iran" not in shadow_queries
     assert len(shadow_queries) <= SEARCH_MAX_QUERIES
 
 
-def test_markets_to_queries_uses_market_object_settlement_sources_when_enabled():
+def test_markets_to_queries_uses_market_object_settlement_sources_in_production():
     market = _market()
     market.settlement_sources = (
         SettlementSource("The Associated Press", domain="apnews.com"),
     )
 
-    queries = _markets_to_queries([market], market_first_query_shadow=True)
+    queries = _markets_to_queries(
+        [market],
+        market_source_hint_query_mode="production",
+    )
 
     assert "site:apnews.com trump visit iran" in queries
     assert len(queries) <= SEARCH_MAX_QUERIES
