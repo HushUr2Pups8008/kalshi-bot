@@ -8,6 +8,7 @@ Covers: live loss limit breach triggers halt, halt persists across subsequent ca
 import asyncio
 import logging
 import threading
+from decimal import Decimal
 
 import pytest
 from types import SimpleNamespace
@@ -17,6 +18,7 @@ import config as _cfg_module
 import trading.live_submission_hold as hold_module
 from trading.executor import TradeExecutor, classify_skip_category
 from trading.execution_terms import FinalExecutionTerms
+from trading.fees import FeeUnscorableError
 from trading.venue import Venue
 
 
@@ -1041,12 +1043,13 @@ class TestBlendedCandidateCompatibility:
             )
         )
         # P-5 CR-D: blended_p chosen so the post-refetch executed-side edge
-        # (0.525 - 0.51 = 0.015) exceeds the override threshold (0.01).
+        # (0.535 - 0.51 = 0.025) exceeds both the override threshold (0.01)
+        # and the Kalshi paper-entry fee.
         candidate = _make_blended_candidate(
-            blended_probability=0.525,
+            blended_probability=0.535,
             signal_meta={
                 "source_lane": "blend",
-                "blended_p": 0.525,
+                "blended_p": 0.535,
                 "readiness_gate_min_edge_override": 0.01,
             },
         )
@@ -1056,11 +1059,11 @@ class TestBlendedCandidateCompatibility:
 
         assert trade_id == "paper-trade-id"
         routed_analysis = ex._execute_paper.await_args.args[0]
-        assert routed_analysis.estimated_probability == pytest.approx(0.525)
+        assert routed_analysis.estimated_probability == pytest.approx(0.535)
         # P-5 CR-D: edge re-derived against the executed-side ask cents
         # (yes_ask=51 here), not the legacy YES midpoint (50). For blended
-        # YES side: 0.525 - 0.51 = 0.015.
-        assert routed_analysis.edge == pytest.approx(0.015)
+        # YES side: 0.535 - 0.51 = 0.025.
+        assert routed_analysis.edge == pytest.approx(0.025)
         assert routed_analysis.signal_type == "blend"
         assert routed_analysis.signal_meta == candidate.signal_meta
 
@@ -1385,6 +1388,199 @@ class TestExecutorModeSafety:
         state_logs = [r for r in caplog.records if "[EXECUTOR_STATE]" in r.message]
         assert len(state_logs) == 1
         assert "mode=paper" in state_logs[0].message
+
+
+# ---------------------------------------------------------------------------
+# Fee-aware paper admission
+# ---------------------------------------------------------------------------
+
+
+class TestPaperFeeAdmission:
+    @pytest.mark.asyncio
+    async def test_kalshi_paper_entry_blocks_when_gross_edge_equals_entry_fee_after_final_terms(
+        self,
+        monkeypatch,
+    ):
+        """Changing <= to < would allow a zero-net Kalshi paper entry."""
+        executor, _, paper = _make_paper_executor(monkeypatch)
+        monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
+        terms = FinalExecutionTerms(price_cents=50, contracts=1, cost_dollars=0.50)
+        executor._final_execution_plan = AsyncMock(return_value=(terms, None))
+        quoted_contexts = []
+
+        def quote_equal_to_gross_edge(context):
+            quoted_contexts.append(context)
+            return SimpleNamespace(net_fee=Decimal("0.0200"))
+
+        monkeypatch.setattr(
+            "trading.executor.quote_fee",
+            quote_equal_to_gross_edge,
+            raising=False,
+        )
+        analysis = _make_analysis(
+            edge=0.02,
+            estimated_prob=0.52,
+            yes_price=50.0,
+            capped_dollars=0.50,
+        )
+
+        with patch("trading.executor.trade_log") as trade_log_mock:
+            trade_id = await executor.execute(analysis)
+
+        assert trade_id is None
+        paper.record_trade.assert_not_called()
+        assert len(quoted_contexts) == 1
+        context = quoted_contexts[0]
+        assert context.schedule_id.name == "kalshi-general-2026-07-07"
+        assert context.schedule_id.venue is Venue.KALSHI
+        assert context.role.value == "taker"
+        assert context.quantity == Decimal("1")
+        assert context.price == Decimal("0.5")
+        assert context.signed_revenue == Decimal("-0.5")
+        assert context.accumulator == Decimal("0")
+        assert context.multiplier == Decimal("1")
+        assert context.coefficient == Decimal("0.07")
+        assert context.account_precision == Decimal("0.0001")
+        assert context.timestamp.tzinfo is not None
+        assert trade_log_mock.log_skipped.call_args.kwargs["reason"] == "fee_admission_non_positive_net_edge"
+
+    def test_kalshi_fee_admission_quotes_authoritative_execution_plan_terms(self, monkeypatch):
+        """Using the analysis snapshot price or size would quote the wrong entry fee."""
+        executor, _, _ = _make_paper_executor(monkeypatch)
+        quoted_contexts = []
+
+        def capture_quote(context):
+            quoted_contexts.append(context)
+            return SimpleNamespace(net_fee=Decimal("0"))
+
+        monkeypatch.setattr("trading.executor.quote_fee", capture_quote)
+        analysis = _make_analysis(
+            edge=0.05,
+            estimated_prob=0.55,
+            yes_price=50.0,
+            capped_dollars=0.50,
+        )
+        terms = FinalExecutionTerms(price_cents=61, contracts=3, cost_dollars=1.83)
+
+        reason = executor._paper_fee_admission_skip_reason(analysis, terms)
+
+        assert reason is None
+        assert len(quoted_contexts) == 1
+        context = quoted_contexts[0]
+        assert context.quantity == Decimal("3")
+        assert context.price == Decimal("0.61")
+        assert context.signed_revenue == Decimal("-1.83")
+
+    @pytest.mark.asyncio
+    async def test_kalshi_paper_entry_records_when_gross_edge_strictly_exceeds_entry_fee(
+        self,
+        monkeypatch,
+    ):
+        """An always-reject fee gate would wrongly suppress fee-positive Kalshi paper entries."""
+        executor, _, paper = _make_paper_executor(monkeypatch)
+        monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
+        terms = FinalExecutionTerms(price_cents=50, contracts=1, cost_dollars=0.50)
+        executor._final_execution_plan = AsyncMock(return_value=(terms, None))
+        paper.record_trade.return_value = "paper-trade-id"
+        analysis = _make_analysis(
+            edge=0.02,
+            estimated_prob=0.52,
+            yes_price=50.0,
+            capped_dollars=0.50,
+        )
+
+        with patch("trading.executor.trade_log"):
+            trade_id = await executor.execute(analysis)
+
+        assert trade_id == "paper-trade-id"
+        paper.record_trade.assert_called_once_with(analysis, execution_terms=terms)
+
+    @pytest.mark.asyncio
+    async def test_kalshi_paper_entry_blocks_when_fee_provenance_is_unscorable(self, monkeypatch):
+        """An unavailable pinned schedule must stop before the paper writer runs."""
+        executor, _, paper = _make_paper_executor(monkeypatch)
+        monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
+        terms = FinalExecutionTerms(price_cents=50, contracts=1, cost_dollars=0.50)
+        executor._final_execution_plan = AsyncMock(return_value=(terms, None))
+
+        def unscorable_schedule(**_kwargs):
+            raise FeeUnscorableError("no pinned fee schedule is effective at timestamp")
+
+        monkeypatch.setattr(
+            "trading.executor.fee_schedule_at",
+            unscorable_schedule,
+            raising=False,
+        )
+        analysis = _make_analysis(
+            edge=0.05,
+            estimated_prob=0.55,
+            yes_price=50.0,
+            capped_dollars=0.50,
+        )
+
+        with patch("trading.executor.trade_log") as trade_log_mock:
+            trade_id = await executor.execute(analysis)
+
+        assert trade_id is None
+        paper.record_trade.assert_not_called()
+        assert trade_log_mock.log_skipped.call_args.kwargs["reason"] == "fee_admission_unscorable"
+
+    @pytest.mark.asyncio
+    async def test_kalshi_paper_entry_blocks_when_fee_quote_fails(self, monkeypatch):
+        """A fee-model failure must stop before the paper writer runs."""
+        executor, _, paper = _make_paper_executor(monkeypatch)
+        monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
+        terms = FinalExecutionTerms(price_cents=50, contracts=1, cost_dollars=0.50)
+        executor._final_execution_plan = AsyncMock(return_value=(terms, None))
+
+        def unscorable_quote(_context):
+            raise FeeUnscorableError("fee model cannot quote the pinned schedule")
+
+        monkeypatch.setattr("trading.executor.quote_fee", unscorable_quote)
+        analysis = _make_analysis(
+            edge=0.05,
+            estimated_prob=0.55,
+            yes_price=50.0,
+            capped_dollars=0.50,
+        )
+
+        with patch("trading.executor.trade_log") as trade_log_mock:
+            trade_id = await executor.execute(analysis)
+
+        assert trade_id is None
+        paper.record_trade.assert_not_called()
+        assert trade_log_mock.log_skipped.call_args.kwargs["reason"] == "fee_admission_unscorable"
+
+    @pytest.mark.asyncio
+    async def test_non_kalshi_paper_entry_bypasses_kalshi_fee_admission(self, monkeypatch):
+        """The Kalshi fee gate must not alter existing Polymarket paper routing."""
+        executor, _, paper = _make_paper_executor(monkeypatch)
+        monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
+        terms = FinalExecutionTerms(price_cents=50, contracts=1, cost_dollars=0.50)
+        executor._final_execution_plan = AsyncMock(return_value=(terms, None))
+
+        def unexpected_fee_lookup(**_kwargs):
+            raise AssertionError("Kalshi fee admission must not run for non-Kalshi markets")
+
+        monkeypatch.setattr(
+            "trading.executor.fee_schedule_at",
+            unexpected_fee_lookup,
+            raising=False,
+        )
+        paper.record_trade.return_value = "paper-trade-id"
+        analysis = _make_analysis(
+            edge=0.05,
+            estimated_prob=0.55,
+            yes_price=50.0,
+            capped_dollars=0.50,
+        )
+        analysis.market.venue = Venue.POLYMARKET_US
+
+        with patch("trading.executor.trade_log"):
+            trade_id = await executor.execute(analysis)
+
+        assert trade_id == "paper-trade-id"
+        paper.record_trade.assert_called_once_with(analysis, execution_terms=terms)
 
 
 # ---------------------------------------------------------------------------

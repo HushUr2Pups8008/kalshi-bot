@@ -291,6 +291,37 @@ class ResearchDossierStore:
             lambda: self._mark_research_task_researching_sync(market_ticker),
         )
 
+    def get_due_research_tasks(
+        self,
+        *,
+        limit: int = 50,
+        now: datetime | None = None,
+        target_cooldown_seconds: float = 0.0,
+    ) -> list[ResearchTaskSnapshot]:
+        return self._get_due_research_tasks_sync(
+            limit=limit,
+            now=now,
+            target_cooldown_seconds=target_cooldown_seconds,
+        )
+
+    def get_due_research_tasks_for_reason(
+        self,
+        reason: str,
+        *,
+        now: datetime | None = None,
+        target_cooldown_seconds: float = 0.0,
+    ) -> list[ResearchTaskSnapshot]:
+        """Return due tasks whose last skip or terminal reason matches ``reason``."""
+        reason_key = str(reason or "").strip()
+        if not reason_key:
+            return []
+        return self._get_due_research_tasks_sync(
+            limit=None,
+            now=now,
+            target_cooldown_seconds=target_cooldown_seconds,
+            reason=reason_key,
+        )
+
     def get_due_research_task_tickers(
         self,
         *,
@@ -298,11 +329,14 @@ class ResearchDossierStore:
         now: datetime | None = None,
         target_cooldown_seconds: float = 0.0,
     ) -> list[str]:
-        return self._get_due_research_task_tickers_sync(
-            limit=limit,
-            now=now,
-            target_cooldown_seconds=target_cooldown_seconds,
-        )
+        return [
+            task.market_ticker
+            for task in self.get_due_research_tasks(
+                limit=limit,
+                now=now,
+                target_cooldown_seconds=target_cooldown_seconds,
+            )
+        ]
 
     async def _run_market_write(self, market_ticker: str, operation: Callable[[], _T]) -> _T:
         lock = self._locks.setdefault(market_ticker, asyncio.Lock())
@@ -1312,38 +1346,45 @@ class ResearchDossierStore:
                 ),
             )
 
-    def _get_due_research_task_tickers_sync(
+    def _get_due_research_tasks_sync(
         self,
         *,
-        limit: int,
+        limit: int | None,
         now: datetime | None,
         target_cooldown_seconds: float,
-    ) -> list[str]:
+        reason: str | None = None,
+    ) -> list[ResearchTaskSnapshot]:
         self._initialize_sync()
-        limit = max(0, int(limit))
-        if limit <= 0:
-            return []
+        if limit is not None:
+            limit = max(0, int(limit))
+            if limit <= 0:
+                return []
         now = now or datetime.now(timezone.utc)
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
         now = now.astimezone(timezone.utc)
         target_cooldown_seconds = max(0.0, float(target_cooldown_seconds or 0.0))
+        reason_key = str(reason or "").strip()
+        reason_filter = (
+            "AND (last_skip_reason = ? OR terminal_reason = ?)"
+            if reason_key
+            else ""
+        )
+        query_params = (reason_key, reason_key) if reason_key else ()
         with self._connection() as conn:
             rows = conn.execute(
-                """
-                SELECT
-                    market_ticker,
-                    cooldown_until_ts,
-                    updated_ts,
-                    last_skip_reason,
-                    backoff_seconds
+                f"""
+                SELECT *
                 FROM research_tasks
-                WHERE state != 'untradeable'
+                WHERE (
+                    state != 'untradeable'
                    OR terminal_reason IN (
                         'official_data_pending',
                         'no_reliable_source_path',
                         'research_timeout_exhausted'
                    )
+                )
+                {reason_filter}
                 ORDER BY
                     CASE
                         WHEN state = 'needs_counter_evidence' THEN 0
@@ -1382,9 +1423,10 @@ class ResearchDossierStore:
                     END,
                     updated_ts ASC,
                     market_ticker ASC
-                """
+                """,
+                query_params,
             ).fetchall()
-        due: list[str] = []
+        due: list[ResearchTaskSnapshot] = []
         for row in rows:
             cooldown_until = _parse_utc_ts(row["cooldown_until_ts"])
             updated_at = _parse_utc_ts(row["updated_ts"])
@@ -1401,8 +1443,21 @@ class ResearchDossierStore:
                 and updated_at + timedelta(seconds=target_cooldown_seconds) > now
             ):
                 continue
-            due.append(str(row["market_ticker"]))
-            if len(due) >= limit:
+            due.append(
+                ResearchTaskSnapshot(
+                    market_ticker=row["market_ticker"],
+                    state=row["state"],
+                    cooldown_until_ts=row["cooldown_until_ts"],
+                    backoff_seconds=backoff_seconds,
+                    terminal_reason=row["terminal_reason"],
+                    open_questions=tuple(_parse_json_list(row["open_questions_json"])),
+                    attempt_count=int(row["attempt_count"] or 0),
+                    same_reason_count=int(row["same_reason_count"] or 0),
+                    last_skip_reason=row["last_skip_reason"],
+                    updated_ts=row["updated_ts"],
+                )
+            )
+            if limit is not None and len(due) >= limit:
                 break
         return due
 

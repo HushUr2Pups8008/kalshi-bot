@@ -704,6 +704,9 @@ RESEARCH_PREWARM_INTERVAL_SECONDS: float = float(
     os.getenv("RESEARCH_PREWARM_INTERVAL_SECONDS", "900")
 )
 RESEARCH_PREWARM_MAX_MARKETS: int = int(os.getenv("RESEARCH_PREWARM_MAX_MARKETS", "25"))
+RESEARCH_PREWARM_MAX_OFFICIAL_PENDING_PER_CYCLE: int = int(
+    os.getenv("RESEARCH_PREWARM_MAX_OFFICIAL_PENDING_PER_CYCLE", "1")
+)
 RESEARCH_PREWARM_MAX_PAGES: int = int(os.getenv("RESEARCH_PREWARM_MAX_PAGES", "5"))
 RESEARCH_PREWARM_CONCURRENCY: int = int(os.getenv("RESEARCH_PREWARM_CONCURRENCY", "1"))
 RESEARCH_PREWARM_SOURCEABLE_SERIES_FALLBACK: tuple[str, ...] = _parse_string_tuple(
@@ -1631,6 +1634,9 @@ class BotConfig:
     research_prewarm_max_markets: int = field(
         default_factory=lambda: RESEARCH_PREWARM_MAX_MARKETS
     )
+    research_prewarm_max_official_pending_per_cycle: int = field(
+        default_factory=lambda: RESEARCH_PREWARM_MAX_OFFICIAL_PENDING_PER_CYCLE
+    )
     research_prewarm_max_pages: int = field(
         default_factory=lambda: RESEARCH_PREWARM_MAX_PAGES
     )
@@ -1725,6 +1731,10 @@ class BotConfig:
             errors.append("RESEARCH_PREWARM_INTERVAL_SECONDS must be positive")
         if self.research_prewarm_max_markets <= 0:
             errors.append("RESEARCH_PREWARM_MAX_MARKETS must be positive")
+        if self.research_prewarm_max_official_pending_per_cycle < 0:
+            errors.append(
+                "RESEARCH_PREWARM_MAX_OFFICIAL_PENDING_PER_CYCLE must be non-negative"
+            )
         if self.research_prewarm_max_pages <= 0:
             errors.append("RESEARCH_PREWARM_MAX_PAGES must be positive")
         if self.research_prewarm_concurrency <= 0:

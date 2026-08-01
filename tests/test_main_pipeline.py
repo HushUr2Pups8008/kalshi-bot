@@ -97,7 +97,10 @@ def _make_bot_stub():
     bot.rest.get_exchange_status.return_value = ExchangeState(
         exchange_active=True, trading_active=True,
     )
-    bot._research_prewarm_due_task_tickers = lambda *, limit, cooldown_seconds: []
+    bot._research_prewarm_due_tasks = lambda *, limit, cooldown_seconds: []
+    bot._research_prewarm_due_official_pending_tasks = (
+        lambda *, cooldown_seconds: []
+    )
     bot.rest.get_series.return_value = None
     bot.matcher = MagicMock()
     bot.matcher.find_all_candidates = AsyncMock(return_value=[])
@@ -379,18 +382,468 @@ def test_research_prewarm_market_provider_ranks_expanded_due_pool(monkeypatch):
         near_mid if ticker == near_mid.ticker else None
     )
     blocked_ticker = "KXMVECROSSCATEGORY-S2026DEADBEEF-123456789AB"
-    bot._research_prewarm_due_task_tickers = MagicMock(
-        return_value=[blocked_ticker, far_tail.ticker, near_mid.ticker]
+    bot._research_prewarm_due_tasks = MagicMock(
+        return_value=[
+            SimpleNamespace(
+                market_ticker=ticker,
+                last_skip_reason=None,
+                terminal_reason=None,
+            )
+            for ticker in (blocked_ticker, far_tail.ticker, near_mid.ticker)
+        ]
     )
 
     selected = bot._research_prewarm_market_provider()
 
-    bot._research_prewarm_due_task_tickers.assert_called_once_with(
+    bot._research_prewarm_due_tasks.assert_called_once_with(
         limit=5,
         cooldown_seconds=bot._research_prewarm_target_cooldown_seconds(),
     )
     assert [market.ticker for market in selected] == [near_mid.ticker]
     bot.rest.get_market.assert_called_once_with(near_mid.ticker)
+
+
+def test_research_prewarm_market_provider_caps_official_pending_without_open_market_bypass(
+    monkeypatch,
+):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 3, raising=False)
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "research_prewarm_max_official_pending_per_cycle",
+        1,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "research_prewarm_sourceable_series_fallback",
+        (),
+        raising=False,
+    )
+    bot = _make_bot_stub()
+    del bot._research_prewarm_due_tasks
+    nonpending_due = replace(_make_market(), ticker="KXNONPENDING-26DEC31")
+    allowed_pending = replace(_make_market(), ticker="KXPENDING-ALLOWED-26DEC31")
+    deferred_pending = replace(_make_market(), ticker="KXPENDING-DEFERRED-26DEC31")
+    fresh_market = replace(_make_market(), ticker="KXFRESH-26DEC31")
+    bot.rest.get_all_open_markets.return_value = [
+        nonpending_due,
+        allowed_pending,
+        deferred_pending,
+        fresh_market,
+    ]
+    store = MagicMock()
+    store.get_due_research_task_tickers.return_value = [
+        nonpending_due.ticker,
+        allowed_pending.ticker,
+        deferred_pending.ticker,
+    ]
+    store.get_due_research_tasks.return_value = [
+        SimpleNamespace(
+            market_ticker=nonpending_due.ticker,
+            last_skip_reason="missing_resolution_source",
+            terminal_reason=None,
+        ),
+        SimpleNamespace(
+            market_ticker=allowed_pending.ticker,
+            last_skip_reason="official_data_pending",
+            terminal_reason=None,
+        ),
+        SimpleNamespace(
+            market_ticker=deferred_pending.ticker,
+            last_skip_reason="official_data_pending",
+            terminal_reason=None,
+        ),
+    ]
+    monkeypatch.setattr(main_module, "default_research_dossier_store", lambda: store)
+    priorities = {
+        nonpending_due.ticker: (0, 0),
+        allowed_pending.ticker: (0, 1),
+        deferred_pending.ticker: (0, 2),
+        fresh_market.ticker: (0, 3),
+    }
+    monkeypatch.setattr(
+        main_module,
+        "research_market_priority_key",
+        lambda market: priorities[market.ticker],
+    )
+    selected = bot._research_prewarm_market_provider()
+
+    assert [market.ticker for market in selected] == [
+        allowed_pending.ticker,
+        nonpending_due.ticker,
+        fresh_market.ticker,
+    ]
+
+
+def test_research_prewarm_market_provider_blocks_deferred_pending_from_sourceable_fallback(
+    monkeypatch,
+):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 3, raising=False)
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "research_prewarm_max_official_pending_per_cycle",
+        1,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "research_prewarm_sourceable_series_fallback",
+        ("KXFALLBACK",),
+        raising=False,
+    )
+    bot = _make_bot_stub()
+    del bot._research_prewarm_due_tasks
+    nonpending_due = replace(_make_market(), ticker="KXNONPENDING-26DEC31")
+    allowed_pending = replace(_make_market(), ticker="KXPENDING-ALLOWED-26DEC31")
+    deferred_pending = replace(
+        _make_market(),
+        ticker="KXFALLBACK-PENDING-DEFERRED-26DEC31",
+        series_ticker="KXFALLBACK",
+    )
+    fresh_fallback = replace(
+        _make_market(),
+        ticker="KXFALLBACK-FRESH-26DEC31",
+        series_ticker="KXFALLBACK",
+    )
+    bot.rest.get_all_open_markets.return_value = [nonpending_due, allowed_pending]
+    bot.rest.get_market.return_value = None
+    bot.rest.get_markets.return_value = ([deferred_pending, fresh_fallback], None)
+    store = MagicMock()
+    store.get_due_research_task_tickers.return_value = [
+        nonpending_due.ticker,
+        allowed_pending.ticker,
+        deferred_pending.ticker,
+    ]
+    store.get_due_research_tasks.return_value = [
+        SimpleNamespace(
+            market_ticker=nonpending_due.ticker,
+            last_skip_reason="missing_resolution_source",
+            terminal_reason=None,
+        ),
+        SimpleNamespace(
+            market_ticker=allowed_pending.ticker,
+            last_skip_reason="official_data_pending",
+            terminal_reason=None,
+        ),
+        SimpleNamespace(
+            market_ticker=deferred_pending.ticker,
+            last_skip_reason="official_data_pending",
+            terminal_reason=None,
+        ),
+    ]
+    monkeypatch.setattr(main_module, "default_research_dossier_store", lambda: store)
+    priorities = {
+        nonpending_due.ticker: (0, 0),
+        allowed_pending.ticker: (0, 1),
+        deferred_pending.ticker: (0, 0),
+        fresh_fallback.ticker: (0, 1),
+    }
+    monkeypatch.setattr(
+        main_module,
+        "research_market_priority_key",
+        lambda market: priorities[market.ticker],
+    )
+
+    selected = bot._research_prewarm_market_provider()
+
+    assert [market.ticker for market in selected] == [
+        allowed_pending.ticker,
+        nonpending_due.ticker,
+        fresh_fallback.ticker,
+    ]
+
+
+def test_research_prewarm_market_provider_blocks_pending_beyond_due_pool_from_all_fills(
+    monkeypatch,
+):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 4, raising=False)
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "research_prewarm_max_official_pending_per_cycle",
+        1,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "research_prewarm_sourceable_series_fallback",
+        ("KXFALLBACK",),
+        raising=False,
+    )
+    bot = _make_bot_stub()
+    del bot._research_prewarm_due_tasks
+    bot.__dict__.pop("_research_prewarm_due_official_pending_tasks", None)
+
+    def pending_task(ticker):
+        return SimpleNamespace(
+            market_ticker=ticker,
+            last_skip_reason="official_data_pending",
+            terminal_reason=None,
+        )
+
+    allowed_pending = replace(_make_market(), ticker="KXPENDING-00-26DEC31")
+    deferred_due_pool = [
+        pending_task(f"KXPENDING-{index:02d}-26DEC31")
+        for index in range(1, 20)
+    ]
+    late_generic = replace(_make_market(), ticker="KXPENDING-LATE-GENERIC-26DEC31")
+    fresh_generic = replace(_make_market(), ticker="KXFRESH-GENERIC-26DEC31")
+    late_fallback = replace(
+        _make_market(),
+        ticker="KXFALLBACK-LATE-PENDING-26DEC31",
+        series_ticker="KXFALLBACK",
+    )
+    fresh_fallback_one = replace(
+        _make_market(),
+        ticker="KXFALLBACK-FRESH-ONE-26DEC31",
+        series_ticker="KXFALLBACK",
+    )
+    fresh_fallback_two = replace(
+        _make_market(),
+        ticker="KXFALLBACK-FRESH-TWO-26DEC31",
+        series_ticker="KXFALLBACK",
+    )
+    regular_due_pool = [pending_task(allowed_pending.ticker), *deferred_due_pool]
+    all_due_pending = [
+        *regular_due_pool,
+        pending_task(late_generic.ticker),
+        pending_task(late_fallback.ticker),
+    ]
+    bot.rest.get_all_open_markets.return_value = [
+        allowed_pending,
+        late_generic,
+        fresh_generic,
+    ]
+    bot.rest.get_markets.return_value = (
+        [late_fallback, fresh_fallback_one, fresh_fallback_two],
+        None,
+    )
+    store = MagicMock()
+    store.get_due_research_tasks.return_value = regular_due_pool
+    store.get_due_research_tasks_for_reason.return_value = all_due_pending
+    monkeypatch.setattr(
+        main_module,
+        "_recent_runtime_research_prewarm_tickers",
+        lambda: [late_generic.ticker],
+    )
+    monkeypatch.setattr(main_module, "default_research_dossier_store", lambda: store)
+    priorities = {
+        allowed_pending.ticker: (0, 0),
+        late_generic.ticker: (0, 1),
+        fresh_generic.ticker: (0, 2),
+        late_fallback.ticker: (0, 0),
+        fresh_fallback_one.ticker: (0, 1),
+        fresh_fallback_two.ticker: (0, 2),
+    }
+    monkeypatch.setattr(
+        main_module,
+        "research_market_priority_key",
+        lambda market: priorities[market.ticker],
+    )
+
+    selected = bot._research_prewarm_market_provider()
+
+    store.get_due_research_tasks.assert_called_once_with(
+        limit=20,
+        target_cooldown_seconds=bot._research_prewarm_target_cooldown_seconds(),
+    )
+    store.get_due_research_tasks_for_reason.assert_called_once_with(
+        "official_data_pending",
+        target_cooldown_seconds=bot._research_prewarm_target_cooldown_seconds(),
+    )
+    assert [market.ticker for market in selected] == [
+        allowed_pending.ticker,
+        fresh_generic.ticker,
+        fresh_fallback_one.ticker,
+        fresh_fallback_two.ticker,
+    ]
+
+
+def test_research_prewarm_market_provider_reserves_pending_outside_due_pool(
+    monkeypatch,
+):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 3, raising=False)
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "research_prewarm_max_official_pending_per_cycle",
+        1,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "research_prewarm_sourceable_series_fallback",
+        (),
+        raising=False,
+    )
+    bot = _make_bot_stub()
+    bot.__dict__.pop("_research_prewarm_due_tasks", None)
+    bot.__dict__.pop("_research_prewarm_due_official_pending_tickers", None)
+    bot.__dict__.pop("_research_prewarm_due_official_pending_tasks", None)
+    higher_priority_markets = [
+        replace(_make_market(), ticker=f"KXHIGH-{index:02d}-26DEC31")
+        for index in range(15)
+    ]
+    late_pending = replace(_make_market(), ticker="KXPENDING-LATE-26DEC31")
+    bot.rest.get_all_open_markets.return_value = [
+        *higher_priority_markets,
+        late_pending,
+    ]
+    store = MagicMock()
+    store.get_due_research_tasks.return_value = [
+        SimpleNamespace(
+            market_ticker=market.ticker,
+            last_skip_reason="missing_resolution_source",
+            terminal_reason=None,
+        )
+        for market in higher_priority_markets
+    ]
+    store.get_due_research_tasks_for_reason.return_value = [
+        SimpleNamespace(
+            market_ticker=late_pending.ticker,
+            last_skip_reason="official_data_pending",
+            terminal_reason=None,
+        )
+    ]
+    monkeypatch.setattr(main_module, "default_research_dossier_store", lambda: store)
+    priorities = {
+        market.ticker: (0, index)
+        for index, market in enumerate(higher_priority_markets)
+    }
+    priorities[late_pending.ticker] = (1, 0)
+    monkeypatch.setattr(
+        main_module,
+        "research_market_priority_key",
+        lambda market: priorities[market.ticker],
+    )
+
+    selected = bot._research_prewarm_market_provider()
+
+    store.get_due_research_tasks.assert_called_once_with(
+        limit=15,
+        target_cooldown_seconds=bot._research_prewarm_target_cooldown_seconds(),
+    )
+    store.get_due_research_tasks_for_reason.assert_called_once_with(
+        "official_data_pending",
+        target_cooldown_seconds=bot._research_prewarm_target_cooldown_seconds(),
+    )
+    assert [market.ticker for market in selected] == [
+        late_pending.ticker,
+        higher_priority_markets[0].ticker,
+        higher_priority_markets[1].ticker,
+    ]
+
+
+def test_research_prewarm_market_provider_fails_closed_when_pending_lookup_fails(
+    monkeypatch,
+):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 3, raising=False)
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "research_prewarm_max_official_pending_per_cycle",
+        1,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "research_prewarm_sourceable_series_fallback",
+        ("KXFALLBACK",),
+        raising=False,
+    )
+    bot = _make_bot_stub()
+    allowed_pending = replace(_make_market(), ticker="KXPENDING-ALLOWED-26DEC31")
+    nonpending_due = replace(_make_market(), ticker="KXNONPENDING-26DEC31")
+    late_pending = replace(_make_market(), ticker="KXPENDING-LATE-26DEC31")
+    fresh_market = replace(_make_market(), ticker="KXFRESH-26DEC31")
+    bot.rest.get_all_open_markets.return_value = [
+        allowed_pending,
+        nonpending_due,
+        late_pending,
+        fresh_market,
+    ]
+    bot._research_prewarm_due_tasks = lambda *, limit, cooldown_seconds: [
+        SimpleNamespace(
+            market_ticker=allowed_pending.ticker,
+            last_skip_reason="official_data_pending",
+            terminal_reason=None,
+        ),
+        SimpleNamespace(
+            market_ticker=nonpending_due.ticker,
+            last_skip_reason="missing_resolution_source",
+            terminal_reason=None,
+        ),
+    ]
+    bot._research_prewarm_due_official_pending_tasks = (
+        lambda *, cooldown_seconds: None
+    )
+    monkeypatch.setattr(
+        main_module,
+        "_recent_runtime_research_prewarm_tickers",
+        lambda: [late_pending.ticker],
+    )
+    priorities = {
+        allowed_pending.ticker: (0, 0),
+        nonpending_due.ticker: (0, 1),
+        late_pending.ticker: (0, 2),
+        fresh_market.ticker: (0, 3),
+    }
+    monkeypatch.setattr(
+        main_module,
+        "research_market_priority_key",
+        lambda market: priorities[market.ticker],
+    )
+
+    selected = bot._research_prewarm_market_provider()
+
+    assert [market.ticker for market in selected] == [
+        allowed_pending.ticker,
+        nonpending_due.ticker,
+    ]
+    bot.rest.get_markets.assert_not_called()
+
+
+def test_research_prewarm_market_provider_allows_one_official_pending_with_single_slot(
+    monkeypatch,
+):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 1, raising=False)
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "research_prewarm_max_official_pending_per_cycle",
+        1,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "research_prewarm_sourceable_series_fallback",
+        (),
+        raising=False,
+    )
+    bot = _make_bot_stub()
+    del bot._research_prewarm_due_tasks
+    pending_market = replace(_make_market(), ticker="KXPENDING-26DEC31")
+    fresh_market = replace(_make_market(), ticker="KXFRESH-26DEC31")
+    bot.rest.get_all_open_markets.return_value = [pending_market, fresh_market]
+    store = MagicMock()
+    store.get_due_research_task_tickers.return_value = [pending_market.ticker]
+    store.get_due_research_tasks.return_value = [
+        SimpleNamespace(
+            market_ticker=pending_market.ticker,
+            last_skip_reason="official_data_pending",
+            terminal_reason=None,
+        )
+    ]
+    monkeypatch.setattr(main_module, "default_research_dossier_store", lambda: store)
+    priorities = {
+        pending_market.ticker: (0, 0),
+        fresh_market.ticker: (0, 1),
+    }
+    monkeypatch.setattr(
+        main_module,
+        "research_market_priority_key",
+        lambda market: priorities[market.ticker],
+    )
+
+    selected = bot._research_prewarm_market_provider()
+
+    assert [market.ticker for market in selected] == [pending_market.ticker]
 
 
 def test_research_prewarm_fallback_ranks_across_series(monkeypatch):
@@ -762,8 +1215,14 @@ def test_research_prewarm_market_provider_direct_fetches_due_db_tasks(
         ticker="KXGENERIC-25DEC31",
         settlement_sources=(SettlementSource(label="Official", domain="official.example"),),
     )
-    bot._research_prewarm_due_task_tickers = (
-        lambda *, limit, cooldown_seconds: [due_market.ticker]
+    bot._research_prewarm_due_tasks = (
+        lambda *, limit, cooldown_seconds: [
+            SimpleNamespace(
+                market_ticker=due_market.ticker,
+                last_skip_reason=None,
+                terminal_reason=None,
+            )
+        ]
     )
     bot.rest.get_all_open_markets.return_value = [generic_market]
     bot.rest.get_market.return_value = due_market
@@ -1216,8 +1675,12 @@ def test_research_prewarm_market_provider_fetches_due_research_task(monkeypatch)
     due_market = replace(_make_market(), ticker="KXDUE-25DEC31")
     bot.rest.get_all_open_markets.return_value = [first_market]
     bot.rest.get_market.return_value = due_market
-    bot._research_prewarm_due_task_tickers = lambda *, limit, cooldown_seconds: [
-        due_market.ticker
+    bot._research_prewarm_due_tasks = lambda *, limit, cooldown_seconds: [
+        SimpleNamespace(
+            market_ticker=due_market.ticker,
+            last_skip_reason=None,
+            terminal_reason=None,
+        )
     ]
 
     assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
@@ -1239,8 +1702,12 @@ def test_research_prewarm_market_provider_keeps_closed_due_task_for_terminalizat
     )
     bot.rest.get_all_open_markets.return_value = [first_market]
     bot.rest.get_market.return_value = closed_due
-    bot._research_prewarm_due_task_tickers = lambda *, limit, cooldown_seconds: [
-        closed_due.ticker
+    bot._research_prewarm_due_tasks = lambda *, limit, cooldown_seconds: [
+        SimpleNamespace(
+            market_ticker=closed_due.ticker,
+            last_skip_reason=None,
+            terminal_reason=None,
+        )
     ]
 
     assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
@@ -1292,8 +1759,12 @@ def test_research_prewarm_market_provider_keeps_unsourceable_due_task_for_skip_t
     )
     bot.rest.get_all_open_markets.return_value = [sourceable_market]
     bot.rest.get_market.return_value = unsourceable_due
-    bot._research_prewarm_due_task_tickers = lambda *, limit, cooldown_seconds: [
-        unsourceable_due.ticker
+    bot._research_prewarm_due_tasks = lambda *, limit, cooldown_seconds: [
+        SimpleNamespace(
+            market_ticker=unsourceable_due.ticker,
+            last_skip_reason=None,
+            terminal_reason=None,
+        )
     ]
 
     assert [market.ticker for market in bot._research_prewarm_market_provider()] == [

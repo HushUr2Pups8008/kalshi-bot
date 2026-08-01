@@ -28,6 +28,16 @@ from kalshi.rest_client import KalshiRestClient
 from polymarket.domain_key import pm_domain_key
 from tasks.kalshi_execution_liquidity import fetch_kalshi_execution_liquidity
 from trading.execution_terms import FinalExecutionTerms, final_execution_terms
+from trading.fees import (
+    DIRECT_ACCOUNT_PRECISION,
+    INITIAL_ORDER_FEE_ACCUMULATOR,
+    FeeContext,
+    FeeRole,
+    FeeUnscorableError,
+    fee_coefficient_for,
+    fee_schedule_at,
+    quote_fee,
+)
 from trading.live_submission_hold import LIVE_SUBMISSION_HOLD_PATH, LiveSubmissionHoldStore
 from trading.paper_trader import PaperTrader
 from trading.venue import Venue
@@ -272,6 +282,12 @@ class TradeExecutor:
         execution_plan: FinalExecutionTerms | None = None
         if skip_reason is None:
             execution_plan, skip_reason = await self._final_execution_plan(analysis)
+        if skip_reason is None and self._is_paper:
+            assert execution_plan is not None
+            skip_reason = self._paper_fee_admission_skip_reason(
+                analysis,
+                execution_plan,
+            )
         if skip_reason:
             effective_min_edge = self._min_edge_threshold(analysis)
             method = (
@@ -745,6 +761,64 @@ class TradeExecutor:
         if override < 0.0:
             raise ValueError("readiness_gate_min_edge_override must be non-negative")
         return float(override)
+
+    def _paper_fee_admission_skip_reason(
+        self,
+        analysis: SignalAnalysis,
+        execution_plan: FinalExecutionTerms,
+    ) -> str | None:
+        """Return a skip reason unless a final Kalshi paper entry clears its entry fee."""
+        if self._venue_value(analysis.market) != Venue.KALSHI.value:
+            return None
+
+        quantity = Decimal(execution_plan.contracts)
+        price = Decimal(execution_plan.price_cents) / Decimal("100")
+        timestamp = datetime.now(timezone.utc)
+        try:
+            schedule_id = fee_schedule_at(
+                venue=Venue.KALSHI,
+                timestamp=timestamp,
+            )
+            context = FeeContext(
+                schedule_id=schedule_id,
+                role=FeeRole.TAKER,
+                quantity=quantity,
+                price=price,
+                signed_revenue=-(quantity * price),
+                order_id="paper-admission",
+                accumulator=INITIAL_ORDER_FEE_ACCUMULATOR,
+                multiplier=Decimal("1"),
+                coefficient=fee_coefficient_for(schedule_id, FeeRole.TAKER),
+                account_precision=DIRECT_ACCOUNT_PRECISION,
+                timestamp=timestamp,
+            )
+            entry_fee = quote_fee(context).net_fee
+            gross_edge = Decimal(str(analysis.edge)) * quantity
+            if (
+                not isinstance(entry_fee, Decimal)
+                or not entry_fee.is_finite()
+                or entry_fee < 0
+                or not gross_edge.is_finite()
+            ):
+                raise FeeUnscorableError("entry fee or expected gross edge is not finite")
+        except (ArithmeticError, FeeUnscorableError, TypeError, ValueError) as exc:
+            log.warning(
+                "[FEE_ADMISSION] skip ticker=%s reason=unscorable error=%s",
+                analysis.market.ticker,
+                type(exc).__name__,
+            )
+            return "fee_admission_unscorable"
+
+        if gross_edge <= entry_fee:
+            log.warning(
+                "[FEE_ADMISSION] skip ticker=%s schedule=%s gross_edge=$%s entry_fee=$%s",
+                analysis.market.ticker,
+                schedule_id.name,
+                gross_edge,
+                entry_fee,
+            )
+            return "fee_admission_non_positive_net_edge"
+        return None
 
     async def _execute_paper(
         self,
