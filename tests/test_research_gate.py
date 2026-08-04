@@ -11924,6 +11924,49 @@ async def _run_gdp_countercheck_case(
     )
 
 
+async def _run_gdpnow_without_adjudicator(*, live_mode: bool) -> SimpleNamespace:
+    market = _strict_gdp_countercheck_market()
+    raw_observation = _verified_gdpnow_observation(market)
+    official_pending = _gdp_countercheck_official_pending(market)
+    provider_calls = 0
+
+    async def search_provider(query: ResearchQuery):
+        nonlocal provider_calls
+        provider_calls += 1
+        if query.query_intent == "base_rate":
+            return [raw_observation]
+        if query.query_intent == "official_resolution":
+            return [official_pending]
+        return []
+
+    async def direct_fetcher(*_args, **_kwargs):
+        return None
+
+    verdict = await run_research_gate(
+        SimpleNamespace(
+            headline="Q2 2026 real GDP outlook",
+            source="Reuters",
+        ),
+        market,
+        model_direction="neutral",
+        model_confidence=0.0,
+        model_reason="No independent directional conclusion.",
+        yes_ask=0.47,
+        no_ask=0.54,
+        live_mode=live_mode,
+        search_provider=search_provider,
+        direct_fetcher=direct_fetcher,
+        adjudicator=None,
+        max_queries=7,
+        require_decision_grade=True,
+    )
+    return SimpleNamespace(
+        verdict=verdict,
+        raw_observation=raw_observation,
+        provider_calls=provider_calls,
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("provisional_side", "gdpnow_value", "expected_counter_side"),
@@ -11984,6 +12027,38 @@ async def test_gdpnow_countercheck_derives_only_strict_opposite_evidence(
     assert result.side_aware_calls == 0
     assert result.adjudicator_calls == 1
     assert {query.query for query in result.seen_queries} <= result.initial_query_texts
+
+
+def test_gdpnow_derived_countercheck_is_not_a_structured_signal():
+    market = _strict_gdp_countercheck_market()
+    raw_observation = _verified_gdpnow_observation(market)
+    derived_countercheck = _derived_gdp_countercheck(raw_observation)
+
+    assert research_gate_module._structured_gdpnow_signal(
+        [raw_observation, derived_countercheck],
+        2.0,
+    ) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("live_mode", [False, True], ids=["paper", "live"])
+async def test_gdpnow_no_adjudicator_path_preserves_raw_observation(live_mode):
+    result = await _run_gdpnow_without_adjudicator(live_mode=live_mode)
+
+    raw = [
+        item
+        for item in result.verdict.evidence
+        if item.claim_type == "base_rate"
+        and item.source_url == result.raw_observation.source_url
+    ]
+    assert len(raw) == 1
+    assert raw[0] == result.raw_observation
+    assert _gdp_counterchecks(result.verdict) == []
+    assert result.verdict.force_side is None
+    assert result.verdict.status not in {
+        ResearchStatus.TRADE_CANDIDATE,
+        ResearchStatus.DECISION_GRADE_CANDIDATE,
+    }
 
 
 @pytest.mark.asyncio
@@ -12411,9 +12486,11 @@ async def test_gdpnow_countercheck_is_disabled_for_live_mode(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cache_only", [True, False], ids=["cache-only", "normal-run"])
 async def test_gdpnow_countercheck_live_mode_rejects_replayed_derived_evidence(
     tmp_path,
     monkeypatch,
+    cache_only,
 ):
     market = _strict_gdp_countercheck_market()
     raw_observation = _verified_gdpnow_observation(market)
@@ -12455,8 +12532,14 @@ async def test_gdpnow_countercheck_live_mode_rejects_replayed_derived_evidence(
         lambda *_args, **_kwargs: None,
     )
 
+    provider_calls = 0
+
     async def search_provider(_query):
-        raise AssertionError("cache-only replay must not issue a provider query")
+        nonlocal provider_calls
+        provider_calls += 1
+        if cache_only:
+            raise AssertionError("cache-only replay must not issue a provider query")
+        return []
 
     async def adjudicator(**_kwargs):
         return {
@@ -12481,10 +12564,12 @@ async def test_gdpnow_countercheck_live_mode_rejects_replayed_derived_evidence(
         search_provider=search_provider,
         adjudicator=adjudicator,
         dossier_store=store,
-        cache_only=True,
+        cache_only=cache_only,
         require_decision_grade=True,
     )
 
+    if cache_only:
+        assert provider_calls == 0
     assert verdict.skip_reason != "cached_dossier_unvetted"
     assert _gdp_counterchecks(verdict) == []
     assert verdict.force_side is None
