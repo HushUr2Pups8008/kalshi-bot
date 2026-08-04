@@ -1173,6 +1173,32 @@ def test_research_prewarm_market_provider_enriches_series_metadata(
     bot.rest.get_series.assert_called_once_with(raw_market.series_ticker)
 
 
+def test_research_prewarm_market_provider_enriches_market_detail_when_series_is_empty(
+    monkeypatch,
+):
+    bot = _make_bot_stub()
+    raw_market = replace(
+        _make_market(),
+        ticker="KXDETAILMETA-25DEC31",
+        series_ticker="",
+        rules_primary="",
+        rules_secondary="",
+        contract_terms_url="",
+        settlement_sources=(),
+    )
+    detail_market = replace(
+        raw_market,
+        rules_primary="Official detail rules identify the settlement report.",
+    )
+    bot.rest.get_series.return_value = None
+    bot.rest.get_market.return_value = detail_market
+
+    enriched = bot._enrich_research_prewarm_market_source_path(raw_market)
+
+    assert enriched.rules_primary == detail_market.rules_primary
+    bot.rest.get_market.assert_called_once_with(raw_market.ticker)
+
+
 def test_research_prewarm_market_provider_enriches_rules_only_market_sources(
     monkeypatch,
 ):
