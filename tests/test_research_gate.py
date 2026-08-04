@@ -559,6 +559,30 @@ def test_strict_selection_keeps_declared_settlement_source_query():
     )
 
 
+def test_strict_selection_keeps_three_distinct_settlement_sources():
+    queries = [
+        ResearchQuery(
+            query=f"site:{domain} Trump Las Vegas remarks",
+            query_intent="resolution_source",
+            source_class="resolution_source",
+        )
+        for domain in ("abcnews.go.com", "foxnews.com", "apnews.com", "wsj.com")
+    ]
+
+    selected = research_gate_module._select_research_queries(
+        queries,
+        max_queries=6,
+        require_decision_grade=True,
+    )
+
+    source_domains = {
+        research_gate_module._site_domain_from_query(query.query)
+        for query in selected
+        if query.query_intent == "resolution_source"
+    }
+    assert source_domains == {"abcnews.go.com", "foxnews.com", "apnews.com"}
+
+
 def test_budget_resolution_official_queries_do_not_include_market_ticker():
     queries = build_research_queries(
         SimpleNamespace(headline="", source="research_prewarm", url=""),
