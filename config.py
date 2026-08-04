@@ -273,7 +273,7 @@ SOURCE_PRIORITY_TIERS: dict[str, int] = {
 #   - heuristic_flags includes minimal_overlap OR single_named_entity_only
 #   - heuristic_flags includes near_threshold_score (score within 0.02 of min_score)
 ENABLE_LOW_QUALITY_MATCH_SUPPRESSION: bool = os.getenv(
-    "ENABLE_LOW_QUALITY_MATCH_SUPPRESSION", "false"
+    "ENABLE_LOW_QUALITY_MATCH_SUPPRESSION", "true"
 ).strip().lower() in {"1", "true", "yes", "on"}
 
 # When enabled, logs a MATCH_SUPPRESSION_CANDIDATE event for every match that meets
