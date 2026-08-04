@@ -1488,14 +1488,24 @@ def _select_research_queries(
 ) -> list[ResearchQuery]:
     if not require_decision_grade:
         return queries[:max_queries]
-    # Keep one extra slot only when a declared settlement-source query exists.
-    # It is independently authoritative and must survive alongside the
-    # required intent set; markets without one retain the prior bounded budget.
-    has_resolution_source_query = any(
-        query.query_intent == "resolution_source" for query in queries
-    )
+    # Keep a small bounded set of declared settlement-source queries alongside
+    # the required intent set.  One publisher can be stale or have no indexed
+    # result; retaining three verified domains improves source throughput while
+    # keeping the prewarm fan-out bounded. Markets without declared sources
+    # retain the prior query budget.
+    resolution_source_queries = [
+        query for query in queries if query.query_intent == "resolution_source"
+    ]
+    resolution_source_slots = min(3, len(resolution_source_queries))
+    official_resolution_domains = {
+        _site_domain_from_query(query.query)
+        for query in queries
+        if query.query_intent == "official_resolution"
+        and _site_domain_from_query(query.query)
+    }
+    official_extra_slots = min(2, max(0, len(official_resolution_domains) - 1))
     required_slots = len(_DECISION_GRADE_REQUIRED_QUERY_INTENTS) + (
-        1 if has_resolution_source_query else 0
+        resolution_source_slots + official_extra_slots
     )
     limit = max(int(max_queries), required_slots)
     selected = list(queries[:limit])
@@ -1511,7 +1521,30 @@ def _select_research_queries(
             continue
         selected.append(replacement)
         selected_intents.add(required)
-    if len(selected) <= limit:
+    selected_source_domains = {
+        _site_domain_from_query(query.query)
+        for query in selected
+        if query.query_intent == "resolution_source"
+    }
+    for query in resolution_source_queries:
+        if sum(
+            1
+            for selected_query in selected
+            if selected_query.query_intent == "resolution_source"
+        ) >= resolution_source_slots:
+            break
+        domain = _site_domain_from_query(query.query)
+        if domain and domain in selected_source_domains:
+            continue
+        selected.append(query)
+        if domain:
+            selected_source_domains.add(domain)
+    selected_source_count = sum(
+        1
+        for query in selected
+        if query.query_intent == "resolution_source"
+    )
+    if len(selected) <= limit and selected_source_count <= resolution_source_slots:
         return _dedupe_queries(selected)
     required_set = set(_DECISION_GRADE_REQUIRED_QUERY_INTENTS)
     kept_required = []
@@ -1520,8 +1553,24 @@ def _select_research_queries(
         if query.query_intent in required_set and query.query_intent not in seen_required:
             kept_required.append(query)
             seen_required.add(query.query_intent)
+    kept_resolution_sources = []
+    seen_resolution_domains: set[str] = set()
+    for query in selected:
+        if query.query_intent != "resolution_source":
+            continue
+        domain = _site_domain_from_query(query.query)
+        key = domain or query.query
+        if key in seen_resolution_domains:
+            continue
+        kept_resolution_sources.append(query)
+        seen_resolution_domains.add(key)
+        if len(kept_resolution_sources) >= resolution_source_slots:
+            break
     kept_other = [
-        query for query in selected if query.query_intent not in required_set
+        query
+        for query in selected
+        if query.query_intent not in required_set
+        and query.query_intent != "resolution_source"
     ]
     kept_domains = {_site_domain_from_query(query.query) for query in kept_required}
     kept_domains.discard("")
@@ -1535,8 +1584,15 @@ def _select_research_queries(
             continue
         extra_official.append(query)
         seen_extra_domains.add(domain)
-    other_limit = max(0, limit - len(kept_required))
-    return _dedupe_queries((extra_official + kept_other)[:other_limit] + kept_required)
+    other_limit = max(
+        0,
+        limit - len(kept_required) - len(kept_resolution_sources),
+    )
+    return _dedupe_queries(
+        (extra_official + kept_other)[:other_limit]
+        + kept_resolution_sources
+        + kept_required
+    )
 
 
 def _site_domain_from_query(query: str) -> str:
