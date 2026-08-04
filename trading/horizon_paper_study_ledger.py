@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 from pathlib import Path
-import re
 import sqlite3
 import stat
 from typing import Protocol
@@ -19,10 +18,6 @@ from trading.horizon_paper_study_manifest import (
 
 
 _SQLITE_SIDECAR_SUFFIXES = ("-journal", "-shm", "-wal")
-_STUDY_TRADES_UNIQUE_PATTERN = re.compile(
-    r",\s*UNIQUE\s*\(\s*study_id\s*,\s*admission_id\s*\)\s*",
-    re.IGNORECASE | re.DOTALL,
-)
 
 
 class HorizonStudyLedgerError(ValueError):
@@ -200,7 +195,8 @@ class HorizonStudyLedger:
                 side TEXT NOT NULL,
                 entry_price_snapshot TEXT NOT NULL,
                 size TEXT NOT NULL,
-                executed_at_utc TEXT NOT NULL
+                executed_at_utc TEXT NOT NULL,
+                UNIQUE(study_id, admission_id)
             )
             """
         )
@@ -320,60 +316,3 @@ def _require_sha256(value: object, label: str) -> str:
     if len(text) != 64 or any(ch not in "0123456789abcdef" for ch in text):
         raise HorizonStudyLedgerError(f"{label} is invalid")
     return text
-
-
-class _StudyLedgerConnectionProxy:
-    def __init__(self, connection: sqlite3.Connection) -> None:
-        object.__setattr__(self, "_connection", connection)
-
-    def __enter__(self) -> "_StudyLedgerConnectionProxy":
-        self._connection.__enter__()
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> bool | None:
-        return self._connection.__exit__(exc_type, exc, tb)
-
-    def execute(self, sql: str, parameters: object = ()) -> sqlite3.Cursor:
-        return self._connection.execute(_normalize_study_trades_schema(sql), parameters)
-
-    def executemany(self, sql: str, seq_of_parameters: object) -> sqlite3.Cursor:
-        return self._connection.executemany(
-            _normalize_study_trades_schema(sql),
-            seq_of_parameters,
-        )
-
-    def __setattr__(self, name: str, value: object) -> None:
-        if name == "_connection":
-            object.__setattr__(self, name, value)
-            return
-        setattr(self._connection, name, value)
-
-    def __getattr__(self, name: str) -> object:
-        return getattr(self._connection, name)
-
-
-def _normalize_study_trades_schema(sql: str) -> str:
-    if "CREATE TABLE" not in sql.upper() or "STUDY_TRADES" not in sql.upper():
-        return sql
-    return _STUDY_TRADES_UNIQUE_PATTERN.sub("", sql, count=1)
-
-
-def _should_proxy_study_ledger(path: object) -> bool:
-    if isinstance(path, Path):
-        return path.name == "study_ledger.db"
-    if isinstance(path, str) and not path.startswith("file:"):
-        return Path(path).name == "study_ledger.db"
-    return False
-
-
-if not getattr(sqlite3, "_horizon_study_ledger_connect_patched", False):
-    _REAL_SQLITE_CONNECT = sqlite3.connect
-
-    def _study_ledger_connect(path: object, *args: object, **kwargs: object) -> object:
-        connection = _REAL_SQLITE_CONNECT(path, *args, **kwargs)
-        if _should_proxy_study_ledger(path):
-            return _StudyLedgerConnectionProxy(connection)
-        return connection
-
-    sqlite3.connect = _study_ledger_connect
-    sqlite3._horizon_study_ledger_connect_patched = True

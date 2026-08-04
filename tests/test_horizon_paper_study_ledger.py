@@ -137,10 +137,12 @@ def _seed_study_trade(
     study_id: str = STUDY_ID,
     admission_id: str = "a" * 64,
     study_trade_id: str = "study-trade-1",
+    enforce_unique_link: bool = True,
 ) -> None:
+    unique_clause = ",\n                UNIQUE(study_id, admission_id)" if enforce_unique_link else ""
     with sqlite3.connect(ledger_path) as conn:
         conn.execute(
-            """
+            f"""
             CREATE TABLE IF NOT EXISTS study_trades (
                 study_trade_id TEXT PRIMARY KEY,
                 study_id TEXT NOT NULL,
@@ -149,8 +151,7 @@ def _seed_study_trade(
                 side TEXT NOT NULL,
                 entry_price_snapshot TEXT NOT NULL,
                 size TEXT NOT NULL,
-                executed_at_utc TEXT NOT NULL,
-                UNIQUE(study_id, admission_id)
+                executed_at_utc TEXT NOT NULL{unique_clause}
             )
             """
         )
@@ -178,6 +179,53 @@ def _seed_study_trade(
                 "2026-08-05T01:05:00.000000+00:00",
             ),
         )
+
+
+def _seed_ambiguous_study_trades(
+    ledger_path: Path,
+    seed: tuple[tuple[str, str, str], ...],
+) -> None:
+    with sqlite3.connect(ledger_path) as conn:
+        conn.execute("DROP TABLE IF EXISTS study_trades")
+        conn.execute(
+            """
+            CREATE TABLE study_trades (
+                study_trade_id TEXT PRIMARY KEY,
+                study_id TEXT NOT NULL,
+                admission_id TEXT NOT NULL,
+                market_id TEXT NOT NULL,
+                side TEXT NOT NULL,
+                entry_price_snapshot TEXT NOT NULL,
+                size TEXT NOT NULL,
+                executed_at_utc TEXT NOT NULL
+            )
+            """
+        )
+        for trade_id, study_id, admission_id in seed:
+            conn.execute(
+                """
+                INSERT INTO study_trades (
+                    study_trade_id,
+                    study_id,
+                    admission_id,
+                    market_id,
+                    side,
+                    entry_price_snapshot,
+                    size,
+                    executed_at_utc
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    trade_id,
+                    study_id,
+                    admission_id,
+                    "market-123",
+                    "yes",
+                    "0.37",
+                    "5",
+                    "2026-08-05T01:05:00.000000+00:00",
+                ),
+            )
 
 
 def test_ledger_module_exposes_isolated_surface(tmp_path: Path):
@@ -274,46 +322,15 @@ def test_lookup_fail_closes_missing_zero_multiple_and_mismatched_links(
     module = _ledger_module()
     ledger_path = study_root / "study_ledger.db"
     if case != "missing":
-        with sqlite3.connect(ledger_path) as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS study_trades (
-                    study_trade_id TEXT PRIMARY KEY,
-                    study_id TEXT NOT NULL,
-                    admission_id TEXT NOT NULL,
-                    market_id TEXT NOT NULL,
-                    side TEXT NOT NULL,
-                    entry_price_snapshot TEXT NOT NULL,
-                    size TEXT NOT NULL,
-                    executed_at_utc TEXT NOT NULL,
-                    UNIQUE(study_id, admission_id)
-                )
-                """
-            )
-            for trade_id, study_id, admission_id in seed or ():
-                conn.execute(
-                    """
-                    INSERT INTO study_trades (
-                        study_trade_id,
-                        study_id,
-                        admission_id,
-                        market_id,
-                        side,
-                        entry_price_snapshot,
-                        size,
-                        executed_at_utc
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        trade_id,
-                        study_id,
-                        admission_id,
-                        "market-123",
-                        "yes",
-                        "0.37",
-                        "5",
-                        "2026-08-05T01:05:00.000000+00:00",
-                    ),
+        if case == "multiple":
+            _seed_ambiguous_study_trades(ledger_path, seed or ())
+        else:
+            for trade_id, seeded_study_id, seeded_admission_id in seed or ():
+                _seed_study_trade(
+                    ledger_path,
+                    study_id=seeded_study_id,
+                    admission_id=seeded_admission_id,
+                    study_trade_id=trade_id,
                 )
     else:
         ledger_path.unlink()
