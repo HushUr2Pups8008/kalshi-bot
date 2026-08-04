@@ -11807,11 +11807,11 @@ def _derived_gdp_countercheck(
 ) -> ResearchEvidence:
     return replace(
         raw_observation,
-        source_url=f"{raw_observation.source_url}#countercheck",
-        title="Derived GDPNow countercheck for Q2 2026",
+        source_name=f"{raw_observation.source_name} GDPNow countercheck",
+        title="gdpnow-countercheck-v1 derived contradiction check",
         snippet=(
-            "Derived countercheck: 1.1889% SAAR is below the strict 2.0% "
-            "Q2 2026 threshold."
+            "gdpnow-countercheck-v1 derived contradiction check from the same "
+            "FRED GDPNow observation."
         ),
         claim_type="contradiction_check",
         supports_direction="no",
@@ -11962,14 +11962,25 @@ async def test_gdpnow_countercheck_derives_only_strict_opposite_evidence(
     assert len(derived) == 1
     countercheck = derived[0]
     assert countercheck.supports_direction == expected_counter_side
+    assert countercheck.source_class == raw_observation.source_class
+    assert countercheck.source_name.startswith(raw_observation.source_name)
+    assert countercheck.source_name.endswith("GDPNow countercheck")
+    assert countercheck.source_url == raw_observation.source_url
+    assert countercheck.title.startswith("gdpnow-countercheck-v1")
+    assert countercheck.snippet.startswith("gdpnow-countercheck-v1")
+    assert countercheck.published_at == raw_observation.published_at
+    assert countercheck.retrieved_at == raw_observation.retrieved_at
     assert countercheck.metric_value == pytest.approx(gdpnow_value)
     assert countercheck.metric_unit == "percent_saar"
+    assert 0.0 < countercheck.supports_confidence <= raw_observation.extraction_confidence
     assert countercheck.contract_fingerprint == _contract_fingerprint(market)
 
     assert len(result.verdict.evidence) == len(result.seed_evidence) + 1
     assert {item for item in result.verdict.evidence if item.claim_type != "contradiction_check"} == set(
         result.seed_evidence
     )
+    assert result.verdict.status == ResearchStatus.DECISION_GRADE_CANDIDATE
+    assert result.verdict.force_side == provisional_side
     assert result.side_aware_calls == 0
     assert result.adjudicator_calls == 1
     assert {query.query for query in result.seen_queries} <= result.initial_query_texts
@@ -12166,6 +12177,24 @@ async def test_gdpnow_countercheck_rejects_ambiguous_or_untrusted_inputs(
     )
 
     assert _gdp_counterchecks(result.verdict) == []
+
+
+@pytest.mark.asyncio
+async def test_gdpnow_countercheck_uses_one_legacy_fallback_when_mismatch_cannot_qualify(
+    monkeypatch,
+):
+    market = _strict_gdp_countercheck_market()
+    result = await _run_gdp_countercheck_case(
+        monkeypatch,
+        market=market,
+        observation=_verified_gdpnow_observation(market, value=1.1889),
+        provisional_side="yes",
+        include_independent_support=False,
+    )
+
+    assert _gdp_counterchecks(result.verdict) == []
+    assert result.side_aware_calls == 1
+    assert result.adjudicator_calls == 1
 
 
 @pytest.mark.asyncio
@@ -12374,6 +12403,11 @@ async def test_gdpnow_countercheck_is_disabled_for_live_mode(monkeypatch):
     )
 
     assert _gdp_counterchecks(result.verdict) == []
+    assert result.verdict.force_side is None
+    assert result.verdict.status not in {
+        ResearchStatus.TRADE_CANDIDATE,
+        ResearchStatus.DECISION_GRADE_CANDIDATE,
+    }
 
 
 @pytest.mark.asyncio
@@ -12452,6 +12486,7 @@ async def test_gdpnow_countercheck_live_mode_rejects_replayed_derived_evidence(
     )
 
     assert verdict.skip_reason != "cached_dossier_unvetted"
+    assert _gdp_counterchecks(verdict) == []
     assert verdict.force_side is None
     assert verdict.status not in {
         ResearchStatus.TRADE_CANDIDATE,
