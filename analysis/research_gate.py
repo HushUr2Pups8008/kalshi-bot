@@ -3909,7 +3909,7 @@ def _parse_rss_search_response(
     root = ET.fromstring(raw)
     out: list[ResearchEvidence] = []
     retrieved_at = _utc_now_iso()
-    for item in root.findall(".//item")[:limit]:
+    for item in root.findall(".//item"):
         title = html.unescape(_clean(item.findtext("title")))
         link = html.unescape(_clean(item.findtext("link")))
         source_element = item.find("source")
@@ -3949,7 +3949,73 @@ def _parse_rss_search_response(
                 aggregator_url=(link if publisher_url and is_aggregator_link else None),
             )
         )
-    return out
+    return _rank_search_results(query, out, limit=limit)
+
+
+_SEARCH_QUERY_STOPWORDS = {
+    "about",
+    "after",
+    "against",
+    "and",
+    "before",
+    "current",
+    "evidence",
+    "for",
+    "from",
+    "latest",
+    "official",
+    "result",
+    "source",
+    "status",
+    "the",
+    "this",
+    "will",
+    "with",
+}
+
+
+def _search_query_tokens(query: ResearchQuery) -> set[str]:
+    text = re.sub(r"\bsite:[^\s]+", " ", _clean(query.query).lower())
+    return {
+        token
+        for token in re.findall(r"[a-z0-9][a-z0-9-]{3,}", text)
+        if token not in _SEARCH_QUERY_STOPWORDS
+    }
+
+
+def _search_result_relevance_score(
+    query: ResearchQuery,
+    item: ResearchEvidence,
+) -> tuple[int, int]:
+    query_tokens = _search_query_tokens(query)
+    if not query_tokens:
+        return (0, 0)
+    title_tokens = set(re.findall(r"[a-z0-9][a-z0-9-]{3,}", _clean(item.title).lower()))
+    result_tokens = set(
+        re.findall(r"[a-z0-9][a-z0-9-]{3,}", _clean(f"{item.title} {item.snippet}").lower())
+    )
+    title_overlap = len(query_tokens & title_tokens)
+    score = title_overlap * 3 + len(query_tokens & result_tokens)
+    query_domain = _query_site_domain(query.query)
+    if query_domain and _domains_match(_domain_from_url(item.source_url), query_domain):
+        score += 8
+    return score, title_overlap
+
+
+def _rank_search_results(
+    query: ResearchQuery,
+    evidence: list[ResearchEvidence],
+    *,
+    limit: int,
+) -> list[ResearchEvidence]:
+    scored = [
+        (index, *_search_result_relevance_score(query, item), item)
+        for index, item in enumerate(evidence)
+    ]
+    if not any(score > 0 for _, score, _, _ in scored):
+        return evidence[:limit]
+    scored.sort(key=lambda row: (-row[1], -row[2], row[0]))
+    return [item for _, _, _, item in scored[:limit]]
 
 
 def _rss_direction_for_query_result(
@@ -4042,9 +4108,7 @@ async def _duckduckgo_lite_search(
                 retrieved_at=retrieved_at,
             )
         )
-        if len(out) >= limit:
-            break
-    return out
+    return _rank_search_results(query, out, limit=limit)
 
 
 def _duckduckgo_result_url(href: str) -> str:

@@ -5773,6 +5773,69 @@ def test_rss_search_does_not_treat_wrong_domain_as_resolution_source(monkeypatch
     assert evidence[0].source_class == "reputable_secondary"
 
 
+def test_rss_search_ranks_contract_relevant_result_before_irrelevant_headline(monkeypatch):
+    rss = b"""<?xml version="1.0" encoding="UTF-8"?>
+    <rss><channel>
+    <item>
+      <title>Unrelated market update</title>
+      <link>https://reuters.com/world/update</link>
+      <source url="https://reuters.com">Reuters</source>
+      <description>General market news.</description>
+    </item>
+    <item>
+      <title>OPEC Monthly Oil Market Report: Iran production</title>
+      <link>https://opec.org/report</link>
+      <source url="https://opec.org">OPEC</source>
+      <description>Iran crude oil production estimate.</description>
+    </item>
+    </channel></rss>
+    """
+
+    _stub_google_news_rss(monkeypatch, rss)
+
+    evidence = _rss_search(
+        ResearchQuery(
+            query="site:opec.org Monthly Oil Market Report Iran production",
+            query_intent="resolution_source",
+            source_class="resolution_source",
+        ),
+        limit=1,
+    )
+
+    assert len(evidence) == 1
+    assert evidence[0].source_name == "OPEC"
+
+
+def test_rss_search_preserves_provider_order_when_no_result_matches(monkeypatch):
+    rss = b"""<?xml version="1.0" encoding="UTF-8"?>
+    <rss><channel>
+    <item>
+      <title>First unrelated result</title>
+      <link>https://example.com/first</link>
+      <source url="https://example.com">Example</source>
+    </item>
+    <item>
+      <title>Second unrelated result</title>
+      <link>https://example.com/second</link>
+      <source url="https://example.com">Example</source>
+    </item>
+    </channel></rss>
+    """
+
+    _stub_google_news_rss(monkeypatch, rss)
+
+    evidence = _rss_search(
+        ResearchQuery(
+            query="site:unmatched.example qwerty",
+            query_intent="official_resolution",
+            source_class="official_primary",
+        ),
+        limit=1,
+    )
+
+    assert [item.title for item in evidence] == ["First unrelated result"]
+
+
 def test_rss_search_uses_source_label_to_match_site_scoped_resolution(monkeypatch):
     rss = b"""<?xml version="1.0" encoding="UTF-8"?>
     <rss><channel><item>
@@ -6229,6 +6292,44 @@ def test_duckduckgo_lite_search_parses_result_links_and_snippets(monkeypatch):
     assert evidence[0].source_class == "official_primary"
     assert evidence[0].title == "White House releases UAP records"
     assert "UAP transparency" in evidence[0].snippet
+
+
+def test_duckduckgo_lite_search_ranks_contract_relevant_result_before_irrelevant_link(
+    monkeypatch,
+):
+    html = b"""
+    <html><body>
+      <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fnoise&amp;rut=x">
+        Unrelated market update
+      </a>
+      <td class='result-snippet'>General market news.</td>
+      <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fopec.org%2Freport&amp;rut=x">
+        OPEC Monthly Oil Market Report: Iran production
+      </a>
+      <td class='result-snippet'>Iran crude oil production estimate.</td>
+    </body></html>
+    """
+
+    async def fetch(*_args, **_kwargs):
+        return html
+
+    monkeypatch.setattr(
+        research_gate_module,
+        "_fetch_duckduckgo_lite_dual_stack",
+        fetch,
+    )
+
+    evidence = _duckduckgo_lite_search(
+        ResearchQuery(
+            query="site:opec.org Monthly Oil Market Report Iran production",
+            query_intent="resolution_source",
+            source_class="resolution_source",
+        ),
+        limit=1,
+    )
+
+    assert len(evidence) == 1
+    assert evidence[0].source_url == "https://opec.org/report"
 
 
 def test_white_house_dot_gov_source_name_classifies_as_official_primary():
