@@ -1414,24 +1414,58 @@ class TradingBot:
             return None
 
     def _enrich_research_prewarm_market_source_path(self, market: object) -> object:
+        if bool(getattr(market, "_research_source_path_enrichment_attempted", False)):
+            return market
+        setattr(market, "_research_source_path_enrichment_attempted", True)
         if tuple(getattr(market, "settlement_sources", ()) or ()):
             return market
         series_ticker = str(getattr(market, "series_ticker", "") or "").strip()
         if not series_ticker:
             ticker = str(getattr(market, "ticker", "") or "").strip()
             series_ticker = ticker.split("-", 1)[0] if ticker else ""
-        if not series_ticker or not hasattr(self.rest, "get_series"):
+        if series_ticker and hasattr(self.rest, "get_series"):
+            try:
+                metadata = self.rest.get_series(series_ticker)
+            except Exception as exc:
+                log.warning(
+                    "[RESEARCH_PREWARM] series metadata fetch failed series=%s: %s",
+                    series_ticker,
+                    exc,
+                )
+                metadata = None
+            if metadata is not None:
+                for attr in (
+                    "rules_primary",
+                    "rules_secondary",
+                    "contract_terms_url",
+                    "settlement_sources",
+                ):
+                    current = getattr(market, attr, None)
+                    if current:
+                        continue
+                    value = getattr(metadata, attr, None)
+                    if value:
+                        setattr(market, attr, value)
+        if market_has_research_source_path(market):
+            return market
+
+        ticker = str(getattr(market, "ticker", "") or "").strip()
+        if (
+            not ticker
+            or bool(getattr(market, "_research_market_detail_fetched", False))
+            or not hasattr(self.rest, "get_market")
+        ):
             return market
         try:
-            metadata = self.rest.get_series(series_ticker)
+            detail = self.rest.get_market(ticker)
         except Exception as exc:
             log.warning(
-                "[RESEARCH_PREWARM] series metadata fetch failed series=%s: %s",
-                series_ticker,
+                "[RESEARCH_PREWARM] market detail fetch failed ticker=%s: %s",
+                ticker,
                 exc,
             )
             return market
-        if metadata is None:
+        if detail is None:
             return market
         for attr in (
             "rules_primary",
@@ -1442,7 +1476,7 @@ class TradingBot:
             current = getattr(market, attr, None)
             if current:
                 continue
-            value = getattr(metadata, attr, None)
+            value = getattr(detail, attr, None)
             if value:
                 setattr(market, attr, value)
         return market
@@ -1564,6 +1598,7 @@ class TradingBot:
                 continue
             if market is None:
                 continue
+            setattr(market, "_research_market_detail_fetched", True)
             market_list.append(market)
             open_by_ticker[ticker] = market
         target_sequence.sort(
