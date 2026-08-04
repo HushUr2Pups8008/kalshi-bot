@@ -1473,6 +1473,7 @@ _DECISION_GRADE_REQUIRED_QUERY_INTENTS = (
     "supporting",
     "disconfirming",
     "base_rate",
+    "resolution_source",
     "official_resolution",
     "rules",
     "market_price",
@@ -1488,7 +1489,10 @@ def _select_research_queries(
 ) -> list[ResearchQuery]:
     if not require_decision_grade:
         return queries[:max_queries]
-    limit = max(int(max_queries), len(_DECISION_GRADE_REQUIRED_QUERY_INTENTS))
+    # Keep one extra slot beyond the required intent set.  Declared settlement
+    # sources are independently authoritative and must survive alongside the
+    # official-resolution query family when a market exposes multiple domains.
+    limit = max(int(max_queries), len(_DECISION_GRADE_REQUIRED_QUERY_INTENTS) + 1)
     selected = list(queries[:limit])
     selected_intents = {query.query_intent for query in selected}
     for required in _DECISION_GRADE_REQUIRED_QUERY_INTENTS:

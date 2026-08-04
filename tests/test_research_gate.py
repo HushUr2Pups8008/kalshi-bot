@@ -525,6 +525,40 @@ def test_strict_selection_keeps_budget_resolution_senate_source_hint():
     assert "site:congress.gov" in rendered
 
 
+def test_strict_selection_keeps_declared_settlement_source_query():
+    queries = build_research_queries(
+        SimpleNamespace(headline="", source="research_prewarm", url=""),
+        SimpleNamespace(
+            ticker="KXTRUMPMENTION-26AUG05-AI",
+            title="What will Donald Trump say during Remarks in Las Vegas, Nevada?",
+            rules_primary=(
+                "If Donald Trump says AI as part of Remarks in Las Vegas, Nevada, "
+                "then the market resolves to Yes."
+            ),
+            rules_secondary="",
+            settlement_sources=(
+                SettlementSource(
+                    label="The Associated Press",
+                    url="https://apnews.com/",
+                    domain="apnews.com",
+                ),
+            ),
+        ),
+    )
+
+    selected = research_gate_module._select_research_queries(
+        queries,
+        max_queries=6,
+        require_decision_grade=True,
+    )
+
+    assert any(
+        query.query_intent == "resolution_source"
+        and query.query.startswith("site:apnews.com ")
+        for query in selected
+    )
+
+
 def test_budget_resolution_official_queries_do_not_include_market_ticker():
     queries = build_research_queries(
         SimpleNamespace(headline="", source="research_prewarm", url=""),
