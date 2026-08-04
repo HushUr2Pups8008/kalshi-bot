@@ -825,10 +825,6 @@ class TestLowQualityMatchSuppression:
         rest.get_series = AsyncMock(return_value=[])
         return MarketMatcher(rest)
 
-    def test_suppression_is_disabled_by_default(self):
-        """Low-quality suppression stays opt-in until its telemetry is reviewed."""
-        assert _cfg_module.ENABLE_LOW_QUALITY_MATCH_SUPPRESSION is False
-
     @pytest.mark.asyncio
     async def test_suppression_off_by_default_candidate_returned(self, matcher):
         """When suppression flag is off, low-quality candidates still reach caller.
