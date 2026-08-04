@@ -17,6 +17,7 @@ from polymarket.public_client import PolymarketMarketPage
 from polymarket.paper_runtime import (
     PolymarketPaperRuntime,
     _market_match_text,
+    _horizon_shadow_market_sets,
     match_polymarket_markets,
     polymarket_paper_runtime_disabled_reason,
 )
@@ -95,6 +96,70 @@ def test_market_match_text_includes_polymarket_public_context_fields():
     assert "diplomacy" in text
     assert "Mediator statement is the key source." in text
     assert "https://example.com/resolution" in text
+
+
+def test_horizon_shadow_market_sets_preserves_existing_partition_boundaries():
+    now = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
+    markets = [
+        _market(
+            market_id="prod-14d",
+            close_time=(now + timedelta(days=14)).isoformat(),
+        ),
+        _market(
+            market_id="shadow-over-14d",
+            close_time=(now + timedelta(days=14, seconds=1)).isoformat(),
+        ),
+        _market(
+            market_id="shadow-30d",
+            close_time=(now + timedelta(days=30)).isoformat(),
+        ),
+        _market(
+            market_id="too-far",
+            close_time=(now + timedelta(days=30, seconds=1)).isoformat(),
+        ),
+        _market(
+            market_id="closed-market",
+            close_time=(now + timedelta(days=20)).isoformat(),
+            status="closed",
+        ),
+        _market(
+            market_id="suppressed-market",
+            close_time=(now + timedelta(days=20)).isoformat(),
+            category="sports",
+            resolution_source="https://example.test/resolution",
+        ),
+    ]
+
+    production, shadow = _horizon_shadow_market_sets(
+        markets,
+        now=now,
+        production_horizon_days=14.0,
+        shadow_horizon_end_days=30.0,
+    )
+
+    assert [market.market_id for market in production] == ["prod-14d"]
+    assert [market.market_id for market in shadow] == [
+        "shadow-over-14d",
+        "shadow-30d",
+    ]
+
+
+def test_horizon_shadow_market_sets_preserves_legacy_reversed_band_behavior():
+    now = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
+    inside_market = _market(
+        market_id="inside-20d",
+        close_time=(now + timedelta(days=20)).isoformat(),
+    )
+
+    production, shadow = _horizon_shadow_market_sets(
+        [inside_market],
+        now=now,
+        production_horizon_days=31.0,
+        shadow_horizon_end_days=30.0,
+    )
+
+    assert [market.market_id for market in production] == ["inside-20d"]
+    assert shadow == []
 
 
 class _FakeClient:
