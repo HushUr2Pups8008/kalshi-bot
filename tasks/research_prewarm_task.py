@@ -49,8 +49,9 @@ ResearchPrewarmMarketResultSink = Callable[
     ["ResearchPrewarmResult", Any],
     Awaitable[None],
 ]
-# Serialize provider starts across prewarm task instances.
-_RESEARCH_PREWARM_PROVIDER_MIN_START_INTERVAL_SECONDS = 1.5
+# Serialize provider starts across prewarm task instances while keeping the
+# eight-query decision-grade fanout inside the 12-second research budget.
+_RESEARCH_PREWARM_PROVIDER_MIN_START_INTERVAL_SECONDS = 0.25
 
 
 class _ResearchPrewarmProviderAdmission:
