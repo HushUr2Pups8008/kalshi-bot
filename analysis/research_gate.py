@@ -1488,25 +1488,15 @@ def _select_research_queries(
 ) -> list[ResearchQuery]:
     if not require_decision_grade:
         return queries[:max_queries]
-    # Keep a small bounded set of declared settlement-source queries alongside
-    # the required intent set.  One publisher can be stale or have no indexed
-    # result; retaining three verified domains improves source throughput while
-    # keeping the prewarm fan-out bounded. Markets without declared sources
-    # retain the prior query budget.
+    # Query construction retains every declared source, but decision-grade
+    # prewarm gets one source slot alongside its seven required intents. This
+    # preserves the established eight-query fan-out envelope and prevents a
+    # multi-source contract from exhausting its provider timeout budget.
     resolution_source_queries = [
         query for query in queries if query.query_intent == "resolution_source"
     ]
-    resolution_source_slots = min(3, len(resolution_source_queries))
-    official_resolution_domains = {
-        _site_domain_from_query(query.query)
-        for query in queries
-        if query.query_intent == "official_resolution"
-        and _site_domain_from_query(query.query)
-    }
-    official_extra_slots = min(2, max(0, len(official_resolution_domains) - 1))
-    required_slots = len(_DECISION_GRADE_REQUIRED_QUERY_INTENTS) + (
-        resolution_source_slots + official_extra_slots
-    )
+    resolution_source_slots = min(1, len(resolution_source_queries))
+    required_slots = len(_DECISION_GRADE_REQUIRED_QUERY_INTENTS) + resolution_source_slots
     limit = max(int(max_queries), required_slots)
     selected = list(queries[:limit])
     selected_intents = {query.query_intent for query in selected}
@@ -1584,13 +1574,9 @@ def _select_research_queries(
             continue
         extra_official.append(query)
         seen_extra_domains.add(domain)
-    other_limit = max(
-        0,
-        limit - len(kept_required) - len(kept_resolution_sources),
-    )
+    other_limit = max(0, limit - len(kept_required))
     return _dedupe_queries(
-        (extra_official + kept_other)[:other_limit]
-        + kept_resolution_sources
+        (extra_official + kept_resolution_sources + kept_other)[:other_limit]
         + kept_required
     )
 
