@@ -1860,6 +1860,36 @@ def test_research_prewarm_market_provider_fetches_due_research_task(monkeypatch)
     bot.rest.get_market.assert_called_once_with(due_market.ticker)
 
 
+def test_research_prewarm_market_provider_demotes_repeated_missing_source_task(
+    monkeypatch,
+):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 1, raising=False)
+    bot = _make_bot_stub()
+    fresh_market = replace(
+        _make_market(),
+        ticker="KXFRESH-25DEC31",
+        settlement_sources=(SettlementSource(label="Official", domain="bea.gov"),),
+    )
+    repeated_market = replace(
+        _make_market(),
+        ticker="KXREPEATED-25DEC31",
+        settlement_sources=(SettlementSource(label="Official", domain="bea.gov"),),
+    )
+    bot.rest.get_all_open_markets.return_value = [fresh_market, repeated_market]
+    bot._research_prewarm_due_tasks = lambda *, limit, cooldown_seconds: [
+        SimpleNamespace(
+            market_ticker=repeated_market.ticker,
+            last_skip_reason="missing_resolution_source",
+            terminal_reason=None,
+            same_reason_count=2,
+        )
+    ]
+
+    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
+        fresh_market.ticker,
+    ]
+
+
 def test_research_prewarm_market_provider_keeps_closed_due_task_for_terminalization(
     monkeypatch,
 ):

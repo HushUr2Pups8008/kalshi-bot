@@ -1552,10 +1552,19 @@ class TradingBot:
         }
         target_sequence: list[str] = []
         seen_targets: set[str] = set()
+        repeated_source_tickers = {
+            task.market_ticker
+            for task in due_tasks
+            if task.market_ticker not in all_due_official_pending_tickers
+            and str(getattr(task, "last_skip_reason", "") or "")
+            == "missing_resolution_source"
+            and int(getattr(task, "same_reason_count", 0) or 0) >= 2
+        }
         due_task_tickers = [
             task.market_ticker
             for task in [*allowed_official_pending_tasks, *due_tasks]
             if task.market_ticker not in deferred_official_pending_tickers
+            and task.market_ticker not in repeated_source_tickers
         ]
         due_task_ticker_set = set(due_task_tickers)
         nonpending_due_tickers = {
@@ -1568,6 +1577,7 @@ class TradingBot:
                 ticker
                 for ticker in _recent_runtime_research_prewarm_tickers()
                 if ticker not in deferred_official_pending_tickers
+                and ticker not in repeated_source_tickers
             ]
             if official_pending_lookup_available
             else []
