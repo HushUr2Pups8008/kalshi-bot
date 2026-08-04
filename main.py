@@ -145,6 +145,9 @@ from trading.paper_cohorts import (
     validate_active_paper_cohort_manifest,
     validate_legacy_pending_paper_cohort_manifest,
 )
+from trading.horizon_paper_study_manifest import (
+    discover_polymarket_horizon_15_30_manifest_blockers,
+)
 from trading.runtime_paper_cohort_attestation import (
     RuntimePaperCohortAttestation,
     RuntimePaperCohortAttestationError,
@@ -5324,6 +5327,16 @@ def _provisioned_cohort_live_risk_gate_failures(
     db_root: Path = DATA_DIR,
 ) -> tuple[bool, list[str]]:
     """Fail closed on every provisioned cohort, independent of runtime selection."""
+
+    try:
+        study_blockers = discover_polymarket_horizon_15_30_manifest_blockers(db_root)
+    except Exception as exc:  # noqa: BLE001 - live-money boundary must fail closed
+        return True, [
+            "Horizon paper study manifest discovery unavailable "
+            f"({str(exc)[:80]}) -- gate fails closed"
+        ]
+    if study_blockers:
+        return True, list(study_blockers)
 
     discovered: list[PaperCohort] = []
     provisioned_kinds: set[str] = set()
