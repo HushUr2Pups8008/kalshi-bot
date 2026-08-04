@@ -1626,8 +1626,6 @@ class TradingBot:
             return market_has_research_source_path(market)
 
         def open_markets_by_price(markets: Iterable[object]) -> list[object]:
-            if not official_pending_lookup_available:
-                return []
             return sorted(
                 [
                     market
@@ -1640,7 +1638,7 @@ class TradingBot:
             )
 
         def sourceable_series_fallback(selected_tickers: set[str] | None = None) -> list[object]:
-            if not official_pending_lookup_available or not hasattr(self.rest, "get_markets"):
+            if not hasattr(self.rest, "get_markets"):
                 return []
             selected_tickers = selected_tickers if selected_tickers is not None else set()
             candidates: dict[str, object] = {}
@@ -1765,8 +1763,6 @@ class TradingBot:
             if unsourceable_targets:
                 return unsourceable_targets[:max_markets]
             return open_markets_by_price(market_list)[:max_markets]
-        if not official_pending_lookup_available:
-            return []
         sourceable = sorted(
             [
                 market

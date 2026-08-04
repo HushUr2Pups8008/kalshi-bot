@@ -888,8 +888,61 @@ def test_research_prewarm_market_provider_fails_closed_when_pending_lookup_fails
     assert [market.ticker for market in selected] == [
         allowed_pending.ticker,
         nonpending_due.ticker,
+        late_pending.ticker,
     ]
     bot.rest.get_markets.assert_not_called()
+
+
+def test_research_prewarm_market_provider_uses_sourceable_fallback_when_pending_lookup_fails(
+    monkeypatch,
+):
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 2, raising=False)
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "research_prewarm_sourceable_series_fallback",
+        ("KXFALLBACK",),
+        raising=False,
+    )
+    bot = _make_bot_stub()
+    unsourceable = replace(
+        _make_market(),
+        ticker="KXUNSOURCEABLE-26DEC31",
+        rules_primary="",
+        rules_secondary="",
+        contract_terms_url="",
+        settlement_sources=(),
+    )
+    fallback = replace(
+        _make_market(),
+        ticker="KXFALLBACK-26DEC31",
+        series_ticker="KXFALLBACK",
+        settlement_sources=(
+            SettlementSource(label="Official", domain="official.example"),
+        ),
+    )
+    bot.rest.get_all_open_markets.return_value = [unsourceable]
+    bot.rest.get_markets.return_value = ([fallback], None)
+    bot._research_prewarm_due_tasks = lambda *, limit, cooldown_seconds: [
+        SimpleNamespace(
+            market_ticker=unsourceable.ticker,
+            last_skip_reason="missing_resolution_source",
+            terminal_reason=None,
+        )
+    ]
+    bot._research_prewarm_due_official_pending_tasks = (
+        lambda *, cooldown_seconds: None
+    )
+
+    selected = bot._research_prewarm_market_provider()
+
+    assert [market.ticker for market in selected] == [
+        fallback.ticker,
+        unsourceable.ticker,
+    ]
+    bot.rest.get_markets.assert_called_once_with(
+        series_ticker="KXFALLBACK",
+        limit=2,
+    )
 
 
 def test_research_prewarm_market_provider_allows_one_official_pending_with_single_slot(
