@@ -583,7 +583,7 @@ def test_strict_selection_keeps_one_declared_settlement_source_within_budget():
     assert source_domains == {"abcnews.go.com"}
 
 
-def test_strict_selection_bounds_declared_sources_to_eight_query_envelope():
+def test_strict_selection_respects_total_query_budget_with_declared_sources():
     queries = [
         ResearchQuery(
             query=f"site:{domain} Trump Las Vegas remarks",
@@ -609,10 +609,16 @@ def test_strict_selection_bounds_declared_sources_to_eight_query_envelope():
         require_decision_grade=True,
     )
 
-    assert len(selected) == 8
+    assert len(selected) == 5
     assert {
         query.query_intent for query in selected
-    } >= set(research_gate_module._DECISION_GRADE_REQUIRED_QUERY_INTENTS)
+    } >= {
+        "official_resolution",
+        "supporting",
+        "disconfirming",
+        "resolution_source",
+        "base_rate",
+    }
     assert [
         research_gate_module._site_domain_from_query(query.query)
         for query in selected
@@ -4900,11 +4906,9 @@ async def test_strict_research_gate_includes_required_decision_grade_query_inten
     assert {
         "supporting",
         "disconfirming",
-        "base_rate",
         "official_resolution",
-        "rules",
-        "market_price",
-        "staleness_check",
+        "resolution_source",
+        "base_rate",
     } <= set(seen_intents)
 
 

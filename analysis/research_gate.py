@@ -1478,6 +1478,17 @@ _DECISION_GRADE_REQUIRED_QUERY_INTENTS = (
     "market_price",
     "staleness_check",
 )
+_DECISION_GRADE_BUDGET_QUERY_PRIORITY = (
+    "supporting",
+    "disconfirming",
+    "official_resolution",
+    "resolution_source",
+    "base_rate",
+    "market_price",
+    "broad_context",
+    "staleness_check",
+    "rules",
+)
 
 
 def _select_research_queries(
@@ -1486,18 +1497,88 @@ def _select_research_queries(
     max_queries: int,
     require_decision_grade: bool,
 ) -> list[ResearchQuery]:
+    max_queries = max(0, int(max_queries))
     if not require_decision_grade:
         return queries[:max_queries]
-    # Query construction retains every declared source, but decision-grade
-    # prewarm gets one source slot alongside its seven required intents. This
-    # preserves the established eight-query fan-out envelope and prevents a
-    # multi-source contract from exhausting its provider timeout budget.
+    # Reserve one slot for the side-aware counter query issued after
+    # adjudication. The configured value is a total per-market budget, not an
+    # initial-search budget.
+    initial_query_budget = max(0, max_queries - 1)
     resolution_source_queries = [
         query for query in queries if query.query_intent == "resolution_source"
     ]
     resolution_source_slots = min(1, len(resolution_source_queries))
     required_slots = len(_DECISION_GRADE_REQUIRED_QUERY_INTENTS) + resolution_source_slots
-    limit = max(int(max_queries), required_slots)
+    if initial_query_budget < required_slots:
+        # The configured runtime budget is authoritative. Preserve the lanes
+        # that make a decision-grade result actionable, then fill any unused
+        # slots without admitting duplicate settlement-source queries.
+        selected: list[ResearchQuery] = []
+        selected_ids: set[int] = set()
+        selected_source_count = 0
+        for intent in _DECISION_GRADE_BUDGET_QUERY_PRIORITY:
+            candidate = next(
+                (
+                    query
+                    for query in queries
+                    if id(query) not in selected_ids
+                    and query.query_intent == intent
+                ),
+                None,
+            )
+            if candidate is None:
+                continue
+            if candidate.query_intent == "resolution_source":
+                selected_source_count += 1
+            selected.append(candidate)
+            selected_ids.add(id(candidate))
+            if len(selected) >= initial_query_budget:
+                break
+        for query in queries:
+            if len(selected) >= initial_query_budget:
+                break
+            if id(query) in selected_ids:
+                continue
+            if query.query_intent == "resolution_source":
+                if selected_source_count >= resolution_source_slots:
+                    continue
+                selected_source_count += 1
+            selected.append(query)
+            selected_ids.add(id(query))
+        if initial_query_budget >= 7:
+            selected_official_domains = {
+                _site_domain_from_query(query.query)
+                for query in selected
+                if query.query_intent == "official_resolution"
+            }
+            for query in queries:
+                if query.query_intent != "official_resolution":
+                    continue
+                domain = _site_domain_from_query(query.query)
+                if domain and domain in selected_official_domains:
+                    continue
+                replacement = next(
+                    (
+                        candidate
+                        for candidate in reversed(selected)
+                        if candidate.query_intent
+                        in {"staleness_check", "rules", "broad_context"}
+                    ),
+                    None,
+                )
+                if replacement is None:
+                    continue
+                selected.remove(replacement)
+                selected_ids.discard(id(replacement))
+                selected.append(query)
+                selected_ids.add(id(query))
+                break
+        return _dedupe_queries(selected[:initial_query_budget])
+    # Query construction retains every declared source, but decision-grade
+    # prewarm gets one source slot alongside its seven required intents. This
+    # preserves the established eight-query fan-out envelope and prevents a
+    # multi-source contract from exhausting its provider timeout budget.
+    limit = max(initial_query_budget, required_slots)
     selected = list(queries[:limit])
     selected_intents = {query.query_intent for query in selected}
     for required in _DECISION_GRADE_REQUIRED_QUERY_INTENTS:

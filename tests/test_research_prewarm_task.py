@@ -207,8 +207,8 @@ async def test_prewarm_process_market_persists_research_run_and_evidence(
     assert result.status == ResearchStatus.NEEDS_RESEARCH.value
     assert result.attempted is True
     assert result.evidence_count == 2
-    assert provider_completions == 8
-    assert len(provider_starts) == 8
+    assert provider_completions == 6
+    assert len(provider_starts) == 6
     assert all(
         later - earlier >= 0.014
         for earlier, later in zip(provider_starts, provider_starts[1:])
