@@ -2579,6 +2579,8 @@ def _extract_open_questions(reason: str | None) -> tuple[str, ...]:
 def _structured_indicator_signal(
     evidence: list[ResearchEvidence],
     market: Any,
+    *,
+    allow_gdpnow: bool = True,
 ) -> dict[str, Any] | None:
     market_text = " ".join(
         (
@@ -2615,9 +2617,10 @@ def _structured_indicator_signal(
         if cpi_threshold is not None:
             return _structured_cpi_signal(evidence, cpi_threshold)
         return None
-    gdp_signal = _structured_gdpnow_signal(evidence, threshold)
-    if gdp_signal is not None:
-        return gdp_signal
+    if allow_gdpnow:
+        gdp_signal = _structured_gdpnow_signal(evidence, threshold)
+        if gdp_signal is not None:
+            return gdp_signal
     cpi_threshold = _cpi_threshold_from_text(market_text)
     if cpi_threshold is not None:
         return _structured_cpi_signal(evidence, cpi_threshold)
@@ -2629,8 +2632,13 @@ def _deterministic_decision_signal(
     market: Any,
     *,
     allow_evidence_signal: bool,
+    allow_gdpnow: bool = True,
 ) -> dict[str, Any] | None:
-    structured_signal = _structured_indicator_signal(evidence, market)
+    structured_signal = _structured_indicator_signal(
+        evidence,
+        market,
+        allow_gdpnow=allow_gdpnow,
+    )
     if structured_signal:
         structured_direction = str(structured_signal["direction"])
         has_conflicting_directional_settlement = any(
@@ -2778,6 +2786,7 @@ def _structured_gdpnow_signal(
         for item in evidence
         if item.metric_name == "gdpnow_real_gdp_growth_saar"
         and item.metric_value is not None
+        and not _is_gdpnow_derived_countercheck(item)
         and (
             not _is_gdpnow_structured_evidence(item)
             or item.supports_direction in {"yes", "no"}
@@ -6939,6 +6948,20 @@ async def run_research_gate(
         contract_fingerprint,
         f"{ticker} {_market_text(market)}",
     )
+    live_cached_gdpnow_countercheck = live_mode and any(
+        item.claim_type == "contradiction_check"
+        and item.metric_name == _GDPNOW_METRIC_NAME
+        for item in usable_cached_evidence
+    )
+    if live_cached_gdpnow_countercheck:
+        usable_cached_evidence = [
+            item
+            for item in usable_cached_evidence
+            if not (
+                item.claim_type == "contradiction_check"
+                and item.metric_name == _GDPNOW_METRIC_NAME
+            )
+        ]
 
     async def finalize_verdict(verdict: ResearchVerdict) -> ResearchVerdict:
         open_questions = research_questions_for_skip(
@@ -7064,6 +7087,18 @@ async def run_research_gate(
         return verdict
 
     if cache_only:
+        if live_cached_gdpnow_countercheck:
+            return ResearchVerdict(
+                status=ResearchStatus.CONTINUE_RESEARCHING,
+                attempted=False,
+                queries=queries,
+                evidence=usable_cached_evidence,
+                summary=(
+                    "Live cache replay cannot use a GDPNow-derived countercheck; "
+                    "the persisted derived record is paper/prewarm-only."
+                ),
+                skip_reason="gdpnow_countercheck_live_disabled",
+            )
         if not _has_sufficient_dossier_evidence(usable_cached_evidence, contract_fingerprint):
             return ResearchVerdict(
                 status=ResearchStatus.CONTINUE_RESEARCHING,
@@ -7075,25 +7110,6 @@ async def run_research_gate(
                     "contract-matching dossier evidence; no live research attempted."
                 ),
                 skip_reason="cached_dossier_insufficient",
-            )
-        if live_mode and any(
-            _is_gdpnow_derived_countercheck(item)
-            for item in usable_cached_evidence
-        ):
-            return ResearchVerdict(
-                status=ResearchStatus.CONTINUE_RESEARCHING,
-                attempted=False,
-                queries=queries,
-                evidence=[
-                    item
-                    for item in usable_cached_evidence
-                    if not _is_gdpnow_derived_countercheck(item)
-                ],
-                summary=(
-                    "Live cache replay cannot use a GDPNow-derived countercheck; "
-                    "the persisted derived record is paper/prewarm-only."
-                ),
-                skip_reason="gdpnow_countercheck_live_disabled",
             )
         cached_status = getattr(cached_dossier, "last_verdict_status", None)
         if (
@@ -7355,41 +7371,18 @@ async def run_research_gate(
         gdp_direction = None
         if gdp_threshold is not None and gdp_observation is not None:
             gdp_direction = "yes" if float(gdp_observation.metric_value) >= gdp_threshold else "no"
-        legacy_evidence = [
-            replace(
-                item,
-                supports_direction=gdp_direction,
-                supports_confidence=max(
-                    float(item.supports_confidence or 0.0),
-                    _gdpnow_confidence(float(item.metric_value), gdp_threshold),
-                )
-                if gdp_threshold is not None and item.metric_value is not None
-                else item.supports_confidence,
-            )
-            if item is gdp_observation and gdp_direction in {"yes", "no"}
-            else item
-            for item in evidence
-        ]
         return await finalize_verdict(
             ResearchVerdict(
                 status=ResearchStatus.UNTRADEABLE,
                 attempted=True,
                 queries=queries,
-                evidence=legacy_evidence,
+                evidence=evidence,
                 summary=(
                     "GDPNow evidence cannot be bound to a real-GDP settlement "
                     "contract with an unambiguous metric definition."
                 ),
                 skip_reason="no_edge",
-                force_side=next(
-                    (
-                        item.supports_direction
-                        for item in evidence
-                        if _is_gdpnow_structured_evidence(item)
-                        and item.supports_direction in {"yes", "no"}
-                    ),
-                    None,
-                ),
+                force_side=gdp_direction,
                 market_price=(
                     no_ask
                     if gdp_direction == "no"
@@ -7464,6 +7457,9 @@ async def run_research_gate(
             evidence,
             market,
             allow_evidence_signal=True,
+            allow_gdpnow=(
+                not live_mode and _parse_gdp_threshold_contract(market) is None
+            ),
         )
         if deterministic_signal:
             model_direction = str(deterministic_signal["direction"])
@@ -7480,74 +7476,18 @@ async def run_research_gate(
         and any(_is_gdpnow_structured_evidence(item) for item in evidence)
         and _has_official_data_pending(evidence)
     ):
-        gdp_threshold = _gdp_threshold_from_text(_market_text(market))
-        gdp_observation = next(
-            (
-                item
-                for item in evidence
-                if item.metric_name == _GDPNOW_METRIC_NAME
-                and item.metric_value is not None
-            ),
-            None,
-        )
-        estimated_probability = None
-        if gdp_threshold is not None and gdp_observation is not None:
-            estimated_probability = max(
-                0.05,
-                min(
-                    0.95,
-                    0.50 + (float(gdp_observation.metric_value) - gdp_threshold) / 5.0,
-                ),
-            )
-        gdp_direction = None
-        if gdp_threshold is not None and gdp_observation is not None:
-            gdp_direction = "yes" if float(gdp_observation.metric_value) >= gdp_threshold else "no"
-        legacy_evidence = [
-            replace(
-                item,
-                supports_direction=gdp_direction,
-                supports_confidence=max(
-                    float(item.supports_confidence or 0.0),
-                    _gdpnow_confidence(float(item.metric_value), gdp_threshold),
-                )
-                if gdp_threshold is not None and item.metric_value is not None
-                else item.supports_confidence,
-            )
-            if item is gdp_observation and gdp_direction in {"yes", "no"}
-            else item
-            for item in evidence
-        ]
-        market_price = (
-            no_ask
-            if gdp_direction == "no"
-            else yes_ask
-            if gdp_direction == "yes"
-            else observed_market_price
-        )
-        estimated_edge = None
-        if estimated_probability is not None and market_price is not None:
-            side_probability = (
-                estimated_probability
-                if gdp_direction == "yes"
-                else 1.0 - estimated_probability
-                if gdp_direction == "no"
-                else estimated_probability
-            )
-            estimated_edge = side_probability - market_price - 0.01
         return await finalize_verdict(
             ResearchVerdict(
                 status=ResearchStatus.NEEDS_COUNTER_EVIDENCE,
                 attempted=True,
                 queries=queries,
-                evidence=legacy_evidence,
+                evidence=evidence,
                 summary=(
-                    "GDPNow is directional context only; obtain an independent "
-                    "counter-evidence adjudication before selecting a side."
+                    "GDPNow is observational context only; obtain independent "
+                    "directional and counter evidence before selecting a side."
                 ),
                 skip_reason="missing_counter_evidence",
-                market_price=market_price,
-                estimated_probability=estimated_probability,
-                estimated_edge=estimated_edge,
+                market_price=observed_market_price,
             )
         )
     if evidence:
@@ -7864,6 +7804,9 @@ async def run_research_gate(
         evidence,
         market,
         allow_evidence_signal=require_decision_grade,
+        allow_gdpnow=(
+            not live_mode and _parse_gdp_threshold_contract(market) is None
+        ),
     )
     if deterministic_signal:
         model_direction = str(deterministic_signal["direction"])
