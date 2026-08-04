@@ -28,6 +28,8 @@ _COHORT_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 _IDENTITY_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 _ACTIVE_COHORTS_DIRNAME = "paper_cohorts"
 _LEGACY_PENDING_COHORTS_DIRNAME = "legacy_pending_paper_cohorts"
+_FINALIZED_LEGACY_PENDING_COHORTS_DIRNAME = "finalized_legacy_pending_paper_cohorts"
+_FINALIZED_LEGACY_PENDING_PAYLOAD_DIRNAME = "payload"
 _PROVISIONED_COHORTS_DIRNAMES = frozenset(
     (_ACTIVE_COHORTS_DIRNAME, _LEGACY_PENDING_COHORTS_DIRNAME)
 )
@@ -51,6 +53,24 @@ _PAPER_COHORT_KINDS = frozenset(
     )
 )
 LEGACY_PENDING_BASELINE_COHORT_ID = "legacy-pending-baseline"
+
+
+def is_finalized_legacy_pending_archive_payload_path(path: Path | str) -> bool:
+    """Return whether ``path`` is lexically inside a finalized archive payload."""
+    try:
+        parts = Path(os.path.normpath(os.fspath(path))).parts
+    except (TypeError, ValueError):
+        return False
+
+    for root_index, component in enumerate(parts):
+        if component != _FINALIZED_LEGACY_PENDING_COHORTS_DIRNAME:
+            continue
+        if (
+            root_index + 2 < len(parts)
+            and parts[root_index + 2] == _FINALIZED_LEGACY_PENDING_PAYLOAD_DIRNAME
+        ):
+            return True
+    return False
 
 
 @dataclass(frozen=True)

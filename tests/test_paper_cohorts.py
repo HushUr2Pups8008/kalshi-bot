@@ -639,6 +639,77 @@ def test_active_cutover_cannot_coexist_with_legacy_pending_root(tmp_path: Path):
         )
 
 
+def test_active_cutover_waits_for_finalized_pending_discovery_and_root_reconciliation(
+    tmp_path: Path,
+):
+    legacy_path = tmp_path / "paper_trades.db"
+    _state_db(legacy_path, notional_bankroll=500.0, unresolved=1)
+    pending = resolve_runtime_paper_cohort(
+        "pending-20260728",
+        legacy_starting_bankroll=None,
+        active_starting_bankroll=125.0,
+        db_root=tmp_path,
+        cohort_kind="legacy_pending",
+    )
+    exposure = legacy_open_exposure_fingerprint(legacy_path)
+    initialize_legacy_pending_paper_cohort_manifest(
+        pending,
+        max_days_to_close=14.0,
+        legacy_db_path=legacy_path,
+        legacy_starting_bankroll=500.0,
+        expected_legacy_open_trade_count=exposure.unresolved_trade_count,
+        expected_legacy_open_rows_sha256=exposure.rows_sha256,
+    )
+    active = resolve_runtime_paper_cohort(
+        "active-20260728",
+        legacy_starting_bankroll=None,
+        active_starting_bankroll=125.0,
+        db_root=tmp_path,
+        cohort_kind="active",
+    )
+
+    with pytest.raises(ValueError, match="cannot coexist"):
+        initialize_active_paper_cohort_manifest(
+            active,
+            max_days_to_close=14.0,
+            legacy_db_path=legacy_path,
+            legacy_starting_bankroll=500.0,
+        )
+
+    pending_root = tmp_path / "legacy_pending_paper_cohorts"
+    finalized_payload_root = (
+        tmp_path
+        / "finalized_legacy_pending_paper_cohorts"
+        / "finalization-20260801t180000z"
+        / "payload"
+    )
+    finalized_payload_root.parent.mkdir(parents=True)
+    shutil.move(str(pending_root), finalized_payload_root)
+
+    assert finalized_payload_root.is_dir()
+    assert discover_legacy_pending_paper_risk_cohorts(tmp_path) == ()
+    with pytest.raises(ValueError, match="zero unresolved"):
+        initialize_active_paper_cohort_manifest(
+            active,
+            max_days_to_close=14.0,
+            legacy_db_path=legacy_path,
+            legacy_starting_bankroll=500.0,
+        )
+    assert not active.db_path.parent.exists()
+
+    with sqlite3.connect(legacy_path) as conn:
+        conn.execute("UPDATE paper_trades SET resolved = 1")
+
+    manifest_path = initialize_active_paper_cohort_manifest(
+        active,
+        max_days_to_close=14.0,
+        legacy_db_path=legacy_path,
+        legacy_starting_bankroll=500.0,
+    )
+
+    assert manifest_path.exists()
+
+
 @pytest.mark.skipif(os.name == "nt", reason="requires POSIX hardlink semantics")
 def test_pending_snapshot_external_hardlink_is_blocked_without_storage_root(
     tmp_path: Path,
