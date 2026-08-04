@@ -1053,6 +1053,19 @@ def build_research_queries(news: Any, market: Any) -> list[ResearchQuery]:
                 source_class=source_class,
             )
         )
+    # Prewarm may attach shadow-only domains as query hints. These hints do not
+    # participate in market source-path admission or count as evidence.
+    for raw_domain in getattr(market, "_research_source_hint_domains", ()) or ():
+        domain = _clean(raw_domain).lower().removeprefix("www.")
+        if not domain or any(char in domain for char in "/ "):
+            continue
+        queries.append(
+            ResearchQuery(
+                query=f"site:{domain} {title or ticker}",
+                query_intent="resolution_source",
+                source_class="resolution_source",
+            )
+        )
     for source in getattr(market, "settlement_sources", ()) or ():
         if _is_placeholder_settlement_source(source):
             continue

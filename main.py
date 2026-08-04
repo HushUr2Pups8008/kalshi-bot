@@ -1832,6 +1832,8 @@ class TradingBot:
     def _create_research_prewarm_runtime_task(self) -> asyncio.Task | None:
         if not bool(getattr(cfg, "enable_research_prewarm_task", False)):
             return None
+        from tasks.market_source_hint_shadow_store import MarketSourceHintShadowStore
+
         prewarm = ResearchPrewarmTask(
             max_queries=int(getattr(cfg, "real_web_research_max_queries", 6)),
             research_timeout_seconds=float(
@@ -1842,6 +1844,9 @@ class TradingBot:
                 getattr(cfg, "research_prewarm_target_cooldown_seconds", 1800.0)
             ),
             market_result_sink=self._admit_research_prewarm_paper_review,
+            source_hint_shadow_store=MarketSourceHintShadowStore(
+                DATA_DIR / "market_source_hint_shadow.db"
+            ),
         )
         return asyncio.create_task(
             prewarm.run_periodic(

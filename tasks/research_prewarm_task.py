@@ -162,6 +162,7 @@ class ResearchPrewarmTask:
         target_cooldown_seconds: float = 0.0,
         result_sink: ResearchPrewarmResultSink | None = None,
         market_result_sink: ResearchPrewarmMarketResultSink | None = None,
+        source_hint_shadow_store: Any | None = None,
     ) -> None:
         self.store = store or default_store()
         self.research_gate = research_gate
@@ -180,6 +181,7 @@ class ResearchPrewarmTask:
         self._last_attempted_by_ticker: dict[str, float] = {}
         self.result_sink = result_sink or _write_research_prewarm_result
         self.market_result_sink = market_result_sink
+        self.source_hint_shadow_store = source_hint_shadow_store
 
     async def _search_provider_with_admission(self, query: Any) -> Any:
         return await _get_research_prewarm_provider_admission().run(
@@ -242,6 +244,7 @@ class ResearchPrewarmTask:
                 contract_question=contract_question,
                 market=market,
             )
+        await self._hydrate_market_source_hint_path(market)
         try:
             persisted_skip = await self._persisted_task_skip_result(
                 ticker,
@@ -384,6 +387,58 @@ class ResearchPrewarmTask:
             )
         except Exception as exc:
             raise ResearchPrewarmError(f"failed research prewarm for {ticker}") from exc
+
+    async def _hydrate_market_source_hint_path(self, market: Any) -> Any:
+        """Attach shadow provenance as a source query hint, never as evidence."""
+        # Shadow provenance can refine queries for an already sourceable market,
+        # but cannot create an otherwise missing source path or bypass admission.
+        if not market_has_research_source_path(market):
+            return market
+        reader = self.source_hint_shadow_store
+        ticker = str(getattr(market, "ticker", "") or "").strip()
+        read_records = getattr(reader, "read_records_for_ticker", None)
+        if not ticker or not callable(read_records):
+            return market
+        try:
+            observations = await asyncio.to_thread(read_records, ticker, limit=32)
+        except Exception as exc:
+            _log.warning(
+                "[RESEARCH_PREWARM] source-hint shadow lookup failed ticker=%s: %s",
+                ticker,
+                exc,
+            )
+            return market
+        existing_hints = tuple(
+            str(domain or "").strip().lower().removeprefix("www.")
+            for domain in (getattr(market, "_research_source_hint_domains", ()) or ())
+        )
+        seen_domains = set(existing_hints)
+        hydrated: list[str] = []
+        for observation in observations or ():
+            domain = (
+                str(getattr(observation, "source_hint_domain", "") or "")
+                .strip()
+                .lower()
+                .removeprefix("www.")
+            )
+            if not domain or domain in seen_domains or any(char in domain for char in "/ "):
+                continue
+            seen_domains.add(domain)
+            hydrated.append(domain)
+        if hydrated:
+            try:
+                setattr(
+                    market,
+                    "_research_source_hint_domains",
+                    existing_hints + tuple(hydrated),
+                )
+            except Exception:
+                _log.warning(
+                    "[RESEARCH_PREWARM] source-hint shadow hydration unavailable "
+                    "ticker=%s",
+                    ticker,
+                )
+        return market
 
     async def _terminal_skip_result(
         self,
