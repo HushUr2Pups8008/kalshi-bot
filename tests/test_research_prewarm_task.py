@@ -652,6 +652,13 @@ async def test_prewarm_provider_admission_is_shared_by_live_loop():
     assert second is first
 
 
+def test_default_provider_admission_fits_decision_grade_query_budget():
+    assert (
+        research_prewarm_task_module._RESEARCH_PREWARM_PROVIDER_MIN_START_INTERVAL_SECONDS
+        <= 0.5
+    )
+
+
 def test_prewarm_provider_admission_does_not_retain_closed_event_loops(monkeypatch):
     references: list[
         tuple[
