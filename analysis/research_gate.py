@@ -49,6 +49,7 @@ from config import cfg
 from utils.bounded_https import (
     BoundedHTTPSAttemptTelemetry,
     _validated_global_ipv4_addresses as _shared_validated_global_ipv4_addresses,
+    fetch_bounded_https_ipv4,
     fetch_bounded_https_dual_stack,
 )
 from utils.logger import get_logger
@@ -3819,7 +3820,7 @@ async def _fetch_bounded_https_dual_stack(
     )
 
 
-async def _fetch_google_news_rss_dual_stack(
+async def _fetch_google_news_rss_ipv4(
     url: str,
     *,
     timeout: float,
@@ -3828,16 +3829,21 @@ async def _fetch_google_news_rss_dual_stack(
     connector_factory: Callable[..., Any] = aiohttp.TCPConnector,
     session_factory: Callable[..., Any] = aiohttp.ClientSession,
 ) -> bytes:
-    return await _fetch_bounded_https_dual_stack(
+    # Google News currently redirects to its canonical RSS endpoint, which is
+    # available through the provider's pinned IPv4 path in this runtime.
+    return await fetch_bounded_https_ipv4(
         url,
         canonical_host="news.google.com",
         provider_name="Google News RSS",
         user_agent="kalshi-bot-research/1.0",
         timeout=timeout,
         max_bytes=max_bytes,
+        max_same_host_redirects=1,
+        admission_factory=lambda: _get_generic_web_search_work_limiter().slot(),
         resolver_factory=resolver_factory,
         connector_factory=connector_factory,
         session_factory=session_factory,
+        telemetry_sink=_log_generic_search_transport_event,
     )
 
 
@@ -3873,7 +3879,7 @@ async def _rss_search(
         {"q": query.query, "hl": "en-US", "gl": "US", "ceid": "US:en"}
     )
     url = f"https://news.google.com/rss/search?{params}"
-    raw = await _fetch_google_news_rss_dual_stack(
+    raw = await _fetch_google_news_rss_ipv4(
         url,
         timeout=timeout,
         max_bytes=300_000,

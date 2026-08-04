@@ -447,6 +447,43 @@ def _is_ip_literal(host: str) -> bool:
     return True
 
 
+_SAME_HOST_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+
+
+def _validated_same_host_https_redirect(
+    current_url: str,
+    location: object,
+    *,
+    canonical_host: str,
+    provider_name: str,
+) -> str:
+    if (
+        not isinstance(location, str)
+        or not location
+        or any(char in location for char in ("\r", "\n", "\x00"))
+    ):
+        raise ValueError(f"{provider_name} redirect requires same-host HTTPS")
+
+    redirect_url = urllib.parse.urljoin(current_url, location)
+    try:
+        parsed = urllib.parse.urlsplit(redirect_url)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError(
+            f"{provider_name} redirect requires same-host HTTPS"
+        ) from exc
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != canonical_host
+        or _is_ip_literal(parsed.hostname or "")
+        or port not in {None, 443}
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise ValueError(f"{provider_name} redirect requires same-host HTTPS")
+    return redirect_url
+
+
 async def _fetch_bounded_https(
     url: str,
     *,
@@ -456,6 +493,7 @@ async def _fetch_bounded_https(
     request_headers: Mapping[str, str] | None = None,
     timeout: float,
     max_bytes: int,
+    max_same_host_redirects: int = 0,
     admission_factory: AsyncAdmissionFactory | None = None,
     resolver_factory: Callable[[], Any] | None = None,
     connector_factory: Callable[..., Any] = aiohttp.TCPConnector,
@@ -485,6 +523,14 @@ async def _fetch_bounded_https(
         )
     if not math.isfinite(timeout) or timeout <= 0 or max_bytes <= 0:
         raise ValueError(f"{provider_name} transport bounds must be positive")
+    if (
+        not isinstance(max_same_host_redirects, int)
+        or isinstance(max_same_host_redirects, bool)
+        or max_same_host_redirects not in {0, 1}
+    ):
+        raise ValueError(
+            f"{provider_name} max_same_host_redirects must be zero or one"
+        )
     extra_headers = _validated_request_headers(request_headers)
 
     loop = asyncio.get_running_loop()
@@ -541,36 +587,58 @@ async def _fetch_bounded_https(
                         timeout=client_timeout,
                         headers={"User-Agent": user_agent, **extra_headers},
                     ) as session:
-                        async with session.get(url, allow_redirects=False) as response:
-                            response_headers_ms = _elapsed_ms(
-                                response_headers_started_at,
-                                loop.time(),
-                            )
-                            http_status = response.status
-                            if not 200 <= response.status < 300:
-                                raise urllib.error.HTTPError(
-                                    url,
-                                    response.status,
-                                    response.reason,
-                                    response.headers,
-                                    None,
-                                )
-                            terminal_stage = "body_read"
-                            body_read_started_at = loop.time()
-                            try:
-                                raw = await response.content.readexactly(max_bytes + 1)
-                            except asyncio.IncompleteReadError as exc:
-                                raw = exc.partial
-                            finally:
-                                body_read_ms = _elapsed_ms(
-                                    body_read_started_at,
+                        current_url = url
+                        redirects_remaining = max_same_host_redirects
+                        while True:
+                            http_status = None
+                            async with session.get(
+                                current_url,
+                                allow_redirects=False,
+                            ) as response:
+                                response_headers_ms = _elapsed_ms(
+                                    response_headers_started_at,
                                     loop.time(),
                                 )
-                            bytes_read = len(raw)
-                            if len(raw) > max_bytes:
-                                raise ValueError(
-                                    f"{provider_name} exceeded its {max_bytes}-byte limit"
-                                )
+                                http_status = response.status
+                                location = response.headers.get("Location")
+                                if (
+                                    response.status in _SAME_HOST_REDIRECT_STATUSES
+                                    and redirects_remaining > 0
+                                    and location is not None
+                                ):
+                                    current_url = _validated_same_host_https_redirect(
+                                        current_url,
+                                        location,
+                                        canonical_host=canonical_host,
+                                        provider_name=provider_name,
+                                    )
+                                    redirects_remaining -= 1
+                                    continue
+                                if not 200 <= response.status < 300:
+                                    raise urllib.error.HTTPError(
+                                        current_url,
+                                        response.status,
+                                        response.reason,
+                                        response.headers,
+                                        None,
+                                    )
+                                terminal_stage = "body_read"
+                                body_read_started_at = loop.time()
+                                try:
+                                    raw = await response.content.readexactly(max_bytes + 1)
+                                except asyncio.IncompleteReadError as exc:
+                                    raw = exc.partial
+                                finally:
+                                    body_read_ms = _elapsed_ms(
+                                        body_read_started_at,
+                                        loop.time(),
+                                    )
+                                bytes_read = len(raw)
+                                if len(raw) > max_bytes:
+                                    raise ValueError(
+                                        f"{provider_name} exceeded its {max_bytes}-byte limit"
+                                    )
+                                break
                 finally:
                     if response_headers_ms is None:
                         response_headers_ms = _elapsed_ms(
@@ -634,6 +702,7 @@ async def fetch_bounded_https_ipv4(
     request_headers: Mapping[str, str] | None = None,
     timeout: float,
     max_bytes: int,
+    max_same_host_redirects: int = 0,
     admission_factory: AsyncAdmissionFactory | None = None,
     resolver_factory: Callable[[], Any] | None = None,
     connector_factory: Callable[..., Any] = aiohttp.TCPConnector,
@@ -649,6 +718,7 @@ async def fetch_bounded_https_ipv4(
         request_headers=request_headers,
         timeout=timeout,
         max_bytes=max_bytes,
+        max_same_host_redirects=max_same_host_redirects,
         admission_factory=admission_factory,
         resolver_factory=resolver_factory,
         connector_factory=connector_factory,

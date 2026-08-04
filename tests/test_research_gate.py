@@ -5742,7 +5742,7 @@ def _stub_google_news_rss(monkeypatch, rss: bytes) -> None:
 
     monkeypatch.setattr(
         research_gate_module,
-        "_fetch_google_news_rss_dual_stack",
+        "_fetch_google_news_rss_ipv4",
         fetch,
     )
 
