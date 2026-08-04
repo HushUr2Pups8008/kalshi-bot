@@ -266,7 +266,7 @@ async def test_slow_dns_is_cancelled_by_total_deadline_without_background_work()
     before = time.monotonic()
 
     with pytest.raises(TimeoutError):
-        await research_gate._fetch_google_news_rss_dual_stack(
+        await research_gate._fetch_google_news_rss_ipv4(
             "https://news.google.com/rss/search?q=test",
             timeout=0.03,
             max_bytes=300_000,
@@ -286,7 +286,7 @@ async def test_empty_async_resolver_is_recognized_provider_availability_failure(
     resolver = _Resolver(addresses=())
 
     with pytest.raises(socket.gaierror) as raised:
-        await research_gate._fetch_google_news_rss_dual_stack(
+        await research_gate._fetch_google_news_rss_ipv4(
             "https://news.google.com/rss/search?q=test",
             timeout=0.2,
             max_bytes=300_000,
@@ -306,7 +306,7 @@ async def test_multi_address_connect_tls_write_share_remaining_total_deadline() 
     before = time.monotonic()
 
     with pytest.raises(TimeoutError):
-        await research_gate._fetch_google_news_rss_dual_stack(
+        await research_gate._fetch_google_news_rss_ipv4(
             "https://news.google.com/rss/search?q=test",
             timeout=0.05,
             max_bytes=300_000,
@@ -341,7 +341,7 @@ async def test_slow_body_read_is_cancelled_and_closes_response_session_connector
     connectors, sessions, connector_factory, session_factory = _transport_factories(response)
 
     with pytest.raises(TimeoutError):
-        await research_gate._fetch_google_news_rss_dual_stack(
+        await research_gate._fetch_google_news_rss_ipv4(
             "https://news.google.com/rss/search?q=test",
             timeout=0.03,
             max_bytes=300_000,
@@ -373,7 +373,7 @@ async def test_external_cancellation_closes_response_session_connector_without_t
     )
     connectors, sessions, connector_factory, session_factory = _transport_factories(response)
     task = asyncio.create_task(
-        research_gate._fetch_google_news_rss_dual_stack(
+        research_gate._fetch_google_news_rss_ipv4(
             "https://news.google.com/rss/search?q=test",
             timeout=1.0,
             max_bytes=300_000,
@@ -397,7 +397,7 @@ async def test_external_cancellation_closes_response_session_connector_without_t
 
 
 @pytest.mark.asyncio
-async def test_generic_web_search_work_is_bounded_while_dual_stack_dns_races() -> None:
+async def test_generic_web_search_work_is_bounded_while_google_ipv4_dns_runs() -> None:
     blocker = asyncio.Event()
     counters = {"active": 0, "peak": 0}
 
@@ -406,7 +406,7 @@ async def test_generic_web_search_work_is_bounded_while_dual_stack_dns_races() -
 
     tasks = [
         asyncio.create_task(
-            research_gate._fetch_google_news_rss_dual_stack(
+            research_gate._fetch_google_news_rss_ipv4(
                 "https://news.google.com/rss/search?q=test",
                 timeout=1.0,
                 max_bytes=300_000,
@@ -415,7 +415,7 @@ async def test_generic_web_search_work_is_bounded_while_dual_stack_dns_races() -
         )
         for _ in range(8)
     ]
-    expected_dns_work = research_gate._GENERIC_WEB_SEARCH_MAX_CONCURRENCY * 2
+    expected_dns_work = research_gate._GENERIC_WEB_SEARCH_MAX_CONCURRENCY
     for _ in range(50):
         if counters["active"] == expected_dns_work:
             break
@@ -456,7 +456,7 @@ async def test_google_and_duckduckgo_transport_emit_distinct_provider_labels(
         _transport_factories(duck_response)
     )
 
-    await research_gate._fetch_google_news_rss_dual_stack(
+    await research_gate._fetch_google_news_rss_ipv4(
         "https://news.google.com/rss/search?q=private-google-query",
         timeout=0.5,
         max_bytes=300_000,
@@ -489,11 +489,11 @@ async def test_google_and_duckduckgo_transport_emit_distinct_provider_labels(
 
 
 @pytest.mark.asyncio
-async def test_canonical_host_is_pinned_without_redirects_and_body_is_bounded() -> None:
+async def test_google_news_canonical_host_is_pinned_to_ipv4_and_body_is_bounded() -> None:
     response = _Response()
     connectors, sessions, connector_factory, session_factory = _transport_factories(response)
 
-    raw = await research_gate._fetch_google_news_rss_dual_stack(
+    raw = await research_gate._fetch_google_news_rss_ipv4(
         "https://news.google.com/rss/search?q=test",
         timeout=0.5,
         max_bytes=300_000,
@@ -505,16 +505,15 @@ async def test_canonical_host_is_pinned_without_redirects_and_body_is_bounded() 
     assert raw == _RSS
     assert connectors[0].kwargs == {
         "resolver": connectors[0].kwargs["resolver"],
-        "family": socket.AF_UNSPEC,
+        "family": socket.AF_INET,
         "use_dns_cache": False,
         "force_close": True,
         "limit": 1,
         "limit_per_host": 1,
-        "happy_eyeballs_delay": 0.25,
-        "interleave": 1,
+        "happy_eyeballs_delay": None,
     }
     pinned = connectors[0].kwargs["resolver"]
-    answers = await pinned.resolve("news.google.com", 443, socket.AF_UNSPEC)
+    answers = await pinned.resolve("news.google.com", 443, socket.AF_INET)
     assert answers == [
         {
             "hostname": "news.google.com",
@@ -584,7 +583,7 @@ async def test_redirect_is_refused_with_existing_http_error_taxonomy() -> None:
     connectors, sessions, connector_factory, session_factory = _transport_factories(response)
 
     with pytest.raises(urllib.error.HTTPError) as raised:
-        await research_gate._fetch_google_news_rss_dual_stack(
+        await research_gate._fetch_google_news_rss_ipv4(
             "https://news.google.com/rss/search?q=test",
             timeout=0.5,
             max_bytes=300_000,
@@ -606,7 +605,7 @@ async def test_oversized_body_is_rejected_at_exact_cap_and_all_resources_close()
     connectors, sessions, connector_factory, session_factory = _transport_factories(response)
 
     with pytest.raises(ValueError, match="10-byte limit"):
-        await research_gate._fetch_google_news_rss_dual_stack(
+        await research_gate._fetch_google_news_rss_ipv4(
             "https://news.google.com/rss/search?q=test",
             timeout=0.5,
             max_bytes=10,

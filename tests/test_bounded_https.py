@@ -148,11 +148,12 @@ class _Response:
         *,
         status: int = 200,
         reason: str = "OK",
+        headers: dict[str, str] | None = None,
         content: _Content | None = None,
     ) -> None:
         self.status = status
         self.reason = reason
-        self.headers = {"X-Test": "bounded"}
+        self.headers = headers if headers is not None else {"X-Test": "bounded"}
         self.content = content or _Content(body)
         self.closed = False
 
@@ -196,12 +197,17 @@ class _Session:
         connector: _Connector,
         timeout: aiohttp.ClientTimeout,
         headers: dict[str, str],
-        request_context: _RequestContext,
+        request_context: _RequestContext | list[_RequestContext],
     ) -> None:
         self.connector = connector
         self.timeout = timeout
         self.headers = headers
         self.request_context = request_context
+        self._request_contexts = (
+            list(request_context)
+            if isinstance(request_context, list)
+            else [request_context]
+        )
         self.closed = False
         self.active = False
         self.get_calls: list[dict[str, Any]] = []
@@ -217,7 +223,9 @@ class _Session:
 
     def get(self, url: str, **kwargs: Any) -> _RequestContext:
         self.get_calls.append({"url": url, **kwargs})
-        return self.request_context
+        if not self._request_contexts:
+            raise AssertionError("unexpected extra transport request")
+        return self._request_contexts.pop(0)
 
 
 class _Admission:
@@ -252,12 +260,15 @@ class _Admission:
 def _transport_factories(
     response: _Response | None = None,
     *,
+    responses: tuple[_Response, ...] | None = None,
     enter_delay: float = 0.0,
     enter_error: BaseException | None = None,
 ) -> tuple[list[_Connector], list[_Session], Any, Any]:
     connectors: list[_Connector] = []
     sessions: list[_Session] = []
-    response = response or _Response()
+    if response is not None and responses is not None:
+        raise ValueError("pass either response or responses")
+    selected_responses = responses or (response or _Response(),)
 
     def connector_factory(**kwargs: Any) -> _Connector:
         connector = _Connector(**kwargs)
@@ -267,11 +278,14 @@ def _transport_factories(
     def session_factory(**kwargs: Any) -> _Session:
         session = _Session(
             **kwargs,
-            request_context=_RequestContext(
-                response,
-                enter_delay=enter_delay,
-                enter_error=enter_error,
-            ),
+            request_context=[
+                _RequestContext(
+                    item,
+                    enter_delay=enter_delay,
+                    enter_error=enter_error,
+                )
+                for item in selected_responses
+            ],
         )
         sessions.append(session)
         return session
@@ -915,6 +929,178 @@ async def test_redirect_is_not_followed() -> None:
     assert raised.value.code == 302
     assert sessions[0].get_calls == [{"url": _URL, "allow_redirects": False}]
     assert response.closed
+    _assert_resources_closed(connectors, sessions)
+
+
+@pytest.mark.asyncio
+async def test_single_same_host_https_redirect_is_followed_only_when_opted_in() -> None:
+    redirect = _Response(
+        status=302,
+        reason="Found",
+        headers={"Location": "/redirected"},
+    )
+    final = _Response(body=b"ok")
+    connectors, sessions, connector_factory, session_factory = _transport_factories(
+        responses=(redirect, final)
+    )
+
+    raw = await fetch_bounded_https_ipv4(
+        _URL,
+        canonical_host=_HOST,
+        provider_name=_PROVIDER,
+        user_agent=_USER_AGENT,
+        timeout=0.5,
+        max_bytes=10,
+        max_same_host_redirects=1,
+        resolver_factory=_Resolver,
+        connector_factory=connector_factory,
+        session_factory=session_factory,
+    )
+
+    assert raw == b"ok"
+    assert sessions[0].get_calls == [
+        {"url": _URL, "allow_redirects": False},
+        {"url": "https://example.com/redirected", "allow_redirects": False},
+    ]
+    assert redirect.closed
+    assert final.closed
+    _assert_resources_closed(connectors, sessions)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "location",
+    (
+        "https://attacker.example/redirected",
+        "//attacker.example/redirected",
+        "http://example.com/redirected",
+        "https://example.com:444/redirected",
+        "https://user:password@example.com/redirected",
+        "https://127.0.0.1/redirected",
+    ),
+)
+async def test_opted_in_redirect_rejects_noncanonical_destination_without_following(
+    location: str,
+) -> None:
+    redirect = _Response(
+        status=302,
+        reason="Found",
+        headers={"Location": location},
+    )
+    connectors, sessions, connector_factory, session_factory = _transport_factories(
+        redirect
+    )
+
+    with pytest.raises(ValueError, match="same-host HTTPS"):
+        await fetch_bounded_https_ipv4(
+            _URL,
+            canonical_host=_HOST,
+            provider_name=_PROVIDER,
+            user_agent=_USER_AGENT,
+            timeout=0.5,
+            max_bytes=10,
+            max_same_host_redirects=1,
+            resolver_factory=_Resolver,
+            connector_factory=connector_factory,
+            session_factory=session_factory,
+        )
+
+    assert sessions[0].get_calls == [{"url": _URL, "allow_redirects": False}]
+    assert redirect.closed
+    _assert_resources_closed(connectors, sessions)
+
+
+@pytest.mark.asyncio
+async def test_same_host_redirect_budget_stops_after_one_hop() -> None:
+    first = _Response(
+        status=302,
+        reason="Found",
+        headers={"Location": "/first"},
+    )
+    second = _Response(
+        status=302,
+        reason="Found",
+        headers={"Location": "/second"},
+    )
+    connectors, sessions, connector_factory, session_factory = _transport_factories(
+        responses=(first, second)
+    )
+
+    with pytest.raises(urllib.error.HTTPError) as raised:
+        await fetch_bounded_https_ipv4(
+            _URL,
+            canonical_host=_HOST,
+            provider_name=_PROVIDER,
+            user_agent=_USER_AGENT,
+            timeout=0.5,
+            max_bytes=10,
+            max_same_host_redirects=1,
+            resolver_factory=_Resolver,
+            connector_factory=connector_factory,
+            session_factory=session_factory,
+        )
+
+    assert raised.value.code == 302
+    assert sessions[0].get_calls == [
+        {"url": _URL, "allow_redirects": False},
+        {"url": "https://example.com/first", "allow_redirects": False},
+    ]
+    assert first.closed
+    assert second.closed
+    _assert_resources_closed(connectors, sessions)
+
+
+@pytest.mark.asyncio
+async def test_redirect_followup_timeout_does_not_report_prior_hop_status() -> None:
+    redirect = _Response(
+        status=302,
+        reason="Found",
+        headers={"Location": "/redirected"},
+    )
+    delayed_final = _Response(body=b"ok")
+    connectors: list[_Connector] = []
+    sessions: list[_Session] = []
+
+    def connector_factory(**kwargs: Any) -> _Connector:
+        connector = _Connector(**kwargs)
+        connectors.append(connector)
+        return connector
+
+    def session_factory(**kwargs: Any) -> _Session:
+        session = _Session(
+            **kwargs,
+            request_context=[
+                _RequestContext(redirect),
+                _RequestContext(delayed_final, enter_delay=0.05),
+            ],
+        )
+        sessions.append(session)
+        return session
+
+    telemetry: list[Any] = []
+
+    with pytest.raises(TimeoutError):
+        await fetch_bounded_https_ipv4(
+            _URL,
+            canonical_host=_HOST,
+            provider_name=_PROVIDER,
+            user_agent=_USER_AGENT,
+            timeout=0.02,
+            max_bytes=10,
+            max_same_host_redirects=1,
+            resolver_factory=_Resolver,
+            connector_factory=connector_factory,
+            session_factory=session_factory,
+            telemetry_sink=telemetry.append,
+        )
+
+    await _wait_until(lambda: len(telemetry) == 1)
+    assert len(telemetry) == 1
+    event = telemetry[0]
+    assert event.outcome == "timeout"
+    assert event.terminal_stage == "response_headers"
+    assert event.http_status is None
+    assert redirect.closed
     _assert_resources_closed(connectors, sessions)
 
 
