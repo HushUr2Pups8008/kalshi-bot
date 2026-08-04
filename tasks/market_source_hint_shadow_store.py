@@ -87,6 +87,19 @@ class MarketSourceHintShadowStore:
         bounded_limit = max(1, min(int(limit), _MAX_READ_LIMIT))
         return self._read_records_sync(bounded_limit)
 
+    def read_records_for_ticker(
+        self,
+        ticker: str,
+        *,
+        limit: int = 100,
+    ) -> tuple[MarketSourceHintShadowObservation, ...]:
+        """Return newest evidence for one ticker through a read-only connection."""
+        normalized_ticker = str(ticker or "").strip()
+        if not normalized_ticker or not self.db_path.is_file():
+            return ()
+        bounded_limit = max(1, min(int(limit), _MAX_READ_LIMIT))
+        return self._read_records_for_ticker_sync(normalized_ticker, bounded_limit)
+
     def _connect_write(self) -> sqlite3.Connection:
         connection = sqlite3.connect(
             self.db_path,
@@ -148,6 +161,30 @@ class MarketSourceHintShadowStore:
                 LIMIT ?
                 """,
                 (limit,),
+            ).fetchall()
+        finally:
+            connection.close()
+        return tuple(_observation_from_row(row) for row in rows)
+
+    def _read_records_for_ticker_sync(
+        self,
+        ticker: str,
+        limit: int,
+    ) -> tuple[MarketSourceHintShadowObservation, ...]:
+        uri = f"{self.db_path.resolve().as_uri()}?mode=ro"
+        connection = sqlite3.connect(uri, uri=True)
+        try:
+            rows = connection.execute(
+                """
+                SELECT captured_at, ticker, market_title, source_hint_query,
+                       source_hint_domain, feed_url, item_id, headline, item_url,
+                       item_source, published_at
+                FROM market_source_hint_shadow_observations
+                WHERE ticker = ?
+                ORDER BY observation_id DESC
+                LIMIT ?
+                """,
+                (ticker, limit),
             ).fetchall()
         finally:
             connection.close()

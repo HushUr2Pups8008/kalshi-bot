@@ -15,8 +15,13 @@ from analysis.research_gate import (
     ResearchQuery,
     ResearchStatus,
     ResearchVerdict,
+    build_research_queries,
 )
 from tasks.research_dossier import ResearchDossierStore
+from tasks.market_source_hint_shadow_store import (
+    MarketSourceHintShadowObservation,
+    MarketSourceHintShadowStore,
+)
 from tasks import research_prewarm_task as research_prewarm_task_module
 from tasks.research_prewarm_task import (
     ResearchPrewarmError,
@@ -2258,6 +2263,120 @@ async def test_prewarm_keeps_unresearchable_open_markets_queued(tmp_path):
     assert snapshot.terminal_reason is None
     assert snapshot.cooldown_until_ts is not None
     assert snapshot.backoff_seconds > 0
+
+
+@pytest.mark.asyncio
+async def test_prewarm_hydrates_resolution_source_hint_from_shadow_observation(tmp_path):
+    dossier_store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await dossier_store.initialize()
+    shadow_store = MarketSourceHintShadowStore(tmp_path / "market_source_hint_shadow.db")
+    await shadow_store.initialize()
+    now = datetime.now(timezone.utc)
+    await shadow_store.append(
+        MarketSourceHintShadowObservation(
+            captured_at=now,
+            ticker="KXSHADOW-HYDRATE",
+            market_title="Will the researched event resolve yes?",
+            source_hint_query="site:agency.example researched event",
+            source_hint_domain="agency.example",
+            feed_url="https://news.google.com/rss/search?q=agency.example",
+            item_id="shadow-item-1",
+            headline="Agency reports the researched event",
+            item_url="https://agency.example/result",
+            item_source="Agency",
+            published_at=now,
+        )
+    )
+    market = SimpleNamespace(
+        ticker="KXSHADOW-HYDRATE",
+        title="Will the researched event resolve yes?",
+        rules_primary="The market resolves from the official report.",
+        rules_secondary="",
+        settlement_sources=(),
+        contract_terms_url="",
+        status="active",
+        close_time="2099-12-31T23:59:59Z",
+        yes_ask_cents=60,
+        no_ask_cents=40,
+    )
+    seen_hints = []
+
+    async def research_gate(news, hydrated_market, **_kwargs):
+        seen_hints.extend(hydrated_market._research_source_hint_domains)
+        assert hydrated_market.settlement_sources == ()
+        assert any(
+            query.query == "site:agency.example Will the researched event resolve yes?"
+            for query in build_research_queries(news, hydrated_market)
+        )
+        return SimpleNamespace(
+            status=ResearchStatus.NEEDS_RESEARCH,
+            attempted=True,
+            queries=[],
+            evidence=[],
+            skip_reason="missing_resolution_source",
+        )
+
+    task = ResearchPrewarmTask(
+        store=dossier_store,
+        research_gate=research_gate,
+        source_hint_shadow_store=shadow_store,
+    )
+
+    result = await task.process_market(market)
+
+    assert result.attempted is True
+    assert seen_hints == ["agency.example"]
+
+
+@pytest.mark.asyncio
+async def test_prewarm_shadow_hint_does_not_create_missing_source_path(tmp_path):
+    dossier_store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await dossier_store.initialize()
+    shadow_store = MarketSourceHintShadowStore(tmp_path / "market_source_hint_shadow.db")
+    await shadow_store.initialize()
+    now = datetime.now(timezone.utc)
+    await shadow_store.append(
+        MarketSourceHintShadowObservation(
+            captured_at=now,
+            ticker="KXSHADOW-NO-BYPASS",
+            market_title="Unsourceable market",
+            source_hint_query="site:agency.example unsourceable",
+            source_hint_domain="agency.example",
+            feed_url="https://news.google.com/rss/search?q=agency.example",
+            item_id="shadow-item-2",
+            headline="Agency report",
+            item_url="https://agency.example/result",
+            item_source="Agency",
+            published_at=now,
+        )
+    )
+    market = SimpleNamespace(
+        ticker="KXSHADOW-NO-BYPASS",
+        title="Unsourceable market",
+        rules_primary="",
+        rules_secondary="",
+        settlement_sources=(),
+        contract_terms_url="",
+        status="active",
+        close_time="2099-12-31T23:59:59Z",
+        yes_ask_cents=60,
+        no_ask_cents=40,
+    )
+
+    async def research_gate(*_args, **_kwargs):
+        raise AssertionError("shadow hints must not bypass source-path admission")
+
+    task = ResearchPrewarmTask(
+        store=dossier_store,
+        research_gate=research_gate,
+        source_hint_shadow_store=shadow_store,
+    )
+
+    result = await task.process_market(market)
+
+    assert result.attempted is False
+    assert result.skip_reason == "no_reliable_source_path"
+    assert not hasattr(market, "_research_source_hint_domains")
 
 
 @pytest.mark.asyncio
