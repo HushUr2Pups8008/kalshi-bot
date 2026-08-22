@@ -4850,7 +4850,13 @@ class TradingBot:
                 run_gdelt_monitor(self._enqueue_news, self._make_market_getter()),
                 name="gdelt",
             ),
-            asyncio.create_task(self._news_consumer_task(),             name="news_consumer"),
+            *[
+                asyncio.create_task(
+                    self._news_consumer_task(),
+                    name=f"news_consumer_{i}",
+                )
+                for i in range(max(1, int(os.getenv("NEWS_CONSUMER_WORKERS", "1"))))
+            ],
             asyncio.create_task(self.ws.run(),                          name="websocket"),
             asyncio.create_task(self._warm_ws_subscriptions(),          name="ws_warm"),
             asyncio.create_task(self._market_refresh_task(),            name="market_refresh"),
