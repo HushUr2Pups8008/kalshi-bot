@@ -312,6 +312,22 @@ def event_news_official_research_kwargs(*, config: Any = None) -> dict[str, bool
     }
 
 
+def event_news_omit_idle_runtime_tasks(*, config: Any = None) -> bool:
+    """Politics does not start Reddit/GDELT/Polymarket/subreddit shells."""
+    return is_event_news_paper_cohort(config)
+
+
+def event_news_forecast_refresh_series(
+    configured: tuple[str, ...] | list[str] | None,
+    *,
+    config: Any = None,
+) -> tuple[str, ...]:
+    """Drop inherited freeze forecast-refresh series on the politics desk."""
+    if is_event_news_paper_cohort(config):
+        return ()
+    return tuple(str(series).strip().upper() for series in (configured or ()) if str(series).strip())
+
+
 async def apply_event_news_live_research(
     *,
     news: Any,

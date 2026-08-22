@@ -5,7 +5,7 @@ set -euo pipefail
 
 JSON=0
 INSTALL_DIR="$HOME/Library/LaunchAgents"
-GOVERNANCE_LLM_MODEL="${GOVERNANCE_LLM_MODEL:-qwen3:14b}"
+GOVERNANCE_LLM_MODEL="${GOVERNANCE_LLM_MODEL:-qwen2.5:7b}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

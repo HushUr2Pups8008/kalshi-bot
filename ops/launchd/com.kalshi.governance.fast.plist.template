@@ -27,8 +27,8 @@
         <key>PYTHONUNBUFFERED</key>
         <string>1</string>
         <!-- Source of truth for the governance LLM. Set per-machine via
-             install.sh (env override GOVERNANCE_LLM_MODEL). Default qwen3:14b
-             for Mac Studio (M4 Max, 128GB); set to qwen3:8b for MacBook (18GB). -->
+             install.sh (env override GOVERNANCE_LLM_MODEL). Default qwen2.5:7b
+             so governance cannot evict the politics money-path model. -->
         <key>GOVERNANCE_LLM_MODEL</key>
         <string>@GOVERNANCE_LLM_MODEL@</string>
     </dict>

@@ -14,7 +14,9 @@ from utils.event_news_research import (
     event_news_in_allowed_ask_band,
     event_news_min_edge,
     event_news_missing_snapshot_ask,
+    event_news_forecast_refresh_series,
     event_news_official_research_kwargs,
+    event_news_omit_idle_runtime_tasks,
     event_news_open_prefix_cap,
     event_news_prewarm_allows,
     event_news_prewarm_skip_reason,
@@ -390,3 +392,12 @@ def test_official_research_kwargs_politics_only():
         "allow_official_pdf_and_homepage": True,
         "prefer_official_sources": True,
     }
+
+
+def test_idle_runtime_tasks_and_forecast_refresh_isolated_from_freeze():
+    freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
+    politics = _politics_config()
+    assert event_news_omit_idle_runtime_tasks(config=freeze) is False
+    assert event_news_omit_idle_runtime_tasks(config=politics) is True
+    assert event_news_forecast_refresh_series(("KXDJI",), config=freeze) == ("KXDJI",)
+    assert event_news_forecast_refresh_series(("KXDJI", "KXCPI"), config=politics) == ()

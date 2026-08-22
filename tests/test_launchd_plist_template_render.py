@@ -13,7 +13,6 @@ EXPECTED_LABELS = {
     "com.jake.kalshi-bot",
     "com.jake.kalshi-bothealth",
     "com.jake.kalshi-match-feedback-aggregator",
-    "com.jake.kalshi-soak-check",
     "com.kalshi.db-backup",
     "com.kalshi.governance.fast",
     "com.kalshi.governance.deep",

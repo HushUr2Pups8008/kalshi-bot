@@ -21,7 +21,6 @@ TEMPLATES = (
     REPO_ROOT / "ops" / "launchd" / "com.jake.kalshi-bot.plist.template",
     REPO_ROOT / "ops" / "launchd" / "com.jake.kalshi-bothealth.plist.template",
     REPO_ROOT / "ops" / "launchd" / "com.jake.kalshi-match-feedback-aggregator.plist.template",
-    REPO_ROOT / "ops" / "launchd" / "com.jake.kalshi-soak-check.plist.template",
     REPO_ROOT / "ops" / "launchd" / "com.kalshi.db-backup.plist.template",
     REPO_ROOT / "ops" / "launchd" / "com.kalshi.governance.fast.plist.template",
     REPO_ROOT / "ops" / "launchd" / "com.kalshi.governance.deep.plist.template",
@@ -63,7 +62,7 @@ def test_templates_carry_unsubstituted_placeholders():
     for tpl in TEMPLATES:
         body = tpl.read_text()
         assert "@REPO_ROOT@" in body, f"{tpl.name} missing placeholder @REPO_ROOT@"
-        if "db-backup" not in tpl.name and "bothealth" not in tpl.name and "soak-check" not in tpl.name:
+        if "db-backup" not in tpl.name and "bothealth" not in tpl.name:
             assert "@VENV_PYTHON@" in body, f"{tpl.name} missing placeholder @VENV_PYTHON@"
         if "governance" in tpl.name:
             assert "@GOVERNANCE_LLM_MODEL@" in body, (
@@ -77,9 +76,9 @@ def test_templates_carry_unsubstituted_placeholders():
 
 
 def test_print_substitutes_default_governance_model():
-    """Default GOVERNANCE_LLM_MODEL is the Mac Studio target (qwen3:14b)."""
+    """Default GOVERNANCE_LLM_MODEL is the money-path 7b model."""
     out = _run_print({"GOVERNANCE_LLM_MODEL": ""})  # force default path
-    assert "qwen3:14b" in out, "default GOVERNANCE_LLM_MODEL not applied"
+    assert "qwen2.5:7b" in out, "default GOVERNANCE_LLM_MODEL not applied"
     assert "@GOVERNANCE_LLM_MODEL@" not in out, "placeholder still present"
 
 

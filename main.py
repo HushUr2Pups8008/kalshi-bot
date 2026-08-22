@@ -4865,14 +4865,29 @@ class TradingBot:
 
         await self._check_llm_health()
         await self._run_startup_observability_probe()
-        await self._warm_polymarket_paper_runtime_cache()
+        from utils.event_news_research import event_news_omit_idle_runtime_tasks
+
+        omit_idle = event_news_omit_idle_runtime_tasks()
+        if omit_idle:
+            log.info(
+                "[EVENT_NEWS_RUNTIME] omit_idle_tasks=reddit,gdelt,polymarket,subreddit"
+            )
+        else:
+            await self._warm_polymarket_paper_runtime_cache()
 
         tasks = [
             asyncio.create_task(run_rss_monitor(self._enqueue_news),    name="rss"),
-            asyncio.create_task(
-                run_reddit_monitor(self._enqueue_news, subreddits=self._make_subreddit_getter()),
-                name="reddit",
-            ),
+        ]
+        if not omit_idle:
+            tasks.append(
+                asyncio.create_task(
+                    run_reddit_monitor(
+                        self._enqueue_news, subreddits=self._make_subreddit_getter()
+                    ),
+                    name="reddit",
+                )
+            )
+        tasks.append(
             asyncio.create_task(
                 run_search_news_monitor(
                     self._enqueue_news,
@@ -4883,50 +4898,75 @@ class TradingBot:
                     get_series_metadata=self.matcher._cache.get_series_metadata_snapshot,
                 ),
                 name="search",
-            ),
-            asyncio.create_task(
-                run_gdelt_monitor(self._enqueue_news, self._make_market_getter()),
-                name="gdelt",
-            ),
-            *[
+            )
+        )
+        if not omit_idle:
+            tasks.append(
                 asyncio.create_task(
-                    self._news_consumer_task(),
-                    name=f"news_consumer_{i}",
+                    run_gdelt_monitor(self._enqueue_news, self._make_market_getter()),
+                    name="gdelt",
                 )
-                for i in range(max(1, int(os.getenv("NEWS_CONSUMER_WORKERS", "1"))))
-            ],
-            asyncio.create_task(self.ws.run(),                          name="websocket"),
-            asyncio.create_task(self._warm_ws_subscriptions(),          name="ws_warm"),
-            asyncio.create_task(self._market_refresh_task(),            name="market_refresh"),
+            )
+        tasks.extend(
             asyncio.create_task(
-                self._polymarket_market_refresh_task(),
-                name="polymarket_market_refresh",
-            ),
-            asyncio.create_task(self._auto_resolve_task(),              name="auto_resolve"),
-            asyncio.create_task(self._subreddit_discovery_task(),       name="sub_discovery"),
-            asyncio.create_task(self._log_rotation_task(),              name="log_rotation"),
-            asyncio.create_task(self._log_maintenance_task(),           name="log_maint"),
-            asyncio.create_task(
-                run_runtime_overrides_poll(
-                    self._runtime_overrides_reader,
-                    interval_secs=600.0,  # 10 minutes
+                self._news_consumer_task(),
+                name=f"news_consumer_{i}",
+            )
+            for i in range(max(1, int(os.getenv("NEWS_CONSUMER_WORKERS", "1"))))
+        )
+        tasks.extend(
+            [
+                asyncio.create_task(self.ws.run(), name="websocket"),
+                asyncio.create_task(self._warm_ws_subscriptions(), name="ws_warm"),
+                asyncio.create_task(self._market_refresh_task(), name="market_refresh"),
+            ]
+        )
+        if not omit_idle:
+            tasks.append(
+                asyncio.create_task(
+                    self._polymarket_market_refresh_task(),
+                    name="polymarket_market_refresh",
+                )
+            )
+        tasks.append(asyncio.create_task(self._auto_resolve_task(), name="auto_resolve"))
+        if not omit_idle:
+            tasks.append(
+                asyncio.create_task(
+                    self._subreddit_discovery_task(), name="sub_discovery"
+                )
+            )
+        tasks.extend(
+            [
+                asyncio.create_task(self._log_rotation_task(), name="log_rotation"),
+                asyncio.create_task(self._log_maintenance_task(), name="log_maint"),
+                asyncio.create_task(
+                    run_runtime_overrides_poll(
+                        self._runtime_overrides_reader,
+                        interval_secs=600.0,  # 10 minutes
+                    ),
+                    name="runtime_overrides_poll",
                 ),
-                name="runtime_overrides_poll",
-            ),
-            asyncio.create_task(
-                self._accumulation_task.run(self._evidence_queue),      name="accumulation",
-            ),
-            asyncio.create_task(self._trading_queue_consumer_task(),    name="blend_consumer"),
-            asyncio.create_task(self._structural_recompute_task(),      name="structural"),
-            *([asyncio.create_task(
-                run_rss_monitor(
-                    self._on_fade_tweet,
-                    feeds=FADE_TWEET_FEED_URLS,
-                    seen_state_path=FADE_TWEET_SEEN_STATE_PATH,
+                asyncio.create_task(
+                    self._accumulation_task.run(self._evidence_queue),
+                    name="accumulation",
                 ),
-                name="fade_tweets",
-            )] if FADE_TWEET_FEED_URLS else []),
-        ]
+                asyncio.create_task(
+                    self._trading_queue_consumer_task(), name="blend_consumer"
+                ),
+                asyncio.create_task(self._structural_recompute_task(), name="structural"),
+            ]
+        )
+        if FADE_TWEET_FEED_URLS:
+            tasks.append(
+                asyncio.create_task(
+                    run_rss_monitor(
+                        self._on_fade_tweet,
+                        feeds=FADE_TWEET_FEED_URLS,
+                        seen_state_path=FADE_TWEET_SEEN_STATE_PATH,
+                    ),
+                    name="fade_tweets",
+                )
+            )
         research_prewarm_task = self._create_research_prewarm_runtime_task()
         if research_prewarm_task is not None:
             tasks.append(research_prewarm_task)

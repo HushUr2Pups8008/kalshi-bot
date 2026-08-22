@@ -12,8 +12,9 @@
 # symlinks). Substitutes @REPO_ROOT@, @VENV_PYTHON@, @GOVERNANCE_LLM_MODEL@ into
 # the *.plist.template files and writes them to ~/Library/LaunchAgents/.
 #
-# GOVERNANCE_LLM_MODEL defaults to qwen3:14b. Override with the env var:
-#   GOVERNANCE_LLM_MODEL=qwen3:8b bash ops/launchd/install.sh
+# GOVERNANCE_LLM_MODEL defaults to qwen2.5:7b so governance cannot evict
+# the politics money-path model. Override with the env var:
+#   GOVERNANCE_LLM_MODEL=qwen3:14b bash ops/launchd/install.sh
 #
 # This script does NOT bootstrap (load) the plists into launchd. Ship/runbook
 # steps do that explicitly. Generation only.
@@ -29,14 +30,13 @@ INSTALL_DIR="$HOME/Library/LaunchAgents"
 EQUIVALENCE_AUDIT="$REPO_ROOT/scripts/launchd_template_equivalence_audit.py"
 
 # Default per-machine settings; override via environment.
-GOVERNANCE_LLM_MODEL="${GOVERNANCE_LLM_MODEL:-qwen3:14b}"
+GOVERNANCE_LLM_MODEL="${GOVERNANCE_LLM_MODEL:-qwen2.5:7b}"
 
 # Templates we manage. Keep this list in sync with the *.plist.template files.
 TEMPLATES=(
     "com.jake.kalshi-bot"
     "com.jake.kalshi-bothealth"
     "com.jake.kalshi-match-feedback-aggregator"
-    "com.jake.kalshi-soak-check"
     "com.kalshi.db-backup"
     "com.kalshi.governance.fast"
     "com.kalshi.governance.deep"

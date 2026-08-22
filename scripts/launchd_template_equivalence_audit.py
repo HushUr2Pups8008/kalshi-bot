@@ -14,7 +14,6 @@ from pathlib import Path
 DEFAULT_LABELS = (
     "com.jake.kalshi-bot",
     "com.jake.kalshi-bothealth",
-    "com.jake.kalshi-soak-check",
     "com.jake.kalshi-match-feedback-aggregator",
     "com.kalshi.db-backup",
     "com.kalshi.governance.fast",
@@ -106,7 +105,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--installed-dir", default=Path.home() / "Library/LaunchAgents")
     parser.add_argument("--fixtures-dir", default=repo_root / "tests/fixtures/installed_plists")
-    parser.add_argument("--governance-model", default=os.environ.get("GOVERNANCE_LLM_MODEL", "qwen3:14b"))
+    parser.add_argument("--governance-model", default=os.environ.get("GOVERNANCE_LLM_MODEL", "qwen2.5:7b"))
     parser.add_argument("--labels", nargs="*", default=list(DEFAULT_LABELS))
     parser.add_argument("--installed", action="store_true", help="compare against installed plists")
     parser.add_argument("--fixtures", action="store_true", help="compare against canonical fixture plists")

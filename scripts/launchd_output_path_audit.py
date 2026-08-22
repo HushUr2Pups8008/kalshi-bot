@@ -22,7 +22,6 @@ LABELS = (
     "com.jake.kalshi-bothealth",
     "com.jake.kalshi-daily-review",
     "com.jake.kalshi-match-feedback-aggregator",
-    "com.jake.kalshi-soak-check",
     "com.kalshi.db-backup",
     "com.kalshi.governance.fast",
     "com.kalshi.governance.deep",
@@ -34,7 +33,7 @@ def _render_template(label: str, repo_root: Path = REPO_ROOT) -> dict:
     text = path.read_text(encoding="utf-8")
     text = text.replace("@REPO_ROOT@", str(repo_root))
     text = text.replace("@VENV_PYTHON@", str(repo_root / ".venv" / "bin" / "python"))
-    text = text.replace("@GOVERNANCE_LLM_MODEL@", "qwen3:14b")
+    text = text.replace("@GOVERNANCE_LLM_MODEL@", "qwen2.5:7b")
     return plistlib.loads(text.encode("utf-8"))
 
 

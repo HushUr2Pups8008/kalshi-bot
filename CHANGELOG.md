@@ -19,6 +19,18 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.43] - 2026-08-22
+
+### Changed
+
+- **Politics runtime hygiene.** The event-news desk no longer starts idle
+  Reddit, GDELT, Polymarket, or subreddit-discovery tasks. The launcher now
+  exports the full money-path contract so freeze `.env` cannot leak KXDJI
+  forecast-refresh, Bing-first search, Google News disable, or shadow
+  capture flags. Governance LaunchAgents default to `qwen2.5:7b` so they
+  cannot evict the trading model. DJI 16:00 freeze and live trading stay
+  locked. Polymarket remains disabled (waitlist-gated KYC).
+
 ## [0.33.42] - 2026-08-22
 
 ### Changed
