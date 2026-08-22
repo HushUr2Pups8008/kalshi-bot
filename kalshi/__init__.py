@@ -29,6 +29,8 @@ class KalshiMarket:
     contract_terms_url: str = ""
     settlement_timer_seconds: Optional[int] = None
     early_close_condition: str = ""
+    can_close_early: Optional[bool] = None
+    strike_type: str = ""
     expected_expiration_time: str = ""
     expiration_time:  str = ""
 

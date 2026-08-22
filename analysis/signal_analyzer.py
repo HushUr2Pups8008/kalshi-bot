@@ -86,7 +86,18 @@ def _llm_routing_reason(news: NewsItem, market: KalshiMarket) -> str | None:
     del news
     if not cfg.enable_llm_routing_filter:
         return None
-    price = float(market.yes_prob)
+    from utils.event_news_research import routing_yes_probability
+
+    price, source = routing_yes_probability(market)
+    if source != "mid":
+        log.info(
+            "[EVENT_NEWS_ROUTING] ticker=%s mid=%.3f ask=%.3f used=%.3f source=%s",
+            getattr(market, "ticker", ""),
+            float(getattr(market, "yes_prob", price) or price),
+            price,
+            price,
+            source,
+        )
     if any(_market_price_in_band(price, low, high) for low, high in cfg.llm_excluded_price_bands):
         return "price_band_excluded"
     if cfg.llm_allowed_price_bands and not any(
@@ -1665,11 +1676,14 @@ async def estimate_probability(
             provider=None,
             result_used=False,
         )
+        from utils.event_news_research import routing_yes_probability
+
+        routing_price, _routing_source = routing_yes_probability(market)
         _emit_llm_routing_log(
             ticker=market.ticker,
             source=news.source,
             reason=routing_reason,
-            market_price=market.yes_prob,
+            market_price=routing_price,
         )
         await write_trade_log_async(
             trade_log.log_llm_skipped_routing,
@@ -1677,7 +1691,7 @@ async def estimate_probability(
             source=news.source,
             headline=news.headline,
             reason=routing_reason,
-            market_price=market.yes_prob,
+            market_price=routing_price,
         )
         llm_result = None
     else:

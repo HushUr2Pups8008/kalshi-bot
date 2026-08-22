@@ -372,6 +372,10 @@ def _build_market(
         contract_terms_url=str(payload.get("contract_terms_url") or ""),
         settlement_timer_seconds=_optional_int(payload, "settlement_timer_seconds"),
         early_close_condition=str(payload.get("early_close_condition") or ""),
+        can_close_early=(
+            bool(payload["can_close_early"]) if "can_close_early" in payload else None
+        ),
+        strike_type=str(payload.get("strike_type") or ""),
         expected_expiration_time=str(payload.get("expected_expiration_time") or ""),
         expiration_time=str(payload.get("expiration_time") or ""),
         yes_bid_cents=yes_bid_cents,

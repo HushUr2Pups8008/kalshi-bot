@@ -2754,6 +2754,17 @@ class TradingBot:
                 market.ticker, news.source,
             )
             return
+        from utils.event_news_research import event_news_illiquid
+
+        illiquid = event_news_illiquid(market)
+        if illiquid:
+            log.info(
+                "[EVENT_NEWS_LIQUIDITY] skip ticker=%s source=%s reason=%s",
+                market.ticker,
+                news.source,
+                illiquid,
+            )
+            return
         # Staleness check: skip if the article is too old when we process it.
         # With a queue, items can sit for several minutes; old news is already
         # priced in.
@@ -3163,7 +3174,11 @@ class TradingBot:
 
         # Days to close -- used by kelly_bet() for time discount
         from analysis.market_matcher import _days_to_close
-        days_to_close = _days_to_close(market.close_time) or 14.0
+        from utils.event_news_research import event_news_horizon_days
+
+        days_to_close = event_news_horizon_days(
+            market, _days_to_close(market.close_time) or 14.0
+        )
 
         # P-5 LD-10 / CR-A: Kelly consumes the executed-side ask in cents,
         # not the YES midpoint. For NO trades this is no_ask_cents; for
@@ -4018,7 +4033,9 @@ class TradingBot:
                 )
                 if market is None:
                     continue
-                if market.status not in ("finalized", "settled"):
+                from utils.event_news_research import event_news_settle_statuses
+
+                if market.status not in event_news_settle_statuses():
                     continue
                 result_str = (market.result or "").lower().strip()
                 if result_str not in ("yes", "no"):
@@ -4027,6 +4044,12 @@ class TradingBot:
                         ticker, market.status, market.result,
                     )
                     continue
+                if market.status == "determined":
+                    log.info(
+                        "[EVENT_NEWS_SETTLE] determined ticker=%s result=%s",
+                        ticker,
+                        result_str,
+                    )
                 resolved_yes = result_str == "yes"
                 await self.paper.resolve_market(ticker, resolved_yes)
                 resolved_count += 1

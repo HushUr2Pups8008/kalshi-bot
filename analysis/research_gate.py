@@ -26,6 +26,7 @@ import urllib.request
 import uuid
 import weakref
 import xml.etree.ElementTree as ET
+import zlib
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 from enum import Enum
@@ -6748,15 +6749,36 @@ def _extract_page_text(raw: bytes) -> tuple[str, str]:
     return title, snippet
 
 
+def _extract_pdf_text(raw: bytes) -> tuple[str, str]:
+    """Best-effort PDF text for Kalshi contract-terms PDFs (no extra dependency)."""
+    chunks: list[str] = []
+    for match in re.finditer(rb"stream\r?\n(.*?)\r?\nendstream", raw, flags=re.S):
+        payload = match.group(1)
+        try:
+            payload = zlib.decompress(payload)
+        except zlib.error:
+            pass
+        decoded = payload.decode("latin-1", errors="ignore")
+        for literal in re.findall(r"\((?:\\.|[^\\)]){4,}\)", decoded):
+            chunks.append(literal[1:-1].replace("\\n", " ").replace("\\r", " "))
+    snippet = _clean(" ".join(chunks))[:4000]
+    return "contract_terms_pdf", snippet
+
+
 def _fetch_direct_source(
     url: str,
     source_class: str,
     claim_type: str,
     *,
     timeout: float = 5.0,
+    allow_official_pdf_and_homepage: bool = False,
 ) -> ResearchEvidence | None:
     cleaned_url = _clean(url)
-    if not cleaned_url or not _should_direct_fetch_source(cleaned_url, claim_type):
+    if not cleaned_url or not _should_direct_fetch_source(
+        cleaned_url,
+        claim_type,
+        allow_official_pdf_and_homepage=allow_official_pdf_and_homepage,
+    ):
         return None
     request = urllib.request.Request(
         cleaned_url,
@@ -6764,7 +6786,12 @@ def _fetch_direct_source(
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310
         raw = response.read(300_000)
-    title, snippet = _extract_page_text(raw)
+    if raw.startswith(b"%PDF") or cleaned_url.lower().endswith(".pdf"):
+        title, snippet = _extract_pdf_text(raw)
+        if not snippet:
+            snippet = "kalshi_official_pdf"
+    else:
+        title, snippet = _extract_page_text(raw)
     domain = _domain_from_url(cleaned_url)
     return ResearchEvidence(
         source_class=source_class,
@@ -6783,12 +6810,16 @@ async def default_direct_fetcher(
     url: str,
     source_class: str,
     claim_type: str,
+    *,
+    allow_official_pdf_and_homepage: bool = False,
 ) -> ResearchEvidence | None:
     return await asyncio.to_thread(
         _fetch_direct_source,
         url,
         source_class,
         claim_type,
+        timeout=5.0,
+        allow_official_pdf_and_homepage=allow_official_pdf_and_homepage,
     )
 
 
@@ -6851,10 +6882,17 @@ def _is_placeholder_settlement_source(source: Any) -> bool:
     return not label or any(marker in label for marker in generic_markers)
 
 
-def _should_direct_fetch_source(url: str, claim_type: str) -> bool:
+def _should_direct_fetch_source(
+    url: str,
+    claim_type: str,
+    *,
+    allow_official_pdf_and_homepage: bool = False,
+) -> bool:
     cleaned_url = _clean(url)
     if not cleaned_url:
         return False
+    if allow_official_pdf_and_homepage:
+        return True
     parsed = urllib.parse.urlparse(
         cleaned_url if "://" in cleaned_url else f"https://{cleaned_url}"
     )
@@ -7047,6 +7085,8 @@ async def run_research_gate(
     _prewarm_phase_timeouts_capability: object | None = None,
     cache_only: bool = False,
     require_decision_grade: bool = False,
+    allow_official_pdf_and_homepage: bool = False,
+    prefer_official_sources: bool = False,
 ) -> ResearchVerdict:
     if prewarm_phase_timeouts is not None and (
         live_mode
@@ -7384,9 +7424,49 @@ async def run_research_gate(
     else:
         evidence = list(usable_cached_evidence)
         existing = {_evidence_identity(item) for item in evidence}
-        fetcher = direct_fetcher or default_direct_fetcher
-        for url, source_class, claim_type in _direct_source_targets(market):
-            if not _should_direct_fetch_source(url, claim_type):
+        if direct_fetcher is None:
+            async def fetcher(
+                url: str, source_class: str, claim_type: str
+            ) -> ResearchEvidence | None:
+                return await default_direct_fetcher(
+                    url,
+                    source_class,
+                    claim_type,
+                    allow_official_pdf_and_homepage=allow_official_pdf_and_homepage,
+                )
+        else:
+            fetcher = direct_fetcher
+        direct_targets = _direct_source_targets(market)
+        if require_decision_grade:
+            log.info(
+                "[RESEARCH_GATE] direct source targets ticker=%s "
+                "allow_official_pdf_and_homepage=%s targets=%s",
+                ticker,
+                allow_official_pdf_and_homepage,
+                [
+                    {
+                        "url": url,
+                        "source_class": source_class,
+                        "claim_type": claim_type,
+                    }
+                    for url, source_class, claim_type in direct_targets
+                ],
+            )
+        for url, source_class, claim_type in direct_targets:
+            if not _should_direct_fetch_source(
+                url,
+                claim_type,
+                allow_official_pdf_and_homepage=allow_official_pdf_and_homepage,
+            ):
+                if require_decision_grade:
+                    log.info(
+                        "[RESEARCH_GATE] direct source skipped ticker=%s url=%s "
+                        "source_class=%s claim_type=%s reason=filter",
+                        ticker,
+                        url,
+                        source_class,
+                        claim_type,
+                    )
                 continue
             remaining = remaining_budget()
             if remaining <= 0:
@@ -7423,7 +7503,28 @@ async def run_research_gate(
                 direct_fetch_failures.append(f"{source_class}:{url}:{exc}")
                 continue
             if item is None:
+                if require_decision_grade:
+                    log.info(
+                        "[RESEARCH_GATE] direct source empty ticker=%s url=%s "
+                        "source_class=%s claim_type=%s",
+                        ticker,
+                        url,
+                        source_class,
+                        claim_type,
+                    )
                 continue
+            if require_decision_grade:
+                log.info(
+                    "[RESEARCH_GATE] direct source accepted ticker=%s url=%s "
+                    "source_class=%s claim_type=%s result_source_class=%s "
+                    "result_claim_type=%s",
+                    ticker,
+                    url,
+                    source_class,
+                    claim_type,
+                    item.source_class,
+                    item.claim_type,
+                )
             identity = _evidence_identity(item)
             if identity in existing:
                 continue
@@ -7487,28 +7588,43 @@ async def run_research_gate(
             if item.source_class in {"resolution_source", "official_primary"}
             and item.source_url
         }
-        provider_queries = [
-            query
-            for query in queries
-            if not (
-                query.source_class in {"resolution_source", "official_primary"}
-                and _query_site_domain(query.query) in direct_domains
-            )
-            and not (
-                _getty_distinct_date_spec_from_text(query.query) is not None
-                and any(
-                    item.metric_name == "getty_trump_distinct_photo_days"
-                    for item in fresh_evidence
-                )
-            )
-            and not (
-                _white_house_action_count_spec_from_text(query.query) is not None
-                and any(
-                    item.metric_name == "white_house_presidential_actions_count"
-                    for item in fresh_evidence
-                )
-            )
+        official_direct_hits = [
+            item
+            for item in fresh_evidence
+            if item.source_class
+            in {"resolution_source", "official_primary", "rules_source"}
         ]
+        if prefer_official_sources and official_direct_hits:
+            log.info(
+                "[RESEARCH_GATE] skip generic search; official evidence present "
+                "ticker=%s n=%d",
+                ticker,
+                len(official_direct_hits),
+            )
+            provider_queries = []
+        else:
+            provider_queries = [
+                query
+                for query in queries
+                if not (
+                    query.source_class in {"resolution_source", "official_primary"}
+                    and _query_site_domain(query.query) in direct_domains
+                )
+                and not (
+                    _getty_distinct_date_spec_from_text(query.query) is not None
+                    and any(
+                        item.metric_name == "getty_trump_distinct_photo_days"
+                        for item in fresh_evidence
+                    )
+                )
+                and not (
+                    _white_house_action_count_spec_from_text(query.query) is not None
+                    and any(
+                        item.metric_name == "white_house_presidential_actions_count"
+                        for item in fresh_evidence
+                    )
+                )
+            ]
         if not collection_budget_exhausted:
             remaining = remaining_budget()
             if remaining <= 0:

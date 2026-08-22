@@ -5668,6 +5668,24 @@ def test_decision_grade_direct_fetch_skips_raw_pdfs_and_homepages():
     )
 
 
+def test_official_pdf_and_homepage_allowed_when_flag_set():
+    assert _should_direct_fetch_source(
+        "https://assets.kalshi.com/contract_terms/REPORTTOPIC.pdf",
+        "contract_terms",
+        allow_official_pdf_and_homepage=True,
+    )
+    assert _should_direct_fetch_source(
+        "https://www.pm.gc.ca",
+        "settlement_source",
+        allow_official_pdf_and_homepage=True,
+    )
+    assert _should_direct_fetch_source(
+        "https://ustr.gov/",
+        "settlement_source",
+        allow_official_pdf_and_homepage=True,
+    )
+
+
 @pytest.mark.asyncio
 async def test_strict_research_gate_does_not_spend_budget_on_raw_pdf_or_homepage_direct_fetch():
     fetched_urls: list[str] = []

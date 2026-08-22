@@ -994,6 +994,37 @@ class TestEstimateProbability:
         assert llm_dir is None and llm_mag is None and llm_conf is None
 
     @pytest.mark.asyncio
+    async def test_politics_ask_routing_allows_wide_spread_favorite(self, monkeypatch):
+        news = _make_news("Canada vows dollar for dollar response as US puts tariffs on goods")
+        market = _make_full_market(yes_price=36.0)
+        market.yes_ask_cents = 70
+        market.yes_ask = 70
+        monkeypatch.setattr(signal_analyzer.cfg, "enable_llm_routing_filter", True)
+        monkeypatch.setattr(signal_analyzer.cfg, "llm_allowed_price_bands", [(0.55, 0.99)])
+        monkeypatch.setattr(signal_analyzer.cfg, "llm_excluded_price_bands", [(0.0, 0.35)])
+        monkeypatch.setattr(
+            signal_analyzer.cfg, "paper_cohort_id", "kalshi-event-news-20260820"
+        )
+
+        async def _fake_llm(*args, **kwargs):
+            return (
+                (0.74, 0.8, "Official source supports YES", "yes", "moderate"),
+                {"attempted": True, "status": "ollama_success", "provider": "ollama", "result_used": True},
+            )
+
+        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate_detailed", _fake_llm)
+        with patch("analysis.signal_analyzer.trade_log.log_signal_analysis_detail"), \
+             patch("analysis.signal_analyzer.trade_log.log_llm_skipped_routing") as skip_mock:
+            prob, _conf, _kw, _reason, llm_dir, llm_mag, _llm_conf = await estimate_probability(
+                news, market
+            )
+
+        skip_mock.assert_not_called()
+        assert llm_dir == "yes"
+        assert llm_mag == "moderate"
+        assert prob == pytest.approx(0.74)
+
+    @pytest.mark.asyncio
     async def test_routing_filter_disabled_keeps_llm_path_unchanged(self, monkeypatch):
         news = _make_news("Quarterly corporate earnings beat expectations")
         market = _make_full_market(yes_price=50.0)

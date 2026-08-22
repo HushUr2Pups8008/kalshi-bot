@@ -7,8 +7,15 @@ from analysis.research_gate import ResearchStatus, ResearchVerdict
 from utils.event_news_research import (
     EVENT_NEWS_COHORT_ID,
     apply_event_news_live_research,
+    event_news_exposure_prefix,
+    event_news_horizon_days,
+    event_news_illiquid,
     event_news_missing_snapshot_ask,
+    event_news_open_prefix_cap,
+    event_news_settle_statuses,
+    event_news_spread_disagreement,
     is_event_news_paper_cohort,
+    routing_yes_probability,
     snapshot_ask_cents,
 )
 
@@ -85,6 +92,8 @@ async def test_live_research_prefers_gate_probability(monkeypatch):
 
     assert gate.await_args.kwargs["cache_only"] is False
     assert gate.await_args.kwargs["require_decision_grade"] is True
+    assert gate.await_args.kwargs["allow_official_pdf_and_homepage"] is True
+    assert gate.await_args.kwargs["prefer_official_sources"] is True
     assert p == pytest.approx(0.81)
     assert side == "yes"
     assert "research_evidence" in keywords
@@ -162,3 +171,110 @@ async def test_live_research_noop_on_macro_cohort(monkeypatch):
     )
     assert p == pytest.approx(0.55)
     gate.assert_not_awaited()
+
+
+def test_routing_prefers_ask_on_politics_only():
+    freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
+    politics = SimpleNamespace(paper_cohort_id=EVENT_NEWS_COHORT_ID)
+    market = SimpleNamespace(
+        yes_prob=0.36,
+        yes_price=36,
+        yes_ask_cents=70,
+        yes_ask=70,
+    )
+    mid, source = routing_yes_probability(market, config=freeze)
+    assert source == "mid"
+    assert mid == pytest.approx(0.36)
+    ask, source = routing_yes_probability(market, config=politics)
+    assert source == "yes_ask"
+    assert ask == pytest.approx(0.70)
+
+
+def test_spread_disagreement_politics_only():
+    freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
+    politics = SimpleNamespace(paper_cohort_id=EVENT_NEWS_COHORT_ID)
+    wide = SimpleNamespace(
+        ticker="KXCANUSDEAL-26-26AUG24",
+        last_price_cents=36,
+        yes_ask_cents=70,
+    )
+    tight = SimpleNamespace(last_price_cents=69, yes_ask_cents=70)
+    assert event_news_spread_disagreement(wide, config=freeze) is None
+    assert event_news_spread_disagreement(wide, config=politics) == "last_ask_divergence"
+    assert event_news_spread_disagreement(tight, config=politics) is None
+
+
+def test_illiquid_skip_requires_both_oi_and_volume():
+    politics = SimpleNamespace(paper_cohort_id=EVENT_NEWS_COHORT_ID)
+    freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
+    empty = SimpleNamespace(
+        ticker="KXTHIN-1",
+        yes_ask_size=1.0,
+        no_ask_size=0.0,
+        open_interest_fp=3.0,
+        volume_24h_fp=1.0,
+    )
+    assert event_news_illiquid(empty, config=freeze) is None
+    assert event_news_illiquid(empty, config=politics) == "illiquid_top_size"
+    missing_size = SimpleNamespace(
+        ticker="KXTHIN-2",
+        yes_ask_size=None,
+        no_ask_size=None,
+        open_interest_fp=3.0,
+        volume_24h_fp=1.0,
+    )
+    assert event_news_illiquid(missing_size, config=politics) == "illiquid_open_interest"
+    # Missing volume must not skip — fail open on incomplete quotes.
+    oi_only = SimpleNamespace(
+        ticker="KXTHIN-3",
+        yes_ask_size=None,
+        no_ask_size=None,
+        open_interest_fp=3.0,
+        volume_24h_fp=None,
+    )
+    assert event_news_illiquid(oi_only, config=politics) is None
+
+
+def test_early_close_compresses_horizon_on_politics_only():
+    freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
+    politics = SimpleNamespace(paper_cohort_id=EVENT_NEWS_COHORT_ID)
+    market = SimpleNamespace(
+        ticker="KXDEAL-1",
+        can_close_early=True,
+        early_close_condition="Closes when the deal is announced.",
+    )
+    assert event_news_horizon_days(market, 14.0, config=freeze) == pytest.approx(14.0)
+    assert event_news_horizon_days(market, 14.0, config=politics) == pytest.approx(2.0)
+    already_short = SimpleNamespace(
+        ticker="KXDEAL-2",
+        can_close_early=False,
+        early_close_condition="announced",
+    )
+    assert event_news_horizon_days(already_short, 0.5, config=politics) == pytest.approx(0.5)
+
+
+def test_event_prefix_and_cap_isolated_from_freeze():
+    freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
+    politics = SimpleNamespace(paper_cohort_id=EVENT_NEWS_COHORT_ID)
+    market = SimpleNamespace(
+        ticker="KXCANUSDEAL-26-26AUG24",
+        event_ticker="KXCANUSDEAL-26",
+    )
+    assert event_news_exposure_prefix(market, "KXCANUSDEAL", config=freeze) == "KXCANUSDEAL"
+    assert (
+        event_news_exposure_prefix(market, "KXCANUSDEAL", config=politics)
+        == "KXCANUSDEAL-26"
+    )
+    assert event_news_open_prefix_cap(2, config=freeze) == 2
+    assert event_news_open_prefix_cap(2, config=politics) == 1
+
+
+def test_determined_status_only_on_politics():
+    freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
+    politics = SimpleNamespace(paper_cohort_id=EVENT_NEWS_COHORT_ID)
+    assert event_news_settle_statuses(config=freeze) == ("finalized", "settled")
+    assert event_news_settle_statuses(config=politics) == (
+        "finalized",
+        "settled",
+        "determined",
+    )

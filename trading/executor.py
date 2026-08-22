@@ -413,11 +413,17 @@ class TradeExecutor:
             return f"price {yes_price:.1f}c is near limit (too illiquid)"
 
         if self._is_paper:
-            from utils.event_news_research import event_news_missing_snapshot_ask
+            from utils.event_news_research import (
+                event_news_missing_snapshot_ask,
+                event_news_spread_disagreement,
+            )
 
             snapshot_reason = event_news_missing_snapshot_ask(analysis.market)
             if snapshot_reason:
                 return snapshot_reason
+            divergence = event_news_spread_disagreement(analysis.market)
+            if divergence:
+                return divergence
 
         # Paper ticker cooldown (4h): prevents same ticker being spammed by a burst
         # of headlines on the same topic (e.g. 30 Iran-war articles in one poll cycle).
@@ -438,15 +444,24 @@ class TradeExecutor:
         # one piece of news can cause N concurrent bets against the same
         # underlying topic; if the bot's read is wrong, losses compound.
         # cfg.max_open_positions_per_prefix (default 2) gates the Nth open.
-        if cfg.max_open_positions_per_prefix > 0:
-            prefix = _correlated_exposure_prefix(analysis.market)
+        from utils.event_news_research import (
+            event_news_exposure_prefix,
+            event_news_open_prefix_cap,
+        )
+
+        prefix_cap = event_news_open_prefix_cap(cfg.max_open_positions_per_prefix)
+        if prefix_cap > 0:
+            prefix = event_news_exposure_prefix(
+                analysis.market,
+                _correlated_exposure_prefix(analysis.market),
+            )
             if prefix:
                 open_in_prefix = self._paper.portfolio.open_positions_by_prefix(prefix)
-                if len(open_in_prefix) >= cfg.max_open_positions_per_prefix:
+                if len(open_in_prefix) >= prefix_cap:
                     open_tickers = sorted({p.ticker for p in open_in_prefix})
                     return (
                         f"per-prefix cap: {len(open_in_prefix)} open in {prefix} "
-                        f"(cap={cfg.max_open_positions_per_prefix}, "
+                        f"(cap={prefix_cap}, "
                         f"open={open_tickers})"
                     )
 
