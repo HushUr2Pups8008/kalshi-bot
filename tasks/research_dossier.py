@@ -2078,8 +2078,21 @@ def _parse_json_list(value: str | None) -> list[str]:
 _default_store: ResearchDossierStore | None = None
 
 
+def _research_dossier_db_path() -> Path:
+    """Isolate research due-tasks per paper cohort so desks cannot poison each other."""
+    try:
+        from config import cfg
+
+        cohort = str(getattr(cfg, "paper_cohort_id", "") or "").strip().lower()
+    except Exception:
+        cohort = ""
+    if cohort and cohort != "legacy":
+        return DATA_DIR / "paper_cohorts" / cohort / "research_dossier.db"
+    return DEFAULT_RESEARCH_DOSSIER_DB_PATH
+
+
 def default_store() -> ResearchDossierStore:
     global _default_store
     if _default_store is None:
-        _default_store = ResearchDossierStore()
+        _default_store = ResearchDossierStore(_research_dossier_db_path())
     return _default_store

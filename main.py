@@ -1482,19 +1482,32 @@ class TradingBot:
         return market
 
     def _research_prewarm_market_provider(self) -> list[object]:
-        try:
-            markets = self.rest.get_all_open_markets(
-                max_pages=int(getattr(cfg, "research_prewarm_max_pages", 5))
-            )
-        except Exception as exc:
-            log.warning("[RESEARCH_PREWARM] open-market scan failed: %s", exc)
-            return []
-        max_markets = max(0, int(getattr(cfg, "research_prewarm_max_markets", 25)))
-        market_list = list(markets or [])
         from utils.event_news_research import (
             event_news_prewarm_allows,
             is_event_news_paper_cohort,
         )
+
+        max_markets = max(0, int(getattr(cfg, "research_prewarm_max_markets", 25)))
+        markets: list[object] = []
+        if is_event_news_paper_cohort():
+            try:
+                markets = list(self.matcher._cache._markets or [])
+            except Exception:
+                markets = []
+            if markets:
+                log.info(
+                    "[EVENT_NEWS_PREWARM] using_matcher_cache markets=%d",
+                    len(markets),
+                )
+        if not markets:
+            try:
+                markets = self.rest.get_all_open_markets(
+                    max_pages=int(getattr(cfg, "research_prewarm_max_pages", 5))
+                )
+            except Exception as exc:
+                log.warning("[RESEARCH_PREWARM] open-market scan failed: %s", exc)
+                return []
+        market_list = list(markets or [])
 
         if is_event_news_paper_cohort():
             before = len(market_list)

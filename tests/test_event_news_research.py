@@ -14,6 +14,7 @@ from utils.event_news_research import (
     event_news_in_allowed_ask_band,
     event_news_min_edge,
     event_news_missing_snapshot_ask,
+    event_news_non_politics_series,
     event_news_forecast_refresh_series,
     event_news_official_research_kwargs,
     event_news_omit_idle_runtime_tasks,
@@ -392,6 +393,32 @@ def test_official_research_kwargs_politics_only():
         "allow_official_pdf_and_homepage": True,
         "prefer_official_sources": True,
     }
+
+
+def test_research_dossier_path_is_cohort_isolated(monkeypatch, tmp_path):
+    import config as config_module
+    from tasks.research_dossier import _research_dossier_db_path
+
+    monkeypatch.setattr("tasks.research_dossier.DATA_DIR", tmp_path)
+    monkeypatch.setattr(config_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
+    path = _research_dossier_db_path()
+    assert path == tmp_path / "paper_cohorts" / EVENT_NEWS_COHORT_ID / "research_dossier.db"
+    monkeypatch.setattr(config_module.cfg, "paper_cohort_id", "kalshi-macro-20260820")
+    path = _research_dossier_db_path()
+    assert path == tmp_path / "paper_cohorts" / "kalshi-macro-20260820" / "research_dossier.db"
+
+
+def test_non_politics_series_denied_on_politics_only():
+    freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
+    politics = _politics_config()
+    gas = SimpleNamespace(ticker="KXAAAGASW-26AUG24-4.096", series_ticker="KXAAAGASW")
+    truth = SimpleNamespace(
+        ticker="KXTRUTHSOCIAL-26AUG22-T240", series_ticker="KXTRUTHSOCIAL"
+    )
+    assert event_news_non_politics_series(gas, config=freeze) is None
+    assert event_news_non_politics_series(gas, config=politics) == "non_politics_series"
+    assert event_news_non_politics_series(truth, config=politics) is None
+    assert event_news_prewarm_skip_reason(gas, config=politics) == "non_politics_series"
 
 
 def test_idle_runtime_tasks_and_forecast_refresh_isolated_from_freeze():

@@ -19,6 +19,16 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.44] - 2026-08-22
+
+### Fixed
+
+- **Politics research no longer shares freeze due-tasks.** The default
+  research-dossier store is per `PAPER_COHORT_ID`, so CPI/weather/DJI mill
+  queues cannot drive politics prewarm. Politics prewarm prefers the matcher
+  geo cache and denies commodity/macro/weather series (AAA gas, DJI, CPI,
+  Fear, HighNY, metals). DJI freeze process is not restarted.
+
 ## [0.33.43] - 2026-08-22
 
 ### Changed

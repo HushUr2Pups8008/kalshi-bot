@@ -6,6 +6,7 @@ process uses a different cohort id and must not take these paths.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from analysis.research_gate import ResearchStatus, run_research_gate
@@ -35,6 +36,23 @@ _FAVORITE_ASK_HIGH = 0.99
 # Kalshi general taker fee is 0.07 * p * (1-p). Buffer keeps min-edge above fee.
 _TAKER_FEE_COEFFICIENT = 0.07
 _MIN_EDGE_FEE_BUFFER = 0.005
+# Commodity / macro / weather ladders that steal favorite-band prewarm.
+_NON_POLITICS_SERIES_PREFIXES = (
+    "KXAAAGAS",
+    "KXDJI",
+    "KXNASDAQ",
+    "KXGOLD",
+    "KXSILVER",
+    "KXHIGHNY",
+    "KXHIGHLAX",
+    "KXWEATHER",
+    "KXFEAR",
+    "KXCPI",
+    "KXGDP",
+    "KXFED",
+    "KXBTC",
+    "KXETH",
+)
 
 
 
@@ -281,10 +299,43 @@ def event_news_min_edge(base: float, market: Any, *, config: Any = None) -> floa
     return required
 
 
+def event_news_series_ticker(market: Any) -> str:
+    series = str(getattr(market, "series_ticker", "") or "").strip().upper()
+    if series:
+        return series
+    ticker = str(getattr(market, "ticker", "") or "").strip().upper()
+    return ticker.split("-", 1)[0] if ticker else ""
+
+
+def event_news_non_politics_series(market: Any, *, config: Any = None) -> str | None:
+    """Skip commodity/macro/weather ladders on the politics desk."""
+    if not is_event_news_paper_cohort(config):
+        return None
+    series = event_news_series_ticker(market)
+    ticker = str(getattr(market, "ticker", "") or "").strip().upper()
+    extra = tuple(
+        part.strip().upper()
+        for part in str(os.getenv("EVENT_NEWS_SERIES_DENY_PREFIXES", "")).split(",")
+        if part.strip()
+    )
+    for prefix in (*_NON_POLITICS_SERIES_PREFIXES, *extra):
+        if series.startswith(prefix) or ticker.startswith(prefix):
+            log.info(
+                "[EVENT_NEWS_PREWARM] skip ticker=%s series=%s reason=non_politics_series",
+                getattr(market, "ticker", ""),
+                series or ticker,
+            )
+            return "non_politics_series"
+    return None
+
+
 def event_news_prewarm_skip_reason(market: Any, *, config: Any = None) -> str | None:
     """Politics prewarm only spends research on favorite-band executable books."""
     if not is_event_news_paper_cohort(config):
         return None
+    denied = event_news_non_politics_series(market, config=config)
+    if denied:
+        return denied
     missing = event_news_missing_snapshot_ask(market, config=config)
     if missing:
         return missing
