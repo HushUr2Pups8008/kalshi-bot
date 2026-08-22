@@ -22,4 +22,9 @@ export POLYMARKET_US_ENABLED=false
 export POLYMARKET_US_LIVE_TRADING_ENABLED=false
 export ENABLE_WEATHER_SHADOW_CAPTURE=false
 export BOT_RUNTIME_LOCK_NAME=bot_runtime.kalshi-event-news-20260820.lock
+# Default 24 recently-updated series yielded 6 open markets. Raise coverage
+# for politics/domestic-policy without touching the DJI freeze process.
+export KALSHI_MATCHER_SERIES_LIMIT=200
+# Freeze .env disables google_news_query; do not inherit that on this desk.
+export DISABLED_SOURCE_FAMILIES_EXTRA=
 exec /usr/bin/caffeinate -dimsu "$ROOT/.venv/bin/python" main.py
