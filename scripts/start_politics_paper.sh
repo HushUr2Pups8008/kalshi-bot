@@ -27,4 +27,12 @@ export BOT_RUNTIME_LOCK_NAME=bot_runtime.kalshi-event-news-20260820.lock
 export KALSHI_MATCHER_SERIES_LIMIT=200
 # Freeze .env disables google_news_query; do not inherit that on this desk.
 export DISABLED_SOURCE_FAMILIES_EXTRA=
+export OLLAMA_MODEL=qwen2.5:7b
+export OLLAMA_KEEP_ALIVE=-1
+export LLM_MAX_CONCURRENT=4
+export NEWS_CONSUMER_WORKERS=4
+# Pin the 7B model in Ollama so Metal is warm before the first research call.
+curl -sS http://localhost:11434/api/generate \
+  -d '{"model":"qwen2.5:7b","prompt":"ok","keep_alive":-1,"stream":false,"options":{"num_predict":1}}' \
+  >/tmp/ollama-politics-warmup.json || true
 exec /usr/bin/caffeinate -dimsu "$ROOT/.venv/bin/python" main.py

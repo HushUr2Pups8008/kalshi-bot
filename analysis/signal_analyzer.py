@@ -55,12 +55,19 @@ def _emit_extraction_trace_step(
         )
     )
 
-# Limit concurrent LLM calls to 1. With a single Ollama process on CPU,
-# parallel calls don't improve throughput — they just spike latency.
-# Using a semaphore here (not at the worker level) means this cap holds
-# even if we add more consumer workers in the future.
-_LLM_SEMAPHORE = asyncio.Semaphore(1)
+def _llm_max_concurrent() -> int:
+    """Politics process sets LLM_MAX_CONCURRENT; freeze omits it and stays at 1."""
+    raw = str(os.getenv("LLM_MAX_CONCURRENT", "1") or "1").strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 1
+
+
+_LLM_MAX_CONCURRENT = _llm_max_concurrent()
+_LLM_SEMAPHORE = asyncio.Semaphore(_LLM_MAX_CONCURRENT)
 _llm_in_flight: int = 0
+log.info("[LLM] max_concurrent=%d", _LLM_MAX_CONCURRENT)
 
 # ── Ollama circuit breaker ─────────────────────────────────────────────────────
 _OLLAMA_FAILURE_THRESHOLD = 3     # consecutive failures before circuit opens
@@ -1476,8 +1483,8 @@ async def llm_estimate_detailed(news, market):
     limits), then Anthropic (requires ANTHROPIC_API_KEY). Returns None if
     both are unavailable, triggering keyword-only fallback in the caller.
 
-    Serialized via _LLM_SEMAPHORE — only one call runs at a time regardless
-    of how many consumer workers are active.
+    Serialized via _LLM_SEMAPHORE. Default concurrency is 1 (DJI freeze).
+    Politics sets LLM_MAX_CONCURRENT>=4 so local GPU Ollama can batch.
     """
     global _llm_in_flight
 

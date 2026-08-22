@@ -38,6 +38,17 @@ from analysis.signal_analyzer import (
     keyword_estimate,
 )
 from kalshi.series_metadata import SettlementSource
+from analysis.signal_analyzer import _llm_max_concurrent
+
+
+def test_llm_max_concurrent_defaults_to_one(monkeypatch):
+    monkeypatch.delenv("LLM_MAX_CONCURRENT", raising=False)
+    assert _llm_max_concurrent() == 1
+
+
+def test_llm_max_concurrent_reads_env(monkeypatch):
+    monkeypatch.setenv("LLM_MAX_CONCURRENT", "4")
+    assert _llm_max_concurrent() == 4
 
 
 def _detail_to_kwargs(detail_mock):
