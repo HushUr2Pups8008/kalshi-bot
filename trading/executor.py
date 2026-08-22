@@ -412,6 +412,13 @@ class TradeExecutor:
         if yes_price < price_floor or yes_price > price_ceil:
             return f"price {yes_price:.1f}c is near limit (too illiquid)"
 
+        if self._is_paper:
+            from utils.event_news_research import event_news_missing_snapshot_ask
+
+            snapshot_reason = event_news_missing_snapshot_ask(analysis.market)
+            if snapshot_reason:
+                return snapshot_reason
+
         # Paper ticker cooldown (4h): prevents same ticker being spammed by a burst
         # of headlines on the same topic (e.g. 30 Iran-war articles in one poll cycle).
         if self._is_paper:

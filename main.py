@@ -2851,6 +2851,28 @@ class TradingBot:
                 match_meta=match_meta,
                 feedback_collector=feedback_collector,
             )
+        from utils.event_news_research import apply_event_news_live_research
+
+        (
+            estimated_prob,
+            confidence,
+            keywords,
+            reasoning,
+            llm_dir,
+            llm_mag,
+            llm_conf,
+        ) = await apply_event_news_live_research(
+            news=news,
+            market=market,
+            estimated_prob=estimated_prob,
+            confidence=confidence,
+            keywords=list(keywords or []),
+            reasoning=reasoning,
+            llm_dir=llm_dir,
+            llm_mag=llm_mag,
+            llm_conf=llm_conf,
+            dossier_store=getattr(self, "_research_dossier_store", None),
+        )
         # PROFIT-EDGE-001: reject only when neither signal source produced
         # anything. Empty `keywords` with a usable LLM signal (mag != none) is
         # a legitimate LLM-only path — the LLM identifies semantic relevance
