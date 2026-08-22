@@ -9,6 +9,7 @@ from utils.event_news_research import (
     apply_event_news_live_research,
     event_news_crossed_asks,
     event_news_exposure_prefix,
+    event_news_favorite_side,
     event_news_horizon_days,
     event_news_illiquid,
     event_news_in_allowed_ask_band,
@@ -21,9 +22,11 @@ from utils.event_news_research import (
     event_news_omit_idle_runtime_tasks,
     event_news_open_prefix_cap,
     event_news_prewarm_allows,
+    event_news_prewarm_seed_markets,
     event_news_prewarm_skip_reason,
     event_news_settle_statuses,
     event_news_spread_disagreement,
+    event_news_wide_spread,
     is_event_news_paper_cohort,
     routing_yes_probability,
     snapshot_ask_cents,
@@ -42,6 +45,8 @@ def test_snapshot_ask_requires_both_sides():
     assert snapshot_ask_cents(yes_only) == (72, None)
     both = SimpleNamespace(yes_ask_cents=72, no_ask_cents=31, yes_ask=None, no_ask=None)
     assert snapshot_ask_cents(both) == (72, 31)
+    boundary = SimpleNamespace(yes_ask_cents=1, no_ask_cents=100, yes_ask=None, no_ask=None)
+    assert snapshot_ask_cents(boundary) == (1, None)
 
 
 def test_event_news_missing_snapshot_ask_only_on_politics_cohort():
@@ -52,6 +57,8 @@ def test_event_news_missing_snapshot_ask_only_on_politics_cohort():
     assert event_news_missing_snapshot_ask(market, config=politics) == "missing_snapshot_ask"
     complete = SimpleNamespace(yes_ask_cents=80, no_ask_cents=22, yes_ask=None, no_ask=None)
     assert event_news_missing_snapshot_ask(complete, config=politics) is None
+    lottery = SimpleNamespace(yes_ask_cents=1, no_ask_cents=100, yes_ask=None, no_ask=None)
+    assert event_news_missing_snapshot_ask(lottery, config=politics) is None
 
 
 @pytest.mark.asyncio
@@ -322,8 +329,8 @@ def test_favorite_ask_band_and_prewarm_filter_politics_only():
         yes_price=12,
         yes_ask_cents=12,
         yes_ask=12,
-        no_ask_cents=90,
-        no_ask=90,
+        no_ask_cents=100,
+        no_ask=100,
         yes_ask_size=8.0,
         no_ask_size=6.0,
         open_interest_fp=40.0,
@@ -338,6 +345,127 @@ def test_favorite_ask_band_and_prewarm_filter_politics_only():
     assert event_news_prewarm_skip_reason(longshot, config=politics) == (
         "ask_outside_favorite_band"
     )
+
+
+def test_favorite_no_side_and_wide_spread_politics_only():
+    freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
+    politics = _politics_config()
+    no_favorite = SimpleNamespace(
+        ticker="KXMOCTRUMP25-26-JAN01",
+        yes_prob=0.11,
+        yes_price=11,
+        yes_ask_cents=13,
+        yes_ask=13,
+        no_ask_cents=91,
+        no_ask=91,
+        yes_ask_size=100.0,
+        no_ask_size=100.0,
+        open_interest_fp=4000.0,
+        volume_24h_fp=200.0,
+    )
+    wide = SimpleNamespace(
+        ticker="KXCANUSDEAL-26-26SEP01",
+        yes_prob=0.50,
+        yes_price=50,
+        yes_ask_cents=97,
+        yes_ask=97,
+        no_ask_cents=97,
+        no_ask=97,
+        yes_ask_size=3000.0,
+        no_ask_size=3000.0,
+        open_interest_fp=250.0,
+        volume_24h_fp=250.0,
+    )
+    lottery = SimpleNamespace(
+        ticker="KXTRUTHSOCIAL-26AUG22-B129",
+        yes_ask_cents=1,
+        no_ask_cents=100,
+        yes_ask=1,
+        no_ask=100,
+        yes_ask_size=9000.0,
+        no_ask_size=None,
+        open_interest_fp=6000.0,
+        volume_24h_fp=200.0,
+    )
+    both = SimpleNamespace(
+        ticker="KXTRUTHSOCIAL-26AUG22-B230",
+        yes_ask_cents=55,
+        no_ask_cents=56,
+        yes_ask=55,
+        no_ask=56,
+        yes_ask_size=40.0,
+        no_ask_size=40.0,
+        open_interest_fp=23000.0,
+        volume_24h_fp=20000.0,
+    )
+    assert event_news_favorite_side(no_favorite, config=freeze) == (None, None)
+    assert event_news_favorite_side(no_favorite, config=politics) == ("no", 91)
+    assert event_news_prewarm_allows(no_favorite, config=politics) is True
+    assert event_news_wide_spread(wide, config=freeze) is None
+    assert event_news_wide_spread(wide, config=politics) == "wide_spread"
+    assert event_news_prewarm_skip_reason(wide, config=politics) == "wide_spread"
+    assert event_news_prewarm_skip_reason(lottery, config=politics) == (
+        "ask_outside_favorite_band"
+    )
+    assert event_news_favorite_side(both, config=politics) == ("yes", 55)
+    near_no = SimpleNamespace(yes_ask_cents=45, no_ask_cents=56, yes_ask=45, no_ask=56)
+    assert event_news_min_edge(0.02, near_no, config=politics) == pytest.approx(
+        0.07 * 0.56 * 0.44 + 0.005
+    )
+
+
+def test_llm_routing_allows_favorite_no_and_blocks_lottery(monkeypatch):
+    from analysis.signal_analyzer import _llm_routing_reason
+    from analysis import signal_analyzer
+
+    politics = _politics_config()
+    monkeypatch.setattr(signal_analyzer.cfg, "enable_llm_routing_filter", True)
+    monkeypatch.setattr(signal_analyzer.cfg, "llm_allowed_price_bands", [(0.55, 0.99)])
+    monkeypatch.setattr(signal_analyzer.cfg, "llm_excluded_price_bands", [(0.00, 0.35)])
+    monkeypatch.setattr("utils.event_news_research.cfg", politics)
+    news = SimpleNamespace(headline="x")
+    no_favorite = SimpleNamespace(
+        ticker="KXMOCTRUMP25-26-JAN01",
+        yes_ask_cents=13,
+        no_ask_cents=91,
+        yes_ask=13,
+        no_ask=91,
+        yes_prob=0.11,
+    )
+    lottery = SimpleNamespace(
+        ticker="KXLONG-1",
+        yes_ask_cents=12,
+        no_ask_cents=100,
+        yes_ask=12,
+        no_ask=100,
+        yes_prob=0.12,
+    )
+    assert _llm_routing_reason(news, no_favorite) is None
+    assert _llm_routing_reason(news, lottery) == "price_band_excluded"
+
+
+def test_prewarm_seed_markets_uses_pinned_series_not_cache():
+    politics = _politics_config()
+    freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
+    cache = [SimpleNamespace(ticker="STALE-CACHE")]
+    fetched: list[str] = []
+
+    def get_markets(*, status, series_ticker, limit):
+        fetched.append(series_ticker)
+        return [SimpleNamespace(ticker=f"{series_ticker}-FRESH", series_ticker=series_ticker)], None
+
+    rest = SimpleNamespace(get_markets=get_markets)
+    freeze_markets = event_news_prewarm_seed_markets(
+        rest_client=rest, matcher_markets=cache, config=freeze
+    )
+    assert freeze_markets == cache
+    assert fetched == []
+    politics_markets = event_news_prewarm_seed_markets(
+        rest_client=rest, matcher_markets=cache, config=politics
+    )
+    assert fetched
+    assert all(getattr(market, "ticker", "").endswith("-FRESH") for market in politics_markets)
+    assert cache[0] not in politics_markets
 
 
 def test_crossed_asks_politics_only():

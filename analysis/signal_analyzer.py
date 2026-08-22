@@ -86,7 +86,18 @@ def _llm_routing_reason(news: NewsItem, market: KalshiMarket) -> str | None:
     del news
     if not cfg.enable_llm_routing_filter:
         return None
-    from utils.event_news_research import routing_yes_probability
+    from utils.event_news_research import event_news_favorite_side, routing_yes_probability
+
+    side, cents = event_news_favorite_side(market)
+    if side is not None and cents is not None:
+        log.info(
+            "[EVENT_NEWS_ROUTING] ticker=%s side=%s ask=%s source=%s_ask",
+            getattr(market, "ticker", ""),
+            side,
+            cents,
+            side,
+        )
+        return None
 
     price, source = routing_yes_probability(market)
     if source != "mid":

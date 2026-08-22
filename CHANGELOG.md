@@ -19,6 +19,18 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.46] - 2026-08-22
+
+### Fixed
+
+- **Politics favorite-side asks and fresh pinned quotes.** Prewarm and LLM
+  routing now take an executable YES *or* NO ask in 0.55–0.99, skip books
+  whose round-trip spread is 15¢ or wider, and treat 0c/100c empty-side
+  quotes as non-executable instead of `missing_snapshot_ask`. Prewarm
+  seeds from live pinned-series list quotes rather than the 30-minute
+  matcher cache, which was dropping ATM Truth Social rungs as they
+  crossed the 0.55 band. Freeze quotes and discovery are unchanged.
+
 ## [0.33.45] - 2026-08-22
 
 ### Fixed

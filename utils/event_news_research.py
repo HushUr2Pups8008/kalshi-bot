@@ -23,6 +23,8 @@ _PRIMARY_STATUSES = {
 }
 # Skip taking when last trade and YES ask disagree by this many cents.
 _LAST_ASK_DIVERGENCE_CENTS = 15
+# Round-trip cents (yes_ask + no_ask - 100). Wide books are not favorites.
+_WIDE_SPREAD_CENTS = 15
 # Top-of-book size below this is treated as untradeable on the politics desk.
 _MIN_TOP_SIZE = 2.0
 # Joint OI + 24h volume floor; missing fields do not skip.
@@ -213,16 +215,33 @@ def _ask_probability(market: Any, *names: str) -> float | None:
 
 
 def snapshot_ask_cents(market: Any) -> tuple[int | None, int | None]:
-    """Return integer yes/no ask cents if both executable asks exist."""
+    """Return integer yes/no ask cents when that side is executable (1-99).
+
+    Kalshi list quotes often use 0c/100c as an empty book on one side.
+    Those boundary quotes are not executable and must not count as a
+    missing-quad failure when the other side is a real take.
+    """
 
     def _as_cents(name: str, alt: str) -> int | None:
-        raw = getattr(market, name, None)
+        try:
+            raw = getattr(market, name, None)
+        except (AttributeError, ValueError, TypeError):
+            raw = None
         if raw is None:
-            raw = getattr(market, alt, None)
+            try:
+                raw = getattr(market, alt, None)
+            except (AttributeError, ValueError, TypeError):
+                raw = None
         if raw is None:
             return None
-        value = float(raw)
-        cents = int(round(value if value > 1.0 else value * 100.0))
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return None
+        if name.endswith("_cents") or value > 1.0:
+            cents = int(round(value))
+        else:
+            cents = int(round(value * 100.0))
         if 1 <= cents <= 99:
             return cents
         return None
@@ -231,12 +250,66 @@ def snapshot_ask_cents(market: Any) -> tuple[int | None, int | None]:
 
 
 def event_news_missing_snapshot_ask(market: Any, *, config: Any = None) -> str | None:
+    """Skip only when neither side has an executable ask."""
+    if not is_event_news_paper_cohort(config):
+        return None
+    yes_ask, no_ask = snapshot_ask_cents(market)
+    if yes_ask is None and no_ask is None:
+        return "missing_snapshot_ask"
+    return None
+
+
+def event_news_wide_spread(market: Any, *, config: Any = None) -> str | None:
+    """Skip books whose round-trip cost is too wide to be a favorite take."""
     if not is_event_news_paper_cohort(config):
         return None
     yes_ask, no_ask = snapshot_ask_cents(market)
     if yes_ask is None or no_ask is None:
-        return "missing_snapshot_ask"
-    return None
+        return None
+    spread = yes_ask + no_ask - 100
+    if spread < _WIDE_SPREAD_CENTS:
+        return None
+    log.info(
+        "[EVENT_NEWS_RISK] wide_spread ticker=%s yes_ask=%s no_ask=%s spread=%s",
+        getattr(market, "ticker", ""),
+        yes_ask,
+        no_ask,
+        spread,
+    )
+    return "wide_spread"
+
+
+def event_news_favorite_side(
+    market: Any, *, config: Any = None
+) -> tuple[str | None, int | None]:
+    """Return the executable favorite side and ask cents, if any.
+
+    Politics takes YES when yes_ask is in the allowed band, otherwise NO
+    when no_ask is in the same band. Prefer YES when both qualify so the
+    existing YES-favorite sample stays stable. Freeze never uses this.
+    """
+    if not is_event_news_paper_cohort(config):
+        return None, None
+    yes_ask, no_ask = snapshot_ask_cents(market)
+    active = config if config is not None else cfg
+    allowed = list(getattr(active, "llm_allowed_price_bands", ()) or ())
+    if not allowed:
+        allowed = [(_FAVORITE_ASK_LOW, _FAVORITE_ASK_HIGH)]
+    excluded = list(getattr(active, "llm_excluded_price_bands", ()) or ())
+
+    def _in_favorite(cents: int | None) -> bool:
+        if cents is None:
+            return False
+        price = cents / 100.0
+        if any(_price_in_band(price, low, high) for low, high in excluded):
+            return False
+        return any(_price_in_band(price, low, high) for low, high in allowed)
+
+    if _in_favorite(yes_ask):
+        return "yes", yes_ask
+    if _in_favorite(no_ask):
+        return "no", no_ask
+    return None, None
 
 
 def _price_in_band(price: float, low: float, high: float) -> bool:
@@ -246,18 +319,11 @@ def _price_in_band(price: float, low: float, high: float) -> bool:
 
 
 def event_news_in_allowed_ask_band(market: Any, *, config: Any = None) -> bool:
-    """True when the executable YES ask is inside the politics favorite band."""
+    """True when an executable favorite-side ask is inside the allowed band."""
     if not is_event_news_paper_cohort(config):
         return True
-    price, _source = routing_yes_probability(market, config=config)
-    active = config if config is not None else cfg
-    allowed = list(getattr(active, "llm_allowed_price_bands", ()) or ())
-    if not allowed:
-        allowed = [(_FAVORITE_ASK_LOW, _FAVORITE_ASK_HIGH)]
-    excluded = list(getattr(active, "llm_excluded_price_bands", ()) or ())
-    if any(_price_in_band(price, low, high) for low, high in excluded):
-        return False
-    return any(_price_in_band(price, low, high) for low, high in allowed)
+    side, _cents = event_news_favorite_side(market, config=config)
+    return side is not None
 
 
 def event_news_crossed_asks(market: Any, *, config: Any = None) -> str | None:
@@ -282,7 +348,11 @@ def event_news_min_edge(base: float, market: Any, *, config: Any = None) -> floa
     """Raise paper min-edge to taker-fee + buffer so admission matches keep-rule."""
     if not is_event_news_paper_cohort(config):
         return base
-    price, _source = routing_yes_probability(market, config=config)
+    _side, cents = event_news_favorite_side(market, config=config)
+    if cents is not None:
+        price = cents / 100.0
+    else:
+        price, _source = routing_yes_probability(market, config=config)
     p = min(max(float(price), 0.01), 0.99)
     fee = _TAKER_FEE_COEFFICIENT * p * (1.0 - p)
     required = fee + _MIN_EDGE_FEE_BUFFER
@@ -345,6 +415,9 @@ def event_news_prewarm_skip_reason(market: Any, *, config: Any = None) -> str | 
     crossed = event_news_crossed_asks(market, config=config)
     if crossed:
         return crossed
+    wide = event_news_wide_spread(market, config=config)
+    if wide:
+        return wide
     if not event_news_in_allowed_ask_band(market, config=config):
         return "ask_outside_favorite_band"
     return None
@@ -421,6 +494,55 @@ def event_news_matcher_reserve_series(*, config: Any = None) -> tuple[str, ...]:
             seen.add(series)
             ordered.append(series)
     return tuple(ordered)
+
+
+def event_news_prewarm_seed_markets(
+    *,
+    rest_client: Any,
+    matcher_markets: list[Any] | None = None,
+    config: Any = None,
+) -> list[Any]:
+    """Politics prewarm uses fresh pinned-series quotes, not the 30-minute cache.
+
+    ATM politics books cross the 0.55 band inside one matcher TTL. Filtering
+    favorite-band admission on stale cache asks drops the only takeable rungs.
+    Freeze does not call this helper.
+    """
+    cache = list(matcher_markets or [])
+    if not is_event_news_paper_cohort(config):
+        return cache
+    series = event_news_matcher_reserve_series(config=config)
+    reader = getattr(rest_client, "get_markets", None)
+    if not callable(reader) or not series:
+        if cache:
+            log.info("[EVENT_NEWS_PREWARM] using_matcher_cache markets=%d", len(cache))
+        return cache
+    fresh: list[Any] = []
+    for series_ticker in series:
+        try:
+            page, _cursor = reader(
+                status="open",
+                series_ticker=series_ticker,
+                limit=200,
+            )
+        except Exception as exc:
+            log.warning(
+                "[EVENT_NEWS_PREWARM] pinned series fetch failed series=%s err=%s",
+                series_ticker,
+                type(exc).__name__,
+            )
+            continue
+        fresh.extend(list(page or []))
+    if fresh:
+        log.info(
+            "[EVENT_NEWS_PREWARM] using_pinned_series_quotes series=%d markets=%d",
+            len(series),
+            len(fresh),
+        )
+        return fresh
+    if cache:
+        log.info("[EVENT_NEWS_PREWARM] using_matcher_cache markets=%d", len(cache))
+    return cache
 
 
 def event_news_pin_matcher_series(

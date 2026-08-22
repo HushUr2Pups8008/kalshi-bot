@@ -1490,15 +1490,17 @@ class TradingBot:
         max_markets = max(0, int(getattr(cfg, "research_prewarm_max_markets", 25)))
         markets: list[object] = []
         if is_event_news_paper_cohort():
+            from utils.event_news_research import event_news_prewarm_seed_markets
+
+            cache_markets: list[object] = []
             try:
-                markets = list(self.matcher._cache._markets or [])
+                cache_markets = list(self.matcher._cache._markets or [])
             except Exception:
-                markets = []
-            if markets:
-                log.info(
-                    "[EVENT_NEWS_PREWARM] using_matcher_cache markets=%d",
-                    len(markets),
-                )
+                cache_markets = []
+            markets = event_news_prewarm_seed_markets(
+                rest_client=self.rest,
+                matcher_markets=cache_markets,
+            )
         if not markets:
             try:
                 markets = self.rest.get_all_open_markets(
