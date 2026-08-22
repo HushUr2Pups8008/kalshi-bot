@@ -399,6 +399,44 @@ def event_news_non_politics_series(market: Any, *, config: Any = None) -> str | 
     return None
 
 
+# Quote-dependent prewarm skips. Exponential backoff on these locks ATM
+# favorites for hours after a stale illiquid/out-of-band print.
+_QUOTE_DEPENDENT_PREWARM_REASONS = frozenset(
+    {
+        "missing_snapshot_ask",
+        "ask_outside_favorite_band",
+        "illiquid_top_size",
+        "illiquid_open_interest",
+        "wide_spread",
+        "crossed_asks",
+        "last_ask_divergence",
+    }
+)
+
+
+def event_news_quote_dependent_skip_reason(reason: str | None) -> bool:
+    return str(reason or "").strip() in _QUOTE_DEPENDENT_PREWARM_REASONS
+
+
+def event_news_bypass_quote_skip_cooldown(
+    last_skip_reason: str | None,
+    market: Any,
+    *,
+    config: Any = None,
+) -> bool:
+    """Retry when a quote-dependent skip is stale and the live book is in-band.
+
+    Politics only. Freeze keeps exponential backoff. A 9600s lock from
+    `illiquid_top_size` / `ask_outside_favorite_band` must not block T240
+    after the book has become a liquid favorite.
+    """
+    if not is_event_news_paper_cohort(config):
+        return False
+    if not event_news_quote_dependent_skip_reason(last_skip_reason):
+        return False
+    return event_news_prewarm_skip_reason(market, config=config) is None
+
+
 def event_news_prewarm_skip_reason(market: Any, *, config: Any = None) -> str | None:
     """Politics prewarm only spends research on favorite-band executable books."""
     if not is_event_news_paper_cohort(config):

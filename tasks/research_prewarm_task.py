@@ -701,6 +701,15 @@ class ResearchPrewarmTask:
         persisted_skip = await self._persisted_task_skip_result(ticker, market)
         if persisted_skip is None:
             return True
+        from utils.event_news_research import is_event_news_paper_cohort
+
+        if is_event_news_paper_cohort():
+            _log.info(
+                "[EVENT_NEWS_PREWARM] unavailable ticker=%s status=%s reason=%s",
+                ticker,
+                persisted_skip.status,
+                persisted_skip.skip_reason,
+            )
         return (
             persisted_skip.status == "skipped_terminal"
             and persisted_skip.skip_reason == "decision_grade_candidate"
@@ -723,6 +732,18 @@ class ResearchPrewarmTask:
             )
             return None
         if snapshot is None:
+            return None
+        from utils.event_news_research import event_news_bypass_quote_skip_cooldown
+
+        if market is not None and event_news_bypass_quote_skip_cooldown(
+            snapshot.last_skip_reason,
+            market,
+        ):
+            _log.info(
+                "[EVENT_NEWS_PREWARM] bypass_quote_cooldown ticker=%s last_skip=%s",
+                ticker,
+                snapshot.last_skip_reason,
+            )
             return None
         if snapshot.state == "decision_grade_candidate":
             if not await self._decision_grade_task_has_countercase(ticker):

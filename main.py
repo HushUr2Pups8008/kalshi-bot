@@ -1526,10 +1526,11 @@ class TradingBot:
                     kept.append(market)
             market_list = kept
             log.info(
-                "[EVENT_NEWS_PREWARM] favorite_band_filter fetched=%d in_band=%d rejected=%s",
+                "[EVENT_NEWS_PREWARM] favorite_band_filter fetched=%d in_band=%d rejected=%s tickers=%s",
                 before,
                 len(market_list),
                 dict(rejected),
+                [str(getattr(market, "ticker", "") or "") for market in market_list],
             )
         now_monotonic = time.monotonic()
         cooldown = self._research_prewarm_target_cooldown_seconds()

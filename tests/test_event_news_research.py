@@ -21,9 +21,11 @@ from utils.event_news_research import (
     event_news_official_research_kwargs,
     event_news_omit_idle_runtime_tasks,
     event_news_open_prefix_cap,
+    event_news_bypass_quote_skip_cooldown,
     event_news_prewarm_allows,
     event_news_prewarm_seed_markets,
     event_news_prewarm_skip_reason,
+    event_news_quote_dependent_skip_reason,
     event_news_settle_statuses,
     event_news_spread_disagreement,
     event_news_wide_spread,
@@ -442,6 +444,65 @@ def test_llm_routing_allows_favorite_no_and_blocks_lottery(monkeypatch):
     )
     assert _llm_routing_reason(news, no_favorite) is None
     assert _llm_routing_reason(news, lottery) == "price_band_excluded"
+
+
+def test_quote_dependent_cooldown_bypass_only_on_live_favorite():
+    freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
+    politics = _politics_config()
+    favorite = SimpleNamespace(
+        ticker="KXTRUTHSOCIAL-26AUG22-T240",
+        yes_ask_cents=58,
+        no_ask_cents=50,
+        yes_ask=58,
+        no_ask=50,
+        yes_ask_size=25.0,
+        no_ask_size=10.0,
+        open_interest_fp=30000.0,
+        volume_24h_fp=14000.0,
+    )
+    longshot = SimpleNamespace(
+        ticker="KXTRUTHSOCIAL-26AUG22-B129",
+        yes_ask_cents=1,
+        no_ask_cents=100,
+        yes_ask=1,
+        no_ask=100,
+        yes_ask_size=9000.0,
+        no_ask_size=None,
+        open_interest_fp=6000.0,
+        volume_24h_fp=200.0,
+    )
+    assert event_news_quote_dependent_skip_reason("illiquid_top_size") is True
+    assert event_news_quote_dependent_skip_reason("official_data_pending") is False
+    assert (
+        event_news_bypass_quote_skip_cooldown(
+            "illiquid_top_size", favorite, config=freeze
+        )
+        is False
+    )
+    assert (
+        event_news_bypass_quote_skip_cooldown(
+            "illiquid_top_size", favorite, config=politics
+        )
+        is True
+    )
+    assert (
+        event_news_bypass_quote_skip_cooldown(
+            "ask_outside_favorite_band", favorite, config=politics
+        )
+        is True
+    )
+    assert (
+        event_news_bypass_quote_skip_cooldown(
+            "illiquid_top_size", longshot, config=politics
+        )
+        is False
+    )
+    assert (
+        event_news_bypass_quote_skip_cooldown(
+            "missing_resolution_source", favorite, config=politics
+        )
+        is False
+    )
 
 
 def test_prewarm_seed_markets_uses_pinned_series_not_cache():

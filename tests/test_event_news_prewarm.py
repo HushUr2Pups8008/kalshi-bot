@@ -5,7 +5,7 @@ import pytest
 
 from analysis.research_gate import ResearchEvidence, ResearchStatus, ResearchVerdict, run_research_gate
 from kalshi.normalizer import SettlementSource
-from tasks.research_dossier import ResearchDossierStore
+from tasks.research_dossier import ResearchDossierStore, ResearchTaskSnapshot
 from tasks.research_prewarm_task import ResearchPrewarmTask
 from utils.event_news_research import EVENT_NEWS_COHORT_ID
 
@@ -142,3 +142,65 @@ async def test_politics_prewarm_skips_longshot_and_passes_official_kwargs(
     assert gate.await_args.kwargs["allow_official_pdf_and_homepage"] is True
     assert gate.await_args.kwargs["prefer_official_sources"] is True
     assert gate.await_args.kwargs["require_decision_grade"] is True
+
+
+@pytest.mark.asyncio
+async def test_quote_skip_cooldown_does_not_starve_live_favorite(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        "utils.event_news_research.cfg",
+        SimpleNamespace(
+            paper_cohort_id=EVENT_NEWS_COHORT_ID,
+            llm_allowed_price_bands=[(0.55, 0.99)],
+            llm_excluded_price_bands=[(0.00, 0.35)],
+        ),
+        raising=False,
+    )
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    gate = AsyncMock(
+        return_value=ResearchVerdict(
+            status=ResearchStatus.NEEDS_RESEARCH,
+            attempted=True,
+            skip_reason="insufficient_corroboration",
+        )
+    )
+    task = ResearchPrewarmTask(store=store, research_gate=gate)
+    favorite = SimpleNamespace(
+        ticker="KXTRUTHSOCIAL-26AUG22-T240",
+        title="Will Donald Trump make 240+ Truth Social posts?",
+        rules_primary="Official source.",
+        rules_secondary="",
+        settlement_sources=(),
+        contract_terms_url="https://assets.kalshi.com/contract_terms/TRUTH.pdf",
+        status="open",
+        close_time="2099-12-31T23:59:59Z",
+        yes_ask_cents=58,
+        no_ask_cents=50,
+        yes_ask=58,
+        no_ask=50,
+        yes_prob=0.54,
+        yes_price=54,
+        yes_ask_size=25.0,
+        no_ask_size=10.0,
+        open_interest_fp=30000.0,
+        volume_24h_fp=14000.0,
+    )
+    cooled = ResearchTaskSnapshot(
+        market_ticker=favorite.ticker,
+        state="needs_research",
+        cooldown_until_ts="2099-01-01T00:00:00Z",
+        backoff_seconds=9600.0,
+        terminal_reason=None,
+        open_questions=(),
+        attempt_count=6,
+        same_reason_count=6,
+        last_skip_reason="illiquid_top_size",
+        updated_ts="2026-08-22T20:32:08.394Z",
+    )
+    task.store.get_research_task_snapshot = AsyncMock(return_value=cooled)
+    results = await task.run_once([favorite])
+    assert results
+    assert gate.await_count >= 1

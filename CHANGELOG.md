@@ -19,6 +19,17 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.47] - 2026-08-22
+
+### Fixed
+
+- **Politics no longer starves live favorites behind stale quote backoff.**
+  In-band books that were previously skipped as `illiquid_top_size` or
+  `ask_outside_favorite_band` were locked for 9600s, so `cycle markets=2
+  results={}` did no research. Quote-dependent skips now bypass cooldown
+  when the live book passes the favorite-band filter. Freeze backoff is
+  unchanged. Prewarm logs the kept in-band tickers.
+
 ## [0.33.46] - 2026-08-22
 
 ### Fixed
