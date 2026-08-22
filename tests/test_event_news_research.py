@@ -15,6 +15,7 @@ from utils.event_news_research import (
     event_news_min_edge,
     event_news_missing_snapshot_ask,
     event_news_non_politics_series,
+    event_news_pin_matcher_series,
     event_news_forecast_refresh_series,
     event_news_official_research_kwargs,
     event_news_omit_idle_runtime_tasks,
@@ -419,6 +420,24 @@ def test_non_politics_series_denied_on_politics_only():
     assert event_news_non_politics_series(gas, config=politics) == "non_politics_series"
     assert event_news_non_politics_series(truth, config=politics) is None
     assert event_news_prewarm_skip_reason(gas, config=politics) == "non_politics_series"
+
+
+def test_matcher_reserve_pins_politics_series_and_ignores_freeze():
+    freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
+    politics = _politics_config()
+    catalog = [
+        {"ticker": "KXRECENTJUNK"},
+        {"ticker": "KXTRUTHSOCIAL"},
+        {"ticker": "KXMOCTRUMP25"},
+    ]
+    recency = ["KXRECENTJUNK"]
+    assert event_news_pin_matcher_series(recency, catalog, limit=2, config=freeze) == [
+        "KXRECENTJUNK"
+    ]
+    pinned = event_news_pin_matcher_series(recency, catalog, limit=2, config=politics)
+    assert pinned[0] == "KXTRUTHSOCIAL"
+    assert "KXMOCTRUMP25" in pinned
+    assert "KXRECENTJUNK" in pinned or len(pinned) == 2
 
 
 def test_idle_runtime_tasks_and_forecast_refresh_isolated_from_freeze():

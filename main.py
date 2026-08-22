@@ -1510,14 +1510,24 @@ class TradingBot:
         market_list = list(markets or [])
 
         if is_event_news_paper_cohort():
+            from collections import Counter
+            from utils.event_news_research import event_news_prewarm_skip_reason
+
             before = len(market_list)
-            market_list = [
-                market for market in market_list if event_news_prewarm_allows(market)
-            ]
+            rejected: Counter[str] = Counter()
+            kept: list[object] = []
+            for market in market_list:
+                reason = event_news_prewarm_skip_reason(market)
+                if reason:
+                    rejected[reason] += 1
+                else:
+                    kept.append(market)
+            market_list = kept
             log.info(
-                "[EVENT_NEWS_PREWARM] favorite_band_filter fetched=%d in_band=%d",
+                "[EVENT_NEWS_PREWARM] favorite_band_filter fetched=%d in_band=%d rejected=%s",
                 before,
                 len(market_list),
+                dict(rejected),
             )
         now_monotonic = time.monotonic()
         cooldown = self._research_prewarm_target_cooldown_seconds()

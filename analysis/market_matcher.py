@@ -949,6 +949,9 @@ class MarketCache:
                 for p in MARKET_SERIES_BLOCKLIST_PREFIXES
             )
         ]
+        from utils.event_news_research import event_news_pin_matcher_series
+
+        geo_tickers = event_news_pin_matcher_series(geo_tickers, all_series)
         log.info(
             "Series discovery: %d geo/political of %d total (%d dropped by sports blocklist)",
             len(geo_tickers), len(all_series), len(keyword_matched) - len(geo_tickers),

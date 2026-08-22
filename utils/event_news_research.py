@@ -379,6 +379,88 @@ def event_news_forecast_refresh_series(
     return tuple(str(series).strip().upper() for series in (configured or ()) if str(series).strip())
 
 
+# Pin these into matcher discovery so recency-top-N cannot drop them.
+_MATCHER_RESERVE_SERIES = (
+    "KXTRUTHSOCIAL",
+    "KXCANUSDEAL",
+    "KXMOCTRUMP25",
+    "KXTRUMPACT",
+    "KXTRUMPSAY",
+    "KXTRUMPMENTION",
+    "KXAPRPOTUS",
+    "KXPOLLPOTUS",
+    "KXEFFTARIFF",
+    "KXVOTESAVEAMERICA",
+    "KXSBUDGETRES",
+    "KXLEAVECONGRESS",
+    "KXFISAEXTEND",
+)
+
+
+def event_news_matcher_reserve_series(*, config: Any = None) -> tuple[str, ...]:
+    """Series that must stay in the politics matcher cache."""
+    if not is_event_news_paper_cohort(config):
+        return ()
+    extra = tuple(
+        part.strip().upper()
+        for part in str(os.getenv("EVENT_NEWS_SERIES_RESERVE", "")).split(",")
+        if part.strip()
+    )
+    fallback = tuple(
+        str(series).strip().upper()
+        for series in (
+            getattr(config if config is not None else cfg, "research_prewarm_sourceable_series_fallback", ())
+            or ()
+        )
+        if str(series).strip()
+    )
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for series in (*extra, *fallback, *_MATCHER_RESERVE_SERIES):
+        if series and series not in seen:
+            seen.add(series)
+            ordered.append(series)
+    return tuple(ordered)
+
+
+def event_news_pin_matcher_series(
+    geo_tickers: list[str],
+    all_series: list[Any],
+    *,
+    limit: int | None = None,
+    config: Any = None,
+) -> list[str]:
+    """Prepend reserved politics series so recency ranking cannot drop them."""
+    reserve = event_news_matcher_reserve_series(config=config)
+    if not reserve:
+        return list(geo_tickers)
+    catalog = [
+        str(series.get("ticker", "") if isinstance(series, dict) else getattr(series, "ticker", "") or "")
+        for series in all_series
+    ]
+    by_upper = {ticker.upper(): ticker for ticker in catalog if ticker}
+    pinned: list[str] = []
+    for prefix in reserve:
+        if prefix in by_upper:
+            pinned.append(by_upper[prefix])
+            continue
+        for ticker, original in by_upper.items():
+            if ticker == prefix or ticker.startswith(prefix + "-"):
+                pinned.append(original)
+                break
+    merged = list(dict.fromkeys([*pinned, *geo_tickers]))
+    if limit is not None and limit > 0:
+        merged = merged[:limit]
+    if pinned:
+        log.info(
+            "[EVENT_NEWS_MATCHER] reserved_series=%s pinned=%d geo_tickers=%d",
+            pinned,
+            len(pinned),
+            len(merged),
+        )
+    return merged
+
+
 async def apply_event_news_live_research(
     *,
     news: Any,

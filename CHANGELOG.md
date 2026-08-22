@@ -19,6 +19,16 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.45] - 2026-08-22
+
+### Fixed
+
+- **Politics matcher now pins money-path series.** Recency-top-N discovery
+  was dropping Truth Social / Trump-action / tariff series, leaving
+  `in_band=1`. Those series are prepended into the geo cache on the
+  event-news cohort only. Prewarm logs rejected-reason counts. Freeze
+  macro discovery is unchanged.
+
 ## [0.33.44] - 2026-08-22
 
 ### Fixed
