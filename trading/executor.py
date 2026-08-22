@@ -414,6 +414,7 @@ class TradeExecutor:
 
         if self._is_paper:
             from utils.event_news_research import (
+                event_news_crossed_asks,
                 event_news_missing_snapshot_ask,
                 event_news_spread_disagreement,
             )
@@ -424,6 +425,9 @@ class TradeExecutor:
             divergence = event_news_spread_disagreement(analysis.market)
             if divergence:
                 return divergence
+            crossed = event_news_crossed_asks(analysis.market)
+            if crossed:
+                return crossed
 
         # Paper ticker cooldown (4h): prevents same ticker being spammed by a burst
         # of headlines on the same topic (e.g. 30 Iran-war articles in one poll cycle).
@@ -795,6 +799,10 @@ class TradeExecutor:
 
     def _min_edge_threshold(self, analysis: SignalAnalysis) -> float:
         base_threshold = PAPER_MIN_EDGE if self._is_paper else cfg.min_edge
+        if self._is_paper:
+            from utils.event_news_research import event_news_min_edge
+
+            base_threshold = event_news_min_edge(base_threshold, analysis.market)
         signal_meta = self._signal_meta(analysis)
         override = signal_meta.get("readiness_gate_min_edge_override")
         if override is None:

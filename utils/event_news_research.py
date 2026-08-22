@@ -29,6 +29,12 @@ _MIN_OPEN_INTEREST = 10.0
 _MIN_VOLUME_24H = 5.0
 # Early-close contracts get a compressed Kelly horizon (days).
 _EARLY_CLOSE_HORIZON_DAYS = 2.0
+# Fallback favorite band when config bands are missing.
+_FAVORITE_ASK_LOW = 0.55
+_FAVORITE_ASK_HIGH = 0.99
+# Kalshi general taker fee is 0.07 * p * (1-p). Buffer keeps min-edge above fee.
+_TAKER_FEE_COEFFICIENT = 0.07
+_MIN_EDGE_FEE_BUFFER = 0.005
 
 
 
@@ -213,6 +219,97 @@ def event_news_missing_snapshot_ask(market: Any, *, config: Any = None) -> str |
     if yes_ask is None or no_ask is None:
         return "missing_snapshot_ask"
     return None
+
+
+def _price_in_band(price: float, low: float, high: float) -> bool:
+    if high >= 1.0:
+        return low <= price <= high
+    return low <= price < high
+
+
+def event_news_in_allowed_ask_band(market: Any, *, config: Any = None) -> bool:
+    """True when the executable YES ask is inside the politics favorite band."""
+    if not is_event_news_paper_cohort(config):
+        return True
+    price, _source = routing_yes_probability(market, config=config)
+    active = config if config is not None else cfg
+    allowed = list(getattr(active, "llm_allowed_price_bands", ()) or ())
+    if not allowed:
+        allowed = [(_FAVORITE_ASK_LOW, _FAVORITE_ASK_HIGH)]
+    excluded = list(getattr(active, "llm_excluded_price_bands", ()) or ())
+    if any(_price_in_band(price, low, high) for low, high in excluded):
+        return False
+    return any(_price_in_band(price, low, high) for low, high in allowed)
+
+
+def event_news_crossed_asks(market: Any, *, config: Any = None) -> str | None:
+    """Skip locked/crossed books (YES ask + NO ask < 100c) on politics only."""
+    if not is_event_news_paper_cohort(config):
+        return None
+    yes_ask, no_ask = snapshot_ask_cents(market)
+    if yes_ask is None or no_ask is None:
+        return None
+    if yes_ask + no_ask >= 100:
+        return None
+    log.info(
+        "[EVENT_NEWS_RISK] crossed_asks ticker=%s yes_ask=%s no_ask=%s",
+        getattr(market, "ticker", ""),
+        yes_ask,
+        no_ask,
+    )
+    return "crossed_asks"
+
+
+def event_news_min_edge(base: float, market: Any, *, config: Any = None) -> float:
+    """Raise paper min-edge to taker-fee + buffer so admission matches keep-rule."""
+    if not is_event_news_paper_cohort(config):
+        return base
+    price, _source = routing_yes_probability(market, config=config)
+    p = min(max(float(price), 0.01), 0.99)
+    fee = _TAKER_FEE_COEFFICIENT * p * (1.0 - p)
+    required = fee + _MIN_EDGE_FEE_BUFFER
+    if required <= base:
+        return base
+    log.info(
+        "[EVENT_NEWS_EDGE] ticker=%s p=%.3f fee=%.4f base=%.4f required=%.4f",
+        getattr(market, "ticker", ""),
+        p,
+        fee,
+        base,
+        required,
+    )
+    return required
+
+
+def event_news_prewarm_skip_reason(market: Any, *, config: Any = None) -> str | None:
+    """Politics prewarm only spends research on favorite-band executable books."""
+    if not is_event_news_paper_cohort(config):
+        return None
+    missing = event_news_missing_snapshot_ask(market, config=config)
+    if missing:
+        return missing
+    illiquid = event_news_illiquid(market, config=config)
+    if illiquid:
+        return illiquid
+    crossed = event_news_crossed_asks(market, config=config)
+    if crossed:
+        return crossed
+    if not event_news_in_allowed_ask_band(market, config=config):
+        return "ask_outside_favorite_band"
+    return None
+
+
+def event_news_prewarm_allows(market: Any, *, config: Any = None) -> bool:
+    return event_news_prewarm_skip_reason(market, config=config) is None
+
+
+def event_news_official_research_kwargs(*, config: Any = None) -> dict[str, bool]:
+    if not is_event_news_paper_cohort(config):
+        return {}
+    return {
+        "allow_official_pdf_and_homepage": True,
+        "prefer_official_sources": True,
+    }
 
 
 async def apply_event_news_live_research(

@@ -1491,6 +1491,21 @@ class TradingBot:
             return []
         max_markets = max(0, int(getattr(cfg, "research_prewarm_max_markets", 25)))
         market_list = list(markets or [])
+        from utils.event_news_research import (
+            event_news_prewarm_allows,
+            is_event_news_paper_cohort,
+        )
+
+        if is_event_news_paper_cohort():
+            before = len(market_list)
+            market_list = [
+                market for market in market_list if event_news_prewarm_allows(market)
+            ]
+            log.info(
+                "[EVENT_NEWS_PREWARM] favorite_band_filter fetched=%d in_band=%d",
+                before,
+                len(market_list),
+            )
         now_monotonic = time.monotonic()
         cooldown = self._research_prewarm_target_cooldown_seconds()
         due_tasks = [

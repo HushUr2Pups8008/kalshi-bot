@@ -232,6 +232,26 @@ class ResearchPrewarmTask:
                 contract_question=contract_question,
                 market=market,
             )
+        from utils.event_news_research import (
+            event_news_official_research_kwargs,
+            event_news_prewarm_skip_reason,
+        )
+
+        prewarm_skip = event_news_prewarm_skip_reason(market)
+        if prewarm_skip:
+            _log.info(
+                "[EVENT_NEWS_PREWARM] skip ticker=%s reason=%s",
+                ticker,
+                prewarm_skip,
+            )
+            return await self._queued_skip_result(
+                ticker,
+                status="needs_research",
+                result_skip_reason=prewarm_skip,
+                summary=f"Politics prewarm skip: {prewarm_skip}",
+                contract_question=contract_question,
+                market=market,
+            )
         if not market_has_research_source_path(market):
             return await self._queued_skip_result(
                 ticker,
@@ -275,6 +295,7 @@ class ResearchPrewarmTask:
                     _PREWARM_PHASE_TIMEOUTS_CAPABILITY
                 ),
                 require_decision_grade=True,
+                **event_news_official_research_kwargs(),
             )
             if getattr(verdict, "research_persisted", False) is not True:
                 fallback_run_id = getattr(verdict, "research_run_id", None) or (

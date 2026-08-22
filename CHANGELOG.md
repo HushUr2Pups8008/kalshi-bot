@@ -19,6 +19,19 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.42] - 2026-08-22
+
+### Changed
+
+- **Politics favorite-band official prewarm.** The event-news paper desk now
+  prewarms research on contracts whose executable YES ask is in 0.55–0.99,
+  using live `research_gate` with official PDF/homepage settlement sources
+  preferred. Injected prewarm fetchers inherit the official-source flag.
+  Paper min-edge on this cohort is `max(PAPER_MIN_EDGE, taker_fee + 0.005)`
+  and fee-net paper accounting is enabled so admission and recorded PnL
+  match the post-cost keep-rule. Crossed books (YES+NO ask < 100¢) are
+  skipped. DJI 16:00 freeze process is untouched; live trading stays locked.
+
 ## [0.33.41] - 2026-08-01
 
 ### Fixed

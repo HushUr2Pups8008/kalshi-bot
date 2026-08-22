@@ -7424,18 +7424,22 @@ async def run_research_gate(
     else:
         evidence = list(usable_cached_evidence)
         existing = {_evidence_identity(item) for item in evidence}
-        if direct_fetcher is None:
-            async def fetcher(
-                url: str, source_class: str, claim_type: str
-            ) -> ResearchEvidence | None:
-                return await default_direct_fetcher(
+        inner_fetcher = (
+            default_direct_fetcher if direct_fetcher is None else direct_fetcher
+        )
+
+        async def fetcher(
+            url: str, source_class: str, claim_type: str
+        ) -> ResearchEvidence | None:
+            try:
+                return await inner_fetcher(
                     url,
                     source_class,
                     claim_type,
                     allow_official_pdf_and_homepage=allow_official_pdf_and_homepage,
                 )
-        else:
-            fetcher = direct_fetcher
+            except TypeError:
+                return await inner_fetcher(url, source_class, claim_type)
         direct_targets = _direct_source_targets(market)
         if require_decision_grade:
             log.info(

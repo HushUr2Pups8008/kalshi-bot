@@ -7,11 +7,17 @@ from analysis.research_gate import ResearchStatus, ResearchVerdict
 from utils.event_news_research import (
     EVENT_NEWS_COHORT_ID,
     apply_event_news_live_research,
+    event_news_crossed_asks,
     event_news_exposure_prefix,
     event_news_horizon_days,
     event_news_illiquid,
+    event_news_in_allowed_ask_band,
+    event_news_min_edge,
     event_news_missing_snapshot_ask,
+    event_news_official_research_kwargs,
     event_news_open_prefix_cap,
+    event_news_prewarm_allows,
+    event_news_prewarm_skip_reason,
     event_news_settle_statuses,
     event_news_spread_disagreement,
     is_event_news_paper_cohort,
@@ -278,3 +284,109 @@ def test_determined_status_only_on_politics():
         "settled",
         "determined",
     )
+
+
+def _politics_config(**extra):
+    values = {
+        "paper_cohort_id": EVENT_NEWS_COHORT_ID,
+        "llm_allowed_price_bands": [(0.55, 0.99)],
+        "llm_excluded_price_bands": [(0.00, 0.35)],
+    }
+    values.update(extra)
+    return SimpleNamespace(**values)
+
+
+def test_favorite_ask_band_and_prewarm_filter_politics_only():
+    freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
+    politics = _politics_config()
+    favorite = SimpleNamespace(
+        ticker="KXSENATE-1",
+        yes_prob=0.40,
+        yes_price=40,
+        yes_ask_cents=72,
+        yes_ask=72,
+        no_ask_cents=30,
+        no_ask=30,
+        yes_ask_size=8.0,
+        no_ask_size=6.0,
+        open_interest_fp=40.0,
+        volume_24h_fp=20.0,
+    )
+    longshot = SimpleNamespace(
+        ticker="KXLONG-1",
+        yes_prob=0.12,
+        yes_price=12,
+        yes_ask_cents=12,
+        yes_ask=12,
+        no_ask_cents=90,
+        no_ask=90,
+        yes_ask_size=8.0,
+        no_ask_size=6.0,
+        open_interest_fp=40.0,
+        volume_24h_fp=20.0,
+    )
+    assert event_news_in_allowed_ask_band(longshot, config=freeze) is True
+    assert event_news_prewarm_allows(longshot, config=freeze) is True
+    assert event_news_prewarm_skip_reason(longshot, config=freeze) is None
+    assert event_news_in_allowed_ask_band(favorite, config=politics) is True
+    assert event_news_prewarm_allows(favorite, config=politics) is True
+    assert event_news_in_allowed_ask_band(longshot, config=politics) is False
+    assert event_news_prewarm_skip_reason(longshot, config=politics) == (
+        "ask_outside_favorite_band"
+    )
+
+
+def test_crossed_asks_politics_only():
+    freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
+    politics = _politics_config()
+    crossed = SimpleNamespace(
+        ticker="KXLOCK-1",
+        yes_ask_cents=48,
+        no_ask_cents=48,
+        yes_ask=48,
+        no_ask=48,
+    )
+    healthy = SimpleNamespace(
+        ticker="KXLOCK-2",
+        yes_ask_cents=72,
+        no_ask_cents=30,
+        yes_ask=72,
+        no_ask=30,
+    )
+    assert event_news_crossed_asks(crossed, config=freeze) is None
+    assert event_news_crossed_asks(crossed, config=politics) == "crossed_asks"
+    assert event_news_crossed_asks(healthy, config=politics) is None
+
+
+def test_min_edge_rises_to_taker_fee_on_politics_only():
+    freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
+    politics = _politics_config()
+    near_even = SimpleNamespace(
+        ticker="KXNEAR-1",
+        yes_prob=0.56,
+        yes_price=56,
+        yes_ask_cents=56,
+        yes_ask=56,
+    )
+    deep_favorite = SimpleNamespace(
+        ticker="KXFAV-1",
+        yes_prob=0.90,
+        yes_price=90,
+        yes_ask_cents=90,
+        yes_ask=90,
+    )
+    assert event_news_min_edge(0.02, near_even, config=freeze) == pytest.approx(0.02)
+    near_even_required = event_news_min_edge(0.02, near_even, config=politics)
+    assert near_even_required == pytest.approx(0.07 * 0.56 * 0.44 + 0.005)
+    assert near_even_required > 0.02
+    assert event_news_min_edge(0.02, deep_favorite, config=politics) == pytest.approx(0.02)
+
+
+def test_official_research_kwargs_politics_only():
+    freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
+    politics = _politics_config()
+    assert event_news_official_research_kwargs(config=freeze) == {}
+    assert event_news_official_research_kwargs(config=politics) == {
+        "allow_official_pdf_and_homepage": True,
+        "prefer_official_sources": True,
+    }
