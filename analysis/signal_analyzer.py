@@ -1907,6 +1907,50 @@ async def estimate_probability(
         await write_trade_log_async(trade_log.log_signal_analysis_detail, detail)
         return market.yes_prob, 0.1, [], "No relevant keywords found -- no signal.", None, None, None
 
+    if routing_reason == "price_band_excluded":
+        # Favorite-band gate: keyword fallback must not manufacture edge on
+        # cheap longshots or excluded mids. Return the quote so post-fee edge is 0.
+        _emit_extraction_trace_step(
+            "final_estimate",
+            ticker=market.ticker,
+            input_signal_magnitude=kw_prob - base_probability,
+            output_signal_magnitude=0.0,
+            intermediate_state={
+                "reason": "price_band_excluded",
+                "estimated_probability": market.yes_prob,
+                "llm_status": llm_meta["status"],
+            },
+        )
+        detail = SignalAnalysisDetail(
+            ticker=market.ticker,
+            source=news.source,
+            headline=news.headline,
+            method="price_band_excluded",
+            keywords=keywords,
+            keyword_contributions=keyword_contribs,
+            base_probability=base_probability,
+            final_probability=market.yes_prob,
+            market_price=market.yes_prob,
+            venue=signal_detail_venue,
+            **signal_detail_timing,
+            llm_result_used=False,
+            llm_routing_passed=False,
+            llm_routing_reason=routing_reason,
+            **_build_llm_meta_kwargs(llm_meta),
+            **probe_fields,
+            **pre_llm_fields,
+        )
+        await write_trade_log_async(trade_log.log_signal_analysis_detail, detail)
+        return (
+            market.yes_prob,
+            0.1,
+            keywords,
+            "price_band_excluded -- no trade.",
+            None,
+            None,
+            None,
+        )
+
     # Keyword only
     confidence = min(0.7, 0.3 + 0.05 * len(keywords))   # more keywords -> more confident
     _emit_extraction_trace_step(

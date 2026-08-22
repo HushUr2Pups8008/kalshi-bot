@@ -940,9 +940,8 @@ class TestEstimateProbability:
             prob, confidence, keywords, reasoning, llm_dir, llm_mag, llm_conf = await estimate_probability(news, market)
 
         assert keywords
-        assert prob != pytest.approx(market.yes_prob)
-        assert confidence > 0.3
-        assert reasoning.startswith("Keyword analysis found")
+        assert prob == pytest.approx(market.yes_prob)
+        assert reasoning == "price_band_excluded -- no trade."
         assert llm_dir is None and llm_mag is None and llm_conf is None
         skip_mock.assert_called_once_with(
             ticker=market.ticker,
@@ -952,13 +951,36 @@ class TestEstimateProbability:
             market_price=market.yes_prob,
         )
         kwargs = _detail_to_kwargs(detail_mock)
-        assert kwargs["method"] == "keyword"
+        assert kwargs["method"] == "price_band_excluded"
         assert kwargs["llm_attempted"] is False
         assert kwargs["llm_result_used"] is False
         assert kwargs["llm_result_status"] == "llm_skipped_routing_price_band_excluded"
         assert kwargs.get("llm_provider") is None
         assert kwargs["llm_routing_passed"] is False
         assert kwargs["llm_routing_reason"] == "price_band_excluded"
+        assert kwargs["final_probability"] == pytest.approx(market.yes_prob)
+
+    @pytest.mark.asyncio
+    async def test_favorite_band_blocks_longshot_keyword_edge(self, monkeypatch):
+        news = _make_news("Missile strike prompts fears of wider conflict")
+        market = _make_full_market(yes_price=8.0)
+        monkeypatch.setattr(signal_analyzer.cfg, "enable_llm_routing_filter", True)
+        monkeypatch.setattr(signal_analyzer.cfg, "llm_allowed_price_bands", [(0.65, 0.98)])
+        monkeypatch.setattr(signal_analyzer.cfg, "llm_excluded_price_bands", [(0.0, 0.35)])
+
+        async def _should_not_run(*args, **kwargs):
+            raise AssertionError("llm must not run on excluded longshot prices")
+
+        monkeypatch.setattr("analysis.signal_analyzer.llm_estimate_detailed", _should_not_run)
+        with patch("analysis.signal_analyzer.trade_log.log_signal_analysis_detail"), \
+             patch("analysis.signal_analyzer.trade_log.log_llm_skipped_routing"):
+            prob, _confidence, _keywords, reasoning, llm_dir, llm_mag, llm_conf = (
+                await estimate_probability(news, market)
+            )
+
+        assert prob == pytest.approx(0.08)
+        assert reasoning == "price_band_excluded -- no trade."
+        assert llm_dir is None and llm_mag is None and llm_conf is None
 
     @pytest.mark.asyncio
     async def test_routing_filter_disabled_keeps_llm_path_unchanged(self, monkeypatch):
