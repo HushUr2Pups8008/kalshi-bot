@@ -16,6 +16,11 @@ export RESEARCH_PREWARM_CONCURRENCY=2
 export RESEARCH_PREWARM_MAX_PAGES=5
 export RESEARCH_PREWARM_TARGET_COOLDOWN_SECONDS=300
 export RESEARCH_PREWARM_SOURCEABLE_SERIES_FALLBACK=KXTRUTHSOCIAL
+# Do not inherit freeze KXDJI forecast-refresh or Bing-first search order.
+# Empty forecast-refresh is parsed as the code default (KXCPI), which
+# non_sports_shadow already excludes. The export still blocks .env KXDJI.
+export RESEARCH_PREWARM_FORECAST_REFRESH_SERIES=
+export RESEARCH_EVENT_SEARCH_PROVIDER_ORDER=legacy
 export PAPER_COHORT_ID=kalshi-event-news-20260820
 export PAPER_COHORT_KIND=active
 export PAPER_ACTIVE_COHORT_BANKROLL=50.00
