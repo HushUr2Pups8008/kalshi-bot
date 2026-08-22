@@ -21,4 +21,5 @@ export LIVE_TRADING_ENABLED=false
 export POLYMARKET_US_ENABLED=false
 export POLYMARKET_US_LIVE_TRADING_ENABLED=false
 export ENABLE_WEATHER_SHADOW_CAPTURE=false
+export BOT_RUNTIME_LOCK_NAME=bot_runtime.kalshi-event-news-20260820.lock
 exec /usr/bin/caffeinate -dimsu "$ROOT/.venv/bin/python" main.py
