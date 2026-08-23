@@ -19,6 +19,18 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.48] - 2026-08-23
+
+### Fixed
+
+- **Politics retries incomplete official research on live favorites.**
+  T240/B230 were in-band 70¢+ books then locked 5h+ by
+  `missing_resolution_source` / `neutral_only_evidence` (B230 never
+  fetched Roll Call; T240 got count=227 then went dark). Those skips
+  now bypass cooldown when the live book still passes the favorite-band
+  filter. `official_data_pending` and `no_edge` stay locked. Freeze
+  backoff is unchanged.
+
 ## [0.33.47] - 2026-08-22
 
 ### Fixed

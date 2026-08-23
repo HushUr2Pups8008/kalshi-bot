@@ -412,6 +412,18 @@ _QUOTE_DEPENDENT_PREWARM_REASONS = frozenset(
         "last_ask_divergence",
     }
 )
+# Incomplete research on a live favorite. 19200s backoff here darks the only
+# in-band books until after the useful window. official_data_pending / no_edge
+# stay locked.
+_IN_BAND_RETRYABLE_RESEARCH_REASONS = frozenset(
+    {
+        "missing_resolution_source",
+        "insufficient_corroboration",
+        "no_research_hits",
+        "neutral_only_evidence",
+        "ambiguous_direction",
+    }
+)
 
 
 def event_news_quote_dependent_skip_reason(reason: str | None) -> bool:
@@ -424,15 +436,19 @@ def event_news_bypass_quote_skip_cooldown(
     *,
     config: Any = None,
 ) -> bool:
-    """Retry when a quote-dependent skip is stale and the live book is in-band.
+    """Retry when a prior skip is stale and the live book is still in-band.
 
-    Politics only. Freeze keeps exponential backoff. A 9600s lock from
-    `illiquid_top_size` / `ask_outside_favorite_band` must not block T240
-    after the book has become a liquid favorite.
+    Politics only. Freeze keeps exponential backoff. Quote skips and
+    incomplete official research (missing Roll Call fetch, neutral-only
+    verifier) must not 5h-lock T240/B230 while they are 70¢+ favorites.
     """
     if not is_event_news_paper_cohort(config):
         return False
-    if not event_news_quote_dependent_skip_reason(last_skip_reason):
+    reason = str(last_skip_reason or "").strip()
+    retryable = reason in _QUOTE_DEPENDENT_PREWARM_REASONS or (
+        reason in _IN_BAND_RETRYABLE_RESEARCH_REASONS
+    )
+    if not retryable:
         return False
     return event_news_prewarm_skip_reason(market, config=config) is None
 

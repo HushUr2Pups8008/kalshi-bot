@@ -501,6 +501,30 @@ def test_quote_dependent_cooldown_bypass_only_on_live_favorite():
         event_news_bypass_quote_skip_cooldown(
             "missing_resolution_source", favorite, config=politics
         )
+        is True
+    )
+    assert (
+        event_news_bypass_quote_skip_cooldown(
+            "neutral_only_evidence", favorite, config=politics
+        )
+        is True
+    )
+    assert (
+        event_news_bypass_quote_skip_cooldown(
+            "missing_resolution_source", longshot, config=politics
+        )
+        is False
+    )
+    assert (
+        event_news_bypass_quote_skip_cooldown(
+            "official_data_pending", favorite, config=politics
+        )
+        is False
+    )
+    assert (
+        event_news_bypass_quote_skip_cooldown(
+            "no_edge", favorite, config=politics
+        )
         is False
     )
 
