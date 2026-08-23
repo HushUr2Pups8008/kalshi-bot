@@ -35,6 +35,10 @@ _EARLY_CLOSE_HORIZON_DAYS = 2.0
 # Fallback favorite band when config bands are missing.
 _FAVORITE_ASK_LOW = 0.55
 _FAVORITE_ASK_HIGH = 0.99
+# Near-certain asks (98¢ NO "won't leave Congress") have ~2¢ max payoff after
+# fees and currently burn every research cycle. Do not treat them as the
+# money path; keep 0.55-0.90 as the tradeable favorite band.
+_FAVORITE_ASK_CERTAIN_CENTS = 91
 # Kalshi general taker fee is 0.07 * p * (1-p). Buffer keeps min-edge above fee.
 _TAKER_FEE_COEFFICIENT = 0.07
 _MIN_EDGE_FEE_BUFFER = 0.005
@@ -305,9 +309,9 @@ def event_news_favorite_side(
             return False
         return any(_price_in_band(price, low, high) for low, high in allowed)
 
-    if _in_favorite(yes_ask):
+    if _in_favorite(yes_ask) and yes_ask < _FAVORITE_ASK_CERTAIN_CENTS:
         return "yes", yes_ask
-    if _in_favorite(no_ask):
+    if _in_favorite(no_ask) and no_ask < _FAVORITE_ASK_CERTAIN_CENTS:
         return "no", no_ask
     return None, None
 
@@ -410,6 +414,7 @@ _QUOTE_DEPENDENT_PREWARM_REASONS = frozenset(
         "wide_spread",
         "crossed_asks",
         "last_ask_divergence",
+        "near_certain_ask",
     }
 )
 # Incomplete research on a live favorite. 19200s backoff here darks the only
@@ -473,6 +478,14 @@ def event_news_prewarm_skip_reason(market: Any, *, config: Any = None) -> str | 
     if wide:
         return wide
     if not event_news_in_allowed_ask_band(market, config=config):
+        yes_ask, no_ask = snapshot_ask_cents(market)
+        favorite_cents = None
+        if yes_ask is not None and 55 <= yes_ask <= 99:
+            favorite_cents = yes_ask
+        elif no_ask is not None and 55 <= no_ask <= 99:
+            favorite_cents = no_ask
+        if favorite_cents is not None and favorite_cents >= _FAVORITE_ASK_CERTAIN_CENTS:
+            return "near_certain_ask"
         return "ask_outside_favorite_band"
     return None
 

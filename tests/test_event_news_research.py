@@ -349,6 +349,42 @@ def test_favorite_ask_band_and_prewarm_filter_politics_only():
     )
 
 
+def test_near_certain_ask_is_not_politics_money_path():
+    politics = _politics_config()
+    freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
+    ninety_eight_no = SimpleNamespace(
+        ticker="KXLEAVECONGRESS-26AUG",
+        yes_ask_cents=7,
+        no_ask_cents=98,
+        yes_ask=7,
+        no_ask=98,
+        yes_ask_size=180.0,
+        no_ask_size=180.0,
+        open_interest_fp=1200.0,
+        volume_24h_fp=100.0,
+    )
+    ninety_yes = SimpleNamespace(
+        ticker="KXFAV-90",
+        yes_ask_cents=90,
+        no_ask_cents=12,
+        yes_ask=90,
+        no_ask=12,
+        yes_ask_size=20.0,
+        no_ask_size=20.0,
+        open_interest_fp=100.0,
+        volume_24h_fp=50.0,
+    )
+    assert event_news_prewarm_skip_reason(ninety_eight_no, config=freeze) is None
+    assert event_news_prewarm_skip_reason(ninety_eight_no, config=politics) == (
+        "near_certain_ask"
+    )
+    assert event_news_favorite_side(ninety_eight_no, config=politics) == (None, None)
+    assert event_news_prewarm_allows(ninety_yes, config=politics) is True
+    assert event_news_bypass_quote_skip_cooldown(
+        "neutral_only_evidence", ninety_eight_no, config=politics
+    ) is False
+
+
 def test_favorite_no_side_and_wide_spread_politics_only():
     freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
     politics = _politics_config()
@@ -358,8 +394,8 @@ def test_favorite_no_side_and_wide_spread_politics_only():
         yes_price=11,
         yes_ask_cents=13,
         yes_ask=13,
-        no_ask_cents=91,
-        no_ask=91,
+        no_ask_cents=87,
+        no_ask=87,
         yes_ask_size=100.0,
         no_ask_size=100.0,
         open_interest_fp=4000.0,
@@ -401,7 +437,7 @@ def test_favorite_no_side_and_wide_spread_politics_only():
         volume_24h_fp=20000.0,
     )
     assert event_news_favorite_side(no_favorite, config=freeze) == (None, None)
-    assert event_news_favorite_side(no_favorite, config=politics) == ("no", 91)
+    assert event_news_favorite_side(no_favorite, config=politics) == ("no", 87)
     assert event_news_prewarm_allows(no_favorite, config=politics) is True
     assert event_news_wide_spread(wide, config=freeze) is None
     assert event_news_wide_spread(wide, config=politics) == "wide_spread"
@@ -429,9 +465,9 @@ def test_llm_routing_allows_favorite_no_and_blocks_lottery(monkeypatch):
     no_favorite = SimpleNamespace(
         ticker="KXMOCTRUMP25-26-JAN01",
         yes_ask_cents=13,
-        no_ask_cents=91,
+        no_ask_cents=87,
         yes_ask=13,
-        no_ask=91,
+        no_ask=87,
         yes_prob=0.11,
     )
     lottery = SimpleNamespace(

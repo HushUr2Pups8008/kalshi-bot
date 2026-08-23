@@ -19,6 +19,17 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.49] - 2026-08-23
+
+### Fixed
+
+- **Politics no longer treats 91–99¢ asks as the money path.** After T240/B230
+  fully priced, the desk was mill-researching `KXLEAVECONGRESS` at 98¢ NO
+  every 5 minutes (homepage settlement fetches, always `neutral_only`).
+  Favorite-side admission now requires an executable ask in 55–90¢.
+  `near_certain_ask` is quote-dependent so a later 80¢ book can retry.
+  Freeze bands are unchanged.
+
 ## [0.33.48] - 2026-08-23
 
 ### Fixed
