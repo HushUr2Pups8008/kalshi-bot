@@ -16,6 +16,7 @@ from utils.event_news_research import (
     event_news_min_edge,
     event_news_missing_snapshot_ask,
     event_news_non_politics_series,
+    event_news_finalize_prewarm_batch,
     event_news_one_market_per_event,
     event_news_pin_matcher_series,
     event_news_forecast_refresh_series,
@@ -714,6 +715,15 @@ def test_one_market_per_event_prefers_yes_favorite():
     ]
     picked_runtime = event_news_one_market_per_event(extras, config=politics)
     assert {market.ticker for market in picked_runtime} == {
+        "KXTRUMPACT-26AUG23-T4",
+        "KXTRUTHSOCIAL-26AUG29-B230",
+    }
+    wide_t5 = rung("KXTRUMPACT-26AUG23-T5", "KXTRUMPACT-26AUG23", 85, 44, 25.0)
+    brazil = rung("KXBRAZILGDP-26SEP02-T1.7", "KXBRAZILGDP-26SEP02", 60, 42, 10.0)
+    finalized = event_news_finalize_prewarm_batch(
+        extras + [wide_t5, brazil], config=politics
+    )
+    assert {market.ticker for market in finalized} == {
         "KXTRUMPACT-26AUG23-T4",
         "KXTRUTHSOCIAL-26AUG29-B230",
     }

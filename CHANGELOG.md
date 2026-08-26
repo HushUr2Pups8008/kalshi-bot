@@ -19,6 +19,15 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.52] - 2026-08-26
+
+### Fixed
+
+- **Final prewarm batch re-applies favorite-band skips.** The runtime
+  one-per-event wrap still kept T5 (29¢ spread), Brazil GDP, and SA
+  trade-balance due-tasks. Finalize now skip-filters then one-per-event.
+  `KXBRAZILGDP` and `KXSATRADEBAL` are denied. Freeze is unchanged.
+
 ## [0.33.51] - 2026-08-26
 
 ### Fixed

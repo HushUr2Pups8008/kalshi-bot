@@ -1876,9 +1876,9 @@ class TradingBot:
     def _research_prewarm_runtime_markets(self) -> list[object]:
         """Politics drops due-task ladder refill so one event cannot mill 25 books."""
         markets = self._research_prewarm_market_provider()
-        from utils.event_news_research import event_news_one_market_per_event
+        from utils.event_news_research import event_news_finalize_prewarm_batch
 
-        return event_news_one_market_per_event(markets)
+        return event_news_finalize_prewarm_batch(markets)
 
     def _create_research_prewarm_runtime_task(self) -> asyncio.Task | None:
         if not bool(getattr(cfg, "enable_research_prewarm_task", False)):

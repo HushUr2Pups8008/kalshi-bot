@@ -59,6 +59,8 @@ _NON_POLITICS_SERIES_PREFIXES = (
     "KXBTC",
     "KXETH",
     "KXSKEXPYOY",
+    "KXBRAZILGDP",
+    "KXSATRADEBAL",
 )
 
 
@@ -529,6 +531,25 @@ def event_news_one_market_per_event(
             [str(getattr(market, "ticker", "") or "") for market in selected],
         )
     return selected
+
+
+def event_news_finalize_prewarm_batch(
+    markets: list[Any],
+    *,
+    config: Any = None,
+) -> list[Any]:
+    """Re-apply favorite-band skips, then one-per-event, on the final batch.
+
+    Due-task refill can restore wide/illiquid siblings and macro leaks after
+    the first filter. Freeze is a no-op.
+    """
+    if not is_event_news_paper_cohort(config):
+        return list(markets)
+    eligible: list[Any] = []
+    for market in markets:
+        if event_news_prewarm_skip_reason(market, config=config) is None:
+            eligible.append(market)
+    return event_news_one_market_per_event(eligible, config=config)
 
 
 def event_news_prewarm_allows(market: Any, *, config: Any = None) -> bool:
