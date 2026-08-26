@@ -16,6 +16,7 @@ from utils.event_news_research import (
     event_news_min_edge,
     event_news_missing_snapshot_ask,
     event_news_non_politics_series,
+    event_news_one_market_per_event,
     event_news_pin_matcher_series,
     event_news_forecast_refresh_series,
     event_news_official_research_kwargs,
@@ -669,6 +670,44 @@ def test_non_politics_series_denied_on_politics_only():
     assert event_news_non_politics_series(gas, config=politics) == "non_politics_series"
     assert event_news_non_politics_series(truth, config=politics) is None
     assert event_news_prewarm_skip_reason(gas, config=politics) == "non_politics_series"
+    korea_cpi = SimpleNamespace(ticker="KXSKEXPYOY-26AUG31-T55.0", series_ticker="KXSKEXPYOY")
+    assert event_news_prewarm_skip_reason(korea_cpi, config=politics) == "non_politics_series"
+
+
+def test_one_market_per_event_prefers_yes_favorite():
+    politics = _politics_config()
+    freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
+
+    def rung(ticker: str, event: str, yes_ask: int, no_ask: int, size: float):
+        return SimpleNamespace(
+            ticker=ticker,
+            event_ticker=event,
+            series_ticker=ticker.split("-", 1)[0],
+            yes_ask_cents=yes_ask,
+            no_ask_cents=no_ask,
+            yes_ask=yes_ask,
+            no_ask=no_ask,
+            yes_ask_size=size,
+            no_ask_size=size,
+            open_interest_fp=1000.0,
+            volume_24h_fp=500.0,
+        )
+
+    ladder = [
+        rung("KXTRUTHSOCIAL-26AUG29-B169", "KXTRUTHSOCIAL-26AUG29", 14, 88, 180.0),
+        rung("KXTRUTHSOCIAL-26AUG29-B230", "KXTRUTHSOCIAL-26AUG29", 24, 77, 50.0),
+        rung("KXTRUTHSOCIAL-26AUG29-T240", "KXTRUTHSOCIAL-26AUG29", 18, 83, 280.0),
+        rung("KXTRUMPACT-26AUG23-T7", "KXTRUMPACT-26AUG23", 22, 86, 325.0),
+        rung("KXTRUMPACT-26AUG23-T4", "KXTRUMPACT-26AUG23", 75, 28, 315.0),
+    ]
+    assert event_news_one_market_per_event(ladder, config=freeze) == ladder
+    picked = event_news_one_market_per_event(ladder, config=politics)
+    tickers = [market.ticker for market in picked]
+    assert "KXTRUMPACT-26AUG23-T4" in tickers
+    assert "KXTRUMPACT-26AUG23-T7" not in tickers
+    truth = [ticker for ticker in tickers if ticker.startswith("KXTRUTHSOCIAL")]
+    assert len(truth) == 1
+    assert truth[0] == "KXTRUTHSOCIAL-26AUG29-B230"
 
 
 def test_matcher_reserve_pins_politics_series_and_ignores_freeze():

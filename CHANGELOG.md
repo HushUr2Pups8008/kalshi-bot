@@ -19,6 +19,18 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.50] - 2026-08-26
+
+### Fixed
+
+- **Politics researches one book per event, not a whole strike ladder.**
+  The new Truth Social week put five correlated 55–90¢ NO rungs plus
+  TRUMPACT T4 (75¢ YES) in-band; prewarm milled B169/B209/B230 every
+  cycle (`neutral_only`) and starved T4. Selection now keeps one market
+  per `event_ticker` (YES favorite first, then ask closest to 65¢).
+  South Korea CPI (`KXSKEXPYOY`) is denied on this desk. Freeze is
+  unchanged.
+
 ## [0.33.49] - 2026-08-23
 
 ### Fixed

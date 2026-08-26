@@ -58,6 +58,7 @@ _NON_POLITICS_SERIES_PREFIXES = (
     "KXFED",
     "KXBTC",
     "KXETH",
+    "KXSKEXPYOY",
 )
 
 
@@ -488,6 +489,46 @@ def event_news_prewarm_skip_reason(market: Any, *, config: Any = None) -> str | 
             return "near_certain_ask"
         return "ask_outside_favorite_band"
     return None
+
+
+def event_news_one_market_per_event(
+    markets: list[Any],
+    *,
+    config: Any = None,
+) -> list[Any]:
+    """Keep one in-band book per event so a strike ladder cannot mill research.
+
+    Prefer a YES favorite in 55-90c over a NO favorite, then the ask closest
+    to 65c, then larger top size. Freeze is a no-op.
+    """
+    if not is_event_news_paper_cohort(config):
+        return list(markets)
+    best: dict[str, tuple[tuple[int, int, float], Any]] = {}
+    for market in markets:
+        event = event_news_exposure_prefix(
+            market,
+            event_news_series_ticker(market) or str(getattr(market, "ticker", "")),
+            config=config,
+        )
+        if not event:
+            continue
+        side, cents = event_news_favorite_side(market, config=config)
+        if side is None or cents is None:
+            continue
+        size = _as_float(getattr(market, "yes_ask_size", None)) or 0.0
+        score = (0 if side == "yes" else 1, abs(int(cents) - 65), -size)
+        prior = best.get(event)
+        if prior is None or score < prior[0]:
+            best[event] = (score, market)
+    selected = [item[1] for item in best.values()]
+    if len(selected) != len(markets):
+        log.info(
+            "[EVENT_NEWS_PREWARM] one_per_event before=%d after=%d tickers=%s",
+            len(markets),
+            len(selected),
+            [str(getattr(market, "ticker", "") or "") for market in selected],
+        )
+    return selected
 
 
 def event_news_prewarm_allows(market: Any, *, config: Any = None) -> bool:
