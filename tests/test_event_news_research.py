@@ -708,6 +708,15 @@ def test_one_market_per_event_prefers_yes_favorite():
     truth = [ticker for ticker in tickers if ticker.startswith("KXTRUTHSOCIAL")]
     assert len(truth) == 1
     assert truth[0] == "KXTRUTHSOCIAL-26AUG29-B230"
+    extras = ladder + [
+        rung("KXTRUTHSOCIAL-26AUG29-B189", "KXTRUTHSOCIAL-26AUG29", 12, 90, 10.0),
+        rung("KXSKIP-OUT", "KXSKIP-OUT", 12, 100, 10.0),
+    ]
+    picked_runtime = event_news_one_market_per_event(extras, config=politics)
+    assert {market.ticker for market in picked_runtime} == {
+        "KXTRUMPACT-26AUG23-T4",
+        "KXTRUTHSOCIAL-26AUG29-B230",
+    }
 
 
 def test_matcher_reserve_pins_politics_series_and_ignores_freeze():

@@ -19,6 +19,15 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.51] - 2026-08-26
+
+### Fixed
+
+- **Politics prewarm no longer re-inflates a strike ladder after due-tasks.**
+  `one_per_event` cut the filter to T4+B209, then due-task refill restored
+  B169/B189/T240 and milled them every cycle. The runtime market provider
+  now applies one-per-event to the **final** batch. Freeze is unchanged.
+
 ## [0.33.50] - 2026-08-26
 
 ### Fixed

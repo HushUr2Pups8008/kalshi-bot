@@ -1873,6 +1873,13 @@ class TradingBot:
             return mark_selected(fallback)
         return open_markets_by_price(market_list)[:max_markets]
 
+    def _research_prewarm_runtime_markets(self) -> list[object]:
+        """Politics drops due-task ladder refill so one event cannot mill 25 books."""
+        markets = self._research_prewarm_market_provider()
+        from utils.event_news_research import event_news_one_market_per_event
+
+        return event_news_one_market_per_event(markets)
+
     def _create_research_prewarm_runtime_task(self) -> asyncio.Task | None:
         if not bool(getattr(cfg, "enable_research_prewarm_task", False)):
             return None
@@ -1894,7 +1901,7 @@ class TradingBot:
         )
         return asyncio.create_task(
             prewarm.run_periodic(
-                self._research_prewarm_market_provider,
+                self._research_prewarm_runtime_markets,
                 interval_seconds=float(
                     getattr(cfg, "research_prewarm_interval_seconds", 900.0)
                 ),
