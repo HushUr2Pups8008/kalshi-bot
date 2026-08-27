@@ -95,7 +95,7 @@ async def test_politics_prewarm_skips_longshot_and_passes_official_kwargs(
     task = ResearchPrewarmTask(store=store, research_gate=gate)
 
     longshot = SimpleNamespace(
-        ticker="KXLONGSHOT-26AUG22",
+        ticker="KXTRUTHSOCIAL-26AUG22-LONG",
         title="Will a longshot event happen?",
         rules_primary="Official source.",
         rules_secondary="",
@@ -119,7 +119,7 @@ async def test_politics_prewarm_skips_longshot_and_passes_official_kwargs(
     gate.assert_not_awaited()
 
     favorite = SimpleNamespace(
-        ticker="KXFAVORITE-26AUG22",
+        ticker="KXTRUMPACT-26AUG23-T4",
         title="Will the favorite event happen?",
         rules_primary="Official source.",
         rules_secondary="",

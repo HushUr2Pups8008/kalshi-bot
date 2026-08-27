@@ -315,7 +315,7 @@ def test_favorite_ask_band_and_prewarm_filter_politics_only():
     freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
     politics = _politics_config()
     favorite = SimpleNamespace(
-        ticker="KXSENATE-1",
+        ticker="KXTRUMPACT-26AUG23-T4",
         yes_prob=0.40,
         yes_price=40,
         yes_ask_cents=72,
@@ -328,7 +328,7 @@ def test_favorite_ask_band_and_prewarm_filter_politics_only():
         volume_24h_fp=20.0,
     )
     longshot = SimpleNamespace(
-        ticker="KXLONG-1",
+        ticker="KXTRUTHSOCIAL-26AUG22-LONG",
         yes_prob=0.12,
         yes_price=12,
         yes_ask_cents=12,
@@ -355,7 +355,7 @@ def test_near_certain_ask_is_not_politics_money_path():
     politics = _politics_config()
     freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
     ninety_eight_no = SimpleNamespace(
-        ticker="KXLEAVECONGRESS-26AUG",
+        ticker="KXTRUMPACT-26AUG23-T99",
         yes_ask_cents=7,
         no_ask_cents=98,
         yes_ask=7,
@@ -366,7 +366,7 @@ def test_near_certain_ask_is_not_politics_money_path():
         volume_24h_fp=100.0,
     )
     ninety_yes = SimpleNamespace(
-        ticker="KXFAV-90",
+        ticker="KXTRUMPACT-26AUG23-T90",
         yes_ask_cents=90,
         no_ask_cents=12,
         yes_ask=90,
@@ -473,7 +473,7 @@ def test_llm_routing_allows_favorite_no_and_blocks_lottery(monkeypatch):
         yes_prob=0.11,
     )
     lottery = SimpleNamespace(
-        ticker="KXLONG-1",
+        ticker="KXTRUTHSOCIAL-26AUG22-LONG",
         yes_ask_cents=12,
         no_ask_cents=100,
         yes_ask=12,
@@ -726,6 +726,18 @@ def test_one_market_per_event_prefers_yes_favorite():
     assert {market.ticker for market in finalized} == {
         "KXTRUMPACT-26AUG23-T4",
         "KXTRUTHSOCIAL-26AUG29-B230",
+    }
+    press = rung(
+        "KXPRESSSECANNOUNCE-26AUG-SEP08",
+        "KXPRESSSECANNOUNCE-26AUG",
+        32,
+        69,
+        50.0,
+    )
+    assert event_news_prewarm_skip_reason(press, config=politics) == "not_reserve_series"
+    assert press.ticker not in {
+        market.ticker
+        for market in event_news_finalize_prewarm_batch(extras + [press], config=politics)
     }
 
 

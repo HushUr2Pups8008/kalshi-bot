@@ -61,6 +61,7 @@ _NON_POLITICS_SERIES_PREFIXES = (
     "KXSKEXPYOY",
     "KXBRAZILGDP",
     "KXSATRADEBAL",
+    "KXARMOMINF",
 )
 
 
@@ -468,6 +469,8 @@ def event_news_prewarm_skip_reason(market: Any, *, config: Any = None) -> str | 
     denied = event_news_non_politics_series(market, config=config)
     if denied:
         return denied
+    if not event_news_is_reserve_series(market, config=config):
+        return "not_reserve_series"
     missing = event_news_missing_snapshot_ask(market, config=config)
     if missing:
         return missing
@@ -623,6 +626,22 @@ def event_news_matcher_reserve_series(*, config: Any = None) -> tuple[str, ...]:
             seen.add(series)
             ordered.append(series)
     return tuple(ordered)
+
+
+def event_news_is_reserve_series(market: Any, *, config: Any = None) -> bool:
+    """True for freeze, and for politics only on pinned money-path series."""
+    if not is_event_news_paper_cohort(config):
+        return True
+    series = event_news_series_ticker(market)
+    ticker = str(getattr(market, "ticker", "") or "").strip().upper()
+    for prefix in event_news_matcher_reserve_series(config=config):
+        if not prefix:
+            continue
+        if series == prefix or series.startswith(prefix):
+            return True
+        if ticker == prefix or ticker.startswith(prefix + "-"):
+            return True
+    return False
 
 
 def event_news_prewarm_seed_markets(

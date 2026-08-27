@@ -19,6 +19,16 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.53] - 2026-08-27
+
+### Fixed
+
+- **Politics final prewarm is pinned-series only.** Due-tasks were still
+  admitting Press Secretary, Big Bend, Snap Election, Canada tariff, and
+  Argentina inflation (cycle 5–6, all `neutral_only`). Non-reserve series
+  now skip `not_reserve_series`; `KXARMOMINF` is denied. Freeze is
+  unchanged.
+
 ## [0.33.52] - 2026-08-26
 
 ### Fixed
