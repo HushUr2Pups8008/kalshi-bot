@@ -8,6 +8,7 @@ import pytest
 from analysis.research_gate import ResearchStatus
 from config import cfg
 from scripts.research_ticker import (
+    _conclusion,
     apply_pinned_asks,
     both_sides_edges,
     build_argparser,
@@ -247,3 +248,43 @@ async def test_evaluate_restores_cohort_after_politics_probe():
         },
     )
     assert cfg.paper_cohort_id == prior
+
+
+def test_conclusion_does_not_park_trade_on_leftover_skip():
+    routing = {
+        "favorite_side": "no",
+        "prewarm_skip_reason": None,
+    }
+    edges = {"selected_side": "yes"}
+    skipped = _conclusion(
+        routing=routing,
+        structured={"p_yes": 0.39},
+        edges=edges,
+        gate={
+            "status": "needs_counter_evidence",
+            "skip_reason": "neutral_only_evidence",
+            "force_side": "yes",
+            "estimated_probability": 0.39,
+        },
+        llm=None,
+    )
+    assert skipped["admitted"] is False
+    assert skipped["scoring_side"] == "yes"
+    assert skipped["trade_side"] is None
+    assert skipped["halted_on_neutral"] is True
+
+    leftover = _conclusion(
+        routing=routing,
+        structured={"p_yes": 0.39},
+        edges=edges,
+        gate={
+            "status": "decision_grade_candidate",
+            "skip_reason": "neutral_only_evidence",
+            "force_side": "yes",
+            "estimated_probability": 0.39,
+        },
+        llm=None,
+    )
+    assert leftover["admitted"] is True
+    assert leftover["trade_side"] == "yes"
+    assert leftover["halted_on_neutral"] is False

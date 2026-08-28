@@ -1623,6 +1623,10 @@ def test_white_house_action_search_only_locks_at_contract_snapshot(monkeypatch):
         item.metric_name != "white_house_presidential_actions_pending"
         for item in pre_cutoff
     )
+    assert any(
+        item.metric_name == "white_house_action_range_probability"
+        for item in pre_cutoff
+    )
     assert locked[0].metric_value == 1
     assert locked[0].supports_direction == "yes"
     assert len(locked) == 1
@@ -13121,3 +13125,146 @@ def test_both_sides_executable_neutral_research_returns_no_edge_not_ambiguous():
     assert verdict.skip_reason == "no_edge"
     assert verdict.status == ResearchStatus.UNTRADEABLE
     assert verdict.force_side is None
+
+
+def test_truth_social_count_contract_is_the_only_structured_direct_query():
+    market = SimpleNamespace(
+        ticker="KXTRUTHSOCIAL-26AUG29-B230",
+        title=(
+            "Will Donald Trump make between 220 and 240 Truth Social posts "
+            "the week of Aug 23, 2026?"
+        ),
+        rules_primary="",
+        close_time="2026-08-30T13:59:00Z",
+    )
+    queries = research_gate_module._structured_direct_source_queries(market, [])
+    assert len(queries) == 1
+    assert queries[0].query_intent == "official_resolution"
+    assert queries[0].source_class == "official_primary"
+
+
+def test_truth_social_phrase_contract_is_the_only_structured_direct_query():
+    market = SimpleNamespace(
+        ticker="KXTRUMPSAY-26AUG31-GOLF",
+        title='Will Trump say "Golf / Golfer / Golfing" before Aug 31, 2026?',
+        rules_primary="",
+        close_time="2026-08-31T23:59:00Z",
+    )
+    queries = research_gate_module._structured_direct_source_queries(market, [])
+    assert len(queries) == 1
+    assert queries[0].query_intent == "official_resolution"
+    assert queries[0].source_class == "official_primary"
+    assert "Golf" in queries[0].query
+
+
+@pytest.mark.asyncio
+async def test_prefer_official_skips_generic_search_after_structured_p(monkeypatch):
+    """Google News must not consume the 18s budget after Factbase p exists."""
+    evidence = _ts_probability_evidence(probability=0.49, direction="no")
+    monkeypatch.setattr(
+        research_gate_module,
+        "_structured_official_search",
+        lambda _query: [evidence],
+    )
+    monkeypatch.setattr(
+        "utils.event_news_research.is_event_news_paper_cohort",
+        lambda _config=None: True,
+    )
+    generic_calls = {"n": 0}
+
+    async def fail_generic(_query):
+        generic_calls["n"] += 1
+        raise AssertionError("generic search must not run after official p")
+
+    async def no_direct(*_args, **_kwargs):
+        return None
+
+    verdict = await run_research_gate(
+        SimpleNamespace(headline="", source="research_prewarm"),
+        SimpleNamespace(
+            ticker="KXTRUTHSOCIAL-26AUG29-B230",
+            title=(
+                "Will Donald Trump make between 220 and 240 Truth Social posts "
+                "the week of Aug 23, 2026?"
+            ),
+            rules_primary=(
+                "If the number of Truth Social posts by Donald Trump from "
+                "Aug 23, 2026 to Aug 29, 2026 is between 220 and 240, then "
+                "the market resolves to Yes."
+            ),
+            rules_secondary="",
+            close_time="2026-08-30T13:59:00Z",
+            settlement_sources=(),
+        ),
+        model_direction="neutral",
+        model_confidence=0.0,
+        model_reason="scheduled research prewarm",
+        yes_ask=0.38,
+        no_ask=0.63,
+        live_mode=False,
+        search_provider=fail_generic,
+        direct_fetcher=no_direct,
+        adjudicator=None,
+        max_queries=8,
+        require_decision_grade=True,
+        prefer_official_sources=True,
+    )
+    assert generic_calls["n"] == 0
+    assert verdict.skip_reason not in {
+        "research_timeout",
+        "neutral_only_evidence",
+        "missing_counter_evidence",
+        "ambiguous_direction",
+    }
+    assert verdict.status == ResearchStatus.DECISION_GRADE_CANDIDATE
+    assert verdict.force_side == "yes"
+
+
+def test_white_house_remaining_time_p_is_decision_grade_without_second_url():
+    """T6: official remaining-time p is corroboration. One WH URL is enough."""
+    retrieved_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    evidence = [
+        ResearchEvidence(
+            source_class="official_primary",
+            source_name="White House Presidential Actions",
+            source_url="https://www.whitehouse.gov/presidential-actions/",
+            title="White House remaining-time YES probability 0.980",
+            snippet=(
+                "Official count is 6 versus threshold 6 "
+                "(already_above_threshold); implied YES probability 0.980."
+            ),
+            claim_type="official_resolution",
+            supports_direction="yes",
+            supports_confidence=0.95,
+            retrieved_at=retrieved_at,
+            metric_name="white_house_action_range_probability",
+            metric_value=0.98,
+            metric_unit="probability",
+            extraction_confidence=0.96,
+        )
+    ]
+    verdict = decide_research_verdict(
+        evidence=evidence,
+        model_direction=None,
+        model_confidence=0.0,
+        model_reason="scheduled research prewarm",
+        estimated_probability_yes=None,
+        yes_ask=0.55,
+        no_ask=0.46,
+        live_mode=False,
+        require_decision_grade=True,
+        score_both_sides=True,
+        queries=[
+            ResearchQuery("wh official", "official_resolution", "official_primary"),
+            ResearchQuery("wh counter", "contradiction_check", "official_primary"),
+        ],
+        contract_ticker="KXTRUMPACT-26AUG23-T6",
+    )
+    assert verdict.skip_reason not in {
+        "insufficient_corroboration",
+        "missing_counter_evidence",
+        "neutral_only_evidence",
+    }
+    assert verdict.status == ResearchStatus.DECISION_GRADE_CANDIDATE
+    assert verdict.force_side == "yes"
+    assert verdict.estimated_probability == pytest.approx(0.98)

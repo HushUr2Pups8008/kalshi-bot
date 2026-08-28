@@ -19,6 +19,19 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.65] - 2026-08-28
+
+### Fixed
+
+- **Official p is not undone by persist, paper admission, or Google
+  fan-out.** Phrase/count search runs before generic queries, so a
+  Factbase hit no longer waits on Google News. White House already-cleared
+  counts still attach remaining-time p so corroboration does not die on
+  one URL. Dossier persistence and paper admission no longer rewrite a
+  decision-grade official p into `neutral_only_evidence` /
+  `missing_counter_evidence` (B209 cheap YES, T6 remaining-time YES).
+  Leftover skip reasons do not park a Trade YES/NO. Freeze stays locked.
+
 ## [0.33.64] - 2026-08-28
 
 ### Fixed

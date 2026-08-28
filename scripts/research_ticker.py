@@ -402,12 +402,21 @@ def _conclusion(
         "trade_candidate",
         "decision_grade_candidate",
     }
-    trade_side = gate_side if admitted else scoring_side
     halt_reasons = {
         "neutral_only_evidence",
         "ambiguous_direction",
     }
-    skip = (gate or {}).get("skip_reason") or routing.get("prewarm_skip_reason")
+    if admitted:
+        # Admission is the gate status. A leftover skip_reason must not
+        # keep reporting Trade YES/NO as a halt.
+        skip = None
+        trade_side = gate_side
+    elif gate is None:
+        skip = routing.get("prewarm_skip_reason")
+        trade_side = scoring_side
+    else:
+        skip = (gate or {}).get("skip_reason") or routing.get("prewarm_skip_reason")
+        trade_side = None
     return {
         "scoring_side": scoring_side,
         "admitted": admitted,

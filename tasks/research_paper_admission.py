@@ -28,6 +28,8 @@ from utils.research_evidence_quality import (
     research_evidence_temporally_valid,
 )
 from utils.research_market_eligibility import research_market_eligibility
+from utils.event_news_research import is_event_news_paper_cohort
+from tasks.research_dossier import _evidence_has_both_sides_probability
 
 DECISION_GRADE_STATUS = "decision_grade_candidate"
 _COUNTER_QUERY_INTENTS = frozenset({"disconfirming", "contradiction_check"})
@@ -212,18 +214,24 @@ class ResearchPaperSignalProvider:
             for item in evidence
         )
         relevant_evidence = tuple(item for item in validated_evidence if _evidence_is_relevant(item, relevance_spec))
-        if not has_reliable_research_source_path(validated_evidence):
+        both_sides_p = (
+            is_event_news_paper_cohort()
+            and _evidence_has_both_sides_probability(list(validated_evidence))
+        )
+        if not has_reliable_research_source_path(validated_evidence) and not both_sides_p:
             return None, "no_reliable_source_path"
-        if not any(
+        if not both_sides_p and not any(
             str(item.supports_direction or "").strip().lower() == side
             and str(item.claim_type or "").strip().lower() in _SETTLEMENT_CLAIM_TYPES
             and float(item.supports_confidence or 0.0) >= MIN_DIRECTIONAL_SUPPORT_CONFIDENCE
             for item in relevant_evidence
         ):
             return None, "missing_directional_support"
-        if not await _has_counter_query(self.store, snapshot.last_research_run_id):
+        if not both_sides_p and not await _has_counter_query(
+            self.store, snapshot.last_research_run_id
+        ):
             return None, "missing_counter_query"
-        if not _has_counter_evidence(side, relevant_evidence):
+        if not both_sides_p and not _has_counter_evidence(side, relevant_evidence):
             return None, "missing_counter_evidence"
         return (
             ResearchPaperSignal(

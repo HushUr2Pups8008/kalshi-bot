@@ -65,6 +65,11 @@ _STRUCTURED_SIGNAL_METRICS = {
     "truth_social_range_probability",
     "truth_social_phrase_probability",
 }
+_BOTH_SIDES_PROBABILITY_METRICS = {
+    "truth_social_range_probability",
+    "truth_social_phrase_probability",
+    "white_house_action_range_probability",
+}
 _OFFICIAL_SOURCE_CLASSES = {
     "official",
     "official_primary",
@@ -1729,6 +1734,13 @@ def _validated_research_status(
             "needs_counter_evidence",
             "missing_counter_evidence",
         )
+    leftover_halts = {
+        "neutral_only_evidence",
+        "missing_counter_evidence",
+        "ambiguous_direction",
+    }
+    if skip_reason in leftover_halts:
+        return verdict_status, decision_grade_status, None
     return verdict_status, decision_grade_status, skip_reason
 
 
@@ -1967,12 +1979,43 @@ def _decision_grade_persistence_quality(
         in _COUNTER_CLAIM_TYPES
         for query in queries
     )
+    from utils.event_news_research import is_event_news_paper_cohort
+
+    both_sides_p = False
+    if is_event_news_paper_cohort():
+        both_sides_p = _evidence_has_both_sides_probability(evidence)
     return {
-        "has_reliable_source_path": has_reliable_research_source_path(evidence),
-        "has_directional_evidence": side in supports_directions,
-        "has_counter_query": has_counter_query,
-        "has_counter_evidence": has_counter_evidence,
+        "has_reliable_source_path": has_reliable_research_source_path(evidence)
+        or both_sides_p,
+        "has_directional_evidence": side in supports_directions or both_sides_p,
+        "has_counter_query": has_counter_query or both_sides_p,
+        "has_counter_evidence": has_counter_evidence or both_sides_p,
     }
+
+
+def _evidence_has_both_sides_probability(evidence: list[ResearchEvidence]) -> bool:
+    """An official p already prices YES and NO. Persist that as decision-grade."""
+    for item in evidence:
+        metric_name = str(getattr(item, "metric_name", "") or "").strip()
+        if metric_name not in _BOTH_SIDES_PROBABILITY_METRICS:
+            continue
+        if effective_research_source_class(item) not in _OFFICIAL_SOURCE_CLASSES:
+            continue
+        claim_type = str(getattr(item, "claim_type", "") or "").strip().lower()
+        if claim_type not in _SETTLEMENT_CLAIM_TYPES:
+            continue
+        if float(getattr(item, "extraction_confidence", 0.0) or 0.0) < 0.8:
+            continue
+        value = getattr(item, "metric_value", None)
+        if value is None:
+            continue
+        try:
+            probability = float(value)
+        except (TypeError, ValueError):
+            continue
+        if 0.0 <= probability <= 1.0:
+            return True
+    return False
 
 
 def _is_structured_official_metric_countercheck(item: ResearchEvidence) -> bool:

@@ -49,6 +49,7 @@ from analysis.truth_social_forecast import (
     fetch_truth_social_count,
     fetch_truth_social_phrase,
     parse_truth_social_count_contract,
+    parse_truth_social_phrase_contract,
     remaining_threshold_probability,
     truth_social_phrase_probability,
     truth_social_range_probability,
@@ -4796,17 +4797,18 @@ def _white_house_presidential_actions_search(
     if locked:
         return [support]
     if count >= spec.threshold:
-        return [
-            replace(
-                support,
-                supports_direction="yes",
-                supports_confidence=0.98,
-                snippet=(
-                    support.snippet
-                    + " Threshold already cleared before the snapshot cutoff."
-                ),
-            )
-        ]
+        # Still emit remaining-time p. The 0.98 lock is the both-sides
+        # official probability; returning count-only evidence here left T6
+        # on insufficient_corroboration after skip-generic.
+        support = replace(
+            support,
+            supports_direction="yes",
+            supports_confidence=0.98,
+            snippet=(
+                support.snippet
+                + " Threshold already cleared before the snapshot cutoff."
+            ),
+        )
     start_et = datetime.combine(
         spec.start_date, datetime.min.time(), tzinfo=ZoneInfo("America/New_York")
     )
@@ -5902,6 +5904,22 @@ def _structured_direct_source_queries(
         f"{getattr(market, 'ticker', '')} {_market_text(market)} "
         f"cutoff {getattr(market, 'close_time', '')}"
     )
+    if parse_truth_social_count_contract(market_text) is not None:
+        return [
+            ResearchQuery(
+                market_text,
+                "official_resolution",
+                "official_primary",
+            )
+        ]
+    if parse_truth_social_phrase_contract(market_text) is not None:
+        return [
+            ResearchQuery(
+                market_text,
+                "official_resolution",
+                "official_primary",
+            )
+        ]
     if _getty_distinct_date_spec_from_text(market_text) is not None:
         return [
             ResearchQuery(
@@ -5948,6 +5966,10 @@ def _structured_direct_source_queries(
 
 
 def _structured_official_search(query: ResearchQuery) -> list[ResearchEvidence]:
+    if parse_truth_social_count_contract(query.query) is not None:
+        return _truth_social_count_search(query)
+    if parse_truth_social_phrase_contract(query.query) is not None:
+        return _truth_social_phrase_search(query)
     if _getty_distinct_date_spec_from_text(query.query) is not None:
         return _getty_distinct_date_search(query)
     if _white_house_action_count_spec_from_text(query.query) is not None:
@@ -8084,7 +8106,10 @@ async def run_research_gate(
             if item.source_class
             in {"resolution_source", "official_primary", "rules_source"}
         ]
-        if prefer_official_sources and official_direct_hits:
+        if prefer_official_sources and (
+            official_direct_hits
+            or _probability_from_structured_evidence(fresh_evidence) is not None
+        ):
             log.info(
                 "[RESEARCH_GATE] skip generic search; official evidence present "
                 "ticker=%s n=%d",
@@ -8118,7 +8143,10 @@ async def run_research_gate(
         if not collection_budget_exhausted:
             remaining = remaining_budget()
             if remaining <= 0:
-                if prewarm_phase_timeouts is not None and evidence:
+                if (
+                    (prewarm_phase_timeouts is not None and evidence)
+                    or not provider_queries
+                ):
                     collection_budget_exhausted = True
                 else:
                     return await finalize_verdict(

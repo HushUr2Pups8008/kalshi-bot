@@ -18,6 +18,7 @@ from tasks.research_paper_admission import (
     ResearchBackedBlendStore,
     ResearchPaperAdmissionBridge,
     ResearchPaperSignal,
+    ResearchPaperSignalProvider,
     _has_counter_query,
     _market_venue,
 )
@@ -1423,3 +1424,114 @@ async def test_invalid_ancillary_evidence_does_not_block_valid_paper_signal() ->
 
     assert result.admitted is True
     assert result.enqueued is True
+
+
+@pytest.mark.asyncio
+async def test_official_p_admits_cheap_yes_when_labeled_the_other_side(monkeypatch) -> None:
+    """B209: p=0.39 labeled NO, trade YES. Paper admission must not park."""
+    monkeypatch.setattr(
+        "tasks.research_paper_admission.is_event_news_paper_cohort",
+        lambda _config=None: True,
+    )
+    ticker = "KXTRUTHSOCIAL-26AUG29-B209"
+    question = (
+        "Will Donald Trump make between 200 and 219 Truth Social posts "
+        "the week of Aug 23, 2026?"
+    )
+    provider = ResearchPaperSignalProvider(
+        store=FakeResearchStore(
+            snapshot=replace(
+                _snapshot(
+                    side="yes",
+                    estimated_probability=0.39,
+                    market_price=0.23,
+                    estimated_edge=0.15,
+                ),
+                market_ticker=ticker,
+                contract_question=question,
+            ),
+            evidence=[
+                ResearchEvidence(
+                    source_class="official_primary",
+                    source_name="Roll Call Factbase Truth Social records",
+                    source_url="https://rollcall.com/wp-json/factbase/v1/twitter",
+                    title=question,
+                    snippet=(
+                        "Factbase records show 175 posts; requested range is "
+                        "200-219. Implied YES probability 0.390."
+                    ),
+                    claim_type="official_resolution",
+                    supports_direction="no",
+                    supports_confidence=0.85,
+                    retrieved_at="2026-07-02T16:00:00+00:00",
+                    metric_name="truth_social_range_probability",
+                    metric_value=0.39,
+                    metric_unit="probability",
+                    extraction_confidence=0.96,
+                )
+            ],
+            has_counter_query=False,
+            query_texts=[question],
+        ),
+        now=lambda: datetime(2026, 7, 2, 16, 5, tzinfo=UTC),
+    )
+    signal, reason = await provider.get_signal(ticker)
+    assert reason is None
+    assert signal is not None
+    assert signal.side == "yes"
+    assert signal.estimated_probability == pytest.approx(0.39)
+
+
+@pytest.mark.asyncio
+async def test_white_house_remaining_time_p_admits_without_counter_query(
+    monkeypatch,
+) -> None:
+    """T6 remaining-time p is both-sides. Missing Google counter must not park."""
+    monkeypatch.setattr(
+        "tasks.research_paper_admission.is_event_news_paper_cohort",
+        lambda _config=None: True,
+    )
+    ticker = "KXTRUMPACT-26AUG23-T6"
+    question = "Will there be at least 6 presidential actions in the week of Aug 23, 2026?"
+    provider = ResearchPaperSignalProvider(
+        store=FakeResearchStore(
+            snapshot=replace(
+                _snapshot(
+                    side="yes",
+                    estimated_probability=0.98,
+                    market_price=0.55,
+                    estimated_edge=0.42,
+                ),
+                market_ticker=ticker,
+                contract_question=question,
+            ),
+            evidence=[
+                ResearchEvidence(
+                    source_class="official_primary",
+                    source_name="White House Presidential Actions",
+                    source_url="https://www.whitehouse.gov/presidential-actions/",
+                    title=question,
+                    snippet=(
+                        "Official count is 6 versus threshold 6 "
+                        "(already_above_threshold); implied YES probability 0.980."
+                    ),
+                    claim_type="official_resolution",
+                    supports_direction="yes",
+                    supports_confidence=0.95,
+                    retrieved_at="2026-07-02T16:00:00+00:00",
+                    metric_name="white_house_action_range_probability",
+                    metric_value=0.98,
+                    metric_unit="probability",
+                    extraction_confidence=0.96,
+                )
+            ],
+            has_counter_query=False,
+            query_texts=[question],
+        ),
+        now=lambda: datetime(2026, 7, 2, 16, 5, tzinfo=UTC),
+    )
+    signal, reason = await provider.get_signal(ticker)
+    assert reason is None
+    assert signal is not None
+    assert signal.side == "yes"
+    assert signal.estimated_probability == pytest.approx(0.98)

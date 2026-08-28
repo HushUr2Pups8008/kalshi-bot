@@ -21,6 +21,7 @@ from tasks.research_dossier import (
     ResearchDossierStore,
     _decision_grade_persistence_quality,
     _stored_decision_grade_snapshot_is_valid_sync,
+    _validated_research_status,
 )
 
 
@@ -3049,3 +3050,114 @@ async def test_persisted_future_nws_evidence_invalidates_decision_grade_snapshot
             )
             is False
         )
+
+
+def _official_p_evidence(*, metric: str, probability: float, direction: str) -> ResearchEvidence:
+    retrieved = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return ResearchEvidence(
+        source_class="official_primary",
+        source_name="Roll Call Factbase Truth Social records",
+        source_url="https://rollcall.com/wp-json/factbase/v1/twitter",
+        title="official p",
+        snippet=f"Implied YES probability {probability:.3f}.",
+        claim_type="official_resolution",
+        supports_direction=direction,
+        supports_confidence=0.85,
+        retrieved_at=retrieved,
+        metric_name=metric,
+        metric_value=probability,
+        metric_unit="probability",
+        extraction_confidence=0.96,
+    )
+
+
+def test_persistence_keeps_decision_grade_when_official_p_is_labeled_the_other_side(monkeypatch):
+    """B209: p=0.39 labeled NO, trade YES. Persist must not rewrite neutral_only."""
+    monkeypatch.setattr(
+        "utils.event_news_research.is_event_news_paper_cohort",
+        lambda _config=None: True,
+    )
+    evidence = [_official_p_evidence(
+        metric="truth_social_range_probability",
+        probability=0.39,
+        direction="no",
+    )]
+    quality = _decision_grade_persistence_quality(
+        ticker="KXTRUTHSOCIAL-26AUG29-B209",
+        side="yes",
+        queries=[
+            SimpleNamespace(query="q", query_intent="official_resolution"),
+            SimpleNamespace(query="c", query_intent="contradiction_check"),
+        ],
+        evidence=evidence,
+    )
+    assert quality["has_directional_evidence"] is True
+    assert quality["has_counter_evidence"] is True
+    status, grade, skip = _validated_research_status(
+        market_ticker="KXTRUTHSOCIAL-26AUG29-B209",
+        verdict_status="decision_grade_candidate",
+        decision_grade_status="decision_grade_candidate",
+        skip_reason=None,
+        force_side="yes",
+        queries=[],
+        evidence=evidence,
+    )
+    assert status == "decision_grade_candidate"
+    assert skip is None
+
+
+def test_persistence_clears_leftover_skip_when_official_p_is_decision_grade(monkeypatch):
+    """Trade YES/NO must not stay parked on a leftover skip_reason."""
+    monkeypatch.setattr(
+        "utils.event_news_research.is_event_news_paper_cohort",
+        lambda _config=None: True,
+    )
+    evidence = [_official_p_evidence(
+        metric="truth_social_range_probability",
+        probability=0.39,
+        direction="no",
+    )]
+    status, _grade, skip = _validated_research_status(
+        market_ticker="KXTRUTHSOCIAL-26AUG29-B209",
+        verdict_status="decision_grade_candidate",
+        decision_grade_status="decision_grade_candidate",
+        skip_reason="neutral_only_evidence",
+        force_side="yes",
+        queries=[],
+        evidence=evidence,
+    )
+    assert status == "decision_grade_candidate"
+    assert skip is None
+
+
+def test_persistence_keeps_decision_grade_for_white_house_remaining_time_p(monkeypatch):
+    monkeypatch.setattr(
+        "utils.event_news_research.is_event_news_paper_cohort",
+        lambda _config=None: True,
+    )
+    evidence = [_official_p_evidence(
+        metric="white_house_action_range_probability",
+        probability=0.77,
+        direction="yes",
+    )]
+    evidence[0] = replace_wh_source(evidence[0])
+    status, _grade, skip = _validated_research_status(
+        market_ticker="KXTRUMPACT-26AUG23-T6",
+        verdict_status="decision_grade_candidate",
+        decision_grade_status="decision_grade_candidate",
+        skip_reason=None,
+        force_side="yes",
+        queries=[],
+        evidence=evidence,
+    )
+    assert status == "decision_grade_candidate"
+    assert skip is None
+
+
+def replace_wh_source(item: ResearchEvidence) -> ResearchEvidence:
+    from dataclasses import replace
+    return replace(
+        item,
+        source_name="White House Presidential Actions",
+        source_url="https://www.whitehouse.gov/presidential-actions/",
+    )

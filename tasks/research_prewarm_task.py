@@ -30,8 +30,10 @@ from analysis.research_gate import (
 from tasks.research_dossier import (
     RESEARCH_TASK_TERMINAL_AFTER_SAME_REASON,
     ResearchDossierStore,
+    _evidence_has_both_sides_probability,
     default_store,
 )
+from utils.event_news_research import is_event_news_paper_cohort
 from utils.logger import get_logger, trade_log, write_trade_log_async
 from utils.research_evidence_quality import has_reliable_research_source_path
 from utils.research_market_eligibility import research_market_eligibility
@@ -818,6 +820,14 @@ class ResearchPrewarmTask:
             snapshot = await self.store.get_dossier_snapshot(ticker)
             if snapshot is None or not snapshot.last_research_run_id:
                 return False
+            evidence = await self.store.get_research_run_evidence(
+                ticker,
+                snapshot.last_research_run_id,
+            )
+            if is_event_news_paper_cohort() and _evidence_has_both_sides_probability(
+                evidence
+            ):
+                return True
             query_checker = getattr(self.store, "has_research_run_query_intent", None)
             if not callable(query_checker) or not await query_checker(
                 snapshot.last_research_run_id,
@@ -827,10 +837,6 @@ class ResearchPrewarmTask:
             side = (snapshot.last_force_side or "").strip().lower()
             if side not in {"yes", "no"}:
                 return False
-            evidence = await self.store.get_research_run_evidence(
-                ticker,
-                snapshot.last_research_run_id,
-            )
         except Exception as exc:
             _log.warning(
                 "[RESEARCH_PREWARM] decision-grade countercase lookup failed "
