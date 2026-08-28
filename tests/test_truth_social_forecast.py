@@ -233,3 +233,39 @@ def test_fetch_truth_social_phrase_hits_barack_hussein_obama(monkeypatch):
     assert state == "phrase_hit"
     assert probability == 0.98
     assert confidence == 0.95
+
+
+def test_fetch_truth_social_phrase_returns_hit_without_full_month_scan(monkeypatch):
+    pages = {
+        1: {
+            "data": [
+                {
+                    "date": "2026-08-28T09:00:00-04:00",
+                    "text": "unrelated",
+                    "deleted_flag": False,
+                },
+                {
+                    "date": "2026-08-10T16:00:00-04:00",
+                    "text": "Playing golf with Gary Player",
+                    "post_url": "https://truthsocial.com/@realDonaldTrump/golf",
+                    "deleted_flag": False,
+                },
+            ]
+        }
+    }
+    calls = {"n": 0}
+
+    def fake_fetch(url, *, timeout):
+        calls["n"] += 1
+        page = int(parse_qs(urlparse(url).query)["page"][0])
+        return pages.get(page, {"data": []})
+
+    monkeypatch.setattr("analysis.truth_social_forecast._fetch_json", fake_fetch)
+    observation = fetch_truth_social_phrase(
+        'Will Trump say "Golf / Golfer / Golfing" before Aug 31, 2026? '
+        "KXTRUMPSAY-26AUG31-GOLF"
+    )
+    assert observation is not None
+    assert observation.hit is True
+    assert observation.matched_phrase == "Golf"
+    assert calls["n"] == 1

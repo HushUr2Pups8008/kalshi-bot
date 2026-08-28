@@ -19,6 +19,16 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.63] - 2026-08-28
+
+### Fixed
+
+- **Phrase hits return on the first matching post.** KXTRUMPSAY no longer
+  waits to paginate the whole month (and time out) before counting a hit.
+  Official structured p also satisfies corroboration, so a White House
+  remaining-time probability is not killed for having one URL. Freeze stays
+  locked.
+
 ## [0.33.62] - 2026-08-28
 
 ### Fixed

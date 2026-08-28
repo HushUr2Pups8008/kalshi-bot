@@ -503,14 +503,12 @@ def _fetch_truth_social_posts_in_window(
         if oldest_seen is not None and oldest_seen < window_start:
             break
     complete = oldest_seen is not None and oldest_seen < window_start
-    if not complete:
-        with _POST_WINDOW_CACHE_LOCK:
-            _POST_WINDOW_CACHE[cache_key] = (time.monotonic(), None)
-        return None
     packed = tuple(posts)
     with _POST_WINDOW_CACHE_LOCK:
-        _POST_WINDOW_CACHE[cache_key] = (time.monotonic(), packed)
-    return packed, pages, True
+        _POST_WINDOW_CACHE[cache_key] = (time.monotonic(), packed if posts else None)
+    if not posts and not complete:
+        return None
+    return packed, pages, complete
 
 
 def fetch_truth_social_phrase(
@@ -519,42 +517,75 @@ def fetch_truth_social_phrase(
     timeout: float = _DEFAULT_TIMEOUT_SECONDS,
     max_pages: int = _PHRASE_MAX_PAGES,
 ) -> TruthSocialPhraseObservation | None:
-    """Scan Factbase post text for a KXTRUMPSAY phrase inside the contract window."""
+    """Scan Factbase post text for a KXTRUMPSAY phrase inside the contract window.
+
+    A hit returns immediately. A miss is only trusted after pagination crosses
+    the window start.
+    """
     contract = parse_truth_social_phrase_contract(query)
     if contract is None or max_pages < 1:
         return None
-    fetched = _fetch_truth_social_posts_in_window(
-        contract.window_start,
-        contract.window_end,
-        timeout=timeout,
-        max_pages=max_pages,
-    )
-    if fetched is None:
-        return None
-    posts, pages, complete = fetched
+    posts_scanned = 0
+    pages = 0
+    oldest_seen: date | None = None
     matched_phrase = None
     match_date = None
     match_url = None
-    for record in posts:
-        text = str(record.get("text") or "")
-        for phrase in contract.phrases:
-            if _phrase_in_text(phrase, text):
-                matched_phrase = phrase
-                match_date = _record_date(record)
-                url = record.get("post_url") or record.get("account_url")
-                match_url = str(url) if url else None
+    for page in range(1, max_pages + 1):
+        params = urllib.parse.urlencode(
+            {
+                "platform": "truth social",
+                "sort": "date",
+                "sort_order": "desc",
+                "page": page,
+                "format": "json",
+            }
+        )
+        payload = _fetch_json(f"{_ENDPOINT}?{params}", timeout=timeout)
+        if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+            raise ValueError("Factbase response missing data list")
+        rows = payload["data"]
+        if not rows:
+            break
+        pages = page
+        for record in rows:
+            if not isinstance(record, dict):
+                raise ValueError("Factbase data row was not an object")
+            observed_date = _record_date(record)
+            if observed_date is None:
+                raise ValueError("Factbase data row missing valid date")
+            oldest_seen = (
+                observed_date if oldest_seen is None else min(oldest_seen, observed_date)
+            )
+            if not (contract.window_start <= observed_date <= contract.window_end):
+                continue
+            posts_scanned += 1
+            text = str(record.get("text") or "")
+            for phrase in contract.phrases:
+                if _phrase_in_text(phrase, text):
+                    matched_phrase = phrase
+                    match_date = observed_date
+                    url = record.get("post_url") or record.get("account_url")
+                    match_url = str(url) if url else None
+                    break
+            if matched_phrase is not None:
                 break
         if matched_phrase is not None:
             break
+        if oldest_seen is not None and oldest_seen < contract.window_start:
+            break
+    complete = oldest_seen is not None and oldest_seen < contract.window_start
+    if matched_phrase is None and not complete:
+        return None
     return TruthSocialPhraseObservation(
         hit=matched_phrase is not None,
         matched_phrase=matched_phrase,
         match_date=match_date,
         match_url=match_url,
-        posts_scanned=len(posts),
+        posts_scanned=posts_scanned,
         window_start=contract.window_start,
         window_end=contract.window_end,
-        complete=complete,
+        complete=True if matched_phrase is not None else complete,
         pages=pages,
         source_url=(
             f"{_ENDPOINT}?platform=truth%20social&sort=date&sort_order=desc&format=json"

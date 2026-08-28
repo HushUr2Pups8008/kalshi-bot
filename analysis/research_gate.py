@@ -1874,6 +1874,7 @@ def decide_research_verdict(
     if (
         len({item.source_url for item in evidence if item.source_url}) < 2
         and not truth_social_count
+        and _probability_from_structured_evidence(evidence) is None
     ):
         return ResearchVerdict(
             status=(
