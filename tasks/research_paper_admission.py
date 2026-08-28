@@ -42,8 +42,10 @@ _STRUCTURED_SIGNAL_METRICS = frozenset(
         "gdpnow_real_gdp_growth_saar",
         "nws_daily_high_temp_f",
         "white_house_presidential_actions_count",
+        "white_house_action_range_probability",
         "truth_social_weekly_post_count",
         "truth_social_range_probability",
+        "truth_social_phrase_probability",
     }
 )
 _EDGE_TOLERANCE = 0.005

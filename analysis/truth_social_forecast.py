@@ -28,6 +28,7 @@ _DEFAULT_MAX_PAGES = 8
 _ET = ZoneInfo("America/New_York")
 TRUTH_SOCIAL_RANGE_PROBABILITY_METRIC = "truth_social_range_probability"
 TRUTH_SOCIAL_COUNT_METRIC = "truth_social_weekly_post_count"
+TRUTH_SOCIAL_PHRASE_PROBABILITY_METRIC = "truth_social_phrase_probability"
 _LOCKED_YES = 0.98
 _LOCKED_NO = 0.02
 _MIN_ELAPSED_DAYS = 0.5
@@ -342,3 +343,248 @@ def truth_social_range_probability(
         state = "open_run_rate"
     confidence = 0.85 if remaining_days < 2.0 else 0.82
     return _clip_probability(probability), state, confidence
+
+
+def remaining_threshold_probability(
+    *,
+    count: int,
+    threshold: int,
+    elapsed_days: float,
+    remaining_days: float,
+) -> tuple[float, str, float] | None:
+    """P(final count >= threshold) from a known floor and remaining time."""
+    if count >= threshold:
+        return _LOCKED_YES, "already_above_threshold", 0.95
+    if remaining_days <= 0:
+        return _LOCKED_NO, "closed", 0.95
+    if elapsed_days < _MIN_ELAPSED_DAYS:
+        return None
+    rate = float(count) / elapsed_days if elapsed_days > 0 else 0.0
+    expected_remaining = rate * remaining_days * _REMAINING_RATE_HAIRCUT
+    need = max(0, int(threshold) - int(count))
+    probability = 1.0 - _poisson_cdf(need - 1, expected_remaining)
+    confidence = 0.85 if remaining_days < 2.0 else 0.82
+    return _clip_probability(probability), "open_run_rate_above", confidence
+
+
+@dataclass(frozen=True)
+class TruthSocialPhraseContract:
+    phrases: tuple[str, ...]
+    window_start: date
+    window_end: date
+    ticker: str
+
+
+@dataclass(frozen=True)
+class TruthSocialPhraseObservation:
+    hit: bool
+    matched_phrase: str | None
+    match_date: date | None
+    match_url: str | None
+    posts_scanned: int
+    window_start: date
+    window_end: date
+    complete: bool
+    pages: int
+    source_url: str
+    observed_at: str
+
+
+_PHRASE_SAY_RE = re.compile(
+    r"\bwill\s+(?:donald\s+)?trump\s+say\s+"
+    r"[\"“]?(?P<phrases>.+?)[\"”]?\s+"
+    r"(?:before|by|by\s+the\s+end\s+of)\s+"
+    r"(?P<month>January|February|March|April|May|June|July|August|"
+    r"September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|"
+    r"Aug|Sep|Sept|Oct|Nov|Dec)\.?\s+"
+    r"(?P<day>\d{1,2}),?\s+(?P<year>20\d{2})\b",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+_POST_WINDOW_CACHE: dict[
+    tuple[date, date, int], tuple[float, tuple[dict[str, Any], ...] | None]
+] = {}
+_POST_WINDOW_CACHE_LOCK = threading.Lock()
+_PHRASE_MAX_PAGES = 20
+
+
+def parse_truth_social_phrase_contract(query: str) -> TruthSocialPhraseContract | None:
+    """Parse KXTRUMPSAY 'Will Trump say \"X / Y\" before DATE' contracts."""
+    match = _PHRASE_SAY_RE.search(query)
+    if match is None:
+        return None
+    raw_phrases = match.group("phrases")
+    phrases = tuple(
+        part.strip(" \t\"“”'")
+        for part in re.split(r"\s*/\s*", raw_phrases)
+        if part.strip(" \t\"“”'")
+    )
+    if not phrases:
+        return None
+    month = _MONTHS.get(match.group("month").lower())
+    if month is None:
+        month = _MONTHS.get(
+            next(
+                (name for name in _MONTHS if name.startswith(match.group("month").lower())),
+                "",
+            )
+        )
+    if month is None:
+        return None
+    try:
+        window_end = date(int(match.group("year")), month, int(match.group("day")))
+    except ValueError:
+        return None
+    window_start = date(window_end.year, window_end.month, 1)
+    ticker_match = re.search(r"\bKXTRUMPSAY[A-Z]*-[A-Z0-9-]+\b", query, re.IGNORECASE)
+    return TruthSocialPhraseContract(
+        phrases=phrases,
+        window_start=window_start,
+        window_end=window_end,
+        ticker=ticker_match.group(0).upper() if ticker_match else "KXTRUMPSAY",
+    )
+
+
+def _phrase_in_text(phrase: str, text: str) -> bool:
+    tokens = re.findall(r"[a-z0-9]+", phrase.lower())
+    if not tokens:
+        return False
+    pattern = r"\b" + r"\s+".join(re.escape(token) for token in tokens) + r"\b"
+    return re.search(pattern, text.lower()) is not None
+
+
+def _fetch_truth_social_posts_in_window(
+    window_start: date,
+    window_end: date,
+    *,
+    timeout: float,
+    max_pages: int,
+) -> tuple[tuple[dict[str, Any], ...], int, bool] | None:
+    cache_key = (window_start, window_end, max_pages)
+    now = time.monotonic()
+    with _POST_WINDOW_CACHE_LOCK:
+        cached = _POST_WINDOW_CACHE.get(cache_key)
+        if cached is not None and now - cached[0] < _OBSERVATION_CACHE_TTL_SECONDS:
+            rows = cached[1]
+            if rows is None:
+                return None
+            return rows, max_pages, True
+
+    posts: list[dict[str, Any]] = []
+    pages = 0
+    oldest_seen: date | None = None
+    for page in range(1, max_pages + 1):
+        params = urllib.parse.urlencode(
+            {
+                "platform": "truth social",
+                "sort": "date",
+                "sort_order": "desc",
+                "page": page,
+                "format": "json",
+            }
+        )
+        payload = _fetch_json(f"{_ENDPOINT}?{params}", timeout=timeout)
+        if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+            raise ValueError("Factbase response missing data list")
+        rows = payload["data"]
+        if not rows:
+            break
+        pages = page
+        for record in rows:
+            if not isinstance(record, dict):
+                raise ValueError("Factbase data row was not an object")
+            observed_date = _record_date(record)
+            if observed_date is None:
+                raise ValueError("Factbase data row missing valid date")
+            oldest_seen = (
+                observed_date if oldest_seen is None else min(oldest_seen, observed_date)
+            )
+            if window_start <= observed_date <= window_end:
+                posts.append(record)
+        if oldest_seen is not None and oldest_seen < window_start:
+            break
+    complete = oldest_seen is not None and oldest_seen < window_start
+    if not complete:
+        with _POST_WINDOW_CACHE_LOCK:
+            _POST_WINDOW_CACHE[cache_key] = (time.monotonic(), None)
+        return None
+    packed = tuple(posts)
+    with _POST_WINDOW_CACHE_LOCK:
+        _POST_WINDOW_CACHE[cache_key] = (time.monotonic(), packed)
+    return packed, pages, True
+
+
+def fetch_truth_social_phrase(
+    query: str,
+    *,
+    timeout: float = _DEFAULT_TIMEOUT_SECONDS,
+    max_pages: int = _PHRASE_MAX_PAGES,
+) -> TruthSocialPhraseObservation | None:
+    """Scan Factbase post text for a KXTRUMPSAY phrase inside the contract window."""
+    contract = parse_truth_social_phrase_contract(query)
+    if contract is None or max_pages < 1:
+        return None
+    fetched = _fetch_truth_social_posts_in_window(
+        contract.window_start,
+        contract.window_end,
+        timeout=timeout,
+        max_pages=max_pages,
+    )
+    if fetched is None:
+        return None
+    posts, pages, complete = fetched
+    matched_phrase = None
+    match_date = None
+    match_url = None
+    for record in posts:
+        text = str(record.get("text") or "")
+        for phrase in contract.phrases:
+            if _phrase_in_text(phrase, text):
+                matched_phrase = phrase
+                match_date = _record_date(record)
+                url = record.get("post_url") or record.get("account_url")
+                match_url = str(url) if url else None
+                break
+        if matched_phrase is not None:
+            break
+    return TruthSocialPhraseObservation(
+        hit=matched_phrase is not None,
+        matched_phrase=matched_phrase,
+        match_date=match_date,
+        match_url=match_url,
+        posts_scanned=len(posts),
+        window_start=contract.window_start,
+        window_end=contract.window_end,
+        complete=complete,
+        pages=pages,
+        source_url=(
+            f"{_ENDPOINT}?platform=truth%20social&sort=date&sort_order=desc&format=json"
+        ),
+        observed_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+def truth_social_phrase_probability(
+    observation: TruthSocialPhraseObservation,
+    *,
+    now: datetime | None = None,
+) -> tuple[float, str, float]:
+    """Hit → locked YES. Closed miss → locked NO. Open miss → remaining prior."""
+    if observation.hit:
+        return _LOCKED_YES, "phrase_hit", 0.95
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    current_et = current.astimezone(_ET)
+    window_end = datetime.combine(
+        observation.window_end, datetime.max.time().replace(microsecond=0), tzinfo=_ET
+    )
+    if current_et >= window_end:
+        return _LOCKED_NO, "closed_miss", 0.95
+    window_start = datetime.combine(
+        observation.window_start, datetime.min.time(), tzinfo=_ET
+    )
+    total_days = max((window_end - window_start).total_seconds() / 86400.0, 1.0)
+    remaining_days = max((window_end - current_et).total_seconds() / 86400.0, 0.0)
+    # No hit yet. Keep a small remaining chance; do not mint a 50c YES.
+    probability = 0.20 * (remaining_days / total_days) * _REMAINING_RATE_HAIRCUT
+    return _clip_probability(probability), "open_miss", 0.80

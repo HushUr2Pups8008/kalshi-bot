@@ -5,7 +5,11 @@ from zoneinfo import ZoneInfo
 from analysis.truth_social_forecast import (
     TruthSocialCountObservation,
     fetch_truth_social_count,
+    fetch_truth_social_phrase,
     parse_truth_social_count_contract,
+    parse_truth_social_phrase_contract,
+    remaining_threshold_probability,
+    truth_social_phrase_probability,
     truth_social_range_probability,
 )
 
@@ -168,3 +172,64 @@ def test_truth_social_range_probability_open_week_uses_run_rate():
     # lock. If this climbs back above 0.70 the haircut was removed.
     assert 0.35 < probability < 0.70
     assert confidence >= 0.82
+
+
+def test_parse_truth_social_phrase_contract_splits_slash_alternates():
+    contract = parse_truth_social_phrase_contract(
+        'Will Trump say "Golf / Golfer / Golfing" before Aug 31, 2026? '
+        "KXTRUMPSAY-26AUG31-GOLF"
+    )
+    assert contract is not None
+    assert contract.phrases == ("Golf", "Golfer", "Golfing")
+    assert contract.window_start == date(2026, 8, 1)
+    assert contract.window_end == date(2026, 8, 31)
+    assert contract.ticker == "KXTRUMPSAY-26AUG31-GOLF"
+
+
+def test_remaining_threshold_probability_locks_when_already_there():
+    probability, state, confidence = remaining_threshold_probability(
+        count=6, threshold=6, elapsed_days=4.0, remaining_days=2.0
+    )
+    assert probability == 0.98
+    assert state == "already_above_threshold"
+    assert confidence == 0.95
+
+
+def test_fetch_truth_social_phrase_hits_barack_hussein_obama(monkeypatch):
+    pages = {
+        1: {
+            "data": [
+                {
+                    "date": "2026-08-07T18:55:00-04:00",
+                    "text": (
+                        "Two Judges, one appointed by Barack Hussein Obama, "
+                        "the other by Sleepy Joe Biden"
+                    ),
+                    "post_url": "https://truthsocial.com/@realDonaldTrump/1",
+                    "deleted_flag": False,
+                },
+                {
+                    "date": "2026-07-31T12:00:00-04:00",
+                    "text": "older than the window",
+                    "deleted_flag": False,
+                },
+            ]
+        }
+    }
+
+    def fake_fetch(url, *, timeout):
+        page = int(parse_qs(urlparse(url).query)["page"][0])
+        return pages[page]
+
+    monkeypatch.setattr("analysis.truth_social_forecast._fetch_json", fake_fetch)
+    observation = fetch_truth_social_phrase(
+        'Will Trump say "Barack Hussein Obama" before Aug 31, 2026? '
+        "KXTRUMPSAY-26AUG31-BARA"
+    )
+    assert observation is not None
+    assert observation.hit is True
+    assert observation.matched_phrase == "Barack Hussein Obama"
+    probability, state, confidence = truth_social_phrase_probability(observation)
+    assert state == "phrase_hit"
+    assert probability == 0.98
+    assert confidence == 0.95

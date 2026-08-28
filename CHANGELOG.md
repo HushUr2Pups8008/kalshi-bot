@@ -19,6 +19,17 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.62] - 2026-08-28
+
+### Fixed
+
+- **Phrase books, cheap YES when p<0.5, and mid-week action counts.**
+  Factbase now scans KXTRUMPSAY post text for the contracted phrase.
+  Both-sides admission no longer keeps a "Trade NO" reason after flipping
+  to cheap YES. White House action floors emit a remaining-time p instead
+  of parking on `official_data_pending` once a count exists. Freeze stays
+  locked.
+
 ## [0.33.61] - 2026-08-28
 
 ### Fixed

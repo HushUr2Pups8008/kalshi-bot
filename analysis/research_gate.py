@@ -44,9 +44,13 @@ from analysis.generic_search_circuit import (
 )
 from analysis.truth_social_forecast import (
     TRUTH_SOCIAL_COUNT_METRIC,
+    TRUTH_SOCIAL_PHRASE_PROBABILITY_METRIC,
     TRUTH_SOCIAL_RANGE_PROBABILITY_METRIC,
     fetch_truth_social_count,
+    fetch_truth_social_phrase,
     parse_truth_social_count_contract,
+    remaining_threshold_probability,
+    truth_social_phrase_probability,
     truth_social_range_probability,
 )
 from analysis.research_timeout_replay import (
@@ -1791,7 +1795,7 @@ def _probability_from_structured_evidence(
     candidates = [
         item
         for item in evidence
-        if item.metric_name == TRUTH_SOCIAL_RANGE_PROBABILITY_METRIC
+        if item.metric_name in _BOTH_SIDES_PROBABILITY_METRICS
         and item.metric_value is not None
         and float(item.extraction_confidence or 0.0) >= 0.8
     ]
@@ -2077,7 +2081,7 @@ def decide_research_verdict(
                 candidate,
                 model_reason=(
                     model_reason
-                    if score_both_sides or trade_side == side
+                    if trade_side == side
                     else None
                 ),
                 contract_ticker=contract_ticker,
@@ -2735,7 +2739,25 @@ def _has_unresolved_contradiction(evidence: list[ResearchEvidence]) -> bool:
         (item.supports_confidence for item in evidence if item.supports_direction == "no"),
         default=0.0,
     )
-    return yes >= 0.65 and no >= 0.65
+    if not (yes >= 0.65 and no >= 0.65):
+        return False
+    directional = [
+        item
+        for item in evidence
+        if item.supports_direction in {"yes", "no"}
+        and float(item.supports_confidence or 0.0) >= 0.65
+    ]
+    metrics = {
+        item.metric_name
+        for item in directional
+        if item.metric_name in _BOTH_SIDES_PROBABILITY_METRICS
+    }
+    # The same official p labeled YES and NO is both-sides scoring, not a fight.
+    if len(metrics) == 1 and all(
+        item.metric_name in metrics for item in directional
+    ):
+        return False
+    return True
 
 
 def _has_stale_evidence(evidence: list[ResearchEvidence]) -> bool:
@@ -2843,6 +2865,16 @@ def _structured_indicator_signal(
     truth_social_signal = _structured_truth_social_range_signal(evidence, market_text)
     if truth_social_signal is not None:
         return truth_social_signal
+    phrase_signal = _structured_official_probability_signal(
+        evidence, TRUTH_SOCIAL_PHRASE_PROBABILITY_METRIC
+    )
+    if phrase_signal is not None:
+        return phrase_signal
+    action_p_signal = _structured_official_probability_signal(
+        evidence, "white_house_action_range_probability"
+    )
+    if action_p_signal is not None:
+        return action_p_signal
     if _getty_distinct_date_spec_from_text(
         f"{market_text} cutoff {_clean(getattr(market, 'close_time', ''))}"
     ) is not None:
@@ -2993,8 +3025,15 @@ _STRUCTURED_SIGNAL_METRICS = {
     "gdpnow_real_gdp_growth_saar",
     "nws_daily_high_temp_f",
     "white_house_presidential_actions_count",
+    "white_house_action_range_probability",
     TRUTH_SOCIAL_COUNT_METRIC,
+    TRUTH_SOCIAL_PHRASE_PROBABILITY_METRIC,
     TRUTH_SOCIAL_RANGE_PROBABILITY_METRIC,
+}
+_BOTH_SIDES_PROBABILITY_METRICS = {
+    TRUTH_SOCIAL_RANGE_PROBABILITY_METRIC,
+    TRUTH_SOCIAL_PHRASE_PROBABILITY_METRIC,
+    "white_house_action_range_probability",
 }
 
 
@@ -3064,8 +3103,45 @@ def _structured_truth_social_range_signal(
         "estimated_probability_yes": probability,
         "confidence": float(item.supports_confidence or 0.0),
         "reason": _query_fragment(
-            f"Trade {item.supports_direction.upper()} because Roll Call Factbase "
-            f"Truth Social post counts imply YES probability {probability:.2f}.",
+            f"Official structured YES probability is {probability:.2f}.",
+            item.snippet,
+            "Market edge still depends on executable price and counter-evidence.",
+            limit=700,
+        ),
+    }
+
+
+def _structured_official_probability_signal(
+    evidence: list[ResearchEvidence],
+    metric_name: str,
+) -> dict[str, Any] | None:
+    candidates = [
+        item
+        for item in evidence
+        if item.metric_name == metric_name
+        and item.metric_value is not None
+        and float(item.supports_confidence or 0.0) >= 0.65
+    ]
+    if not candidates:
+        return None
+    item = max(
+        candidates, key=lambda row: float(row.supports_confidence or 0.0)
+    )
+    try:
+        probability = float(item.metric_value)
+    except (TypeError, ValueError):
+        return None
+    if not 0.0 <= probability <= 1.0:
+        return None
+    direction = item.supports_direction
+    if direction not in {"yes", "no"}:
+        direction = "yes" if probability >= 0.5 else "no"
+    return {
+        "direction": direction,
+        "estimated_probability_yes": probability,
+        "confidence": float(item.supports_confidence or 0.0),
+        "reason": _query_fragment(
+            f"Official structured YES probability is {probability:.2f}.",
             item.snippet,
             "Market edge still depends on executable price and counter-evidence.",
             limit=700,
@@ -3591,7 +3667,11 @@ def _has_truth_social_count_evidence(evidence: list[ResearchEvidence]) -> bool:
         item.source_class in {"official_primary", "resolution_source"}
         and item.claim_type in {"official_resolution", "resolution_source", "base_rate"}
         and item.metric_name
-        in {TRUTH_SOCIAL_COUNT_METRIC, TRUTH_SOCIAL_RANGE_PROBABILITY_METRIC}
+        in {
+            TRUTH_SOCIAL_COUNT_METRIC,
+            TRUTH_SOCIAL_RANGE_PROBABILITY_METRIC,
+            TRUTH_SOCIAL_PHRASE_PROBABILITY_METRIC,
+        }
         and item.supports_direction in {"yes", "no", "neutral"}
         and float(item.supports_confidence or 0.0) >= 0.65
         and _is_finite_number(item.metric_value)
@@ -4714,25 +4794,80 @@ def _white_house_presidential_actions_search(
     )
     if locked:
         return [support]
-    pending = ResearchEvidence(
-        source_class="official_primary",
-        source_name="White House Presidential Actions",
-        source_url=source_url,
-        title="White House presidential-action window remains open",
-        snippet=(
-            f"Current official count is {count}; {max(spec.threshold - count, 0)} "
-            f"more actions are needed before the {spec.cutoff_at.isoformat()} check."
-        ),
-        claim_type="official_resolution",
-        supports_direction="neutral",
-        supports_confidence=0.0,
-        available_at=spec.cutoff_at.isoformat(),
-        retrieved_at=retrieved_at,
-        metric_name="white_house_presidential_actions_pending",
-        metric_unit="period_status",
-        extraction_confidence=0.98,
+    if count >= spec.threshold:
+        return [
+            replace(
+                support,
+                supports_direction="yes",
+                supports_confidence=0.98,
+                snippet=(
+                    support.snippet
+                    + " Threshold already cleared before the snapshot cutoff."
+                ),
+            )
+        ]
+    start_et = datetime.combine(
+        spec.start_date, datetime.min.time(), tzinfo=ZoneInfo("America/New_York")
     )
-    return [support, pending]
+    current_et = observation_finished_at.astimezone(ZoneInfo("America/New_York"))
+    elapsed_days = (current_et - start_et).total_seconds() / 86400.0
+    remaining_days = (
+        spec.cutoff_at.astimezone(ZoneInfo("America/New_York")) - current_et
+    ).total_seconds() / 86400.0
+    forecast = remaining_threshold_probability(
+        count=count,
+        threshold=spec.threshold,
+        elapsed_days=elapsed_days,
+        remaining_days=remaining_days,
+    )
+    if forecast is None:
+        pending = ResearchEvidence(
+            source_class="official_primary",
+            source_name="White House Presidential Actions",
+            source_url=source_url,
+            title="White House presidential-action window remains open",
+            snippet=(
+                f"Current official count is {count}; "
+                f"{max(spec.threshold - count, 0)} more actions are needed "
+                f"before the {spec.cutoff_at.isoformat()} check."
+            ),
+            claim_type="official_resolution",
+            supports_direction="neutral",
+            supports_confidence=0.0,
+            available_at=spec.cutoff_at.isoformat(),
+            retrieved_at=retrieved_at,
+            metric_name="white_house_presidential_actions_pending",
+            metric_unit="period_status",
+            extraction_confidence=0.98,
+        )
+        return [support, pending]
+    p_yes, state, confidence = forecast
+    direction = "yes" if p_yes >= 0.5 else "no"
+    return [
+        replace(
+            support,
+            supports_direction=direction,
+            supports_confidence=confidence,
+        ),
+        ResearchEvidence(
+            source_class="official_primary",
+            source_name="White House Presidential Actions",
+            source_url=source_url,
+            title=f"White House remaining-time YES probability {p_yes:.3f}",
+            snippet=(
+                f"Official count is {count} versus threshold {spec.threshold} "
+                f"({state}); implied YES probability {p_yes:.3f}."
+            ),
+            claim_type="official_resolution",
+            supports_direction=direction,
+            supports_confidence=confidence,
+            retrieved_at=retrieved_at,
+            metric_name="white_house_action_range_probability",
+            metric_value=p_yes,
+            metric_unit="probability",
+            extraction_confidence=0.96,
+        ),
+    ]
 
 
 def _federal_register_search(
@@ -6573,6 +6708,79 @@ def _truth_social_count_search(query: ResearchQuery) -> list[ResearchEvidence]:
     ]
 
 
+def _truth_social_phrase_search(query: ResearchQuery) -> list[ResearchEvidence]:
+    if query.query_intent not in {
+        "base_rate",
+        "disconfirming",
+        "contradiction_check",
+        "official_resolution",
+        "resolution_source",
+    }:
+        return []
+    try:
+        observation = fetch_truth_social_phrase(query.query)
+    except (OSError, TimeoutError, ValueError, TypeError):
+        log.warning("Truth Social phrase observation unavailable", exc_info=True)
+        return []
+    if observation is None:
+        return []
+    probability, state, confidence = truth_social_phrase_probability(observation)
+    direction = "yes" if probability >= 0.5 else "no"
+    countercheck = query.query_intent in {"disconfirming", "contradiction_check"}
+    supports_direction = "neutral" if countercheck else direction
+    supports_confidence = 0.72 if countercheck else confidence
+    if observation.hit:
+        snippet = (
+            f"Factbase matched {observation.matched_phrase!r} on "
+            f"{observation.match_date.isoformat() if observation.match_date else 'unknown date'} "
+            f"({observation.posts_scanned} posts scanned). Implied YES probability "
+            f"{probability:.3f}."
+        )
+    else:
+        snippet = (
+            f"Factbase scanned {observation.posts_scanned} posts from "
+            f"{observation.window_start.isoformat()} through "
+            f"{observation.window_end.isoformat()} with no phrase hit "
+            f"({state}). Implied YES probability {probability:.3f}."
+        )
+    log.info(
+        "[RESEARCH_GATE] Truth Social phrase observation accepted "
+        "query_intent=%s hit=%s p_yes=%.3f state=%s pages=%s",
+        query.query_intent,
+        observation.hit,
+        probability,
+        state,
+        observation.pages,
+    )
+    return [
+        ResearchEvidence(
+            source_class="official_primary",
+            source_name="Roll Call Factbase Truth Social records",
+            source_url=observation.match_url or observation.source_url,
+            title=(
+                "Factbase phrase hit"
+                if observation.hit
+                else "Factbase phrase miss"
+            ),
+            snippet=snippet,
+            claim_type=(
+                "contradiction_check"
+                if countercheck
+                else "official_resolution"
+            ),
+            supports_direction=supports_direction,
+            supports_confidence=supports_confidence,
+            published_at=observation.observed_at,
+            available_at=observation.observed_at,
+            retrieved_at=_utc_now_iso(),
+            metric_name=TRUTH_SOCIAL_PHRASE_PROBABILITY_METRIC,
+            metric_value=probability,
+            metric_unit="probability",
+            extraction_confidence=0.96,
+        )
+    ]
+
+
 def _truth_social_event_search(
     query: ResearchQuery,
     *,
@@ -6966,6 +7174,7 @@ async def default_search_provider(query: ResearchQuery) -> list[ResearchEvidence
 
     for provider in (
         _truth_social_count_search,
+        _truth_social_phrase_search,
         _truth_social_event_search,
         _bank_of_israel_policy_search,
         _treasury_yield_search,

@@ -1618,18 +1618,19 @@ def test_white_house_action_search_only_locks_at_contract_snapshot(monkeypatch):
         now=before_snapshot,
     )
 
-    assert pre_cutoff[0].supports_direction == "neutral"
-    assert pre_cutoff[-1].metric_name == "white_house_presidential_actions_pending"
+    assert pre_cutoff[0].supports_direction == "yes"
+    assert all(
+        item.metric_name != "white_house_presidential_actions_pending"
+        for item in pre_cutoff
+    )
     assert locked[0].metric_value == 1
     assert locked[0].supports_direction == "yes"
     assert len(locked) == 1
     assert missed[0].metric_name == "white_house_snapshot_missed"
     assert missed[0].supports_direction == "neutral"
-    assert straddled[0].supports_direction == "neutral"
-    assert straddled[-1].metric_name == "white_house_presidential_actions_pending"
-    assert pending[0].supports_direction == "neutral"
-    assert pending[-1].metric_name == "white_house_presidential_actions_pending"
-    assert pending[-1].available_at == "2026-07-19T14:00:00+00:00"
+    assert straddled[0].supports_direction == "yes"
+    assert pending[-1].metric_name == "white_house_action_range_probability"
+    assert pending[-1].metric_value is not None
 
 
 def test_white_house_action_search_rejects_unordered_archive(monkeypatch):
@@ -12937,6 +12938,44 @@ def _ts_probability_evidence(*, probability: float, direction: str = "neutral"):
         metric_unit="probability",
         extraction_confidence=0.96,
     )
+
+
+def test_cheap_yes_with_p_below_half_is_decision_grade():
+    """p=0.39 labeled NO must still admit 23c YES. Both-sides is the trade."""
+    evidence = [_ts_probability_evidence(probability=0.39, direction="no")]
+    counter = replace(
+        evidence[0],
+        source_url=f"{evidence[0].source_url}#countercheck",
+        claim_type="contradiction_check",
+        supports_direction="neutral",
+        supports_confidence=0.72,
+        snippet="Factbase scanned the same week; implied YES probability 0.390.",
+    )
+    verdict = decide_research_verdict(
+        evidence=[evidence[0], counter],
+        model_direction="no",
+        model_confidence=0.85,
+        model_reason="Official structured YES probability is 0.39.",
+        estimated_probability_yes=0.39,
+        yes_ask=0.23,
+        no_ask=0.78,
+        live_mode=False,
+        require_decision_grade=True,
+        score_both_sides=True,
+        queries=[
+            ResearchQuery("ts official", "official_resolution", "official_primary"),
+            ResearchQuery("ts counter", "contradiction_check", "official_primary"),
+        ],
+        contract_ticker="KXTRUTHSOCIAL-26AUG29-B209",
+    )
+    assert verdict.status == ResearchStatus.DECISION_GRADE_CANDIDATE
+    assert verdict.force_side == "yes"
+    assert verdict.skip_reason not in {
+        "neutral_only_evidence",
+        "missing_counter_evidence",
+        "ambiguous_direction",
+    }
+    assert verdict.estimated_edge == pytest.approx(0.15)
 
 
 def test_structured_probability_is_decision_grade_without_google_no_contrary_phrase():
