@@ -3673,6 +3673,7 @@ def _has_truth_social_count_evidence(evidence: list[ResearchEvidence]) -> bool:
             TRUTH_SOCIAL_COUNT_METRIC,
             TRUTH_SOCIAL_RANGE_PROBABILITY_METRIC,
             TRUTH_SOCIAL_PHRASE_PROBABILITY_METRIC,
+            "truth_social_phrase_open_miss",
         }
         and item.supports_direction in {"yes", "no", "neutral"}
         and float(item.supports_confidence or 0.0) >= 0.65
@@ -6741,6 +6742,11 @@ def _truth_social_phrase_search(query: ResearchQuery) -> list[ResearchEvidence]:
         "resolution_source",
     }:
         return []
+    if query.query_intent in {"disconfirming", "contradiction_check"}:
+        from analysis.truth_social_forecast import _PHRASE_AFTER_RE
+
+        if _PHRASE_AFTER_RE.search(query.query) is None:
+            return []
     try:
         observation = fetch_truth_social_phrase(query.query)
     except (OSError, TimeoutError, ValueError, TypeError):
@@ -6753,6 +6759,13 @@ def _truth_social_phrase_search(query: ResearchQuery) -> list[ResearchEvidence]:
     countercheck = query.query_intent in {"disconfirming", "contradiction_check"}
     supports_direction = "neutral" if countercheck else direction
     supports_confidence = 0.72 if countercheck else confidence
+    # An open miss is not a 0.02 NO lock. Feeding it as both-sides p
+    # minted 87c NO on Kamala/Windmill with days left. Hits and closed
+    # misses stay tradeable. Counter queries are often title-only and
+    # would re-parse the window as Aug 1 and lock YES on a pre-rules hit.
+    tradeable_phrase_p = (
+        state in {"phrase_hit", "closed_miss"} and not countercheck
+    )
     if observation.hit:
         snippet = (
             f"Factbase matched {observation.matched_phrase!r} on "
@@ -6797,10 +6810,14 @@ def _truth_social_phrase_search(query: ResearchQuery) -> list[ResearchEvidence]:
             published_at=observation.observed_at,
             available_at=observation.observed_at,
             retrieved_at=_utc_now_iso(),
-            metric_name=TRUTH_SOCIAL_PHRASE_PROBABILITY_METRIC,
+            metric_name=(
+                TRUTH_SOCIAL_PHRASE_PROBABILITY_METRIC
+                if tradeable_phrase_p
+                else "truth_social_phrase_open_miss"
+            ),
             metric_value=probability,
             metric_unit="probability",
-            extraction_confidence=0.96,
+            extraction_confidence=0.96 if tradeable_phrase_p else 0.80,
         )
     ]
 
@@ -8339,7 +8356,18 @@ async def run_research_gate(
                 market_price=observed_market_price,
             )
         )
-    if evidence:
+    skip_adjudicator = (
+        _probability_from_structured_evidence(evidence) is not None
+        or any(
+            item.metric_name
+            in {
+                TRUTH_SOCIAL_PHRASE_PROBABILITY_METRIC,
+                "truth_social_phrase_open_miss",
+            }
+            for item in evidence
+        )
+    )
+    if evidence and not skip_adjudicator:
         adjudicate = adjudicator or default_ollama_adjudicator
         remaining = remaining_budget()
         if deterministic_signal is None:
@@ -8485,6 +8513,18 @@ async def run_research_gate(
                         model_direction,
                         contract_ticker=ticker,
                     )
+                    if any(
+                        item.metric_name
+                        in {
+                            TRUTH_SOCIAL_PHRASE_PROBABILITY_METRIC,
+                            "truth_social_phrase_open_miss",
+                        }
+                        for item in evidence
+                    ):
+                        # Official Factbase phrase scan already priced YES and
+                        # NO. A title-only disconfirming query must not reopen
+                        # the window to Aug 1 and lock a pre-rules hit.
+                        needs_legacy_counter = False
                     if gdpnow_countercheck_attempted:
                         needs_legacy_counter = not gdpnow_countercheck_qualified
                     counter_query = (

@@ -186,6 +186,25 @@ def test_parse_truth_social_phrase_contract_splits_slash_alternates():
     assert contract.ticker == "KXTRUMPSAY-26AUG31-GOLF"
 
 
+_LAND_RULES_QUERY = (
+    'Will Trump say "Landslide" before Aug 31, 2026? '
+    "If Landslide, or a plural or possessive form of Landslide, is stated "
+    "by Donald Trump after August 24, 2026 at 8:00am ET and before "
+    "Aug 31, 2026 at 12:00am ET, then the market resolves to Yes. "
+    "KXTRUMPSAY-26AUG31-LAND"
+)
+
+
+def test_parse_truth_social_phrase_contract_uses_rules_after_date():
+    """Live rules start Aug 24 8am ET, not Aug 1. Title-only month start is wrong."""
+    contract = parse_truth_social_phrase_contract(_LAND_RULES_QUERY)
+    assert contract is not None
+    assert contract.phrases == ("Landslide",)
+    assert contract.window_start == date(2026, 8, 24)
+    assert contract.window_end == date(2026, 8, 30)
+    assert contract.ticker == "KXTRUMPSAY-26AUG31-LAND"
+
+
 def test_remaining_threshold_probability_locks_when_already_there():
     probability, state, confidence = remaining_threshold_probability(
         count=6, threshold=6, elapsed_days=4.0, remaining_days=2.0
@@ -269,3 +288,80 @@ def test_fetch_truth_social_phrase_returns_hit_without_full_month_scan(monkeypat
     assert observation.hit is True
     assert observation.matched_phrase == "Golf"
     assert calls["n"] == 1
+
+
+def test_fetch_truth_social_phrase_ignores_hit_before_rules_after_date(monkeypatch):
+    """LAND Aug 16 is before Aug 24 8am ET. That is not a settlement YES."""
+    pages = {
+        1: {
+            "data": [
+                {
+                    "date": "2026-08-28T09:00:00-04:00",
+                    "text": "unrelated",
+                    "deleted_flag": False,
+                },
+                {
+                    "date": "2026-08-16T12:00:00-04:00",
+                    "text": "I win the Election IN A LANDSLIDE",
+                    "post_url": "https://truthsocial.com/@realDonaldTrump/landslide",
+                    "deleted_flag": False,
+                },
+                {
+                    "date": "2026-08-23T12:00:00-04:00",
+                    "text": "older than the rules window",
+                    "deleted_flag": False,
+                },
+            ]
+        }
+    }
+
+    def fake_fetch(url, *, timeout):
+        page = int(parse_qs(urlparse(url).query)["page"][0])
+        return pages.get(page, {"data": []})
+
+    monkeypatch.setattr("analysis.truth_social_forecast._fetch_json", fake_fetch)
+    observation = fetch_truth_social_phrase(_LAND_RULES_QUERY)
+    assert observation is not None
+    assert observation.hit is False
+    assert observation.window_start == date(2026, 8, 24)
+    assert observation.window_end == date(2026, 8, 30)
+    probability, state, _confidence = truth_social_phrase_probability(
+        observation,
+        now=datetime(2026, 8, 28, 18, 0, tzinfo=timezone.utc),
+    )
+    assert state == "open_miss"
+    assert probability > 0.02
+
+
+def test_fetch_truth_social_phrase_hits_inside_rules_window(monkeypatch):
+    from analysis.truth_social_forecast import _PHRASE_OBS_CACHE, _PHRASE_OBS_CACHE_LOCK
+
+    with _PHRASE_OBS_CACHE_LOCK:
+        _PHRASE_OBS_CACHE.clear()
+    pages = {
+        1: {
+            "data": [
+                {
+                    "date": "2026-08-25T09:00:00-04:00",
+                    "text": "This is a LANDSLIDE victory",
+                    "post_url": "https://truthsocial.com/@realDonaldTrump/in-window",
+                    "deleted_flag": False,
+                },
+                {
+                    "date": "2026-08-23T09:00:00-04:00",
+                    "text": "LANDSLIDE last week does not count",
+                    "deleted_flag": False,
+                },
+            ]
+        }
+    }
+
+    def fake_fetch(url, *, timeout):
+        page = int(parse_qs(urlparse(url).query)["page"][0])
+        return pages.get(page, {"data": []})
+
+    monkeypatch.setattr("analysis.truth_social_forecast._fetch_json", fake_fetch)
+    observation = fetch_truth_social_phrase(_LAND_RULES_QUERY)
+    assert observation is not None
+    assert observation.hit is True
+    assert observation.match_date == date(2026, 8, 25)

@@ -390,15 +390,30 @@ class TruthSocialPhraseObservation:
     observed_at: str
 
 
+_MONTH_NAME_PATTERN = (
+    r"January|February|March|April|May|June|July|August|"
+    r"September|October|November|December|Jan|Feb|Mar|Apr|"
+    r"Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec"
+)
 _PHRASE_SAY_RE = re.compile(
     r"\bwill\s+(?:donald\s+)?trump\s+say\s+"
     r"[\"“]?(?P<phrases>.+?)[\"”]?\s+"
     r"(?:before|by|by\s+the\s+end\s+of)\s+"
-    r"(?P<month>January|February|March|April|May|June|July|August|"
-    r"September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|"
-    r"Aug|Sep|Sept|Oct|Nov|Dec)\.?\s+"
+    rf"(?P<month>{_MONTH_NAME_PATTERN})\.?\s+"
     r"(?P<day>\d{1,2}),?\s+(?P<year>20\d{2})\b",
     flags=re.IGNORECASE | re.DOTALL,
+)
+_PHRASE_AFTER_RE = re.compile(
+    rf"\bafter\s+(?P<month>{_MONTH_NAME_PATTERN})\.?\s+"
+    r"(?P<day>\d{1,2}),?\s+(?P<year>20\d{2})"
+    r"(?:\s+at\s+\d{1,2}:\d{2}\s*(?:a\.?m\.?|p\.?m\.?)\s*ET)?",
+    flags=re.IGNORECASE,
+)
+_PHRASE_BEFORE_MIDNIGHT_RE = re.compile(
+    rf"\bbefore\s+(?P<month>{_MONTH_NAME_PATTERN})\.?\s+"
+    r"(?P<day>\d{1,2}),?\s+(?P<year>20\d{2})"
+    r"\s+at\s+12:00\s*a\.?m\.?\s*ET",
+    flags=re.IGNORECASE,
 )
 _POST_WINDOW_CACHE: dict[
     tuple[date, date, int], tuple[float, tuple[dict[str, Any], ...] | None]
@@ -412,8 +427,35 @@ _PHRASE_OBS_CACHE: dict[
 _PHRASE_OBS_CACHE_LOCK = threading.Lock()
 
 
+def _named_date_from_match(match: re.Match[str]) -> date | None:
+    month = _MONTHS.get(match.group("month").lower())
+    if month is None:
+        month = _MONTHS.get(
+            next(
+                (
+                    name
+                    for name in _MONTHS
+                    if name.startswith(match.group("month").lower())
+                ),
+                "",
+            )
+        )
+    if month is None:
+        return None
+    try:
+        return date(int(match.group("year")), month, int(match.group("day")))
+    except ValueError:
+        return None
+
+
 def parse_truth_social_phrase_contract(query: str) -> TruthSocialPhraseContract | None:
-    """Parse KXTRUMPSAY 'Will Trump say \"X / Y\" before DATE' contracts."""
+    """Parse KXTRUMPSAY phrase contracts.
+
+    Title text is 'before DATE' and would start the window on the 1st.
+    Settlement rules are 'after DATE at 8:00am ET and before DATE at
+    12:00am ET'. Prefer the rules window so a July/early-August post is
+    not a locked YES.
+    """
     match = _PHRASE_SAY_RE.search(query)
     if match is None:
         return None
@@ -425,21 +467,24 @@ def parse_truth_social_phrase_contract(query: str) -> TruthSocialPhraseContract 
     )
     if not phrases:
         return None
-    month = _MONTHS.get(match.group("month").lower())
-    if month is None:
-        month = _MONTHS.get(
-            next(
-                (name for name in _MONTHS if name.startswith(match.group("month").lower())),
-                "",
-            )
-        )
-    if month is None:
-        return None
-    try:
-        window_end = date(int(match.group("year")), month, int(match.group("day")))
-    except ValueError:
+    window_end = _named_date_from_match(match)
+    if window_end is None:
         return None
     window_start = date(window_end.year, window_end.month, 1)
+    after_match = _PHRASE_AFTER_RE.search(query)
+    if after_match is not None:
+        after_date = _named_date_from_match(after_match)
+        if after_date is None:
+            return None
+        window_start = after_date
+    midnight_match = _PHRASE_BEFORE_MIDNIGHT_RE.search(query)
+    if midnight_match is not None:
+        exclusive_end = _named_date_from_match(midnight_match)
+        if exclusive_end is None:
+            return None
+        window_end = exclusive_end - timedelta(days=1)
+    if window_start > window_end:
+        return None
     ticker_match = re.search(r"\bKXTRUMPSAY[A-Z]*-[A-Z0-9-]+\b", query, re.IGNORECASE)
     return TruthSocialPhraseContract(
         phrases=phrases,

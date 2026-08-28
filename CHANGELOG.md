@@ -19,6 +19,16 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.66] - 2026-08-28
+
+### Fixed
+
+- **Phrase books use the rules window, not the title month.** KXTRUMPSAY
+  resolves after Aug 24 8:00am ET through Aug 30, not Aug 1–31. Pre-window
+  Factbase hits (LAND Aug 16, GOLF Aug 10, BARA Aug 7) are not locked YES.
+  An open miss is not a 0.02 NO lock, and a title-only counter query
+  cannot reopen the window. Freeze stays locked.
+
 ## [0.33.65] - 2026-08-28
 
 ### Fixed

@@ -13220,6 +13220,64 @@ async def test_prefer_official_skips_generic_search_after_structured_p(monkeypat
     assert verdict.force_side == "yes"
 
 
+def test_phrase_open_miss_does_not_lock_expensive_no():
+    """Kamala/Windmill open miss must not mint 87c NO while the window is open."""
+    retrieved_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    evidence = [
+        ResearchEvidence(
+            source_class="official_primary",
+            source_name="Roll Call Factbase Truth Social records",
+            source_url="https://rollcall.com/wp-json/factbase/v1/twitter",
+            title="Factbase phrase miss",
+            snippet=(
+                "Factbase scanned 213 posts from 2026-08-24 through 2026-08-30 "
+                "with no phrase hit (open_miss). Implied YES probability 0.069."
+            ),
+            claim_type="official_resolution",
+            supports_direction="no",
+            supports_confidence=0.80,
+            retrieved_at=retrieved_at,
+            metric_name="truth_social_phrase_open_miss",
+            metric_value=0.069,
+            metric_unit="probability",
+            extraction_confidence=0.80,
+        )
+    ]
+    verdict = decide_research_verdict(
+        evidence=evidence,
+        model_direction=None,
+        model_confidence=0.0,
+        model_reason="scheduled research prewarm",
+        estimated_probability_yes=None,
+        yes_ask=0.17,
+        no_ask=0.87,
+        live_mode=False,
+        require_decision_grade=True,
+        score_both_sides=True,
+        queries=[
+            ResearchQuery("phrase official", "official_resolution", "official_primary"),
+            ResearchQuery("phrase counter", "contradiction_check", "official_primary"),
+        ],
+        contract_ticker="KXTRUMPSAY-26AUG31-KAMA",
+    )
+    assert verdict.force_side is None
+    assert verdict.skip_reason == "no_edge"
+    assert verdict.status == ResearchStatus.UNTRADEABLE
+
+
+def test_disconfirming_title_only_query_does_not_widen_phrase_window():
+    """A counter query without rules after-DATE must not scan Aug 1 and lock YES."""
+    hits = research_gate_module._truth_social_phrase_search(
+        ResearchQuery(
+            'Will Trump say "Landslide" before Aug 31, 2026? '
+            "KXTRUMPSAY-26AUG31-LAND",
+            "disconfirming",
+            "official_primary",
+        )
+    )
+    assert hits == []
+
+
 def test_white_house_remaining_time_p_is_decision_grade_without_second_url():
     """T6: official remaining-time p is corroboration. One WH URL is enough."""
     retrieved_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
