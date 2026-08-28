@@ -295,11 +295,12 @@ def event_news_wide_spread(market: Any, *, config: Any = None) -> str | None:
 def event_news_favorite_side(
     market: Any, *, config: Any = None
 ) -> tuple[str | None, int | None]:
-    """Return the executable favorite side and ask cents, if any.
+    """Return the higher in-band executable ask, if any.
 
-    Politics takes YES when yes_ask is in the allowed band, otherwise NO
-    when no_ask is in the same band. Prefer YES when both qualify so the
-    existing YES-favorite sample stays stable. Freeze never uses this.
+    This is a band/liquidity gate for which book to spend research on, not
+    the trade side. YES is not preferred over NO. When both asks qualify,
+    the higher ask is the favorite. Trade side comes from both-side edge
+    after research produces a probability. Freeze never uses this.
     """
     if not is_event_news_paper_cohort(config):
         return None, None
@@ -321,11 +322,16 @@ def event_news_favorite_side(
             return False
         return any(_price_in_band(price, low, high) for low, high in allowed)
 
+    candidates: list[tuple[int, str]] = []
     if _in_favorite(yes_ask) and yes_ask < _FAVORITE_ASK_CERTAIN_CENTS:
-        return "yes", yes_ask
+        candidates.append((int(yes_ask), "yes"))
     if _in_favorite(no_ask) and no_ask < _FAVORITE_ASK_CERTAIN_CENTS:
-        return "no", no_ask
-    return None, None
+        candidates.append((int(no_ask), "no"))
+    if not candidates:
+        return None, None
+    # Higher ask wins. Equal asks prefer NO so a NO favorite is not dropped.
+    cents, side = max(candidates, key=lambda item: (item[0], item[1] == "no"))
+    return side, cents
 
 
 def _price_in_band(price: float, low: float, high: float) -> bool:
@@ -511,12 +517,13 @@ def event_news_one_market_per_event(
 ) -> list[Any]:
     """Keep one in-band book per event so a strike ladder cannot mill research.
 
-    Prefer a YES favorite in 55-90c over a NO favorite, then the ask closest
-    to 65c, then larger top size. Freeze is a no-op.
+    Do not prefer YES books over NO books. Pick the in-band ask closest to
+    65c, then larger top size. Trade side is decided later from p vs both
+    asks. Freeze is a no-op.
     """
     if not is_event_news_paper_cohort(config):
         return list(markets)
-    best: dict[str, tuple[tuple[int, int, float], Any]] = {}
+    best: dict[str, tuple[tuple[int, float], Any]] = {}
     for market in markets:
         event = event_news_exposure_prefix(
             market,
@@ -529,7 +536,9 @@ def event_news_one_market_per_event(
         if side is None or cents is None:
             continue
         size = _as_float(getattr(market, "yes_ask_size", None)) or 0.0
-        score = (0 if side == "yes" else 1, abs(int(cents) - 65), -size)
+        if side == "no":
+            size = _as_float(getattr(market, "no_ask_size", None)) or size
+        score = (abs(int(cents) - 65), -size)
         prior = best.get(event)
         if prior is None or score < prior[0]:
             best[event] = (score, market)

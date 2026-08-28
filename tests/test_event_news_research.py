@@ -447,7 +447,7 @@ def test_favorite_no_side_and_wide_spread_politics_only():
     assert event_news_prewarm_skip_reason(lottery, config=politics) == (
         "ask_outside_favorite_band"
     )
-    assert event_news_favorite_side(both, config=politics) == ("yes", 55)
+    assert event_news_favorite_side(both, config=politics) == ("no", 56)
     near_no = SimpleNamespace(yes_ask_cents=45, no_ask_cents=56, yes_ask=45, no_ask=56)
     assert event_news_min_edge(0.02, near_no, config=politics) == pytest.approx(
         0.07 * 0.56 * 0.44 + 0.005
@@ -786,7 +786,7 @@ def test_truth_social_mid_price_yes_is_in_politics_money_path():
         open_interest_fp=200.0,
         volume_24h_fp=100.0,
     )
-    assert event_news_favorite_side(truth_yes, config=politics) == ("yes", 38)
+    assert event_news_favorite_side(truth_yes, config=politics) == ("no", 63)
     assert event_news_prewarm_skip_reason(truth_yes, config=politics) is None
     assert event_news_prewarm_skip_reason(other_mid, config=politics) == (
         "ask_outside_favorite_band"

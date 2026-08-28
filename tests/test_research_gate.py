@@ -12918,3 +12918,131 @@ def test_truth_social_count_search_emits_probability_from_factbase(monkeypatch):
     assert evidence[0].supports_direction == "no"
     assert evidence[0].metric_value == pytest.approx(0.22)
     assert evidence[0].source_class == "official_primary"
+
+def _ts_probability_evidence(*, probability: float, direction: str = "neutral"):
+    retrieved_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return ResearchEvidence(
+        source_class="official_primary",
+        source_name="Roll Call Factbase Truth Social records",
+        source_url="https://rollcall.com/wp-json/factbase/v1/twitter?platform=truth%20social",
+        title="KXTRUTHSOCIAL observed posts",
+        snippet=f"Implied YES probability {probability:.3f}.",
+        claim_type="official_resolution",
+        supports_direction=direction,
+        supports_confidence=0.85,
+        published_at=retrieved_at,
+        retrieved_at=retrieved_at,
+        metric_name="truth_social_range_probability",
+        metric_value=probability,
+        metric_unit="probability",
+        extraction_confidence=0.96,
+    )
+
+
+def test_structured_probability_trades_cheap_yes_even_if_no_is_the_favorite():
+    """38c YES vs 63c NO: p=0.49 must take YES. A NO favorite is not a NO trade."""
+    evidence = [_ts_probability_evidence(probability=0.49, direction="no")]
+    verdict = decide_research_verdict(
+        evidence=evidence,
+        model_direction=None,
+        model_confidence=0.0,
+        model_reason="scheduled research prewarm",
+        estimated_probability_yes=None,
+        yes_ask=0.38,
+        no_ask=0.63,
+        live_mode=False,
+        require_decision_grade=False,
+        score_both_sides=True,
+        queries=[
+            ResearchQuery(
+                "Will Donald Trump make between 220 and 240 Truth Social posts "
+                "the week of Aug 23, 2026?",
+                "official_resolution",
+                "official_primary",
+            ),
+            ResearchQuery(
+                "counter",
+                "contradiction_check",
+                "official_primary",
+            ),
+        ],
+        contract_ticker="KXTRUTHSOCIAL-26AUG29-B230",
+    )
+    assert verdict.skip_reason not in {"neutral_only_evidence", "ambiguous_direction"}
+    assert verdict.status == ResearchStatus.TRADE_CANDIDATE
+    assert verdict.force_side == "yes"
+    assert verdict.estimated_probability == pytest.approx(0.49)
+    assert verdict.estimated_edge == pytest.approx(0.10)
+
+
+def test_structured_probability_trades_no_when_no_is_the_value_side():
+    evidence = [_ts_probability_evidence(probability=0.20, direction="yes")]
+    verdict = decide_research_verdict(
+        evidence=evidence,
+        model_direction="yes",
+        model_confidence=0.9,
+        model_reason="LLM guessed YES because that is the usual favorite.",
+        estimated_probability_yes=0.20,
+        yes_ask=0.38,
+        no_ask=0.63,
+        live_mode=False,
+        require_decision_grade=False,
+        score_both_sides=True,
+        queries=[
+            ResearchQuery("ts official", "official_resolution", "official_primary"),
+            ResearchQuery("ts counter", "contradiction_check", "official_primary"),
+        ],
+        contract_ticker="KXTRUTHSOCIAL-26AUG29-B230",
+    )
+    assert verdict.status == ResearchStatus.TRADE_CANDIDATE
+    assert verdict.force_side == "no"
+    assert verdict.skip_reason not in {"neutral_only_evidence", "ambiguous_direction"}
+    assert verdict.estimated_edge == pytest.approx(0.16)
+
+
+def test_both_sides_executable_neutral_research_returns_no_edge_not_ambiguous():
+    retrieved_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    evidence = [
+        ResearchEvidence(
+            source_class="official_primary",
+            source_name="assets.kalshi.com",
+            source_url="https://assets.kalshi.com/contract_terms/TRUTHSOCIAL.pdf",
+            title="contract_terms_pdf",
+            snippet="Official contract terms.",
+            claim_type="official_resolution",
+            supports_direction="neutral",
+            supports_confidence=0.8,
+            retrieved_at=retrieved_at,
+        ),
+        ResearchEvidence(
+            source_class="official_primary",
+            source_name="rollcall.com",
+            source_url="https://rollcall.com/factbase",
+            title="No directional post-count yet",
+            snippet="Official records are inconclusive for the open week.",
+            claim_type="official_resolution",
+            supports_direction="neutral",
+            supports_confidence=0.7,
+            retrieved_at=retrieved_at,
+        ),
+    ]
+    verdict = decide_research_verdict(
+        evidence=evidence,
+        model_direction=None,
+        model_confidence=0.0,
+        model_reason="scheduled research prewarm",
+        estimated_probability_yes=None,
+        yes_ask=0.38,
+        no_ask=0.63,
+        live_mode=False,
+        require_decision_grade=True,
+        score_both_sides=True,
+        queries=[
+            ResearchQuery("q", "official_resolution", "official_primary"),
+            ResearchQuery("c", "contradiction_check", "official_primary"),
+        ],
+        contract_ticker="KXTRUTHSOCIAL-26AUG29-B230",
+    )
+    assert verdict.skip_reason == "no_edge"
+    assert verdict.status == ResearchStatus.UNTRADEABLE
+    assert verdict.force_side is None

@@ -19,6 +19,18 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.58] - 2026-08-28
+
+### Fixed
+
+- **Politics scores both sides and stops dying on neutral.** Favorite-band
+  no longer prefers YES when a NO ask is the actual favorite. One-per-event
+  no longer ranks YES books above NO books. A structured probability now
+  trades the cheaper +EV side even if evidence was tagged the other way.
+  Research that ran on both executable asks without an independent p returns
+  `no_edge` instead of parking forever on `neutral_only_evidence` /
+  `ambiguous_direction`. Freeze and live stay locked.
+
 ## [0.33.57] - 2026-08-28
 
 ### Fixed

@@ -1780,6 +1780,27 @@ def _actionable_market_price(value: float | None) -> bool:
     return 0.0 < price < 1.0
 
 
+def _probability_from_structured_evidence(
+    evidence: list[ResearchEvidence],
+) -> float | None:
+    """Read an explicit YES probability off structured official evidence.
+
+    A labeled-neutral Factbase count that still carries a probability is a
+    both-sides answer. Do not wait for the LLM to pick a favorite.
+    """
+    candidates = [
+        item
+        for item in evidence
+        if item.metric_name == TRUTH_SOCIAL_RANGE_PROBABILITY_METRIC
+        and item.metric_value is not None
+        and float(item.extraction_confidence or 0.0) >= 0.8
+    ]
+    if not candidates:
+        return None
+    item = max(candidates, key=lambda row: float(row.supports_confidence or 0.0))
+    return _coerce_probability(item.metric_value)
+
+
 def decide_research_verdict(
     *,
     evidence: list[ResearchEvidence],
@@ -1795,8 +1816,13 @@ def decide_research_verdict(
     counterclaims: tuple[str, ...] = (),
     open_questions: tuple[str, ...] = (),
     contract_ticker: str = "",
+    score_both_sides: bool | None = None,
 ) -> ResearchVerdict:
     queries = list(queries or [])
+    if score_both_sides is None:
+        from utils.event_news_research import is_event_news_paper_cohort
+
+        score_both_sides = is_event_news_paper_cohort()
     observed_market_price = _market_price_for_side(None, yes_ask, no_ask)
     if _direction_reason_conflict(model_direction, model_reason):
         return ResearchVerdict(
@@ -1885,10 +1911,38 @@ def decide_research_verdict(
             open_questions=open_questions,
         )
 
+    p_yes = _coerce_probability(estimated_probability_yes)
+    if p_yes is None:
+        p_yes = _probability_from_structured_evidence(evidence)
     side = model_direction if model_direction in {"yes", "no"} else None
     conf = max(0.0, min(1.0, float(model_confidence or 0.0)))
+    if score_both_sides and p_yes is not None and (side is None or conf <= 0.0):
+        # A probability already evaluates both sides. Do not halt as
+        # neutral/ambiguous just because the LLM did not pick a favorite.
+        side = "yes" if p_yes >= 0.5 else "no"
+        conf = max(conf, 0.65)
     side_market_price = _market_price_for_side(side, yes_ask, no_ask)
     if side is None or conf <= 0.0:
+        both_asks = _actionable_market_price(yes_ask) and _actionable_market_price(
+            no_ask
+        )
+        if score_both_sides and require_decision_grade and evidence and both_asks:
+            # Research ran. Both sides are executable. Returning no_edge is a
+            # decision; parking the book on needs_counter_evidence is not.
+            return ResearchVerdict(
+                status=ResearchStatus.UNTRADEABLE,
+                attempted=True,
+                queries=queries,
+                evidence=evidence,
+                summary=(
+                    "Research completed on both executable sides without an "
+                    "independent probability; neither side is a trade."
+                ),
+                skip_reason="no_edge",
+                counterclaims=counterclaims,
+                open_questions=open_questions,
+                market_price=side_market_price,
+            )
         directional_evidence = any(
             item.supports_direction in {"yes", "no"} for item in evidence
         )
@@ -1914,8 +1968,6 @@ def decide_research_verdict(
             open_questions=open_questions,
             market_price=side_market_price,
         )
-
-    p_yes = _coerce_probability(estimated_probability_yes)
     if p_yes is None:
         return ResearchVerdict(
             status=(
@@ -1958,7 +2010,8 @@ def decide_research_verdict(
         if edges[candidate_side] is not None
         and float(edges[candidate_side]) >= min_edge
         and (
-            candidate_side == side
+            (score_both_sides and p_yes is not None)
+            or candidate_side == side
             or (
                 require_decision_grade
                 and bool(support_by_side[candidate_side])
@@ -1983,18 +2036,23 @@ def decide_research_verdict(
     if safe_qualifying_sides:
         trade_side, trade_edge, executable_ask = max(
             safe_qualifying_sides,
-            key=lambda candidate: (candidate[1], candidate[0] == side),
+            key=lambda candidate: (
+                candidate[1],
+                candidate[0] == "no" if score_both_sides else candidate[0] == side,
+            ),
         )
         flipped_side = trade_side != side
         trade_confidence = conf
         trade_counterclaims = counterclaims
         trade_open_questions = open_questions
         if flipped_side:
-            selected_support_confidence = max(
-                float(item.supports_confidence or 0.0)
-                for item in support_by_side[trade_side]
-            )
-            trade_confidence = min(conf, selected_support_confidence)
+            support_rows = support_by_side[trade_side]
+            if support_rows:
+                selected_support_confidence = max(
+                    float(item.supports_confidence or 0.0)
+                    for item in support_rows
+                )
+                trade_confidence = min(conf, selected_support_confidence)
             trade_counterclaims = _counterclaims_for_side(evidence, trade_side)
             trade_open_questions = ()
         candidate = ResearchVerdict(
@@ -2017,8 +2075,13 @@ def decide_research_verdict(
         if require_decision_grade:
             return _decision_grade_verdict(
                 candidate,
-                model_reason=(model_reason if trade_side == side else None),
+                model_reason=(
+                    model_reason
+                    if score_both_sides or trade_side == side
+                    else None
+                ),
                 contract_ticker=contract_ticker,
+                score_both_sides=score_both_sides,
             )
         return candidate
     if require_decision_grade:
@@ -2098,6 +2161,7 @@ def _decision_grade_verdict(
     *,
     model_reason: str | None,
     contract_ticker: str = "",
+    score_both_sides: bool = False,
 ) -> ResearchVerdict:
     if not _has_reliable_non_pending_source_path(candidate.evidence):
         return _decision_grade_block(
@@ -2126,6 +2190,15 @@ def _decision_grade_verdict(
             or _evidence_is_relevant_to_spec(item, relevance_spec)
         )
     }
+    if (
+        score_both_sides
+        and candidate.force_side in {"yes", "no"}
+        and candidate.estimated_probability is not None
+    ):
+        # A probability already prices YES and NO. Neutral-labeled official
+        # records must not veto the cheaper +EV side.
+        raw_directions.add(candidate.force_side)
+        directions.add(candidate.force_side)
     if not raw_directions:
         return _decision_grade_block(
             candidate,
@@ -2951,7 +3024,6 @@ def _structured_truth_social_range_signal(
         for item in evidence
         if item.metric_name == TRUTH_SOCIAL_RANGE_PROBABILITY_METRIC
         and item.metric_value is not None
-        and item.supports_direction in {"yes", "no"}
         and float(item.supports_confidence or 0.0) >= 0.65
     ]
     if not candidates:
@@ -2963,8 +3035,11 @@ def _structured_truth_social_range_signal(
         return None
     if not 0.0 <= probability <= 1.0:
         return None
+    direction = item.supports_direction
+    if direction not in {"yes", "no"}:
+        direction = "yes" if probability >= 0.5 else "no"
     return {
-        "direction": item.supports_direction,
+        "direction": direction,
         "estimated_probability_yes": probability,
         "confidence": float(item.supports_confidence or 0.0),
         "reason": _query_fragment(
