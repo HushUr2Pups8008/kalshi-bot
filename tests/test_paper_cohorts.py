@@ -962,3 +962,17 @@ def test_aggregate_open_exposure_fails_closed_when_any_cohort_is_unreadable(tmp_
     assert snapshot.ok is False
     assert snapshot.failure_status == "cohort_state_unavailable"
     assert snapshot.cohorts == ()
+
+
+def test_isolated_runtime_desk_lock_name(monkeypatch):
+    from trading.paper_cohorts import _isolated_paper_runtime_desk
+
+    monkeypatch.delenv("BOT_RUNTIME_LOCK_NAME", raising=False)
+    assert _isolated_paper_runtime_desk() is False
+    monkeypatch.setenv("BOT_RUNTIME_LOCK_NAME", "bot_runtime.lock")
+    assert _isolated_paper_runtime_desk() is False
+    monkeypatch.setenv(
+        "BOT_RUNTIME_LOCK_NAME",
+        "bot_runtime.kalshi-event-news-20260820.lock",
+    )
+    assert _isolated_paper_runtime_desk() is True

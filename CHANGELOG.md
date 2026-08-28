@@ -19,6 +19,17 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.56] - 2026-08-28
+
+### Fixed
+
+- **Isolated politics desk can start beside a leftover legacy-pending archive.**
+  Startup validated the freeze-era "active cannot coexist with legacy pending"
+  rule against `data/legacy_pending_paper_cohorts/`, so the 0.33.55 restart
+  crashed in a loop. Creating a new active family still fails closed; an
+  already-provisioned isolated desk with a non-default runtime lock can boot.
+  Freeze is unchanged.
+
 ## [0.33.55] - 2026-08-28
 
 ### Fixed

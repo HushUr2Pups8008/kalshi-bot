@@ -494,6 +494,12 @@ def initialize_legacy_pending_paper_cohort_manifest(
     return cohort_dir / _MANIFEST_FILENAME
 
 
+def _isolated_paper_runtime_desk() -> bool:
+    """True when a second paper process uses a non-default runtime lock file."""
+    name = Path(str(os.getenv("BOT_RUNTIME_LOCK_NAME", "bot_runtime.lock") or "").strip()).name
+    return bool(name) and name != "bot_runtime.lock"
+
+
 def validate_active_paper_cohort_manifest(
     cohort: PaperCohort,
     *,
@@ -504,7 +510,13 @@ def validate_active_paper_cohort_manifest(
     """Validate selected runtime config, immutable cutover snapshot, and DB identity."""
 
     _require_active_cohort(cohort)
-    if discover_legacy_pending_paper_risk_cohorts(cohort.storage_root):
+    # An isolated second desk (politics) must be able to start beside freeze
+    # even if an unresolved legacy-pending archive still sits on disk. Creating
+    # a new active cutover family still fails closed in initialize_*.
+    if (
+        not _isolated_paper_runtime_desk()
+        and discover_legacy_pending_paper_risk_cohorts(cohort.storage_root)
+    ):
         raise ValueError("active cutover cannot coexist with a legacy pending cohort")
     binding = _load_active_binding(_manifest_path_for(cohort), cohort.storage_root)
     expected_legacy_path = _validate_legacy_db_path(legacy_db_path, cohort.storage_root)
