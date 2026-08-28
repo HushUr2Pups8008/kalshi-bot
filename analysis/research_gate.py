@@ -4849,6 +4849,7 @@ def _white_house_presidential_actions_search(
             support,
             supports_direction=direction,
             supports_confidence=confidence,
+            available_at=None,
         ),
         ResearchEvidence(
             source_class="official_primary",

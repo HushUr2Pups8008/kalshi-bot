@@ -19,6 +19,15 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.64] - 2026-08-28
+
+### Fixed
+
+- **Phrase observations are reused across query intents.** GOLF/BARA were
+  hitting Factbase at p=0.98 then re-paginating four times and timing out.
+  White House remaining-time evidence is current (`available_at` cleared)
+  so it is not marked stale versus Sunday's snapshot. Freeze stays locked.
+
 ## [0.33.63] - 2026-08-28
 
 ### Fixed

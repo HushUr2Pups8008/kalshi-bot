@@ -405,6 +405,11 @@ _POST_WINDOW_CACHE: dict[
 ] = {}
 _POST_WINDOW_CACHE_LOCK = threading.Lock()
 _PHRASE_MAX_PAGES = 20
+_PHRASE_OBS_CACHE: dict[
+    tuple[str, date, date, tuple[str, ...], int],
+    tuple[float, TruthSocialPhraseObservation | None],
+] = {}
+_PHRASE_OBS_CACHE_LOCK = threading.Lock()
 
 
 def parse_truth_social_phrase_contract(query: str) -> TruthSocialPhraseContract | None:
@@ -525,6 +530,18 @@ def fetch_truth_social_phrase(
     contract = parse_truth_social_phrase_contract(query)
     if contract is None or max_pages < 1:
         return None
+    cache_key = (
+        contract.ticker,
+        contract.window_start,
+        contract.window_end,
+        contract.phrases,
+        max_pages,
+    )
+    now_mono = time.monotonic()
+    with _PHRASE_OBS_CACHE_LOCK:
+        cached = _PHRASE_OBS_CACHE.get(cache_key)
+        if cached is not None and now_mono - cached[0] < _OBSERVATION_CACHE_TTL_SECONDS:
+            return cached[1]
     posts_scanned = 0
     pages = 0
     oldest_seen: date | None = None
@@ -576,8 +593,10 @@ def fetch_truth_social_phrase(
             break
     complete = oldest_seen is not None and oldest_seen < contract.window_start
     if matched_phrase is None and not complete:
+        with _PHRASE_OBS_CACHE_LOCK:
+            _PHRASE_OBS_CACHE[cache_key] = (time.monotonic(), None)
         return None
-    return TruthSocialPhraseObservation(
+    observation = TruthSocialPhraseObservation(
         hit=matched_phrase is not None,
         matched_phrase=matched_phrase,
         match_date=match_date,
@@ -592,6 +611,9 @@ def fetch_truth_social_phrase(
         ),
         observed_at=datetime.now(timezone.utc).isoformat(),
     )
+    with _PHRASE_OBS_CACHE_LOCK:
+        _PHRASE_OBS_CACHE[cache_key] = (time.monotonic(), observation)
+    return observation
 
 
 def truth_social_phrase_probability(
