@@ -802,8 +802,10 @@ def discover_provisioned_paper_risk_cohorts(
 
     active = discover_paper_risk_cohorts(db_root)
     pending = discover_legacy_pending_paper_risk_cohorts(db_root)
-    if active and pending:
+    if active and pending and not _isolated_paper_runtime_desk():
         raise ValueError("active and legacy pending cohort roots cannot coexist")
+    if _isolated_paper_runtime_desk() and active:
+        return active
     return active or pending
 
 

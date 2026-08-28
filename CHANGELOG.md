@@ -19,6 +19,15 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.57] - 2026-08-28
+
+### Fixed
+
+- **Isolated politics PaperTrader can bind while legacy-pending remains on disk.**
+  The 0.33.56 boot still died in `discover_provisioned_paper_risk_cohorts`.
+  Isolated desks now see the active family only; default-lock freeze still
+  fails closed. Live stays locked.
+
 ## [0.33.56] - 2026-08-28
 
 ### Fixed
