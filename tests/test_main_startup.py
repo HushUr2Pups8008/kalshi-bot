@@ -1629,6 +1629,23 @@ async def test_async_main_resolve_true_mode_applies_authoritative_observation(
     paper.resolve_market.assert_not_called()
 
 
+def test_bot_runtime_lock_path_uses_env_filename_inside_data_dir(monkeypatch):
+    monkeypatch.setenv(
+        "BOT_RUNTIME_LOCK_NAME",
+        "bot_runtime.kalshi-event-news-20260820.lock",
+    )
+    path = main._bot_runtime_lock_path()
+    assert path.parent == main.DATA_DIR
+    assert path.name == "bot_runtime.kalshi-event-news-20260820.lock"
+
+
+def test_bot_runtime_lock_path_rejects_separator_escape(monkeypatch):
+    monkeypatch.setenv("BOT_RUNTIME_LOCK_NAME", "../etc/passwd")
+    path = main._bot_runtime_lock_path()
+    assert path.parent == main.DATA_DIR
+    assert path.name == "passwd"
+
+
 @pytest.mark.asyncio
 async def test_async_main_runtime_path_is_blocked_when_lock_is_held(caplog):
     root = _tmp_root()

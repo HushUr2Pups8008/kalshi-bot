@@ -19,6 +19,15 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.55] - 2026-08-28
+
+### Fixed
+
+- **Politics runtime lock name is actually honored.** `BOT_RUNTIME_LOCK_NAME`
+  was exported by the launcher but `main.py` still used `data/bot_runtime.lock`,
+  so a politics restart collided with the live DJI freeze process and exited.
+  The desk lock is now confined to `DATA_DIR`. Freeze is unchanged.
+
 ## [0.33.54] - 2026-08-28
 
 ### Fixed

@@ -283,7 +283,20 @@ def _runtime_paper_cohort_from_config(
     )
     return (*result, binding) if return_binding else result
 
-_BOT_RUNTIME_LOCK = DATA_DIR / "bot_runtime.lock"
+def _bot_runtime_lock_path() -> Path:
+    """Allow a second paper desk to coexist with freeze via BOT_RUNTIME_LOCK_NAME.
+
+    The filename is confined to DATA_DIR. Path separators are rejected so a
+    leaked env value cannot move the lock outside the data directory.
+    """
+    raw = str(os.getenv("BOT_RUNTIME_LOCK_NAME", "bot_runtime.lock") or "").strip()
+    name = Path(raw).name
+    if not name or name in {".", ".."}:
+        name = "bot_runtime.lock"
+    return DATA_DIR / name
+
+
+_BOT_RUNTIME_LOCK = _bot_runtime_lock_path()
 _RUNTIME_PAPER_COHORT_ATTESTATION_PATH = (
     STATE_ROOT / "runtime_paper_cohort_attestation.json"
 )
