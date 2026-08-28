@@ -6,13 +6,16 @@ from types import SimpleNamespace
 import pytest
 
 from analysis.research_gate import ResearchStatus
+from config import cfg
 from scripts.research_ticker import (
     apply_pinned_asks,
     both_sides_edges,
     build_argparser,
     evaluate,
+    resolve_dossier_store,
     routing_snapshot,
 )
+from tasks.research_dossier import DEFAULT_RESEARCH_DOSSIER_DB_PATH
 from utils.event_news_research import EVENT_NEWS_COHORT_ID
 
 
@@ -104,6 +107,38 @@ def test_pinned_asks_override_live_cents():
     assert market.no_ask_cents == 63
     assert market.yes_ask == pytest.approx(0.38)
     assert market.no_ask == pytest.approx(0.63)
+    assert market.yes_price == pytest.approx(38)
+    assert market.last_price_cents == 38
+    assert market.price_available is True
+
+
+def test_both_sides_ignores_empty_book_asks():
+    edges = both_sides_edges(0.49, None, 0.0, live_mode=False)
+    assert edges["yes"]["net_edge"] is None
+    assert edges["no"]["net_edge"] is None
+    assert edges["selected_side"] is None
+
+
+def test_write_dossier_refuses_live_evidence_store(tmp_path):
+    with pytest.raises(ValueError, match="requires --db-path"):
+        resolve_dossier_store(Namespace(write_dossier=True, db_path=None))
+    with pytest.raises(ValueError, match="live evidence_store"):
+        resolve_dossier_store(
+            Namespace(write_dossier=True, db_path=DEFAULT_RESEARCH_DOSSIER_DB_PATH)
+        )
+    with pytest.raises(ValueError, match="live evidence_store"):
+        resolve_dossier_store(
+            Namespace(write_dossier=True, db_path=tmp_path / "evidence_store.db")
+        )
+    store, tmp_dir = resolve_dossier_store(
+        Namespace(write_dossier=True, db_path=tmp_path / "probe.db")
+    )
+    assert tmp_dir is None
+    assert store.db_path == (tmp_path / "probe.db").resolve()
+    store, tmp_dir = resolve_dossier_store(Namespace(write_dossier=False, db_path=None))
+    assert tmp_dir is not None
+    assert "evidence_store.db" not in str(store.db_path)
+    tmp_dir.cleanup()
 
 
 class _Client:
@@ -137,6 +172,7 @@ async def _llm(*_args, **_kwargs):
 
 @pytest.mark.asyncio
 async def test_evaluate_replays_38_63_without_writing_live_dossier_or_orders():
+    prior_cohort = cfg.paper_cohort_id
     market = _b230_market()
     args = Namespace(
         ticker="KXTRUTHSOCIAL-26AUG29-B230",
@@ -179,3 +215,35 @@ async def test_evaluate_replays_38_63_without_writing_live_dossier_or_orders():
     assert report["conclusion"]["favorite_side_is_not_trade_side"] is True
     assert report["conclusion"]["halted_on_neutral"] is False
     assert report["conclusion"]["placed_orders"] == 0
+    assert cfg.paper_cohort_id == prior_cohort
+
+
+@pytest.mark.asyncio
+async def test_evaluate_restores_cohort_after_politics_probe():
+    market = _b230_market()
+    args = Namespace(
+        ticker="KXTRUTHSOCIAL-26AUG29-B230",
+        yes_ask=0.38,
+        no_ask=0.63,
+        cohort=EVENT_NEWS_COHORT_ID,
+        live_mode=False,
+        llm=False,
+        no_gate=True,
+        timeout_seconds=18.0,
+        max_queries=10,
+        db_path=None,
+        write_dossier=False,
+    )
+    prior = cfg.paper_cohort_id
+    await evaluate(
+        args,
+        client=_Client(market),
+        structured_fn=lambda _market: {
+            "query": "B230",
+            "observation": None,
+            "p_yes": 0.49,
+            "state": "open_run_rate",
+            "confidence": 0.85,
+        },
+    )
+    assert cfg.paper_cohort_id == prior

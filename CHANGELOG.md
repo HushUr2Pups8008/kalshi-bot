@@ -19,6 +19,16 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.60] - 2026-08-28
+
+### Fixed
+
+- **Ticker replay cannot write the live evidence store.** `--write-dossier`
+  now requires `--db-path` and refuses `evidence_store.db`. The probe
+  restores `PAPER_COHORT_ID` / `cfg` after the run, pins `yes_price` so
+  `--llm` sees the same book as the gate, and scores only executable
+  1-99c asks. Freeze stays locked.
+
 ## [0.33.59] - 2026-08-28
 
 ### Added

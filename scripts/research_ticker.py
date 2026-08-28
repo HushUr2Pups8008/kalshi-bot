@@ -22,10 +22,11 @@ import json
 import os
 import sys
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -40,7 +41,10 @@ from analysis.truth_social_forecast import (
 from config import cfg
 from feeds import NewsItem
 from kalshi.rest_client import KalshiRestClient
-from tasks.research_dossier import ResearchDossierStore
+from tasks.research_dossier import (
+    DEFAULT_RESEARCH_DOSSIER_DB_PATH,
+    ResearchDossierStore,
+)
 from utils.event_news_research import (
     EVENT_NEWS_COHORT_ID,
     _TAKER_FEE_COEFFICIENT,
@@ -115,7 +119,10 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--write-dossier",
         action="store_true",
-        help="Persist gate evidence. Default uses a throwaway temp DB.",
+        help=(
+            "Persist gate evidence to --db-path. Refuses the live "
+            "evidence_store.db. Default uses a throwaway temp DB."
+        ),
     )
     parser.add_argument(
         "--json",
@@ -125,14 +132,32 @@ def build_argparser() -> argparse.ArgumentParser:
     return parser
 
 
-def activate_cohort(cohort_id: str) -> None:
-    """Force this process onto the requested desk for score_both_sides."""
+@contextmanager
+def activate_cohort(cohort_id: str) -> Iterator[str]:
+    """Temporarily switch this process onto the requested desk, then restore."""
     cohort = str(cohort_id or "").strip().lower() or _DEFAULT_COHORT
+    prev_env_id = os.environ.get("PAPER_COHORT_ID")
+    prev_env_kind = os.environ.get("PAPER_COHORT_KIND")
+    prev_cfg_id = cfg.paper_cohort_id
+    prev_cfg_kind = cfg.paper_cohort_kind
     os.environ["PAPER_COHORT_ID"] = cohort
-    if cohort != "legacy":
+    if cohort == EVENT_NEWS_COHORT_ID:
         os.environ["PAPER_COHORT_KIND"] = "active"
         cfg.paper_cohort_kind = "active"
     cfg.paper_cohort_id = cohort
+    try:
+        yield cohort
+    finally:
+        if prev_env_id is None:
+            os.environ.pop("PAPER_COHORT_ID", None)
+        else:
+            os.environ["PAPER_COHORT_ID"] = prev_env_id
+        if prev_env_kind is None:
+            os.environ.pop("PAPER_COHORT_KIND", None)
+        else:
+            os.environ["PAPER_COHORT_KIND"] = prev_env_kind
+        cfg.paper_cohort_id = prev_cfg_id
+        cfg.paper_cohort_kind = prev_cfg_kind
 
 
 def parse_ask(value: float | None) -> tuple[int, float] | None:
@@ -153,6 +178,11 @@ def apply_pinned_asks(market: Any, yes_ask: float | None, no_ask: float | None) 
         cents, prob = pinned_yes
         setattr(market, "yes_ask_cents", cents)
         setattr(market, "yes_ask", prob)
+        # KalshiMarket.yes_prob is yes_price/100. Pin the mid so --llm
+        # scores the same book the gate sees, not the live print.
+        setattr(market, "yes_price", float(cents))
+        setattr(market, "last_price_cents", cents)
+        setattr(market, "price_available", True)
     if pinned_no is not None:
         cents, prob = pinned_no
         setattr(market, "no_ask_cents", cents)
@@ -160,14 +190,19 @@ def apply_pinned_asks(market: Any, yes_ask: float | None, no_ask: float | None) 
     return market
 
 
-def _ask_probability(market: Any, *names: str) -> float | None:
-    for name in names:
-        raw = getattr(market, name, None)
-        if raw is None:
-            continue
-        value = float(raw)
-        return value / 100.0 if value > 1.0 else value
-    return None
+def _executable_asks(market: Any) -> tuple[float | None, float | None]:
+    yes_cents, no_cents = snapshot_ask_cents(market)
+    yes_ask = None if yes_cents is None else yes_cents / 100.0
+    no_ask = None if no_cents is None else no_cents / 100.0
+    return yes_ask, no_ask
+
+
+def _actionable_ask(value: float | None) -> bool:
+    try:
+        price = float(value)
+    except (TypeError, ValueError):
+        return False
+    return 0.0 < price < 1.0
 
 
 def _contract_query(market: Any) -> str:
@@ -186,26 +221,34 @@ def both_sides_edges(
     live_mode: bool,
 ) -> dict[str, Any]:
     min_edge = _GATE_LIVE_MIN_EDGE if live_mode else _GATE_PAPER_MIN_EDGE
-    yes_raw = p_yes - float(yes_ask) if yes_ask is not None else None
-    no_raw = (1.0 - p_yes) - float(no_ask) if no_ask is not None else None
-    yes_net = (
-        yes_raw - _SPREAD_BUFFER if yes_raw is not None else None
-    )
+    yes_ok = _actionable_ask(yes_ask)
+    no_ok = _actionable_ask(no_ask)
+    yes_raw = p_yes - float(yes_ask) if yes_ok else None
+    no_raw = (1.0 - p_yes) - float(no_ask) if no_ok else None
+    yes_net = yes_raw - _SPREAD_BUFFER if yes_raw is not None else None
     no_net = no_raw - _SPREAD_BUFFER if no_raw is not None else None
     fee_yes = (
         _TAKER_FEE_COEFFICIENT * float(yes_ask) * (1.0 - float(yes_ask))
-        if yes_ask is not None
+        if yes_ok
         else None
     )
     fee_no = (
         _TAKER_FEE_COEFFICIENT * float(no_ask) * (1.0 - float(no_ask))
-        if no_ask is not None
+        if no_ok
         else None
     )
+
+    def _safe(ask: float | None) -> bool:
+        if ask is None:
+            return False
+        if not live_mode:
+            return True
+        return 0.03 < float(ask) < 0.97
+
     candidates: list[tuple[str, float]] = []
-    if yes_net is not None and yes_net >= min_edge:
+    if yes_net is not None and yes_net >= min_edge and _safe(yes_ask):
         candidates.append(("yes", yes_net))
-    if no_net is not None and no_net >= min_edge:
+    if no_net is not None and no_net >= min_edge and _safe(no_ask):
         candidates.append(("no", no_net))
     selected = None
     if candidates:
@@ -308,6 +351,22 @@ def _structured_probability(market: Any) -> dict[str, Any]:
     return payload
 
 
+def resolve_dossier_store(
+    args: argparse.Namespace,
+) -> tuple[ResearchDossierStore, tempfile.TemporaryDirectory[str] | None]:
+    if not bool(getattr(args, "write_dossier", False)):
+        tmp_dir = tempfile.TemporaryDirectory(prefix="research_ticker_")
+        return ResearchDossierStore(Path(tmp_dir.name) / "research_dossier.db"), tmp_dir
+    raw_path = getattr(args, "db_path", None)
+    if raw_path is None:
+        raise ValueError("--write-dossier requires --db-path")
+    path = Path(raw_path).expanduser().resolve()
+    default = Path(DEFAULT_RESEARCH_DOSSIER_DB_PATH).expanduser().resolve()
+    if path == default or path.name == "evidence_store.db":
+        raise ValueError("refusing to write the live evidence_store.db")
+    return ResearchDossierStore(path), None
+
+
 def _research_news(market: Any) -> SimpleNamespace:
     return SimpleNamespace(
         headline="",
@@ -381,7 +440,6 @@ async def evaluate(
     llm_fn: Callable[..., Any] | None = None,
     structured_fn: Callable[[Any], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    activate_cohort(getattr(args, "cohort", _DEFAULT_COHORT))
     client = client or KalshiRestClient()
     ticker = str(args.ticker).strip()
     market = client.get_market(ticker)
@@ -403,104 +461,110 @@ async def evaluate(
         "rules_primary": getattr(market, "rules_primary", None),
     }
     apply_pinned_asks(market, args.yes_ask, args.no_ask)
-    yes_ask = _ask_probability(market, "yes_ask_cents", "yes_ask")
-    no_ask = _ask_probability(market, "no_ask_cents", "no_ask")
-    routing = routing_snapshot(market, config=cfg)
-    structured = (structured_fn or _structured_probability)(market)
-    p_yes = structured.get("p_yes")
-    edges = (
-        both_sides_edges(float(p_yes), yes_ask, no_ask, live_mode=bool(args.live_mode))
-        if p_yes is not None
-        else None
-    )
-
+    yes_ask, no_ask = _executable_asks(market)
     tmp_dir = None
-    if args.write_dossier:
-        store = ResearchDossierStore(args.db_path) if args.db_path else ResearchDossierStore()
-    else:
-        tmp_dir = tempfile.TemporaryDirectory(prefix="research_ticker_")
-        store = ResearchDossierStore(Path(tmp_dir.name) / "research_dossier.db")
-
-    gate_task = None
-    llm_task = None
-    if not args.no_gate:
-        gate = research_gate or run_research_gate
-        gate_task = asyncio.create_task(
-            gate(
-                _research_news(market),
-                market,
-                model_direction="neutral",
-                model_confidence=0.0,
-                model_reason="research_ticker replay",
-                yes_ask=yes_ask,
-                no_ask=no_ask,
-                live_mode=bool(args.live_mode),
-                dossier_store=store,
-                max_queries=int(args.max_queries),
-                research_timeout_seconds=float(args.timeout_seconds),
-                require_decision_grade=True,
-                **event_news_official_research_kwargs(config=cfg),
+    try:
+        with activate_cohort(getattr(args, "cohort", _DEFAULT_COHORT)) as cohort_id:
+            routing = routing_snapshot(market, config=cfg)
+            structured = (structured_fn or _structured_probability)(market)
+            p_yes = structured.get("p_yes")
+            edges = (
+                both_sides_edges(
+                    float(p_yes), yes_ask, no_ask, live_mode=bool(args.live_mode)
+                )
+                if p_yes is not None
+                else None
             )
-        )
-    if args.llm:
-        llm = llm_fn or estimate_probability
-        llm_task = asyncio.create_task(llm(_llm_news(market), market))
-
-    gate_payload = None
-    if gate_task is not None:
-        verdict = await gate_task
-        gate_payload = _verdict_dict(verdict)
-        if edges is None and gate_payload.get("estimated_probability") is not None:
-            edges = both_sides_edges(
-                float(gate_payload["estimated_probability"]),
-                yes_ask,
-                no_ask,
-                live_mode=bool(args.live_mode),
-            )
-
-    llm_payload = None
-    if llm_task is not None:
-        prob, confidence, keywords, reasoning, direction, magnitude, llm_conf = (
-            await llm_task
-        )
-        llm_payload = {
-            "probability": prob,
-            "confidence": confidence,
-            "direction": direction,
-            "magnitude": magnitude,
-            "llm_confidence": llm_conf,
-            "keywords": list(keywords or []),
-            "reasoning": reasoning,
-        }
-
-    report = {
-        "as_of": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "ticker": ticker,
-        "cohort_id": cfg.paper_cohort_id,
-        "live_mode": bool(args.live_mode),
-        "pinned": {"yes_ask": args.yes_ask, "no_ask": args.no_ask},
-        "live_market": live_snapshot,
-        "routing": routing,
-        "structured": structured,
-        "both_sides": edges,
-        "gate": gate_payload,
-        "llm": llm_payload,
-        "conclusion": _conclusion(
-            routing=routing,
-            structured=structured,
-            edges=edges,
-            gate=gate_payload,
-            llm=llm_payload,
-        ),
-        "dossier": {
-            "persisted": bool(args.write_dossier),
-            "path": str(store.db_path),
-        },
-        "placed_orders": 0,
-    }
-    if tmp_dir is not None:
-        report["_tmp_dir"] = tmp_dir
-    return report
+            store, tmp_dir = resolve_dossier_store(args)
+            jobs: list[Any] = []
+            labels: list[str] = []
+            if not args.no_gate:
+                gate = research_gate or run_research_gate
+                jobs.append(
+                    gate(
+                        _research_news(market),
+                        market,
+                        model_direction="neutral",
+                        model_confidence=0.0,
+                        model_reason="research_ticker replay",
+                        yes_ask=yes_ask,
+                        no_ask=no_ask,
+                        live_mode=bool(args.live_mode),
+                        dossier_store=store,
+                        max_queries=int(args.max_queries),
+                        research_timeout_seconds=float(args.timeout_seconds),
+                        require_decision_grade=True,
+                        **event_news_official_research_kwargs(config=cfg),
+                    )
+                )
+                labels.append("gate")
+            if args.llm:
+                llm = llm_fn or estimate_probability
+                jobs.append(llm(_llm_news(market), market))
+                labels.append("llm")
+            results = await asyncio.gather(*jobs) if jobs else []
+            by_label = dict(zip(labels, results, strict=True))
+            gate_payload = None
+            if "gate" in by_label:
+                gate_payload = _verdict_dict(by_label["gate"])
+                if (
+                    edges is None
+                    and gate_payload.get("estimated_probability") is not None
+                ):
+                    edges = both_sides_edges(
+                        float(gate_payload["estimated_probability"]),
+                        yes_ask,
+                        no_ask,
+                        live_mode=bool(args.live_mode),
+                    )
+            llm_payload = None
+            if "llm" in by_label:
+                (
+                    prob,
+                    confidence,
+                    keywords,
+                    reasoning,
+                    direction,
+                    magnitude,
+                    llm_conf,
+                ) = by_label["llm"]
+                llm_payload = {
+                    "probability": prob,
+                    "confidence": confidence,
+                    "direction": direction,
+                    "magnitude": magnitude,
+                    "llm_confidence": llm_conf,
+                    "keywords": list(keywords or []),
+                    "reasoning": reasoning,
+                }
+            return {
+                "as_of": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "ticker": ticker,
+                "cohort_id": cohort_id,
+                "live_mode": bool(args.live_mode),
+                "pinned": {"yes_ask": args.yes_ask, "no_ask": args.no_ask},
+                "live_market": live_snapshot,
+                "routing": routing,
+                "structured": structured,
+                "both_sides": edges,
+                "gate": gate_payload,
+                "llm": llm_payload,
+                "conclusion": _conclusion(
+                    routing=routing,
+                    structured=structured,
+                    edges=edges,
+                    gate=gate_payload,
+                    llm=llm_payload,
+                ),
+                "dossier": {
+                    "persisted": bool(args.write_dossier),
+                    "path": str(store.db_path),
+                },
+                "placed_orders": 0,
+            }
+    finally:
+        if tmp_dir is not None:
+            tmp_dir.cleanup()
 
 
 def _jsonable(value: Any) -> Any:
@@ -554,7 +618,11 @@ def _render(report: dict[str, Any], *, json_output: bool) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_argparser().parse_args(argv)
-    report = asyncio.run(evaluate(args))
+    try:
+        report = asyncio.run(evaluate(args))
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     print(_render(report, json_output=bool(args.json)))
     return 0
 
