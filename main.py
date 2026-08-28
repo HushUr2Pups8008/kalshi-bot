@@ -2805,7 +2805,11 @@ class TradingBot:
                 market.ticker, news.source,
             )
             return
-        from utils.event_news_research import event_news_illiquid
+        from utils.event_news_research import (
+            event_news_illiquid,
+            event_news_prewarm_skip_reason,
+            is_event_news_paper_cohort,
+        )
 
         illiquid = event_news_illiquid(market)
         if illiquid:
@@ -2816,6 +2820,16 @@ class TradingBot:
                 illiquid,
             )
             return
+        if is_event_news_paper_cohort():
+            skip_reason = event_news_prewarm_skip_reason(market)
+            if skip_reason:
+                log.info(
+                    "[EVENT_NEWS_NEWS] skip ticker=%s source=%s reason=%s",
+                    market.ticker,
+                    news.source,
+                    skip_reason,
+                )
+                return
         # Staleness check: skip if the article is too old when we process it.
         # With a queue, items can sit for several minutes; old news is already
         # priced in.

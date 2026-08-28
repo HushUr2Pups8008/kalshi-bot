@@ -19,6 +19,19 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.54] - 2026-08-28
+
+### Fixed
+
+- **Politics Truth Social counts are now a tradeable probability.** Factbase
+  already observed 175 posts vs the 220-240 band and labeled every cycle
+  `neutral_only_evidence`. Incomplete-week floors now become a remaining-time
+  Poisson YES probability, wired through the structured decision signal so
+  LLM silence cannot swallow the official count. `KXTRUTHSOCIAL` executable
+  asks 36-90c are in-band so 38c YES is no longer forced onto 63c NO.
+  News-triggered research now uses the same reserve-series skip as prewarm
+  (sports and 98c junk stop stealing cycles). Freeze is unchanged.
+
 ## [0.33.53] - 2026-08-27
 
 ### Fixed

@@ -29,6 +29,8 @@ STRUCTURED_OFFICIAL_RESEARCH_METRICS = frozenset(
         "gdpnow_real_gdp_growth_saar",
         "nws_daily_high_temp_f",
         "white_house_presidential_actions_count",
+        "truth_social_weekly_post_count",
+        "truth_social_range_probability",
     }
 )
 

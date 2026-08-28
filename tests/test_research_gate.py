@@ -42,6 +42,7 @@ from analysis.research_gate import (
     _should_direct_fetch_source,
     urllib,
     _rss_search as _async_rss_search,
+    _truth_social_count_search,
     _truth_social_event_search,
     _treasury_yield_search,
     build_research_queries,
@@ -12795,3 +12796,125 @@ async def test_gdpnow_countercheck_live_mode_rejects_replayed_derived_evidence(
         ResearchStatus.TRADE_CANDIDATE,
         ResearchStatus.DECISION_GRADE_CANDIDATE,
     }
+
+
+@pytest.mark.asyncio
+async def test_truth_social_run_rate_can_trade_cheap_yes_without_llm(monkeypatch):
+    retrieved_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    support = ResearchEvidence(
+        source_class="official_primary",
+        source_name="Roll Call Factbase Truth Social records",
+        source_url="https://rollcall.com/wp-json/factbase/v1/twitter?platform=truth%20social",
+        title="KXTRUTHSOCIAL-26AUG29-B230 observed 175 Truth Social posts",
+        snippet=(
+            "Factbase records show 175 posts from 2026-08-23 through 2026-08-29 "
+            "(open_run_rate); requested range is 220-240. Implied YES "
+            "probability 0.650."
+        ),
+        claim_type="official_resolution",
+        supports_direction="yes",
+        supports_confidence=0.85,
+        published_at=retrieved_at,
+        retrieved_at=retrieved_at,
+        metric_name="truth_social_range_probability",
+        metric_value=0.65,
+        metric_unit="probability",
+        extraction_confidence=0.96,
+    )
+    counter = replace(
+        support,
+        source_url=f"{support.source_url}#countercheck",
+        title="Factbase contradiction check found no contrary count",
+        snippet="Contradiction check found no contrary official post count.",
+        claim_type="contradiction_check",
+        supports_direction="neutral",
+        supports_confidence=0.72,
+    )
+
+    async def ts_search(query):
+        if query.query_intent in {"disconfirming", "contradiction_check"}:
+            return [counter]
+        if query.query_intent in {
+            "official_resolution",
+            "resolution_source",
+            "base_rate",
+        }:
+            return [support]
+        return []
+
+    async def no_direct(*_args):
+        return None
+
+    verdict = await run_research_gate(
+        SimpleNamespace(headline="", source="research_prewarm"),
+        SimpleNamespace(
+            ticker="KXTRUTHSOCIAL-26AUG29-B230",
+            title=(
+                "Will Donald Trump make between 220 and 240 Truth Social posts "
+                "the week of Aug 23, 2026?"
+            ),
+            rules_primary=(
+                "If the number of Truth Social posts by Donald Trump from "
+                "Aug 23, 2026 to Aug 29, 2026 is between 220 and 240, then "
+                "the market resolves Yes."
+            ),
+            rules_secondary="",
+            close_time="2026-08-30T04:00:00Z",
+            settlement_sources=(),
+        ),
+        model_direction=None,
+        model_confidence=0.0,
+        model_reason="scheduled research prewarm",
+        yes_ask=0.38,
+        no_ask=0.63,
+        live_mode=False,
+        search_provider=ts_search,
+        direct_fetcher=no_direct,
+        adjudicator=None,
+        max_queries=8,
+        require_decision_grade=True,
+    )
+
+    assert verdict.status == ResearchStatus.DECISION_GRADE_CANDIDATE
+    assert verdict.force_side == "yes"
+    assert verdict.estimated_probability == pytest.approx(0.65)
+    assert verdict.estimated_edge == pytest.approx(0.26)
+
+
+def test_truth_social_count_search_emits_probability_from_factbase(monkeypatch):
+    from analysis.truth_social_forecast import TruthSocialCountObservation
+
+    observation = TruthSocialCountObservation(
+        count=175,
+        deleted_count=2,
+        window_start=datetime.now(timezone.utc).date().replace(day=1),
+        window_end=datetime.now(timezone.utc).date(),
+        lower=220,
+        upper=240,
+        complete=True,
+        pages=4,
+        source_url="https://rollcall.com/wp-json/factbase/v1/twitter",
+        observed_at=datetime.now(timezone.utc).isoformat(),
+    )
+    monkeypatch.setattr(
+        research_gate_module,
+        "fetch_truth_social_count",
+        lambda _query: observation,
+    )
+    monkeypatch.setattr(
+        research_gate_module,
+        "truth_social_range_probability",
+        lambda _obs, now=None: (0.22, "open_run_rate", 0.85),
+    )
+    evidence = _truth_social_count_search(
+        ResearchQuery(
+            "KXTRUTHSOCIAL-26AUG29-B230 Will Donald Trump make between 220 and "
+            "240 Truth Social posts the week of Aug 23, 2026?",
+            "official_resolution",
+            "official_primary",
+        )
+    )
+    assert len(evidence) == 1
+    assert evidence[0].supports_direction == "no"
+    assert evidence[0].metric_value == pytest.approx(0.22)
+    assert evidence[0].source_class == "official_primary"

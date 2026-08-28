@@ -42,6 +42,13 @@ from analysis.generic_search_circuit import (
     GenericSearchUnavailable,
     generic_search_circuit_event_record,
 )
+from analysis.truth_social_forecast import (
+    TRUTH_SOCIAL_COUNT_METRIC,
+    TRUTH_SOCIAL_RANGE_PROBABILITY_METRIC,
+    fetch_truth_social_count,
+    parse_truth_social_count_contract,
+    truth_social_range_probability,
+)
 from analysis.research_timeout_replay import (
     ResearchTimeoutReplaySnapshot,
     capture_timeout_replay_snapshot,
@@ -1818,7 +1825,8 @@ def decide_research_verdict(
         )
 
     settlement_hits = [item for item in evidence if _is_settlement_evidence(item)]
-    if not settlement_hits:
+    truth_social_count = _has_truth_social_count_evidence(evidence)
+    if not settlement_hits and not truth_social_count:
         return ResearchVerdict(
             status=(
                 ResearchStatus.NEEDS_RESEARCH
@@ -1833,7 +1841,10 @@ def decide_research_verdict(
             market_price=observed_market_price,
         )
 
-    if len({item.source_url for item in evidence if item.source_url}) < 2:
+    if (
+        len({item.source_url for item in evidence if item.source_url}) < 2
+        and not truth_social_count
+    ):
         return ResearchVerdict(
             status=(
                 ResearchStatus.NEEDS_RESEARCH
@@ -2735,6 +2746,9 @@ def _structured_indicator_signal(
             _market_text(market),
         )
     )
+    truth_social_signal = _structured_truth_social_range_signal(evidence, market_text)
+    if truth_social_signal is not None:
+        return truth_social_signal
     if _getty_distinct_date_spec_from_text(
         f"{market_text} cutoff {_clean(getattr(market, 'close_time', ''))}"
     ) is not None:
@@ -2885,6 +2899,8 @@ _STRUCTURED_SIGNAL_METRICS = {
     "gdpnow_real_gdp_growth_saar",
     "nws_daily_high_temp_f",
     "white_house_presidential_actions_count",
+    TRUTH_SOCIAL_COUNT_METRIC,
+    TRUTH_SOCIAL_RANGE_PROBABILITY_METRIC,
 }
 
 
@@ -2917,6 +2933,43 @@ def _structured_count_signal(
         "reason": _query_fragment(
             f"Trade {direction.upper()} because settlement-aligned {label} "
             f"evidence reports {item.metric_value:g}.",
+            item.snippet,
+            "Market edge still depends on executable price and counter-evidence.",
+            limit=700,
+        ),
+    }
+
+
+def _structured_truth_social_range_signal(
+    evidence: list[ResearchEvidence],
+    market_text: str,
+) -> dict[str, Any] | None:
+    if not _query_mentions_truth_social_count(market_text):
+        return None
+    candidates = [
+        item
+        for item in evidence
+        if item.metric_name == TRUTH_SOCIAL_RANGE_PROBABILITY_METRIC
+        and item.metric_value is not None
+        and item.supports_direction in {"yes", "no"}
+        and float(item.supports_confidence or 0.0) >= 0.65
+    ]
+    if not candidates:
+        return None
+    item = max(candidates, key=lambda candidate: float(candidate.supports_confidence or 0.0))
+    try:
+        probability = float(item.metric_value)
+    except (TypeError, ValueError):
+        return None
+    if not 0.0 <= probability <= 1.0:
+        return None
+    return {
+        "direction": item.supports_direction,
+        "estimated_probability_yes": probability,
+        "confidence": float(item.supports_confidence or 0.0),
+        "reason": _query_fragment(
+            f"Trade {item.supports_direction.upper()} because Roll Call Factbase "
+            f"Truth Social post counts imply YES probability {probability:.2f}.",
             item.snippet,
             "Market edge still depends on executable price and counter-evidence.",
             limit=700,
@@ -3400,6 +3453,8 @@ def _has_reliable_non_pending_source_path(
     ]
     if has_reliable_research_source_path(non_pending):
         return True
+    if _has_truth_social_count_evidence(non_pending):
+        return True
     if any(
         item.source_class == "specialized_data"
         and item.claim_type == "base_rate"
@@ -3432,6 +3487,26 @@ def _has_reliable_non_pending_source_path(
     return (
         len(source_keys) >= 2
         and any(_is_settlement_evidence(item) for item in non_pending)
+    )
+
+
+def _has_truth_social_count_evidence(evidence: list[ResearchEvidence]) -> bool:
+    return any(
+        item.source_class in {"official_primary", "resolution_source"}
+        and item.claim_type in {"official_resolution", "resolution_source", "base_rate"}
+        and item.metric_name
+        in {TRUTH_SOCIAL_COUNT_METRIC, TRUTH_SOCIAL_RANGE_PROBABILITY_METRIC}
+        and item.supports_direction in {"yes", "no", "neutral"}
+        and float(item.supports_confidence or 0.0) >= 0.65
+        and _is_finite_number(item.metric_value)
+        and float(item.extraction_confidence or 0.0) >= 0.8
+        and research_source_key(
+            item.source_class,
+            item.source_name,
+            item.source_url,
+        )
+        == "rollcall.com"
+        for item in evidence
     )
 
 
@@ -6299,6 +6374,109 @@ def _query_mentions_treasury_yield(query: str) -> bool:
     )
 
 
+def _query_mentions_truth_social_count(query: str) -> bool:
+    text = _clean(query).lower()
+    return (
+        "truth social" in text
+        and "post" in text
+        and re.search(
+            r"\b(?:between\s+\d+\s+and\s+\d+|above\s+\d+|at\s+least\s+\d+|"
+            r"more\s+than\s+\d+|greater\s+than\s+\d+|below\s+\d+|"
+            r"at\s+most\s+\d+|less\s+than\s+\d+)\b",
+            text,
+        )
+        is not None
+        and re.search(r"\bweek\s+of\b", text) is not None
+    )
+
+
+def _truth_social_count_search(query: ResearchQuery) -> list[ResearchEvidence]:
+    if (
+        query.query_intent
+        not in {
+            "base_rate",
+            "disconfirming",
+            "contradiction_check",
+            "official_resolution",
+            "resolution_source",
+        }
+        or not _query_mentions_truth_social_count(query.query)
+    ):
+        return []
+    try:
+        observation = fetch_truth_social_count(query.query)
+    except (OSError, TimeoutError, ValueError, TypeError):
+        log.warning("Truth Social count observation unavailable", exc_info=True)
+        return []
+    if observation is None:
+        log.info(
+            "[RESEARCH_GATE] Truth Social count observation incomplete "
+            "query_intent=%s",
+            query.query_intent,
+        )
+        return []
+    forecast = truth_social_range_probability(observation)
+    if forecast is None:
+        log.info(
+            "[RESEARCH_GATE] Truth Social count sample too short "
+            "query_intent=%s count=%s",
+            query.query_intent,
+            observation.count,
+        )
+        return []
+    probability, state, confidence = forecast
+    contract = parse_truth_social_count_contract(query.query)
+    if contract is None:
+        return []
+    direction = "yes" if probability >= 0.5 else "no"
+    countercheck = query.query_intent in {"disconfirming", "contradiction_check"}
+    supports_direction = "neutral" if countercheck else direction
+    supports_confidence = 0.72 if countercheck else confidence
+    snippet = (
+        f"Factbase records show {observation.count} posts from "
+        f"{observation.window_start.isoformat()} through "
+        f"{observation.window_end.isoformat()} ({state}); requested range is "
+        f"{observation.lower}-{observation.upper}. Implied YES probability "
+        f"{probability:.3f}. The bounded fetch covered {observation.pages} "
+        f"pages and {observation.deleted_count} deleted rows."
+    )
+    log.info(
+        "[RESEARCH_GATE] Truth Social count observation accepted "
+        "query_intent=%s count=%s p_yes=%.3f state=%s pages=%s",
+        query.query_intent,
+        observation.count,
+        probability,
+        state,
+        observation.pages,
+    )
+    return [
+        ResearchEvidence(
+            source_class="official_primary",
+            source_name="Roll Call Factbase Truth Social records",
+            source_url=observation.source_url,
+            title=(
+                f"{contract.ticker} observed {observation.count} Truth Social "
+                f"posts for {observation.window_start.isoformat()} week"
+            ),
+            snippet=snippet,
+            claim_type=(
+                "contradiction_check"
+                if countercheck
+                else "official_resolution"
+            ),
+            supports_direction=supports_direction,
+            supports_confidence=supports_confidence,
+            published_at=observation.observed_at,
+            available_at=observation.observed_at,
+            retrieved_at=_utc_now_iso(),
+            metric_name=TRUTH_SOCIAL_RANGE_PROBABILITY_METRIC,
+            metric_value=probability,
+            metric_unit="probability",
+            extraction_confidence=0.96,
+        )
+    ]
+
+
 def _truth_social_event_search(
     query: ResearchQuery,
     *,
@@ -6691,6 +6869,7 @@ async def default_search_provider(query: ResearchQuery) -> list[ResearchEvidence
         return candidate
 
     for provider in (
+        _truth_social_count_search,
         _truth_social_event_search,
         _bank_of_israel_policy_search,
         _treasury_yield_search,
@@ -8195,6 +8374,8 @@ _TIME_SENSITIVE_METRICS = {
     "nws_daily_high_temp_f",
     "daily_treasury_yield_curve",
     "research_market_price",
+    TRUTH_SOCIAL_COUNT_METRIC,
+    TRUTH_SOCIAL_RANGE_PROBABILITY_METRIC,
 }
 _TIME_SENSITIVE_CLAIM_TYPES = {"market_price", "staleness_check"}
 _DURABLE_CLAIM_TYPES = {

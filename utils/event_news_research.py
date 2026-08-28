@@ -35,6 +35,11 @@ _EARLY_CLOSE_HORIZON_DAYS = 2.0
 # Fallback favorite band when config bands are missing.
 _FAVORITE_ASK_LOW = 0.55
 _FAVORITE_ASK_HIGH = 0.99
+# Truth Social weekly count books are tight (often 1c round-trip). A 38c YES
+# is not a 12c lottery; blocking it forces the desk onto the 63c NO while
+# Factbase run-rate says the cheap side is the value.
+_TRUTH_SOCIAL_COUNT_ASK_LOW = 0.36
+_TRUTH_SOCIAL_COUNT_ASK_HIGH = 0.90
 # Near-certain asks (98¢ NO "won't leave Congress") have ~2¢ max payoff after
 # fees and currently burn every research cycle. Do not treat them as the
 # money path; keep 0.55-0.90 as the tradeable favorite band.
@@ -300,9 +305,12 @@ def event_news_favorite_side(
         return None, None
     yes_ask, no_ask = snapshot_ask_cents(market)
     active = config if config is not None else cfg
-    allowed = list(getattr(active, "llm_allowed_price_bands", ()) or ())
-    if not allowed:
-        allowed = [(_FAVORITE_ASK_LOW, _FAVORITE_ASK_HIGH)]
+    if event_news_series_ticker(market).startswith("KXTRUTHSOCIAL"):
+        allowed = [(_TRUTH_SOCIAL_COUNT_ASK_LOW, _TRUTH_SOCIAL_COUNT_ASK_HIGH)]
+    else:
+        allowed = list(getattr(active, "llm_allowed_price_bands", ()) or ())
+        if not allowed:
+            allowed = [(_FAVORITE_ASK_LOW, _FAVORITE_ASK_HIGH)]
     excluded = list(getattr(active, "llm_excluded_price_bands", ()) or ())
 
     def _in_favorite(cents: int | None) -> bool:

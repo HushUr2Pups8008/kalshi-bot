@@ -759,6 +759,41 @@ def test_matcher_reserve_pins_politics_series_and_ignores_freeze():
     assert "KXRECENTJUNK" in pinned or len(pinned) == 2
 
 
+def test_truth_social_mid_price_yes_is_in_politics_money_path():
+    politics = _politics_config()
+    freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
+    truth_yes = SimpleNamespace(
+        ticker="KXTRUTHSOCIAL-26AUG29-B230",
+        series_ticker="KXTRUTHSOCIAL",
+        yes_ask_cents=38,
+        no_ask_cents=63,
+        yes_ask=38,
+        no_ask=63,
+        yes_ask_size=12.0,
+        no_ask_size=10.0,
+        open_interest_fp=200.0,
+        volume_24h_fp=100.0,
+    )
+    other_mid = SimpleNamespace(
+        ticker="KXTRUMPACT-26AUG23-T4",
+        series_ticker="KXTRUMPACT",
+        yes_ask_cents=38,
+        no_ask_cents=100,
+        yes_ask=38,
+        no_ask=100,
+        yes_ask_size=12.0,
+        no_ask_size=None,
+        open_interest_fp=200.0,
+        volume_24h_fp=100.0,
+    )
+    assert event_news_favorite_side(truth_yes, config=politics) == ("yes", 38)
+    assert event_news_prewarm_skip_reason(truth_yes, config=politics) is None
+    assert event_news_prewarm_skip_reason(other_mid, config=politics) == (
+        "ask_outside_favorite_band"
+    )
+    assert event_news_prewarm_skip_reason(truth_yes, config=freeze) is None
+
+
 def test_idle_runtime_tasks_and_forecast_refresh_isolated_from_freeze():
     freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
     politics = _politics_config()
