@@ -19,6 +19,17 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.61] - 2026-08-28
+
+### Fixed
+
+- **Politics admits official structured p without a Google counter phrase.**
+  Factbase remaining-time probability already prices YES and NO. Decision-grade
+  no longer parks those books on `missing_counter_evidence` waiting for a
+  "no contrary" search snippet that timed out. A 1-lot top on a traded
+  Truth Social book (13k OI) is no longer `illiquid_top_size`. Freeze stays
+  locked.
+
 ## [0.33.60] - 2026-08-28
 
 ### Fixed

@@ -2217,11 +2217,19 @@ def _decision_grade_verdict(
         candidate.force_side,
         contract_ticker=contract_ticker,
     ):
-        return _decision_grade_block(
-            candidate,
-            "missing_counter_evidence",
-            "Decision-grade verifier requires an explicit disconfirming search result.",
-        )
+        # An official structured p already prices YES and NO. Requiring a
+        # Google "no contrary" snippet here is why Factbase counts never
+        # admitted. Freeze/live keep the search-phrase counter check.
+        if not (
+            score_both_sides
+            and _probability_from_structured_evidence(list(candidate.evidence))
+            is not None
+        ):
+            return _decision_grade_block(
+                candidate,
+                "missing_counter_evidence",
+                "Decision-grade verifier requires an explicit disconfirming search result.",
+            )
     if _has_unresolved_contradiction(candidate.evidence):
         return _decision_grade_block(
             candidate,
@@ -2331,19 +2339,32 @@ def _structured_decision_grade_reason(candidate: ResearchVerdict) -> str:
         return ""
     support = _strongest_evidence_for_side(candidate.evidence, side.lower())
     counter = _strongest_counter_evidence(candidate.evidence, side.lower())
-    if support is None or counter is None:
+    structured_p = _probability_from_structured_evidence(list(candidate.evidence))
+    if support is None and structured_p is None:
+        return ""
+    if counter is None and structured_p is None:
         return ""
     price = _format_probability(candidate.market_price)
     probability = _format_probability(
         _side_probability(side.lower(), candidate.estimated_probability)
     )
     edge = _format_probability(candidate.estimated_edge)
-    support_text = _evidence_phrase(support)
-    counter_text = (
-        _clean(candidate.counterclaims[0])
-        if candidate.counterclaims
-        else _evidence_phrase(counter)
+    support_text = (
+        _evidence_phrase(support)
+        if support is not None
+        else (
+            f"official structured YES probability {float(structured_p):.3f}"
+        )
     )
+    if candidate.counterclaims:
+        counter_text = _clean(candidate.counterclaims[0])
+    elif counter is not None:
+        counter_text = _evidence_phrase(counter)
+    else:
+        counter_text = (
+            f"the complementary NO probability {1.0 - float(structured_p):.3f} "
+            "from the same official observation"
+        )
     return _query_fragment(
         f"Trade {side} because {support_text}",
         (

@@ -12939,6 +12939,42 @@ def _ts_probability_evidence(*, probability: float, direction: str = "neutral"):
     )
 
 
+def test_structured_probability_is_decision_grade_without_google_no_contrary_phrase():
+    """Factbase p is both-sides counter. Magic search phrases must not be required."""
+    evidence = [_ts_probability_evidence(probability=0.49, direction="no")]
+    verdict = decide_research_verdict(
+        evidence=evidence,
+        model_direction=None,
+        model_confidence=0.0,
+        model_reason="scheduled research prewarm",
+        estimated_probability_yes=None,
+        yes_ask=0.38,
+        no_ask=0.63,
+        live_mode=False,
+        require_decision_grade=True,
+        score_both_sides=True,
+        queries=[
+            ResearchQuery(
+                "Will Donald Trump make between 220 and 240 Truth Social posts "
+                "the week of Aug 23, 2026?",
+                "official_resolution",
+                "official_primary",
+            ),
+            ResearchQuery(
+                "counter",
+                "contradiction_check",
+                "official_primary",
+            ),
+        ],
+        contract_ticker="KXTRUTHSOCIAL-26AUG29-B230",
+    )
+    assert verdict.skip_reason != "missing_counter_evidence"
+    assert verdict.status == ResearchStatus.DECISION_GRADE_CANDIDATE
+    assert verdict.force_side == "yes"
+    assert verdict.estimated_probability == pytest.approx(0.49)
+    assert verdict.estimated_edge == pytest.approx(0.10)
+
+
 def test_structured_probability_trades_cheap_yes_even_if_no_is_the_favorite():
     """38c YES vs 63c NO: p=0.49 must take YES. A NO favorite is not a NO trade."""
     evidence = [_ts_probability_evidence(probability=0.49, direction="no")]

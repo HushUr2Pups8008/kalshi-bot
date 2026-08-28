@@ -150,19 +150,22 @@ def event_news_illiquid(market: Any, *, config: Any = None) -> str | None:
         for name in ("yes_ask_size", "no_ask_size")
     ]
     present_sizes = [size for size in sizes if size is not None]
-    if present_sizes and max(present_sizes) < _MIN_TOP_SIZE:
-        log.info(
-            "[EVENT_NEWS_LIQUIDITY] skip ticker=%s reason=illiquid_top_size size=%s",
-            getattr(market, "ticker", ""),
-            max(present_sizes),
-        )
-        return "illiquid_top_size"
     oi = _as_float(getattr(market, "open_interest_fp", None))
     if oi is None:
         oi = _as_float(getattr(market, "open_interest", None))
     vol = _as_float(getattr(market, "volume_24h_fp", None))
     if vol is None:
         vol = _as_float(getattr(market, "volume_24h", None))
+    traded = (oi is not None and oi >= _MIN_OPEN_INTEREST) or (
+        vol is not None and vol >= _MIN_VOLUME_24H
+    )
+    if present_sizes and max(present_sizes) < _MIN_TOP_SIZE and not traded:
+        log.info(
+            "[EVENT_NEWS_LIQUIDITY] skip ticker=%s reason=illiquid_top_size size=%s",
+            getattr(market, "ticker", ""),
+            max(present_sizes),
+        )
+        return "illiquid_top_size"
     if oi is not None and vol is not None and oi < _MIN_OPEN_INTEREST and vol < _MIN_VOLUME_24H:
         log.info(
             "[EVENT_NEWS_LIQUIDITY] skip ticker=%s reason=illiquid_open_interest oi=%s vol24h=%s",

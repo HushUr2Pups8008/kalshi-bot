@@ -237,6 +237,14 @@ def test_illiquid_skip_requires_both_oi_and_volume():
     )
     assert event_news_illiquid(empty, config=freeze) is None
     assert event_news_illiquid(empty, config=politics) == "illiquid_top_size"
+    traded_thin_top = SimpleNamespace(
+        ticker="KXTRUTHSOCIAL-26AUG29-B230",
+        yes_ask_size=1.0,
+        no_ask_size=None,
+        open_interest=13118,
+        volume=17767,
+    )
+    assert event_news_illiquid(traded_thin_top, config=politics) is None
     missing_size = SimpleNamespace(
         ticker="KXTHIN-2",
         yes_ask_size=None,
