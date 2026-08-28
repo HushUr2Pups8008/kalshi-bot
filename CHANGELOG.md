@@ -19,6 +19,19 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.59] - 2026-08-28
+
+### Added
+
+- **Repeatable ticker replay CLI.** `scripts/research_ticker.py` runs one
+  Kalshi ticker through the same politics functions the desk uses:
+  favorite-band routing, Factbase remaining-time p, both-sides spread-buffer
+  edge, `run_research_gate`, and optional concurrent `estimate_probability`.
+  Pin `--yes-ask` / `--no-ask` to replay a book (the 38c YES / 63c NO
+  Truth Social example is the first fixture). Never orders. Temp dossier
+  by default so a probe cannot contaminate the sealed sample. Freeze stays
+  locked.
+
 ## [0.33.58] - 2026-08-28
 
 ### Fixed

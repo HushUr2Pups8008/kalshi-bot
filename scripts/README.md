@@ -60,6 +60,7 @@ persisted ID requires a separate reviewed repair task.
 | `pipeline_impact_audit.py` | Before/after audit for recent pipeline-quality changes. |
 | `capital_guard_shadow_replay.py` | Writes a deterministic read-only OOS prerequisite report from the isolated capital-guard ledger. It hashes and reads a temporary DB/WAL copy, rejects rollback journals or an unstable source, and reports decision-time coverage plus current-head diagnostics. It never calculates P&L or allows promotion until committed settlement-economics, correction-cashflow, mark, baseline, and multi-fill fee-state contracts exist. |
 | `replay_dossier.py` | Dossier replay utility. |
+| `research_ticker.py` | Repeatable one-ticker politics research/decision replay. Pins `--yes-ask`/`--no-ask`, scores both sides, optional `--llm`. Never orders; temp dossier by default. |
 | `signal_edge_diagnostics.py` | Diagnostics for the signal → opportunity → execution boundary. |
 | `source_scorecard.py` | Source scorecard for operator review. |
 | `trade_log_summary.py` | Summary tool for structured trade logs. |
