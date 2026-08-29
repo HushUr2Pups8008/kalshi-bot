@@ -998,14 +998,26 @@ class BlendTask:
         # signal at p≠0.5 stays classified as real and continues to
         # contribute. Spec: docs/superpowers/specs/2026-05-24-lane-aware-
         # blender-design.md.
+        # Official research p is not an LLM guess. Applying the news-lane
+        # calibration scale (and a fake accumulation dossier) dropped
+        # T240/T7 below G1 after the research gate had already admitted.
+        research_grade = (
+            str(getattr(fast_lane_result, "signal_type", "") or "")
+            == "research_decision_grade"
+        )
+        fast_scale = 1.0 if research_grade else self._calibration_scale("fast")
         fast = LaneInput(
             p=fast_lane_result.estimated_probability,
-            confidence=fast_lane_result.confidence * self._calibration_scale("fast"),
+            confidence=fast_lane_result.confidence * fast_scale,
             lane_id="fast",
             signal_kind="real",
         )
-        accumulation = self._build_accumulation_lane(dossier)
-        structural = self._build_structural_lane(structural_prior)
+        accumulation = (
+            None if research_grade else self._build_accumulation_lane(dossier)
+        )
+        structural = (
+            None if research_grade else self._build_structural_lane(structural_prior)
+        )
         try:
             return self._blender(
                 fast=fast,
@@ -1364,6 +1376,8 @@ def _readiness_input(
     market_liquidity_override: float | None | object = _READINESS_LIQUIDITY_UNSET,
 ) -> dict[str, Any]:
     source_lane = "accumulation" if (dossier is not None and dossier.current_estimate is not None) else "fast"
+    if str(getattr(analysis, "signal_type", "") or "") == "research_decision_grade":
+        source_lane = "fast"
     readiness_records = _readiness_records(recent_records, trigger_record)
     return {
         "source_lane": source_lane,

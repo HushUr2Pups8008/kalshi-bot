@@ -802,6 +802,27 @@ def test_truth_social_mid_price_yes_is_in_politics_money_path():
     assert event_news_prewarm_skip_reason(truth_yes, config=freeze) is None
 
 
+def test_mention_books_do_not_burn_the_research_gate():
+    politics = _politics_config()
+    freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
+    maga = SimpleNamespace(
+        ticker="KXTRUMPMENTION-26AUG30-MAGA",
+        series_ticker="KXTRUMPMENTION",
+        yes_ask_cents=22,
+        no_ask_cents=81,
+        yes_ask=22,
+        no_ask=81,
+        yes_ask_size=10.0,
+        no_ask_size=10.0,
+        open_interest_fp=2000.0,
+        volume_24h_fp=2000.0,
+    )
+    assert event_news_prewarm_skip_reason(maga, config=politics) == (
+        "mention_requires_transcript"
+    )
+    assert event_news_prewarm_skip_reason(maga, config=freeze) is None
+
+
 def test_idle_runtime_tasks_and_forecast_refresh_isolated_from_freeze():
     freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
     politics = _politics_config()

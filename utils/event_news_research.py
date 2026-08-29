@@ -488,6 +488,11 @@ def event_news_prewarm_skip_reason(market: Any, *, config: Any = None) -> str | 
         return denied
     if not event_news_is_reserve_series(market, config=config):
         return "not_reserve_series"
+    series = event_news_series_ticker(market)
+    if series.startswith("KXTRUMPMENTION"):
+        # Fox/speech mention books have no Factbase official p. Google
+        # fan-out burns the 18s gate and ends as research_provider_error.
+        return "mention_requires_transcript"
     missing = event_news_missing_snapshot_ask(market, config=config)
     if missing:
         return missing

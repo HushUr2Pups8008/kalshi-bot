@@ -14,6 +14,7 @@ from kalshi import KalshiMarket
 from scripts.decision_funnel_summary import summarize
 from tasks.blend_task import TradeCandidate
 from tasks.research_dossier import ResearchDossierSnapshot
+from tasks.blend_task import BlendTask
 from tasks.research_paper_admission import (
     ResearchBackedBlendStore,
     ResearchPaperAdmissionBridge,
@@ -1535,3 +1536,64 @@ async def test_white_house_remaining_time_p_admits_without_counter_query(
     assert signal is not None
     assert signal.side == "yes"
     assert signal.estimated_probability == pytest.approx(0.98)
+
+
+class _HarshLlmCalibration:
+    def get_scaling_factor(self, _lane: str) -> float:
+        return 0.05
+
+
+@pytest.mark.asyncio
+async def test_official_research_survives_llm_calibration_g1_kill() -> None:
+    """T240 died at G1 because news-lane calibration scaled official p."""
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+
+    async def route(analysis, store):
+        task = BlendTask(
+            trading_queue=queue,
+            store=store,
+            logger=logger,
+            is_paper_mode=True,
+            calibration=_HarshLlmCalibration(),
+            now=lambda: datetime(2026, 8, 28, 16, 5, tzinfo=UTC),
+        )
+        return await task.process_fast_lane_result(analysis)
+
+    market = _market_with_current_ask(yes_ask_cents=88, no_ask_cents=13)
+    market.ticker = "KXTRUTHSOCIAL-26AUG29-T240"
+    market.title = "Will Donald Trump make above 240 Truth Social posts the week of Aug 23, 2026?"
+    market.close_time = "2026-08-30T13:59:00Z"
+    market.regime_weights = {}
+    bridge = ResearchPaperAdmissionBridge(
+        research_store=FakeResearchStore(
+            snapshot=replace(
+                _snapshot(
+                    side="yes",
+                    estimated_probability=0.98,
+                    market_price=0.88,
+                    estimated_edge=0.09,
+                    last_researched_ts="2026-08-28T16:00:00+00:00",
+                ),
+                market_ticker="KXTRUTHSOCIAL-26AUG29-T240",
+            ),
+            evidence=_valid_evidence(),
+        ),
+        trading_queue=queue,
+        logger=logger,
+        now=lambda: datetime(2026, 8, 28, 16, 5, tzinfo=UTC),
+        route_analysis=route,
+    )
+    result = await bridge.admit_prewarm_result(
+        ResearchPrewarmResult(
+            market_ticker="KXTRUTHSOCIAL-26AUG29-T240",
+            status="decision_grade_candidate",
+            attempted=True,
+            research_run_id="rr-decision",
+            research_contract_fingerprint="contract-v1",
+        ),
+        market,
+    )
+    assert result.reason != "G1_blended_confidence"
+    assert result.admitted is True
+    assert result.enqueued is True

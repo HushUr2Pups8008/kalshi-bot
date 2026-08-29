@@ -19,6 +19,17 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.67] - 2026-08-28
+
+### Fixed
+
+- **Official research p is not an LLM guess.** T240/T7 cleared the
+  research gate then died at G1 because news-lane calibration and a fake
+  accumulation dossier diluted confidence. Research-grade admission stays
+  on the fast lane with unscaled confidence. Fox/mention books skip
+  Google (`mention_requires_transcript`) instead of burning the 18s gate.
+  Freeze stays locked. Polymarket stays off.
+
 ## [0.33.66] - 2026-08-28
 
 ### Fixed

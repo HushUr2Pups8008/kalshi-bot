@@ -262,7 +262,9 @@ class ResearchBackedBlendStore:
         return DossierState(
             market_ticker=market_ticker,
             dossier_version=1,
-            current_estimate=self.signal.estimated_probability,
+            # Keep research admission on the fast lane. A copied p here
+            # flipped source_lane to accumulation and G1-killed T240/T7.
+            current_estimate=None,
             confidence=self.signal.confidence,
             prior_estimate=None,
             drift_suspect=False,
@@ -386,6 +388,12 @@ class ResearchPaperAdmissionBridge:
                 admitted=False,
                 reason=reason,
             )
+        if not getattr(market, "regime_weights", None):
+            # Politics prewarm uses REST quotes with empty regime_weights.
+            # Uniform 1/3 → rc=0 → scaled_confidence=0 → G1 always fails.
+            from analysis.regime_classifier import compute_regime_weights
+
+            market.regime_weights = compute_regime_weights(market)
         analysis = _signal_analysis_from_research(market, current_signal)
         claim_admission = getattr(
             self.provider.store,
