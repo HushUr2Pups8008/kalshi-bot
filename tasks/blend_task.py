@@ -407,6 +407,21 @@ class BlendTask:
             raise ReadinessEvaluationError(f"readiness evaluation failed for {ticker}: {exc}") from exc
         if use_execution_liquidity and readiness.trade_blocked_reason is None:
             execution_liquidity = await self._execution_liquidity_for(fast_lane_result)
+            liquidity_override: float | None = (
+                float(execution_liquidity.executable_notional)
+                if execution_liquidity is not None
+                else _event_news_research_top_notional(market, fast_lane_result)
+            )
+            if execution_liquidity is None and liquidity_override is not None:
+                self._set_execution_liquidity_meta(
+                    fast_lane_result,
+                    {
+                        "source": "rest_top_size",
+                        "status": "fallback",
+                        "executable_notional": liquidity_override,
+                        "reason": "orderbook_unavailable",
+                    },
+                )
             readiness_input = _readiness_input(
                 blend_result=blend_result,
                 dossier=dossier,
@@ -420,9 +435,7 @@ class BlendTask:
                     open_exposure_snapshot.drawdown_pct if open_exposure_snapshot is not None else None
                 ),
                 market_liquidity_override=(
-                    float(execution_liquidity.executable_notional)
-                    if execution_liquidity is not None
-                    else 0.0
+                    0.0 if liquidity_override is None else liquidity_override
                 ),
             )
             try:
@@ -1363,6 +1376,18 @@ async def process_fast_lane_result(
     """Convenience entry point for one fast-lane-triggered blend evaluation."""
     task = BlendTask(trading_queue=trading_queue, store=store, logger=logger)
     return await task.process_fast_lane_result(fast_lane_result)
+
+
+def _event_news_research_top_notional(
+    market: KalshiMarket,
+    analysis: SignalAnalysis,
+) -> float | None:
+    """Politics official-p G7 fallback. Freeze and news-lane stay fail-closed."""
+    if str(getattr(analysis, "signal_type", "") or "") != "research_decision_grade":
+        return None
+    from utils.event_news_research import event_news_executable_top_notional
+
+    return event_news_executable_top_notional(market, str(getattr(analysis, "side", "") or ""))
 
 
 def _readiness_input(

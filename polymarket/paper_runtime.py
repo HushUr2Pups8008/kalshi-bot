@@ -1584,6 +1584,9 @@ def _market_match_text(market: PolymarketMarket) -> str:
     )
 
 
+_ISOLATED_POLYMARKET_COHORT_PREFIX = "polymarket-"
+
+
 def polymarket_paper_runtime_disabled_reason(config: Any = cfg) -> str | None:
     if not bool(getattr(config, "polymarket_us_enabled", False)):
         return "polymarket_us_enabled=false"
@@ -1591,6 +1594,12 @@ def polymarket_paper_runtime_disabled_reason(config: Any = cfg) -> str | None:
         return "bot_not_in_paper_mode"
     if bool(getattr(config, "polymarket_us_live_trading_enabled", False)):
         return "polymarket_live_trading_enabled"
+    cohort = str(getattr(config, "paper_cohort_id", "") or "").strip().lower()
+    if not cohort.startswith(_ISOLATED_POLYMARKET_COHORT_PREFIX):
+        # Kalshi freeze and politics desks share matcher weights, Ollama, and
+        # .env. Flipping POLYMARKET_US_ENABLED must not attach PM to those
+        # processes. Paper PM needs its own polymarket-* cohort first.
+        return "polymarket_requires_isolated_cohort"
     return None
 
 

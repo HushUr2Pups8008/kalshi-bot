@@ -177,6 +177,65 @@ def event_news_illiquid(market: Any, *, config: Any = None) -> str | None:
     return None
 
 
+def event_news_executable_top_size(
+    market: Any,
+    side: str,
+    *,
+    config: Any = None,
+) -> float | None:
+    """REST top size for the intended side. Freeze is a no-op.
+
+    Kalshi ``/markets`` often omits ``no_ask_size_fp``. Buying NO is lifting
+    YES bids, so ``yes_bid_size`` is the complementary size.
+    """
+    if not is_event_news_paper_cohort(config):
+        return None
+    wanted = str(side or "").strip().lower()
+    if wanted == "yes":
+        size = _as_float(getattr(market, "yes_ask_size", None))
+        if size is None:
+            size = _as_float(getattr(market, "no_bid_size", None))
+    elif wanted == "no":
+        size = _as_float(getattr(market, "no_ask_size", None))
+        if size is None:
+            size = _as_float(getattr(market, "yes_bid_size", None))
+    else:
+        return None
+    if size is None or size <= 0.0:
+        return None
+    return size
+
+
+def event_news_executable_top_notional(
+    market: Any,
+    side: str,
+    *,
+    config: Any = None,
+) -> float | None:
+    """REST top-of-book notional for G7 when the Kalshi orderbook fetch fails.
+
+    Freeze is a no-op. A zero REST ``liquidity_dollars`` field is not proof
+    the book is empty; Kalshi often reports 0 while top size is live.
+    """
+    size = event_news_executable_top_size(market, side, config=config)
+    if size is None:
+        return None
+    wanted = str(side or "").strip().lower()
+    cents_name = "yes_ask_cents" if wanted == "yes" else "no_ask_cents"
+    cents = _as_float(getattr(market, cents_name, None))
+    price = None
+    if cents is not None and 1.0 <= cents <= 99.0:
+        price = cents / 100.0
+    if price is None:
+        price = _ask_probability(market, "yes_ask" if wanted == "yes" else "no_ask")
+    if price is None or not (0.0 < price < 1.0):
+        return None
+    notional = size * price
+    if notional <= 0.0:
+        return None
+    return notional
+
+
 def event_news_horizon_days(market: Any, days: float, *, config: Any = None) -> float:
     """Compress Kelly horizon when Kalshi says the market can close early."""
     if not is_event_news_paper_cohort(config):

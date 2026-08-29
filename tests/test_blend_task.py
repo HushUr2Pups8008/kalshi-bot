@@ -482,6 +482,80 @@ async def test_execution_orderbook_failure_fails_closed_at_g7():
 
 
 @pytest.mark.asyncio
+async def test_event_news_research_uses_rest_top_size_when_orderbook_fails(
+    monkeypatch,
+) -> None:
+    """T7 REST liquidity_dollars=0 must not G7-kill official-p after a book timeout."""
+    monkeypatch.setattr(
+        "utils.event_news_research.is_event_news_paper_cohort",
+        lambda _config=None: True,
+    )
+
+    async def execution_liquidity_provider(_analysis: SignalAnalysis) -> ExecutableLiquidity:
+        raise RuntimeError("orderbook unavailable")
+
+    market = _market(liquidity_dollars=Decimal("0"))
+    market.yes_ask_size = Decimal("8")
+    analysis = _analysis(market=market)
+    analysis.signal_type = "research_decision_grade"
+    logger = SpyLogger()
+    task = BlendTask(
+        trading_queue=asyncio.Queue(),
+        store=FakeStore(),
+        logger=logger,
+        execution_liquidity_provider=execution_liquidity_provider,
+        is_paper_mode=True,
+    )
+
+    result = await task.process_fast_lane_result(analysis)
+
+    assert result.ready is True
+    assert result.enqueued is True
+    assert result.trade_blocked_reason is None
+    assert result.candidate is not None
+    assert result.candidate.signal_meta["g7_execution_liquidity"] == {
+        "source": "rest_top_size",
+        "status": "fallback",
+        "executable_notional": pytest.approx(4.08),
+        "reason": "orderbook_unavailable",
+    }
+
+
+@pytest.mark.asyncio
+async def test_freeze_research_orderbook_failure_stays_g7_fail_closed(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "utils.event_news_research.is_event_news_paper_cohort",
+        lambda _config=None: False,
+    )
+
+    async def execution_liquidity_provider(_analysis: SignalAnalysis) -> ExecutableLiquidity:
+        raise RuntimeError("orderbook unavailable")
+
+    market = _market(liquidity_dollars=Decimal("0"))
+    market.yes_ask_size = Decimal("8")
+    analysis = _analysis(market=market)
+    analysis.signal_type = "research_decision_grade"
+    logger = SpyLogger()
+    task = BlendTask(
+        trading_queue=asyncio.Queue(),
+        store=FakeStore(),
+        logger=logger,
+        execution_liquidity_provider=execution_liquidity_provider,
+        is_paper_mode=True,
+    )
+
+    result = await task.process_fast_lane_result(analysis)
+
+    assert result.ready is False
+    assert result.trade_blocked_reason == "G7_zero_liquidity"
+    assert logger.skipped_records[0]["signal_meta"]["g7_execution_liquidity"] == {
+        "source": "kalshi_orderbook",
+        "status": "unavailable",
+        "reason": "RuntimeError",
+    }
+
+
+@pytest.mark.asyncio
 async def test_prequeue_book_provenance_provider_absent_preserves_ready_candidate_metadata():
     queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
     source_meta = {

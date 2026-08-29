@@ -628,6 +628,14 @@ class TradeExecutor:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            fallback_plan, fallback_reason = self._event_news_research_rest_execution_plan(
+                analysis,
+                plan,
+            )
+            if fallback_plan is not None:
+                return fallback_plan, None
+            if fallback_reason is not None:
+                return None, fallback_reason
             self._set_final_execution_depth_meta(
                 analysis,
                 {
@@ -655,6 +663,49 @@ class TradeExecutor:
                 available_contracts,
             )
             return None, "G8_execution_depth_insufficient"
+        return plan, None
+
+    def _event_news_research_rest_execution_plan(
+        self,
+        analysis: SignalAnalysis,
+        plan: FinalExecutionTerms,
+    ) -> tuple[FinalExecutionTerms | None, str | None]:
+        """Paper politics official-p only. Freeze and live stay fail-closed."""
+        if not self._is_paper:
+            return None, None
+        if str(getattr(analysis, "signal_type", "") or "") != "research_decision_grade":
+            return None, None
+        from utils.event_news_research import event_news_executable_top_size
+
+        available = event_news_executable_top_size(
+            analysis.market,
+            str(getattr(analysis, "side", "") or ""),
+        )
+        if available is None:
+            return None, None
+        available_contracts = Decimal(str(available))
+        if available_contracts < Decimal(plan.contracts):
+            self._set_final_execution_depth_meta(
+                analysis,
+                {
+                    "source": "rest_top_size",
+                    "status": "insufficient",
+                    "reason": "orderbook_unavailable",
+                    "requested_contracts": plan.contracts,
+                    "available_contracts": float(available_contracts),
+                },
+            )
+            return None, "G8_execution_depth_insufficient"
+        self._set_final_execution_depth_meta(
+            analysis,
+            {
+                "source": "rest_top_size",
+                "status": "fallback",
+                "reason": "orderbook_unavailable",
+                "requested_contracts": plan.contracts,
+                "available_contracts": float(available_contracts),
+            },
+        )
         return plan, None
 
     def _set_final_execution_depth_meta(

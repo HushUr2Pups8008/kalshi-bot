@@ -4138,7 +4138,9 @@ class TradingBot:
             except Exception as exc:
                 log.warning("Auto-resolve: failed to check %s: %s", ticker, exc)
 
-        if has_polymarket and cfg.polymarket_us_enabled:
+        from polymarket.paper_runtime import polymarket_paper_runtime_disabled_reason
+
+        if has_polymarket and polymarket_paper_runtime_disabled_reason(cfg) is None:
             try:
                 result = await asyncio.to_thread(
                     lambda: SettlementReconciler(
@@ -4894,10 +4896,15 @@ class TradingBot:
         log.info("Kalshi Trading Bot v%s starting", VERSION)
         log.info("Mode:             %s", "PAPER TRADING" if cfg.is_paper_trading else "LIVE TRADING")
         log.info(cfg.polymarket_us_startup_status())
-        if cfg.polymarket_us_enabled:
+        from polymarket.paper_runtime import polymarket_paper_runtime_disabled_reason
+
+        polymarket_disabled = polymarket_paper_runtime_disabled_reason(cfg)
+        if polymarket_disabled is None:
             from polymarket.startup_probe import log_polymarket_startup_probe
 
             await asyncio.to_thread(log_polymarket_startup_probe)
+        elif cfg.polymarket_us_enabled:
+            log.info("[POLYMARKET_PAPER] inactive reason=%s", polymarket_disabled)
         runtime_cohort = getattr(self, "paper_cohort", None)
         _log_bankroll_summary(
             notional,
@@ -4923,7 +4930,7 @@ class TradingBot:
             log.info("Kalshi account balance: $%.2f", balance)
         except Exception as exc:
             log.warning("Could not fetch Kalshi balance: %s", exc)
-        if cfg.polymarket_us_enabled:
+        if polymarket_disabled is None:
             await asyncio.to_thread(_log_polymarket_account_summary)
 
         await self._check_llm_health()

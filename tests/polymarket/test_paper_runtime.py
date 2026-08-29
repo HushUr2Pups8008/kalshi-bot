@@ -2448,8 +2448,32 @@ def test_polymarket_paper_runtime_disabled_reason():
         polymarket_us_enabled=True,
         is_paper_trading=True,
         polymarket_us_live_trading_enabled=False,
+        paper_cohort_id="polymarket-us-paper-20260829",
     )
     assert polymarket_paper_runtime_disabled_reason(active_cfg) is None
+
+    assert (
+        polymarket_paper_runtime_disabled_reason(
+            SimpleNamespace(
+                polymarket_us_enabled=True,
+                is_paper_trading=True,
+                polymarket_us_live_trading_enabled=False,
+                paper_cohort_id="kalshi-event-news-20260820",
+            )
+        )
+        == "polymarket_requires_isolated_cohort"
+    )
+    assert (
+        polymarket_paper_runtime_disabled_reason(
+            SimpleNamespace(
+                polymarket_us_enabled=True,
+                is_paper_trading=True,
+                polymarket_us_live_trading_enabled=False,
+                paper_cohort_id="kalshi-macro-20260820",
+            )
+        )
+        == "polymarket_requires_isolated_cohort"
+    )
 
     assert (
         polymarket_paper_runtime_disabled_reason(

@@ -5898,6 +5898,9 @@ class TestMainAsyncBlocking:
             raising=False,
         )
         monkeypatch.setattr(_cfg_module.cfg, "polymarket_us_enabled", True)
+        monkeypatch.setattr(main_module.cfg, "polymarket_us_enabled", True)
+        monkeypatch.setattr(_cfg_module.cfg, "paper_cohort_id", "polymarket-us-paper-test")
+        monkeypatch.setattr(main_module.cfg, "paper_cohort_id", "polymarket-us-paper-test")
         monkeypatch.setattr(
             main_module,
             "SettlementReconciler",
@@ -6010,6 +6013,18 @@ class TestMainAsyncBlocking:
         )
         monkeypatch.setattr(_cfg_module.cfg, "polymarket_us_enabled", True)
         monkeypatch.setattr(main_module.cfg, "polymarket_us_enabled", True)
+        monkeypatch.setattr(_cfg_module.cfg, "paper_cohort_id", "polymarket-us-paper-test")
+        monkeypatch.setattr(main_module.cfg, "paper_cohort_id", "polymarket-us-paper-test")
+        monkeypatch.setattr(
+            _cfg_module.cfg,
+            "enable_canonical_persisted_settlement_reconciliation",
+            False,
+        )
+        monkeypatch.setattr(
+            main_module.cfg,
+            "enable_canonical_persisted_settlement_reconciliation",
+            False,
+        )
 
         await bot._check_and_resolve()
 
@@ -6052,6 +6067,18 @@ class TestMainAsyncBlocking:
         )
         monkeypatch.setattr(_cfg_module.cfg, "polymarket_us_enabled", True)
         monkeypatch.setattr(main_module.cfg, "polymarket_us_enabled", True)
+        monkeypatch.setattr(_cfg_module.cfg, "paper_cohort_id", "polymarket-us-paper-test")
+        monkeypatch.setattr(main_module.cfg, "paper_cohort_id", "polymarket-us-paper-test")
+        monkeypatch.setattr(
+            _cfg_module.cfg,
+            "enable_canonical_persisted_settlement_reconciliation",
+            False,
+        )
+        monkeypatch.setattr(
+            main_module.cfg,
+            "enable_canonical_persisted_settlement_reconciliation",
+            False,
+        )
 
     @pytest.mark.asyncio
     async def test_auto_resolve_summary_includes_error_count(self, monkeypatch):

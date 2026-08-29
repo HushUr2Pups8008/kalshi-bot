@@ -24,6 +24,7 @@ from tasks.research_paper_admission import (
     _market_venue,
 )
 from tasks.research_prewarm_task import ResearchPrewarmResult
+from trading.orderbook import ExecutableLiquidity
 from utils.logger import TradeLogger
 
 
@@ -1599,5 +1600,147 @@ async def test_official_research_survives_llm_calibration_g1_kill(monkeypatch) -
         market,
     )
     assert result.reason != "G1_blended_confidence"
+    assert result.admitted is True
+    assert result.enqueued is True
+
+
+@pytest.mark.asyncio
+async def test_official_research_survives_zero_rest_liquidity_when_book_is_live(
+    monkeypatch,
+) -> None:
+    """Kalshi liquidity_dollars=0 is not a dead T7 book when the orderbook has size."""
+    monkeypatch.setattr(
+        "utils.event_news_research.is_event_news_paper_cohort",
+        lambda _config=None: True,
+    )
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+
+    async def provider(analysis):
+        return ExecutableLiquidity(
+            market_ticker=analysis.market.ticker,
+            side=analysis.side,
+            limit_price=Decimal(analysis.executed_price_cents) / Decimal("100"),
+            best_price=Decimal(analysis.executed_price_cents) / Decimal("100"),
+            executable_quantity=Decimal("8"),
+            executable_notional=Decimal("1.12"),
+            as_of=datetime(2026, 8, 28, 16, 5, tzinfo=UTC),
+            raw_payload_hash="c" * 64,
+        )
+
+    async def route(analysis, store):
+        task = BlendTask(
+            trading_queue=queue,
+            store=store,
+            logger=logger,
+            is_paper_mode=True,
+            execution_liquidity_provider=provider,
+            now=lambda: datetime(2026, 8, 28, 16, 5, tzinfo=UTC),
+        )
+        return await task.process_fast_lane_result(analysis)
+
+    market = _market_with_current_ask(yes_ask_cents=14, no_ask_cents=87)
+    market.ticker = "KXTRUMPACT-26AUG23-T7"
+    market.title = "Will there be at least 7 presidential actions in the week of Aug 23, 2026?"
+    market.close_time = "2026-08-30T13:59:00Z"
+    market.regime_weights = {}
+    market.liquidity_dollars = Decimal("0")
+    market.yes_ask_size = Decimal("8")
+    bridge = ResearchPaperAdmissionBridge(
+        research_store=FakeResearchStore(
+            snapshot=replace(
+                _snapshot(
+                    side="yes",
+                    estimated_probability=0.73,
+                    market_price=0.14,
+                    estimated_edge=0.58,
+                    last_researched_ts="2026-08-28T16:00:00+00:00",
+                ),
+                market_ticker="KXTRUMPACT-26AUG23-T7",
+            ),
+            evidence=_valid_evidence(),
+        ),
+        trading_queue=queue,
+        logger=logger,
+        now=lambda: datetime(2026, 8, 28, 16, 5, tzinfo=UTC),
+        route_analysis=route,
+    )
+    result = await bridge.admit_prewarm_result(
+        ResearchPrewarmResult(
+            market_ticker="KXTRUMPACT-26AUG23-T7",
+            status="decision_grade_candidate",
+            attempted=True,
+            research_run_id="rr-decision",
+            research_contract_fingerprint="contract-v1",
+        ),
+        market,
+    )
+    assert result.reason != "G7_zero_liquidity"
+    assert result.admitted is True
+    assert result.enqueued is True
+
+
+@pytest.mark.asyncio
+async def test_official_research_uses_rest_top_size_when_orderbook_fetch_fails(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "utils.event_news_research.is_event_news_paper_cohort",
+        lambda _config=None: True,
+    )
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    logger = SpyLogger()
+
+    async def provider(_analysis):
+        raise RuntimeError("orderbook unavailable")
+
+    async def route(analysis, store):
+        task = BlendTask(
+            trading_queue=queue,
+            store=store,
+            logger=logger,
+            is_paper_mode=True,
+            execution_liquidity_provider=provider,
+            now=lambda: datetime(2026, 8, 28, 16, 5, tzinfo=UTC),
+        )
+        return await task.process_fast_lane_result(analysis)
+
+    market = _market_with_current_ask(yes_ask_cents=14, no_ask_cents=87)
+    market.ticker = "KXTRUMPACT-26AUG23-T7"
+    market.title = "Will there be at least 7 presidential actions in the week of Aug 23, 2026?"
+    market.close_time = "2026-08-30T13:59:00Z"
+    market.regime_weights = {}
+    market.liquidity_dollars = Decimal("0")
+    market.yes_ask_size = Decimal("8")
+    bridge = ResearchPaperAdmissionBridge(
+        research_store=FakeResearchStore(
+            snapshot=replace(
+                _snapshot(
+                    side="yes",
+                    estimated_probability=0.73,
+                    market_price=0.14,
+                    estimated_edge=0.58,
+                    last_researched_ts="2026-08-28T16:00:00+00:00",
+                ),
+                market_ticker="KXTRUMPACT-26AUG23-T7",
+            ),
+            evidence=_valid_evidence(),
+        ),
+        trading_queue=queue,
+        logger=logger,
+        now=lambda: datetime(2026, 8, 28, 16, 5, tzinfo=UTC),
+        route_analysis=route,
+    )
+    result = await bridge.admit_prewarm_result(
+        ResearchPrewarmResult(
+            market_ticker="KXTRUMPACT-26AUG23-T7",
+            status="decision_grade_candidate",
+            attempted=True,
+            research_run_id="rr-decision",
+            research_contract_fingerprint="contract-v1",
+        ),
+        market,
+    )
+    assert result.reason != "G7_zero_liquidity"
     assert result.admitted is True
     assert result.enqueued is True

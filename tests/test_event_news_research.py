@@ -22,6 +22,8 @@ from utils.event_news_research import (
     event_news_forecast_refresh_series,
     event_news_official_research_kwargs,
     event_news_omit_idle_runtime_tasks,
+    event_news_executable_top_notional,
+    event_news_executable_top_size,
     event_news_open_prefix_cap,
     event_news_bypass_quote_skip_cooldown,
     event_news_prewarm_allows,
@@ -223,6 +225,41 @@ def test_spread_disagreement_politics_only():
     assert event_news_spread_disagreement(wide, config=freeze) is None
     assert event_news_spread_disagreement(wide, config=politics) == "last_ask_divergence"
     assert event_news_spread_disagreement(tight, config=politics) is None
+
+
+def test_executable_top_notional_is_politics_only():
+    politics = SimpleNamespace(paper_cohort_id=EVENT_NEWS_COHORT_ID)
+    freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
+    book = SimpleNamespace(
+        yes_ask_size=8.0,
+        no_ask_size=3.0,
+        yes_bid_size=5.0,
+        no_bid_size=2.0,
+        yes_ask_cents=14,
+        no_ask_cents=87,
+        yes_ask=0.14,
+        no_ask=0.87,
+    )
+    assert event_news_executable_top_notional(book, "yes", config=freeze) is None
+    assert event_news_executable_top_notional(book, "yes", config=politics) == pytest.approx(1.12)
+    assert event_news_executable_top_notional(book, "no", config=politics) == pytest.approx(2.61)
+    rest_no_ask = SimpleNamespace(
+        yes_ask_size=8.0,
+        no_ask_size=None,
+        yes_bid_size=5.0,
+        yes_ask_cents=14,
+        no_ask_cents=87,
+    )
+    assert event_news_executable_top_size(rest_no_ask, "no", config=politics) == pytest.approx(5.0)
+    assert event_news_executable_top_notional(rest_no_ask, "no", config=politics) == pytest.approx(4.35)
+    empty = SimpleNamespace(
+        yes_ask_size=0.0,
+        no_ask_size=None,
+        yes_bid_size=None,
+        yes_ask_cents=14,
+        no_ask_cents=87,
+    )
+    assert event_news_executable_top_notional(empty, "yes", config=politics) is None
 
 
 def test_illiquid_skip_requires_both_oi_and_volume():

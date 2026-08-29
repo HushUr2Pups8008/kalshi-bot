@@ -19,6 +19,18 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.69] - 2026-08-29
+
+### Fixed
+
+- **Official-p G7/G8 use live size, not REST 0.** Research admission
+  already fetches the Kalshi book. If that fetch fails, the event-news
+  paper desk uses REST top-of-book size instead of `G7_zero_liquidity`
+  / `G8_execution_depth_unavailable`. Buying NO uses `yes_bid_size`
+  when `no_ask_size` is missing. Freeze stays fail-closed. Polymarket
+  stays off unless the paper cohort is isolated (`polymarket-*`). Live
+  stays locked.
+
 ## [0.33.68] - 2026-08-29
 
 ### Fixed

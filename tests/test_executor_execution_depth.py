@@ -289,6 +289,58 @@ async def test_live_execution_does_not_submit_when_final_depth_is_unavailable(mo
 
 
 @pytest.mark.asyncio
+async def test_paper_politics_research_uses_rest_top_size_when_orderbook_unavailable(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "utils.event_news_research.is_event_news_paper_cohort",
+        lambda _config=None: True,
+    )
+    executor, rest, paper = _executor(monkeypatch, paper_mode=True)
+    analysis = _analysis(side="yes")
+    analysis.signal_type = "research_decision_grade"
+    analysis.market.yes_ask_size = Decimal("20")
+    analysis.market.yes_ask_cents = 50
+    rest.get_market_orderbook.side_effect = RuntimeError("orderbook unavailable")
+
+    result = await executor.execute(analysis)
+
+    rest.place_limit_order.assert_not_called()
+    assert analysis.signal_meta["final_execution_depth"] == {
+        "source": "rest_top_size",
+        "status": "fallback",
+        "reason": "orderbook_unavailable",
+        "requested_contracts": 20,
+        "available_contracts": 20.0,
+    }
+    assert result in {"paper-depth-1", None}
+
+
+@pytest.mark.asyncio
+async def test_live_politics_research_stays_g8_fail_closed_when_orderbook_unavailable(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setattr(
+        "utils.event_news_research.is_event_news_paper_cohort",
+        lambda _config=None: True,
+    )
+    executor, rest, _paper = _executor(monkeypatch, paper_mode=False)
+    executor._live_submission_holds._path = tmp_path / "holds.json"
+    analysis = _analysis(side="yes")
+    analysis.signal_type = "research_decision_grade"
+    analysis.market.yes_ask_size = Decimal("20")
+    rest.get_market_orderbook.side_effect = RuntimeError("orderbook unavailable")
+
+    result = await executor.execute(analysis)
+
+    assert result is None
+    rest.place_limit_order.assert_not_called()
+    assert analysis.signal_meta["final_execution_depth"]["source"] == "kalshi_orderbook"
+    assert analysis.signal_meta["final_execution_depth"]["status"] == "unavailable"
+
+
+@pytest.mark.asyncio
 async def test_live_execution_uses_final_depth_plan_and_journals_it(monkeypatch, tmp_path):
     executor, rest, _paper = _executor(monkeypatch, paper_mode=False)
     executor._live_submission_holds._path = tmp_path / "holds.json"

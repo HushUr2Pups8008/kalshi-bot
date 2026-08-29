@@ -15,7 +15,8 @@ export PAPER_ACTIVE_COHORT_BANKROLL=50.00
 export PAPER_ACTIVE_COHORT_MAX_DAYS_TO_CLOSE=14
 export BOT_RUNTIME_LOCK_NAME=bot_runtime.kalshi-event-news-20260820.lock
 
-# Live / second venue stay locked. Polymarket remains waitlist-gated.
+# Live / second venue stay locked. Polymarket needs an isolated
+# polymarket-* paper cohort before POLYMARKET_US_ENABLED can be true.
 export LIVE_TRADING_ENABLED=false
 export POLYMARKET_US_ENABLED=false
 export POLYMARKET_US_LIVE_TRADING_ENABLED=false
