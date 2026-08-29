@@ -12,6 +12,7 @@ from typing import Any, Protocol
 from analysis import SignalAnalysis
 from analysis.regime_classifier import compute_regime_weights
 from analysis.research_gate import ResearchEvidence
+from feeds import NewsItem
 from tasks.blend_task import BlendTask, BlendTaskResult, TradeCandidate
 from tasks.evidence_store import DossierState, EvidenceRecord, StructuralPriorRecord
 from tasks.research_dossier import ResearchDossierSnapshot, default_store
@@ -513,7 +514,7 @@ def _signal_analysis_from_research(
         contract_fingerprint=signal.contract_fingerprint,
     )
     return SignalAnalysis(
-        news_item=None,
+        news_item=_research_news_item(market, signal, trigger_evidence),
         market=market,
         estimated_probability=signal.estimated_probability,
         executed_price_cents=int(round(signal.market_price * 100)),
@@ -577,6 +578,31 @@ def _emit_research_opportunity(
         research_run_id=signal.research_run_id,
         signal_type=analysis.signal_type,
         lifecycle_id=lifecycle_id,
+    )
+
+
+def _research_news_item(
+    market: Any,
+    signal: ResearchPaperSignal,
+    evidence: ResearchEvidence | None,
+) -> NewsItem:
+    headline = str(getattr(market, "title", "") or signal.market_ticker)
+    source = str(
+        (evidence.source_name if evidence is not None else "") or "research"
+    )
+    url = str((evidence.source_url if evidence is not None else "") or "")
+    published = None
+    raw_published = evidence.published_at if evidence is not None else None
+    if isinstance(raw_published, datetime):
+        published = raw_published if raw_published.tzinfo else raw_published.replace(tzinfo=UTC)
+    return NewsItem(
+        headline=headline[:200],
+        url=url,
+        source=source,
+        published=published,
+        body=(evidence.snippet[:300] if evidence is not None and evidence.snippet else ""),
+        item_id=f"research:{signal.research_run_id}",
+        retrieval_mode="research_decision_grade",
     )
 
 

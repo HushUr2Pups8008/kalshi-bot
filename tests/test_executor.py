@@ -1437,6 +1437,7 @@ class TestPaperResearchAdmission:
     ):
         """The existing research bridge remains the admission path for LLM-only news."""
         executor, _, paper = _make_paper_executor(monkeypatch)
+        monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
         terms = FinalExecutionTerms(price_cents=50, contracts=1, cost_dollars=0.50)
         executor._final_execution_plan = AsyncMock(return_value=(terms, None))
         paper.record_trade.return_value = "paper-trade-id"
@@ -1450,6 +1451,7 @@ class TestPaperResearchAdmission:
         analysis.llm_magnitude = "small"
         analysis.signal_meta = {
             "research_admission_status": "decision_grade_candidate",
+            "lifecycle_id": "lc-" + ("a" * 32),
         }
 
         with patch("trading.executor.trade_log"):

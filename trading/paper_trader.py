@@ -1838,7 +1838,9 @@ class PaperTrader:
         if not canonical_identity:
             bankroll_after = self._debit_bankroll(cost_dollars)
 
-        source_mult = self.credibility.get_multiplier(analysis.news_item.source)
+        news = getattr(analysis, "news_item", None)
+        source_name = str(getattr(news, "source", None) or "research")
+        source_mult = self.credibility.get_multiplier(source_name)
         # P-6 / CR-E: custom encoder routes around the LD-2/CR-C legacy guard
         # and serializes Decimal / datetime fields safely.
         market_snapshot = json.dumps(
@@ -1927,7 +1929,7 @@ class PaperTrader:
 
             llm_capture_row_id = signal_capture_row_id(
                 analysis.market.ticker,
-                getattr(analysis.news_item, "item_id", "") or "",
+                getattr(getattr(analysis, "news_item", None), "item_id", "") or "",
             )
         except Exception:  # noqa: BLE001 — additive join key, never block a trade
             llm_capture_row_id = None
@@ -1943,8 +1945,8 @@ class PaperTrader:
             executed_edge,
             analysis.kelly_dollars,
             analysis.capped_dollars,
-            analysis.news_item.headline,
-            analysis.news_item.source,
+            str(getattr(news, "headline", None) or analysis.market.ticker),
+            source_name,
             json.dumps(analysis.keywords_matched),
             analysis.reasoning,
             source_mult,
@@ -2192,8 +2194,8 @@ class PaperTrader:
             "edge": executed_edge,
             "kelly_dollars": analysis.kelly_dollars,
             "reasoning": analysis.reasoning,
-            "signal_headline": analysis.news_item.headline,
-            "signal_source": analysis.news_item.source,
+            "signal_headline": str(getattr(news, "headline", None) or analysis.market.ticker),
+            "signal_source": source_name,
             "keywords_matched": analysis.keywords_matched,
             "bankroll_delta_dollars": bankroll_after - bankroll_before,
         }

@@ -19,6 +19,18 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.70] - 2026-08-29
+
+### Fixed
+
+- **Research admission can paper-fill.** B230 was admitted then the
+  executor skipped `capped_dollars=0` (never Kelly-sized) and crashed
+  logging `news_item=None`. Research candidates now carry a NewsItem,
+  get the same Kelly path as news, and skip-log without a headline.
+  KXTRUMPACT cheap official YES (T7 at 14c) stays in prewarm; pending
+  official counts retry instead of 5h-locking. Freeze stays locked.
+  Polymarket stays off. Live stays locked.
+
 ## [0.33.69] - 2026-08-29
 
 ### Fixed

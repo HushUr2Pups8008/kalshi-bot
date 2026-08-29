@@ -289,6 +289,48 @@ async def test_live_execution_does_not_submit_when_final_depth_is_unavailable(mo
 
 
 @pytest.mark.asyncio
+async def test_paper_skip_does_not_crash_when_research_news_item_is_missing(
+    monkeypatch,
+) -> None:
+    executor, _rest, paper = _executor(monkeypatch, paper_mode=True)
+    analysis = _analysis(side="yes")
+    analysis.news_item = None
+    analysis.capped_dollars = 0.0
+    analysis.estimated_probability = 0.50
+    analysis.edge = 0.0
+    analysis.executed_price_cents = 50
+    analysis.confidence = 0.85
+    analysis.market.close_time = "2026-08-30T13:59:00Z"
+
+    result = await executor.execute(analysis)
+
+    assert result is None
+    paper.record_trade.assert_not_called()
+
+
+def test_paper_research_admission_gets_kelly_size_when_capped_dollars_zero(
+    monkeypatch,
+) -> None:
+    executor, _rest, paper = _executor(monkeypatch, paper_mode=True)
+    paper.get_notional_bankroll.return_value = 50.0
+    paper.get_effective_sizing_bankroll.return_value = 50.0
+    analysis = _analysis(side="yes")
+    analysis.capped_dollars = 0.0
+    analysis.kelly_dollars = 0.0
+    analysis.estimated_probability = 0.73
+    analysis.edge = 0.58
+    analysis.executed_price_cents = 14
+    analysis.confidence = 0.85
+    analysis.market.close_time = "2026-08-30T13:59:00Z"
+    analysis.signal_type = "research_decision_grade"
+
+    executor._ensure_sized(analysis)
+
+    assert analysis.capped_dollars > 0
+    assert analysis.kelly_dollars > 0
+
+
+@pytest.mark.asyncio
 async def test_paper_politics_research_uses_rest_top_size_when_orderbook_unavailable(
     monkeypatch,
 ) -> None:

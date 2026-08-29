@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from analysis import SignalAnalysis
-from analysis.kelly import contracts_from_dollars
+from analysis.kelly import contracts_from_dollars, kelly_bet
 from config import cfg, PAPER_MIN_EDGE, PAPER_BLOCK_SAME_SIDE_DUPLICATE
 from kalshi import OrderResult
 from kalshi.rest_client import KalshiRestClient
@@ -101,6 +101,31 @@ def classify_skip_category(reason: str | None) -> str:
 
 def _is_research_paper_review_signal(signal_meta: dict[str, Any]) -> bool:
     return str(signal_meta.get("research_admission_status") or "") == "decision_grade_candidate"
+
+
+def _skip_headline(analysis: SignalAnalysis) -> str:
+    news = getattr(analysis, "news_item", None)
+    headline = getattr(news, "headline", None)
+    if isinstance(headline, str) and headline.strip():
+        return headline[:80]
+    title = getattr(getattr(analysis, "market", None), "title", None)
+    if isinstance(title, str) and title.strip():
+        return title[:80]
+    ticker = getattr(getattr(analysis, "market", None), "ticker", None)
+    return str(ticker or "research")[:80]
+
+
+def _skip_source(analysis: SignalAnalysis) -> str:
+    news = getattr(analysis, "news_item", None)
+    source = getattr(news, "source", None)
+    if isinstance(source, str) and source.strip():
+        return source
+    meta = getattr(analysis, "signal_meta", None)
+    if isinstance(meta, dict):
+        trigger = meta.get("trigger_evidence_source")
+        if isinstance(trigger, str) and trigger.strip():
+            return trigger
+    return "research"
 
 
 def _requires_decision_grade_research_paper_admission(
@@ -249,6 +274,7 @@ class TradeExecutor:
             # or side selection no longer yields positive edge). Caller logs
             # the reason; no trade attempted.
             return None
+        self._ensure_sized(analysis)
         # P-5 CR-C: legacy yes_price read in this log line is guarded by the
         # candidate-side `is_tradeable()` check inside `_analysis_from_candidate`.
         log.debug(
@@ -278,8 +304,8 @@ class TradeExecutor:
                 skip_category=classify_skip_category(skip_reason),
                 ticker=analysis.market.ticker,
                 side=analysis.side,
-                headline=analysis.news_item.headline[:80],
-                source=analysis.news_item.source,
+                headline=_skip_headline(analysis),
+                source=_skip_source(analysis),
                 method="research_decision_grade",
                 llm_direction=analysis.llm_direction,
                 llm_magnitude=analysis.llm_magnitude,
@@ -331,8 +357,8 @@ class TradeExecutor:
                 "skip_category": classify_skip_category(skip_reason),
                 "ticker": analysis.market.ticker,
                 "side": analysis.side,
-                "headline": analysis.news_item.headline[:80],
-                "source": analysis.news_item.source,
+                "headline": _skip_headline(analysis),
+                "source": _skip_source(analysis),
                 "method": method,
                 "llm_direction": analysis.llm_direction,
                 "llm_magnitude": analysis.llm_magnitude,
@@ -377,6 +403,53 @@ class TradeExecutor:
             )
 
         return trade_id
+
+    def _ensure_sized(self, analysis: SignalAnalysis) -> None:
+        """Kelly-size research admissions. News already sized in main.py."""
+        if float(getattr(analysis, "capped_dollars", 0.0) or 0.0) > 0:
+            return
+        executed = analysis.executed_price_cents
+        if (
+            isinstance(executed, bool)
+            or not isinstance(executed, int)
+            or not 0 < executed < 100
+        ):
+            return
+        side = str(getattr(analysis, "side", "") or "").strip().lower()
+        estimated = float(analysis.estimated_probability)
+        side_probability = estimated if side == "yes" else 1.0 - estimated
+        notional = self._sizing_bankroll()
+        from analysis.market_matcher import _days_to_close
+        from utils.event_news_research import event_news_horizon_days
+
+        days_to_close = event_news_horizon_days(
+            analysis.market, _days_to_close(analysis.market.close_time) or 14.0
+        )
+        min_edge = PAPER_MIN_EDGE if self._is_paper else cfg.min_edge
+        _frac, kelly_dollars, capped_dollars = kelly_bet(
+            estimated_probability=side_probability,
+            market_price_cents=float(executed),
+            bankroll=notional,
+            kelly_fraction=cfg.kelly_fraction,
+            max_bet_dollars=cfg.dynamic_max_bet(notional),
+            min_bet_dollars=cfg.min_bet_dollars,
+            min_edge=min_edge,
+            confidence=float(getattr(analysis, "confidence", 1.0) or 1.0),
+            days_to_close=days_to_close,
+            time_discount_half_life=cfg.time_discount_half_life,
+            time_discount_floor=cfg.time_discount_floor,
+        )
+        analysis.kelly_fraction = _frac
+        analysis.kelly_dollars = kelly_dollars
+        analysis.capped_dollars = capped_dollars
+
+    def _sizing_bankroll(self) -> float:
+        getter = getattr(self._paper, "get_effective_sizing_bankroll", None)
+        if callable(getter):
+            value = getter()
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+                return float(value)
+        return float(self._paper.get_notional_bankroll())
 
     def _validate(self, analysis: SignalAnalysis) -> Optional[str]:
         """Return skip reason, or None if the trade should proceed."""
@@ -743,6 +816,7 @@ class TradeExecutor:
 
         signal_meta = self._candidate_signal_meta(candidate)
         analysis = copy.copy(candidate.fast_lane_analysis)
+        preserved_signal_type = str(getattr(analysis, "signal_type", "") or "")
 
         ticker = candidate.market.ticker
         fresh_market = None
@@ -808,7 +882,8 @@ class TradeExecutor:
         analysis.side = new_side
         analysis.executed_price_cents = new_executed_cents
         analysis.edge = edges.yes_edge if new_side == "yes" else edges.no_edge
-        analysis.signal_type = "blend"
+        if preserved_signal_type != "research_decision_grade":
+            analysis.signal_type = "blend"
         analysis.signal_meta = signal_meta
         return analysis
 

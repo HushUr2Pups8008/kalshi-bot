@@ -40,6 +40,10 @@ _FAVORITE_ASK_HIGH = 0.99
 # Factbase run-rate says the cheap side is the value.
 _TRUTH_SOCIAL_COUNT_ASK_LOW = 0.36
 _TRUTH_SOCIAL_COUNT_ASK_HIGH = 0.90
+# White House action counts (T7 YES at 14c, p≈0.73) are official-p cheap
+# YES, not 1c lotteries. Keep 12c as the floor so 1-11c noise stays out.
+_OFFICIAL_ACTION_COUNT_ASK_LOW = 0.12
+_OFFICIAL_ACTION_COUNT_ASK_HIGH = 0.90
 # Near-certain asks (98¢ NO "won't leave Congress") have ~2¢ max payoff after
 # fees and currently burn every research cycle. Do not treat them as the
 # money path; keep 0.55-0.90 as the tradeable favorite band.
@@ -368,13 +372,18 @@ def event_news_favorite_side(
         return None, None
     yes_ask, no_ask = snapshot_ask_cents(market)
     active = config if config is not None else cfg
-    if event_news_series_ticker(market).startswith("KXTRUTHSOCIAL"):
+    series = event_news_series_ticker(market)
+    if series.startswith("KXTRUTHSOCIAL"):
         allowed = [(_TRUTH_SOCIAL_COUNT_ASK_LOW, _TRUTH_SOCIAL_COUNT_ASK_HIGH)]
+        excluded: list[tuple[float, float]] = []
+    elif series.startswith("KXTRUMPACT"):
+        allowed = [(_OFFICIAL_ACTION_COUNT_ASK_LOW, _OFFICIAL_ACTION_COUNT_ASK_HIGH)]
+        excluded = []
     else:
         allowed = list(getattr(active, "llm_allowed_price_bands", ()) or ())
         if not allowed:
             allowed = [(_FAVORITE_ASK_LOW, _FAVORITE_ASK_HIGH)]
-    excluded = list(getattr(active, "llm_excluded_price_bands", ()) or ())
+        excluded = list(getattr(active, "llm_excluded_price_bands", ()) or ())
 
     def _in_favorite(cents: int | None) -> bool:
         if cents is None:
@@ -507,6 +516,7 @@ _IN_BAND_RETRYABLE_RESEARCH_REASONS = frozenset(
         "no_research_hits",
         "neutral_only_evidence",
         "ambiguous_direction",
+        "official_data_pending",
     }
 )
 

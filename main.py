@@ -4848,9 +4848,9 @@ class TradingBot:
             try:
                 trade_id = await self.executor.execute(candidate)
                 if trade_id:
-                    self.source_stats.increment_trades(
-                        candidate.fast_lane_analysis.news_item.source
-                    )
+                    news = getattr(candidate.fast_lane_analysis, "news_item", None)
+                    source = str(getattr(news, "source", None) or "research")
+                    self.source_stats.increment_trades(source)
                 if self.executor._venue_value(candidate.market) == "kalshi":
                     self.ws.watch([candidate.market.ticker])
             except Exception:

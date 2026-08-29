@@ -394,6 +394,29 @@ def test_favorite_ask_band_and_prewarm_filter_politics_only():
     assert event_news_prewarm_skip_reason(longshot, config=politics) == (
         "ask_outside_favorite_band"
     )
+    cheap_official_yes = SimpleNamespace(
+        ticker="KXTRUMPACT-26AUG23-T7",
+        yes_ask_cents=14,
+        no_ask_cents=87,
+        yes_ask=14,
+        no_ask=87,
+        yes_ask_size=8.0,
+        no_ask_size=6.0,
+        open_interest_fp=40.0,
+        volume_24h_fp=20.0,
+    )
+    assert event_news_in_allowed_ask_band(cheap_official_yes, config=politics) is True
+    assert event_news_prewarm_skip_reason(cheap_official_yes, config=politics) is None
+    assert event_news_bypass_quote_skip_cooldown(
+        "official_data_pending",
+        cheap_official_yes,
+        config=politics,
+    ) is True
+    assert event_news_bypass_quote_skip_cooldown(
+        "official_data_pending",
+        cheap_official_yes,
+        config=freeze,
+    ) is False
 
 
 def test_near_certain_ask_is_not_politics_money_path():
@@ -602,7 +625,7 @@ def test_quote_dependent_cooldown_bypass_only_on_live_favorite():
         event_news_bypass_quote_skip_cooldown(
             "official_data_pending", favorite, config=politics
         )
-        is False
+        is True
     )
     assert (
         event_news_bypass_quote_skip_cooldown(
@@ -833,9 +856,7 @@ def test_truth_social_mid_price_yes_is_in_politics_money_path():
     )
     assert event_news_favorite_side(truth_yes, config=politics) == ("no", 63)
     assert event_news_prewarm_skip_reason(truth_yes, config=politics) is None
-    assert event_news_prewarm_skip_reason(other_mid, config=politics) == (
-        "ask_outside_favorite_band"
-    )
+    assert event_news_prewarm_skip_reason(other_mid, config=politics) is None
     assert event_news_prewarm_skip_reason(truth_yes, config=freeze) is None
 
 
