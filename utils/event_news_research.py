@@ -7,6 +7,7 @@ process uses a different cohort id and must not take these paths.
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from typing import Any
 
 from analysis.research_gate import ResearchStatus, run_research_gate
@@ -758,6 +759,76 @@ def event_news_should_retry_admission(
 
 def event_news_prewarm_allows(market: Any, *, config: Any = None) -> bool:
     return event_news_prewarm_skip_reason(market, config=config) is None
+
+
+def event_news_official_p_ready(
+    *,
+    estimated_probability: float | None,
+    force_side: str | None,
+    market: Any,
+    config: Any = None,
+) -> bool:
+    """True when research_gate already priced both sides on an in-band book."""
+    if not is_event_news_paper_cohort(config):
+        return False
+    side = str(force_side or "").strip().lower()
+    if side not in {"yes", "no"}:
+        return False
+    try:
+        probability = float(estimated_probability)
+    except (TypeError, ValueError):
+        return False
+    if not 0.0 < probability < 1.0:
+        return False
+    if event_news_prewarm_skip_reason(market, config=config) is not None:
+        return False
+    yes_ask, no_ask = snapshot_ask_cents(market)
+    return yes_ask is not None and no_ask is not None
+
+
+def event_news_admission_gate_reason(
+    market: Any,
+    *,
+    edge: float | None = None,
+    config: Any = None,
+) -> str | None:
+    """Re-apply favorite-band / crossed / last-ask / fee-net edge at admit time."""
+    if not is_event_news_paper_cohort(config):
+        return None
+    skip = event_news_prewarm_skip_reason(market, config=config)
+    if skip:
+        return skip
+    divergence = event_news_spread_disagreement(market, config=config)
+    if divergence:
+        return divergence
+    if edge is None:
+        return None
+    required = event_news_min_edge(0.02, market, config=config)
+    if float(edge) + 1e-12 < required:
+        return "below_fee_net_min_edge"
+    return None
+
+
+def event_news_dossier_is_stale(
+    researched_ts: str | None,
+    *,
+    now: datetime | None = None,
+    max_age_seconds: float = 6 * 3600,
+) -> bool:
+    """Decision-grade older than max_age must be re-researched, not blend-killed."""
+    text = str(researched_ts or "").strip()
+    if not text:
+        return True
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    clock = now or datetime.now(timezone.utc)
+    if clock.tzinfo is None:
+        clock = clock.replace(tzinfo=timezone.utc)
+    return (clock.astimezone(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds() > max_age_seconds
 
 
 def event_news_official_research_kwargs(*, config: Any = None) -> dict[str, bool]:

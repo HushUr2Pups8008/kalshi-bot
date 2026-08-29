@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -13,7 +14,10 @@ from utils.event_news_research import (
     event_news_horizon_days,
     event_news_illiquid,
     event_news_in_allowed_ask_band,
+    event_news_admission_gate_reason,
+    event_news_dossier_is_stale,
     event_news_min_edge,
+    event_news_official_p_ready,
     event_news_missing_snapshot_ask,
     event_news_non_politics_series,
     event_news_finalize_prewarm_batch,
@@ -968,6 +972,50 @@ def test_politics_retries_admission_without_paper_exposure():
             config=freeze,
         )
         is False
+    )
+
+
+def test_official_p_ready_and_admission_gate_politics_only():
+    politics = _politics_config()
+    freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
+    t240 = SimpleNamespace(
+        ticker="KXTRUTHSOCIAL-26AUG29-T240",
+        series_ticker="KXTRUTHSOCIAL",
+        yes_ask_cents=18,
+        no_ask_cents=83,
+        yes_ask=18,
+        no_ask=83,
+        yes_ask_size=280.0,
+        no_ask_size=280.0,
+        open_interest_fp=1000.0,
+        volume_24h_fp=500.0,
+    )
+    assert (
+        event_news_official_p_ready(
+            estimated_probability=0.72,
+            force_side="no",
+            market=t240,
+            config=politics,
+        )
+        is True
+    )
+    assert (
+        event_news_official_p_ready(
+            estimated_probability=0.72,
+            force_side="no",
+            market=t240,
+            config=freeze,
+        )
+        is False
+    )
+    assert event_news_admission_gate_reason(t240, edge=0.12, config=politics) is None
+    assert event_news_dossier_is_stale(
+        "2026-08-28T18:17:34Z",
+        now=datetime(2026, 8, 29, 14, 22, tzinfo=timezone.utc),
+    )
+    assert not event_news_dossier_is_stale(
+        "2026-08-29T14:00:00Z",
+        now=datetime(2026, 8, 29, 14, 22, tzinfo=timezone.utc),
     )
 
 

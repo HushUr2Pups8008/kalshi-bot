@@ -17,7 +17,6 @@ from tasks.blend_task import BlendTask, BlendTaskResult, TradeCandidate
 from tasks.evidence_store import DossierState, EvidenceRecord, StructuralPriorRecord
 from tasks.research_dossier import ResearchDossierSnapshot, default_store
 from tasks.research_prewarm_task import ResearchPrewarmResult
-from utils.logger import trade_log
 from utils.lifecycle import build_research_lifecycle_id
 from utils.research_evidence_quality import (
     MIN_COUNTER_EVIDENCE_CONFIDENCE,
@@ -30,8 +29,16 @@ from utils.research_evidence_quality import (
     research_evidence_temporally_valid,
 )
 from utils.research_market_eligibility import research_market_eligibility
-from utils.event_news_research import is_event_news_paper_cohort
+from utils.event_news_research import (
+    event_news_admission_gate_reason,
+    event_news_official_p_ready,
+    is_event_news_paper_cohort,
+)
 from tasks.research_dossier import _evidence_has_both_sides_probability
+from utils.logger import get_logger, trade_log
+
+_event_news_log = get_logger("event_news_research")
+TRADE_CANDIDATE_STATUS = "trade_candidate"
 
 DECISION_GRADE_STATUS = "decision_grade_candidate"
 _COUNTER_QUERY_INTENTS = frozenset({"disconfirming", "contradiction_check"})
@@ -168,7 +175,13 @@ class ResearchPaperSignalProvider:
         snapshot = await self.store.get_dossier_snapshot(market_ticker)
         if snapshot is None:
             return None, "missing_dossier"
-        if (
+        if is_event_news_paper_cohort():
+            if snapshot.last_verdict_status not in {
+                DECISION_GRADE_STATUS,
+                TRADE_CANDIDATE_STATUS,
+            }:
+                return None, "not_decision_grade_candidate"
+        elif (
             snapshot.last_verdict_status != DECISION_GRADE_STATUS
             or snapshot.last_decision_grade_status != DECISION_GRADE_STATUS
         ):
@@ -364,7 +377,9 @@ class ResearchPaperAdmissionBridge:
         result_ticker = str(result.market_ticker or "").strip()
         market_ticker = str(getattr(market, "ticker", "") or "").strip()
         ticker = result_ticker or market_ticker
-        if not _is_decision_grade_prewarm_result(result):
+        if not _is_official_p_prewarm_result(result) and not _is_decision_grade_prewarm_result(
+            result
+        ):
             return ResearchPaperAdmissionResult(
                 market_ticker=ticker,
                 admitted=False,
@@ -420,6 +435,22 @@ class ResearchPaperAdmissionBridge:
             # Uniform 1/3 → rc=0 → scaled_confidence=0 → G1 always fails.
             market.regime_weights = compute_regime_weights(market)
         analysis = _signal_analysis_from_research(market, current_signal)
+        bypass_blend = is_event_news_paper_cohort() and event_news_official_p_ready(
+            estimated_probability=current_signal.estimated_probability,
+            force_side=current_signal.side,
+            market=market,
+        )
+        if bypass_blend:
+            gate_reason = event_news_admission_gate_reason(
+                market,
+                edge=current_signal.estimated_edge,
+            )
+            if gate_reason:
+                return ResearchPaperAdmissionResult(
+                    market_ticker=ticker,
+                    admitted=False,
+                    reason=gate_reason,
+                )
         claim_admission = getattr(
             self.provider.store,
             "claim_research_paper_admission",
@@ -468,6 +499,32 @@ class ResearchPaperAdmissionBridge:
             )
         try:
             _emit_research_opportunity(self.logger, market, current_signal, analysis)
+            if bypass_blend:
+                candidate = _official_p_trade_candidate(analysis, current_signal)
+                await self.trading_queue.put(candidate)
+                _event_news_log.info(
+                    "[EVENT_NEWS_ADMIT] blend_bypassed reason=official_p "
+                    "ticker=%s side=%s p=%.3f edge=%.4f",
+                    ticker,
+                    current_signal.side,
+                    current_signal.estimated_probability,
+                    current_signal.estimated_edge,
+                )
+                await complete_admission(
+                    ticker,
+                    current_signal.research_run_id,
+                    current_signal.contract_fingerprint,
+                    state="completed",
+                    enqueued=True,
+                    outcome_reason=None,
+                )
+                return ResearchPaperAdmissionResult(
+                    market_ticker=ticker,
+                    admitted=True,
+                    reason=None,
+                    enqueued=True,
+                    blend_result=None,
+                )
             research_store = ResearchBackedBlendStore(current_signal)
             if self._route_analysis is not None:
                 blend_result = await self._route_analysis(analysis, research_store)
@@ -543,6 +600,51 @@ def _is_decision_grade_prewarm_result(result: ResearchPrewarmResult) -> bool:
     if result.status == DECISION_GRADE_STATUS:
         return True
     return result.status == "skipped_terminal" and result.skip_reason == DECISION_GRADE_STATUS
+
+
+def _is_official_p_prewarm_result(result: ResearchPrewarmResult) -> bool:
+    if not is_event_news_paper_cohort():
+        return False
+    status = str(result.status or "").strip()
+    if status in {DECISION_GRADE_STATUS, TRADE_CANDIDATE_STATUS}:
+        return True
+    return status == "skipped_terminal" and str(result.skip_reason or "").strip() in {
+        DECISION_GRADE_STATUS,
+        TRADE_CANDIDATE_STATUS,
+    }
+
+
+def _official_p_trade_candidate(
+    analysis: SignalAnalysis,
+    signal: ResearchPaperSignal,
+) -> TradeCandidate:
+    from tasks.trade_readiness_gate import ReadinessDecision
+
+    cents = analysis.executed_price_cents
+    signal_meta = dict(analysis.signal_meta or {})
+    signal_meta["source_lane"] = "research_official_p"
+    signal_meta["blend_bypassed"] = True
+    signal_meta["blend_bypass_reason"] = "official_p"
+    readiness = ReadinessDecision(
+        passed=True,
+        failure_reasons=(),
+        trade_blocked_reason=None,
+        readiness_gate_min_edge_override=None,
+        scaled_confidence=float(analysis.confidence or 0.0),
+        regime_confidence=1.0,
+        fail_safe_active=False,
+        applied_conditions=("event_news_official_p",),
+    )
+    return TradeCandidate(
+        fast_lane_analysis=analysis,
+        market=analysis.market,
+        blended_probability=float(signal.estimated_probability),
+        entry_price_cents=float(cents) if cents is not None else 0.0,
+        side=analysis.side,
+        signal_meta=signal_meta,
+        readiness_decision=readiness,
+        executed_price_cents=cents,
+    )
 
 
 def _signal_analysis_from_research(

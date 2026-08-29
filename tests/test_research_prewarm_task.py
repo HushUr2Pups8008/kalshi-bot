@@ -1541,6 +1541,113 @@ async def test_prewarm_skips_terminal_decision_grade_candidate(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_politics_stale_decision_grade_is_reresearched(monkeypatch, tmp_path):
+    import config as config_module
+    from utils.event_news_research import EVENT_NEWS_COHORT_ID
+
+    monkeypatch.setattr(config_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
+    monkeypatch.setattr("utils.event_news_research.cfg", config_module.cfg)
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    calls: list[str] = []
+    await store.record_research_run(
+        "KXTRUTHSOCIAL-26AUG29-T240",
+        "run-decision-old",
+        trigger_headline="Decision-grade candidate",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Stale official p",
+        verdict_status=ResearchStatus.DECISION_GRADE_CANDIDATE.value,
+        skip_reason=None,
+        decision_grade_status=ResearchStatus.DECISION_GRADE_CANDIDATE.value,
+        force_side="yes",
+        estimated_probability=0.64,
+        confidence=0.82,
+        evidence=[
+            ResearchEvidence(
+                source_class="official_primary",
+                source_name="Factbase",
+                source_url="https://rollcall.com/wp-json/factbase/v1/twitter",
+                title="Official p",
+                snippet="Implied YES 0.64",
+                claim_type="official_resolution",
+                supports_direction="yes",
+                supports_confidence=0.9,
+                metric_name="truth_social_range_probability",
+                metric_value=0.64,
+                extraction_confidence=0.95,
+            )
+        ],
+        queries=[
+            ResearchQuery(
+                query="official result",
+                query_intent="official_resolution",
+                source_class="resolution_source",
+            ),
+            ResearchQuery(
+                query="countercase",
+                query_intent="disconfirming",
+                source_class="reputable_secondary",
+            ),
+        ],
+    )
+    with sqlite3.connect(tmp_path / "research_dossier.db") as conn:
+        conn.execute(
+            """
+            UPDATE research_dossiers
+            SET last_researched_ts = '2026-08-28T18:17:34.000Z'
+            WHERE market_ticker = 'KXTRUTHSOCIAL-26AUG29-T240'
+            """
+        )
+        conn.execute(
+            """
+            UPDATE research_tasks
+            SET updated_ts = '2026-08-28T18:17:34.000Z',
+                cooldown_until_ts = NULL
+            WHERE market_ticker = 'KXTRUTHSOCIAL-26AUG29-T240'
+            """
+        )
+
+    async def research_gate(_news, market, **_kwargs):
+        calls.append(market.ticker)
+        return SimpleNamespace(
+            status=ResearchStatus.DECISION_GRADE_CANDIDATE,
+            attempted=True,
+            queries=[],
+            evidence=[],
+        )
+
+    market = SimpleNamespace(
+        ticker="KXTRUTHSOCIAL-26AUG29-T240",
+        title="Will Trump post 240 times?",
+        rules_primary="Factbase weekly post count resolves the market.",
+        rules_secondary="",
+        settlement_sources=(),
+        contract_terms_url="",
+        status="open",
+        close_time="2099-12-31T23:59:59Z",
+        series_ticker="KXTRUTHSOCIAL",
+        event_ticker="KXTRUTHSOCIAL-26AUG29",
+        yes_ask_cents=18,
+        no_ask_cents=83,
+        yes_ask=18,
+        no_ask=83,
+        yes_ask_size=280.0,
+        no_ask_size=280.0,
+        open_interest_fp=1000.0,
+        volume_24h_fp=500.0,
+    )
+    task = ResearchPrewarmTask(
+        store=store,
+        research_gate=research_gate,
+        target_cooldown_seconds=300.0,
+    )
+    result = await task.process_market(market)
+    assert calls == ["KXTRUTHSOCIAL-26AUG29-T240"]
+    assert result.attempted is True
+
+
+@pytest.mark.asyncio
 async def test_politics_prewarm_skip_does_not_stamp_cooldown(monkeypatch, tmp_path):
     import config as config_module
     from utils.event_news_research import EVENT_NEWS_COHORT_ID

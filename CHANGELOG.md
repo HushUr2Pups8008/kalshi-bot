@@ -19,6 +19,18 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.72] - 2026-08-29
+
+### Fixed
+
+- **Official-p admissions skip BlendTask on politics.** In-band
+  decision-grade / trade-candidate books with a research_gate p, side,
+  and snapshot asks no longer die at G1 or the 6-hour dossier max-age.
+  Favorite-band, crossed, last-ask, and fee-net min-edge still apply.
+  Stale in-band DG is re-researched then admitted without blend. The
+  news/LLM path still uses BlendTask. Freeze stays locked. Live stays
+  locked.
+
 ## [0.33.71] - 2026-08-29
 
 ### Fixed

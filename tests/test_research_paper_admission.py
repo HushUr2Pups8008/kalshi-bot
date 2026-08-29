@@ -191,6 +191,57 @@ class SpyLogger:
         self.lane_skipped_records.append(kwargs)
 
 
+def _politics_in_band_market() -> KalshiMarket:
+    market = KalshiMarket(
+        ticker="KXTRUTHSOCIAL-26AUG29-T240",
+        title="Will Donald Trump make 240 Truth Social posts this week?",
+        yes_bid=17,
+        yes_ask=18,
+        yes_price=18,
+        volume=500,
+        open_interest=1000,
+        close_time="2026-08-30T23:59:59Z",
+        status="active",
+        yes_bid_cents=17,
+        yes_ask_cents=18,
+        no_bid_cents=82,
+        no_ask_cents=83,
+        price_available=True,
+        price_source="rest_list",
+        price_method="dollars_fixed_point",
+        liquidity_dollars=Decimal("1000"),
+    )
+    market.series_ticker = "KXTRUTHSOCIAL"
+    market.event_ticker = "KXTRUTHSOCIAL-26AUG29"
+    market.yes_ask_size = 280.0
+    market.no_ask_size = 280.0
+    market.open_interest_fp = 1000.0
+    market.volume_24h_fp = 500.0
+    return market
+
+
+def _official_range_evidence(*, ticker: str = "KXTRUTHSOCIAL-26AUG29-T240") -> list[ResearchEvidence]:
+    return [
+        ResearchEvidence(
+            source_class="official_primary",
+            source_name="Roll Call Factbase Truth Social records",
+            source_url="https://rollcall.com/wp-json/factbase/v1/twitter",
+            title="Factbase weekly post count",
+            snippet="Factbase records imply YES probability 0.640.",
+            claim_type="official_resolution",
+            supports_direction="yes",
+            supports_confidence=0.95,
+            retrieved_at="2026-07-02T16:00:00+00:00",
+            inserted_at="2026-07-02T16:00:00+00:00",
+            metric_name="truth_social_range_probability",
+            metric_value=0.64,
+            metric_unit="probability",
+            extraction_confidence=0.96,
+            contract_fingerprint="contract-v1",
+        )
+    ]
+
+
 def _market(*, venue: object | None = None) -> KalshiMarket:
     market = KalshiMarket(
         ticker="KXRESEARCH-1",
@@ -617,6 +668,58 @@ async def test_politics_retries_unfilled_decision_grade_admission(monkeypatch) -
     third = await blocked.admit_prewarm_result(prewarm, _market())
     assert third.admitted is False
     assert third.reason == "duplicate_research_admission"
+
+
+@pytest.mark.asyncio
+async def test_politics_official_p_bypasses_blend_task(monkeypatch) -> None:
+    import config as config_module
+    from utils.event_news_research import EVENT_NEWS_COHORT_ID
+
+    monkeypatch.setattr(config_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
+    monkeypatch.setattr("utils.event_news_research.cfg", config_module.cfg)
+    monkeypatch.setattr(
+        "tasks.research_paper_admission.is_event_news_paper_cohort",
+        lambda _config=None: True,
+    )
+    ticker = "KXTRUTHSOCIAL-26AUG29-T240"
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    routed: list[object] = []
+
+    async def route_analysis(analysis, _store):
+        routed.append(analysis)
+        raise AssertionError("BlendTask must not run for official p")
+
+    bridge = ResearchPaperAdmissionBridge(
+        research_store=FakeResearchStore(
+            snapshot=replace(_snapshot(), market_ticker=ticker),
+            evidence=_official_range_evidence(ticker=ticker),
+            has_counter_query=False,
+        ),
+        trading_queue=queue,
+        logger=SpyLogger(),
+        now=lambda: datetime(2026, 7, 2, 16, 5, tzinfo=UTC),
+        route_analysis=route_analysis,
+        paper_exposure_checker=lambda _ticker: False,
+    )
+    result = await bridge.admit_prewarm_result(
+        ResearchPrewarmResult(
+            market_ticker=ticker,
+            status="skipped_terminal",
+            attempted=False,
+            skip_reason="decision_grade_candidate",
+            research_run_id="rr-decision",
+            research_contract_fingerprint="contract-v1",
+        ),
+        _politics_in_band_market(),
+    )
+    assert result.admitted is True
+    assert result.enqueued is True
+    assert result.blend_result is None
+    assert routed == []
+    candidate = queue.get_nowait()
+    assert candidate.fast_lane_analysis.signal_type == "research_decision_grade"
+    assert candidate.signal_meta["blend_bypassed"] is True
+    assert candidate.signal_meta["blend_bypass_reason"] == "official_p"
 
 
 @pytest.mark.asyncio

@@ -768,6 +768,29 @@ class ResearchPrewarmTask:
         if snapshot.state == "decision_grade_candidate":
             if not await self._decision_grade_task_has_countercase(ticker):
                 return None
+            from utils.event_news_research import (
+                event_news_dossier_is_stale,
+                event_news_prewarm_skip_reason,
+            )
+
+            if (
+                is_event_news_paper_cohort()
+                and market is not None
+                and event_news_prewarm_skip_reason(market) is None
+            ):
+                try:
+                    dossier = await self.store.get_dossier_snapshot(ticker)
+                except Exception:
+                    dossier = None
+                researched_ts = (
+                    None if dossier is None else dossier.last_researched_ts
+                )
+                if event_news_dossier_is_stale(researched_ts):
+                    _log.info(
+                        "[EVENT_NEWS_PREWARM] stale_dg_reresearch ticker=%s",
+                        ticker,
+                    )
+                    return None
         if snapshot.state in _TERMINAL_RESEARCH_TASK_STATES:
             if snapshot.terminal_reason in _RETRYABLE_TERMINAL_RESEARCH_REASONS:
                 return None
