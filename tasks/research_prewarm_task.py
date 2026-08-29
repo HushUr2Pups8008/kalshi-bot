@@ -240,6 +240,17 @@ class ResearchPrewarmTask:
         )
 
         prewarm_skip = event_news_prewarm_skip_reason(market)
+        if prewarm_skip == "ask_outside_favorite_band":
+            from utils.event_news_research import (
+                event_news_google_counter_not_required,
+            )
+
+            if event_news_google_counter_not_required(
+                market=market,
+                estimated_probability=0.5,
+                force_side="yes",
+            ):
+                prewarm_skip = None
         if prewarm_skip:
             _log.info(
                 "[EVENT_NEWS_PREWARM] skip ticker=%s reason=%s",
@@ -801,6 +812,32 @@ class ResearchPrewarmTask:
                 and market_has_research_source_path(market)
             ):
                 return None
+            if (
+                snapshot.state == "untradeable"
+                and snapshot.terminal_reason
+                in {
+                    "contradictory_evidence_unresolved",
+                    "insufficient_directional_evidence",
+                }
+                and is_event_news_paper_cohort()
+                and market is not None
+            ):
+                from utils.event_news_research import (
+                    event_news_google_counter_not_required,
+                )
+
+                if event_news_google_counter_not_required(
+                    market=market,
+                    estimated_probability=0.5,
+                    force_side="yes",
+                ):
+                    _log.info(
+                        "[EVENT_NEWS_PREWARM] retry_missing_counter ticker=%s "
+                        "terminal=%s",
+                        ticker,
+                        snapshot.terminal_reason,
+                    )
+                    return None
             run_id = None
             fingerprint = None
             if snapshot.state == "decision_grade_candidate":

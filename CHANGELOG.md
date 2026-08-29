@@ -19,6 +19,19 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.73] - 2026-08-29
+
+### Fixed
+
+- **Politics official sources can emit a p without a Google counter.** Reserve
+  favorites with Kalshi `settlement_sources` / `contract_terms_url` and
+  snapshot asks in 0.55–0.99 no longer die as `missing_counter_evidence`
+  before research_gate keeps `estimated_probability` + `force_side`.
+  The missing-counter hit is a warning. Still fail closed on missing
+  official source, crossed book, missing asks, longshot 0.00–0.35, or
+  fee-net edge below hurdle. True `no_edge` stays idle. Freeze stays
+  locked. Live stays locked.
+
 ## [0.33.72] - 2026-08-29
 
 ### Fixed

@@ -1822,6 +1822,7 @@ def decide_research_verdict(
     open_questions: tuple[str, ...] = (),
     contract_ticker: str = "",
     score_both_sides: bool | None = None,
+    market: Any | None = None,
 ) -> ResearchVerdict:
     queries = list(queries or [])
     if score_both_sides is None:
@@ -2088,6 +2089,9 @@ def decide_research_verdict(
                 ),
                 contract_ticker=contract_ticker,
                 score_both_sides=score_both_sides,
+                yes_ask=yes_ask,
+                no_ask=no_ask,
+                market=market,
             )
         return candidate
     if require_decision_grade:
@@ -2168,8 +2172,25 @@ def _decision_grade_verdict(
     model_reason: str | None,
     contract_ticker: str = "",
     score_both_sides: bool = False,
+    yes_ask: float | None = None,
+    no_ask: float | None = None,
+    market: Any | None = None,
 ) -> ResearchVerdict:
-    if not _has_reliable_non_pending_source_path(candidate.evidence):
+    from utils.event_news_research import event_news_google_counter_not_required
+
+    official_p_without_google = event_news_google_counter_not_required(
+        market=market,
+        ticker=contract_ticker,
+        yes_ask=yes_ask,
+        no_ask=no_ask,
+        evidence=list(candidate.evidence),
+        estimated_probability=candidate.estimated_probability,
+        force_side=candidate.force_side,
+    )
+    if (
+        not _has_reliable_non_pending_source_path(candidate.evidence)
+        and not official_p_without_google
+    ):
         return _decision_grade_block(
             candidate,
             "no_reliable_source_path",
@@ -2226,11 +2247,20 @@ def _decision_grade_verdict(
         # An official structured p already prices YES and NO. Requiring a
         # Google "no contrary" snippet here is why Factbase counts never
         # admitted. Freeze/live keep the search-phrase counter check.
-        if not (
+        if official_p_without_google or (
             score_both_sides
             and _probability_from_structured_evidence(list(candidate.evidence))
             is not None
         ):
+            if official_p_without_google:
+                log.warning(
+                    "[EVENT_NEWS_RESEARCH] missing_counter_evidence ignored "
+                    "official_p ticker=%s side=%s p=%s",
+                    contract_ticker,
+                    candidate.force_side,
+                    candidate.estimated_probability,
+                )
+        else:
             return _decision_grade_block(
                 candidate,
                 "missing_counter_evidence",
@@ -7924,6 +7954,7 @@ async def run_research_gate(
             live_mode=live_mode,
             queries=queries,
             contract_ticker=ticker,
+            market=market,
         )
         if (
             cached_status == ResearchStatus.DECISION_GRADE_CANDIDATE.value
@@ -7933,6 +7964,9 @@ async def run_research_gate(
                 verdict,
                 model_reason=verdict.summary,
                 contract_ticker=ticker,
+                yes_ask=yes_ask,
+                no_ask=no_ask,
+                market=market,
             )
         return verdict
     provider_non_pending_evidence: list[ResearchEvidence] = []
@@ -8502,6 +8536,7 @@ async def run_research_gate(
                                 counterclaims=decision_grade_counterclaims,
                                 open_questions=decision_grade_open_questions,
                                 contract_ticker=ticker,
+                                market=market,
                             )
                             gdpnow_countercheck_qualified = _is_vetted_candidate_status(
                                 enriched_verdict.status
@@ -8718,6 +8753,7 @@ async def run_research_gate(
         counterclaims=decision_grade_counterclaims,
         open_questions=decision_grade_open_questions,
         contract_ticker=ticker,
+        market=market,
     )
     if require_decision_grade:
         verdict = _keep_pending_no_edge_researchable(verdict)

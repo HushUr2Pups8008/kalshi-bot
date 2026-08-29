@@ -16,6 +16,7 @@ from utils.event_news_research import (
     event_news_in_allowed_ask_band,
     event_news_admission_gate_reason,
     event_news_dossier_is_stale,
+    event_news_google_counter_not_required,
     event_news_min_edge,
     event_news_official_p_ready,
     event_news_missing_snapshot_ask,
@@ -1016,6 +1017,119 @@ def test_official_p_ready_and_admission_gate_politics_only():
     assert not event_news_dossier_is_stale(
         "2026-08-29T14:00:00Z",
         now=datetime(2026, 8, 29, 14, 22, tzinfo=timezone.utc),
+    )
+
+
+def test_google_counter_not_required_for_in_band_official_reserve():
+    politics = _politics_config()
+    freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
+    evidence = [
+        SimpleNamespace(
+            source_class="official_primary",
+            claim_type="official_resolution",
+            source_url="https://www.congress.gov/bill/119th-congress/house-bill/1",
+        )
+    ]
+    assert (
+        event_news_google_counter_not_required(
+            ticker="KXFISAEXTEND-26JUN-27",
+            yes_ask=0.62,
+            no_ask=0.40,
+            evidence=evidence,
+            estimated_probability=0.72,
+            force_side="yes",
+            config=politics,
+        )
+        is True
+    )
+    assert (
+        event_news_google_counter_not_required(
+            ticker="KXFISAEXTEND-26JUN-27",
+            yes_ask=0.20,
+            no_ask=0.81,
+            evidence=evidence,
+            estimated_probability=0.72,
+            force_side="yes",
+            config=politics,
+        )
+        is True
+    )
+    assert (
+        event_news_google_counter_not_required(
+            ticker="KXFISAEXTEND-26JUN-27",
+            yes_ask=0.20,
+            no_ask=0.25,
+            evidence=evidence,
+            estimated_probability=0.72,
+            force_side="yes",
+            config=politics,
+        )
+        is False
+    )
+    assert (
+        event_news_google_counter_not_required(
+            ticker="KXFISAEXTEND-26JUN-27",
+            yes_ask=0.62,
+            no_ask=0.40,
+            evidence=evidence,
+            estimated_probability=0.72,
+            force_side="yes",
+            config=freeze,
+        )
+        is False
+    )
+    assert (
+        event_news_google_counter_not_required(
+            ticker="KXFISAEXTEND-26JUN-27",
+            evidence=evidence,
+            estimated_probability=0.72,
+            force_side="yes",
+            config=politics,
+        )
+        is False
+    )
+    assert (
+        event_news_google_counter_not_required(
+            ticker="KXFISAEXTEND-26JUN-27",
+            yes_ask=0.62,
+            no_ask=0.40,
+            evidence=[],
+            estimated_probability=0.72,
+            force_side="yes",
+            config=politics,
+        )
+        is False
+    )
+    assert (
+        event_news_google_counter_not_required(
+            ticker="KXFISAEXTEND-26JUN-27",
+            yes_ask=0.40,
+            no_ask=0.40,
+            evidence=evidence,
+            estimated_probability=0.72,
+            force_side="yes",
+            config=politics,
+        )
+        is False
+    )
+    market = SimpleNamespace(
+        ticker="KXFISAEXTEND-26JUN-27",
+        series_ticker="KXFISAEXTEND",
+        yes_ask_cents=62,
+        no_ask_cents=40,
+        yes_ask=62,
+        no_ask=40,
+        settlement_sources=("https://www.congress.gov/",),
+        contract_terms_url="https://kalshi.com/terms/KXFISAEXTEND.pdf",
+    )
+    assert (
+        event_news_google_counter_not_required(
+            market=market,
+            estimated_probability=0.72,
+            force_side="yes",
+            config=politics,
+        )
+        is True
     )
 
 

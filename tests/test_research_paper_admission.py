@@ -723,6 +723,113 @@ async def test_politics_official_p_bypasses_blend_task(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_politics_official_source_p_admits_without_google_counter(monkeypatch) -> None:
+    import config as config_module
+    from utils.event_news_research import EVENT_NEWS_COHORT_ID
+
+    monkeypatch.setattr(config_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
+    monkeypatch.setattr(config_module.cfg, "llm_allowed_price_bands", [(0.55, 0.99)])
+    monkeypatch.setattr(config_module.cfg, "llm_excluded_price_bands", [(0.00, 0.35)])
+    monkeypatch.setattr("utils.event_news_research.cfg", config_module.cfg)
+    monkeypatch.setattr(
+        "tasks.research_paper_admission.is_event_news_paper_cohort",
+        lambda _config=None: True,
+    )
+    ticker = "KXFISAEXTEND-26JUN-27"
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    market = KalshiMarket(
+        ticker=ticker,
+        title="Will FISA section 702 be extended?",
+        yes_bid=60,
+        yes_ask=62,
+        yes_price=62,
+        volume=80,
+        open_interest=200,
+        close_time="2099-06-27T23:59:59Z",
+        status="active",
+        yes_bid_cents=60,
+        yes_ask_cents=62,
+        no_bid_cents=38,
+        no_ask_cents=40,
+        price_available=True,
+        price_source="rest_list",
+        price_method="dollars_fixed_point",
+        liquidity_dollars=Decimal("1000"),
+    )
+    market.series_ticker = "KXFISAEXTEND"
+    market.event_ticker = "KXFISAEXTEND-26JUN"
+    market.yes_ask_size = 50.0
+    market.no_ask_size = 50.0
+    market.open_interest_fp = 200.0
+    market.volume_24h_fp = 80.0
+    market.settlement_sources = ("https://www.congress.gov/",)
+    market.contract_terms_url = "https://kalshi.com/terms/KXFISAEXTEND.pdf"
+    evidence = [
+        ResearchEvidence(
+            source_class="official_primary",
+            source_name="Congress.gov",
+            source_url="https://www.congress.gov/bill/119th-congress/house-bill/7888",
+            title="FISA section 702 reauthorization",
+            snippet="The official bill page records current FISA 702 status.",
+            claim_type="official_resolution",
+            supports_direction="yes",
+            supports_confidence=0.88,
+            retrieved_at="2026-07-02T16:00:00+00:00",
+            inserted_at="2026-07-02T16:00:00+00:00",
+            contract_fingerprint="contract-v1",
+        ),
+        ResearchEvidence(
+            source_class="rules_source",
+            source_name="Kalshi",
+            source_url="https://kalshi.com/terms/KXFISAEXTEND.pdf",
+            title="Contract terms",
+            snippet="Market resolves from official FISA extension enactment.",
+            claim_type="contract_terms",
+            supports_direction="yes",
+            supports_confidence=0.85,
+            retrieved_at="2026-07-02T16:00:00+00:00",
+            inserted_at="2026-07-02T16:00:00+00:00",
+            contract_fingerprint="contract-v1",
+        ),
+    ]
+    bridge = ResearchPaperAdmissionBridge(
+        research_store=FakeResearchStore(
+            snapshot=replace(
+                _snapshot(market_price=0.62, estimated_probability=0.72, estimated_edge=0.09),
+                market_ticker=ticker,
+            ),
+            evidence=evidence,
+            has_counter_query=False,
+        ),
+        trading_queue=queue,
+        logger=SpyLogger(),
+        now=lambda: datetime(2026, 7, 2, 16, 5, tzinfo=UTC),
+        paper_exposure_checker=lambda _ticker: False,
+    )
+    result = await bridge.admit_prewarm_result(
+        ResearchPrewarmResult(
+            market_ticker=ticker,
+            status="decision_grade_candidate",
+            attempted=True,
+            research_run_id="rr-decision",
+            research_contract_fingerprint="contract-v1",
+        ),
+        market,
+    )
+    assert result.reason != "missing_counter_evidence"
+    assert result.reason != "missing_counter_query"
+    if result.admitted:
+        candidate = queue.get_nowait()
+        assert candidate.fast_lane_analysis.estimated_probability == pytest.approx(0.72)
+    else:
+        assert result.reason in {
+            "below_fee_net_min_edge",
+            "no_positive_edge",
+            "ask_outside_favorite_band",
+        }
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("raw_venue", "terminal_venue"),
     [

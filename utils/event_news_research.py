@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 
 from analysis.research_gate import ResearchStatus, run_research_gate
@@ -759,6 +760,121 @@ def event_news_should_retry_admission(
 
 def event_news_prewarm_allows(market: Any, *, config: Any = None) -> bool:
     return event_news_prewarm_skip_reason(market, config=config) is None
+
+
+def event_news_google_counter_not_required(
+    *,
+    market: Any | None = None,
+    ticker: str = "",
+    yes_ask: float | None = None,
+    no_ask: float | None = None,
+    evidence: list[Any] | None = None,
+    estimated_probability: float | None = None,
+    force_side: str | None = None,
+    require_favorite_band: bool = True,
+    config: Any = None,
+) -> bool:
+    """Politics reserve favorites may keep an official p without a Google counter.
+
+    Fail closed without an official source, executable 0.55-0.99 ask, or p+side.
+    Longshot 0.00-0.35 asks do not qualify. Freeze is unchanged.
+    Persist/admission may skip the ask band; those callers re-check quotes later.
+    """
+    if not is_event_news_paper_cohort(config):
+        return False
+    side = str(force_side or "").strip().lower()
+    if side not in {"yes", "no"}:
+        return False
+    try:
+        probability = float(estimated_probability)
+    except (TypeError, ValueError):
+        return False
+    if not 0.0 < probability < 1.0:
+        return False
+    if market is not None:
+        if event_news_non_politics_series(market, config=config):
+            return False
+        if not event_news_is_reserve_series(market, config=config):
+            return False
+        if event_news_crossed_asks(market, config=config):
+            return False
+        if event_news_missing_snapshot_ask(market, config=config):
+            return False
+        ticker = str(getattr(market, "ticker", "") or ticker)
+        yes_cents, no_cents = snapshot_ask_cents(market)
+        yes_ask = None if yes_cents is None else yes_cents / 100.0
+        no_ask = None if no_cents is None else no_cents / 100.0
+    elif not event_news_is_reserve_series(
+        SimpleNamespace(ticker=str(ticker or "")),
+        config=config,
+    ):
+        return False
+    if require_favorite_band or market is not None:
+        if not _event_news_favorite_ask_in_trade_band(yes_ask, no_ask):
+            return False
+        yes_norm = _event_news_norm_ask(yes_ask)
+        no_norm = _event_news_norm_ask(no_ask)
+        if (
+            yes_norm is not None
+            and no_norm is not None
+            and (yes_norm + no_norm) < 1.0 - 1e-12
+        ):
+            return False
+    if market is not None:
+        if str(getattr(market, "contract_terms_url", "") or "").strip():
+            return True
+        if tuple(getattr(market, "settlement_sources", ()) or ()):
+            return True
+    return _event_news_has_official_settlement_evidence(evidence)
+
+
+def _event_news_norm_ask(raw: float | None) -> float | None:
+    if raw is None:
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not 0.0 < value < 100.0:
+        return None
+    return value / 100.0 if value > 1.0 else value
+
+
+def _event_news_favorite_ask_in_trade_band(
+    yes_ask: float | None,
+    no_ask: float | None,
+) -> bool:
+    for price in (_event_news_norm_ask(yes_ask), _event_news_norm_ask(no_ask)):
+        if price is None:
+            continue
+        if 0.00 <= price <= 0.35:
+            continue
+        if 0.55 <= price <= 0.99:
+            return True
+    return False
+
+
+def _event_news_has_official_settlement_evidence(evidence: list[Any] | None) -> bool:
+    official = {
+        "official",
+        "official_primary",
+        "official_source",
+        "resolution_source",
+        "rules_source",
+    }
+    claims = {
+        "contract_terms",
+        "official_resolution",
+        "resolution",
+        "settlement",
+        "settlement_source",
+    }
+    for item in evidence or ():
+        source = str(getattr(item, "source_class", "") or "").strip().lower()
+        claim = str(getattr(item, "claim_type", "") or "").strip().lower()
+        if source in official and claim in claims:
+            return True
+    return False
 
 
 def event_news_official_p_ready(

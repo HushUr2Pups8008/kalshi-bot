@@ -3191,6 +3191,55 @@ def test_persistence_keeps_decision_grade_for_white_house_remaining_time_p(monke
     assert skip is None
 
 
+def test_persistence_keeps_politics_official_source_p_without_google_counter(monkeypatch):
+    monkeypatch.setattr(
+        "utils.event_news_research.is_event_news_paper_cohort",
+        lambda _config=None: True,
+    )
+    evidence = [
+        ResearchEvidence(
+            source_class="official_primary",
+            source_name="Congress.gov",
+            source_url="https://www.congress.gov/bill/119th-congress/house-bill/7888",
+            title="FISA section 702 reauthorization",
+            snippet="The official bill page records current FISA 702 status.",
+            claim_type="official_resolution",
+            supports_direction="yes",
+            supports_confidence=0.88,
+        ),
+        ResearchEvidence(
+            source_class="rules_source",
+            source_name="Kalshi",
+            source_url="https://kalshi.com/terms/KXFISAEXTEND.pdf",
+            title="Contract terms",
+            snippet="Market resolves from official FISA extension enactment.",
+            claim_type="contract_terms",
+            supports_direction="yes",
+            supports_confidence=0.85,
+        ),
+    ]
+    quality = _decision_grade_persistence_quality(
+        ticker="KXFISAEXTEND-26JUN-27",
+        side="yes",
+        queries=[SimpleNamespace(query="fisa official", query_intent="official_resolution")],
+        evidence=evidence,
+    )
+    assert quality["has_counter_evidence"] is True
+    assert quality["has_counter_query"] is True
+    status, grade, skip = _validated_research_status(
+        market_ticker="KXFISAEXTEND-26JUN-27",
+        verdict_status="decision_grade_candidate",
+        decision_grade_status="decision_grade_candidate",
+        skip_reason="missing_counter_evidence",
+        force_side="yes",
+        queries=[],
+        evidence=evidence,
+    )
+    assert status == "decision_grade_candidate"
+    assert grade == "decision_grade_candidate"
+    assert skip is None
+
+
 def replace_wh_source(item: ResearchEvidence) -> ResearchEvidence:
     from dataclasses import replace
     return replace(

@@ -13326,3 +13326,109 @@ def test_white_house_remaining_time_p_is_decision_grade_without_second_url():
     assert verdict.status == ResearchStatus.DECISION_GRADE_CANDIDATE
     assert verdict.force_side == "yes"
     assert verdict.estimated_probability == pytest.approx(0.98)
+
+
+def test_politics_official_source_p_does_not_need_google_counter(monkeypatch):
+    monkeypatch.setattr(
+        "utils.event_news_research.is_event_news_paper_cohort",
+        lambda _config=None: True,
+    )
+    fresh = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    evidence = [
+        ResearchEvidence(
+            source_class="rules_source",
+            source_name="Kalshi contract terms",
+            source_url="https://kalshi.com/terms/KXFISAEXTEND.pdf",
+            title="FISA reauthorization contract terms",
+            snippet="Market resolves from official FISA extension enactment.",
+            claim_type="contract_terms",
+            supports_direction="yes",
+            supports_confidence=0.85,
+            retrieved_at=fresh,
+        ),
+        ResearchEvidence(
+            source_class="official_primary",
+            source_name="Congress.gov",
+            source_url="https://www.congress.gov/bill/119th-congress/house-bill/7888",
+            title="FISA section 702 reauthorization",
+            snippet="The official bill page records current FISA 702 status.",
+            claim_type="official_resolution",
+            supports_direction="yes",
+            supports_confidence=0.88,
+            retrieved_at=fresh,
+        ),
+    ]
+    verdict = decide_research_verdict(
+        evidence=evidence,
+        model_direction="yes",
+        model_confidence=0.82,
+        model_reason=(
+            "YES because official Congress.gov FISA records price this market "
+            "above the 62c ask; executable edge clears the fee-net hurdle and "
+            "the counter-search found no contrary enactment."
+        ),
+        estimated_probability_yes=0.72,
+        yes_ask=0.62,
+        no_ask=0.40,
+        live_mode=False,
+        require_decision_grade=True,
+        score_both_sides=True,
+        queries=[
+            ResearchQuery("fisa official", "official_resolution", "official_primary"),
+        ],
+        contract_ticker="KXFISAEXTEND-26JUN-27",
+    )
+    assert verdict.skip_reason != "missing_counter_evidence"
+    assert verdict.status == ResearchStatus.DECISION_GRADE_CANDIDATE
+    assert verdict.force_side == "yes"
+    assert verdict.estimated_probability == pytest.approx(0.72)
+
+
+def test_politics_longshot_still_requires_counter_without_favorite_band(monkeypatch):
+    monkeypatch.setattr(
+        "utils.event_news_research.is_event_news_paper_cohort",
+        lambda _config=None: True,
+    )
+    fresh = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    evidence = [
+        ResearchEvidence(
+            source_class="official_primary",
+            source_name="Congress.gov",
+            source_url="https://www.congress.gov/bill/longshot",
+            title="Longshot official page",
+            snippet="Official page exists.",
+            claim_type="official_resolution",
+            supports_direction="yes",
+            supports_confidence=0.88,
+            retrieved_at=fresh,
+        ),
+        ResearchEvidence(
+            source_class="rules_source",
+            source_name="Kalshi",
+            source_url="https://kalshi.com/terms/longshot.pdf",
+            title="Terms",
+            snippet="Contract terms.",
+            claim_type="contract_terms",
+            supports_direction="yes",
+            supports_confidence=0.85,
+            retrieved_at=fresh,
+        ),
+    ]
+    verdict = decide_research_verdict(
+        evidence=evidence,
+        model_direction="yes",
+        model_confidence=0.82,
+        model_reason="Longshot YES.",
+        estimated_probability_yes=0.90,
+        yes_ask=0.20,
+        no_ask=0.25,
+        live_mode=False,
+        require_decision_grade=True,
+        score_both_sides=True,
+        queries=[
+            ResearchQuery("official", "official_resolution", "official_primary"),
+        ],
+        contract_ticker="KXFISAEXTEND-26JUN-27",
+    )
+    assert verdict.skip_reason == "missing_counter_evidence"
+    assert verdict.force_side is None

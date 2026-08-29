@@ -256,20 +256,32 @@ class ResearchPaperSignalProvider:
             is_event_news_paper_cohort()
             and _evidence_has_both_sides_probability(list(validated_evidence))
         )
-        if not has_reliable_research_source_path(validated_evidence) and not both_sides_p:
+        official_without_google = False
+        if is_event_news_paper_cohort() and not both_sides_p:
+            from utils.event_news_research import event_news_google_counter_not_required
+
+            official_without_google = event_news_google_counter_not_required(
+                ticker=market_ticker,
+                evidence=list(validated_evidence),
+                estimated_probability=snapshot.last_estimated_probability,
+                force_side=side,
+                require_favorite_band=False,
+            )
+        waive_google_counter = both_sides_p or official_without_google
+        if not has_reliable_research_source_path(validated_evidence) and not waive_google_counter:
             return None, "no_reliable_source_path"
-        if not both_sides_p and not any(
+        if not waive_google_counter and not any(
             str(item.supports_direction or "").strip().lower() == side
             and str(item.claim_type or "").strip().lower() in _SETTLEMENT_CLAIM_TYPES
             and float(item.supports_confidence or 0.0) >= MIN_DIRECTIONAL_SUPPORT_CONFIDENCE
             for item in relevant_evidence
         ):
             return None, "missing_directional_support"
-        if not both_sides_p and not await _has_counter_query(
+        if not waive_google_counter and not await _has_counter_query(
             self.store, snapshot.last_research_run_id
         ):
             return None, "missing_counter_query"
-        if not both_sides_p and not _has_counter_evidence(side, relevant_evidence):
+        if not waive_google_counter and not _has_counter_evidence(side, relevant_evidence):
             return None, "missing_counter_evidence"
         return (
             ResearchPaperSignal(

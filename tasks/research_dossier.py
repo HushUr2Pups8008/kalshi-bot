@@ -2148,14 +2148,26 @@ def _decision_grade_persistence_quality(
     from utils.event_news_research import is_event_news_paper_cohort
 
     both_sides_p = False
+    official_without_google = False
     if is_event_news_paper_cohort():
         both_sides_p = _evidence_has_both_sides_probability(evidence)
+        if not both_sides_p and side in {"yes", "no"}:
+            from utils.event_news_research import event_news_google_counter_not_required
+
+            official_without_google = event_news_google_counter_not_required(
+                ticker=ticker,
+                evidence=evidence,
+                estimated_probability=0.5,
+                force_side=side,
+                require_favorite_band=False,
+            )
+    waive_google_counter = both_sides_p or official_without_google
     return {
         "has_reliable_source_path": has_reliable_research_source_path(evidence)
-        or both_sides_p,
-        "has_directional_evidence": side in supports_directions or both_sides_p,
-        "has_counter_query": has_counter_query or both_sides_p,
-        "has_counter_evidence": has_counter_evidence or both_sides_p,
+        or waive_google_counter,
+        "has_directional_evidence": side in supports_directions or waive_google_counter,
+        "has_counter_query": has_counter_query or waive_google_counter,
+        "has_counter_evidence": has_counter_evidence or waive_google_counter,
     }
 
 

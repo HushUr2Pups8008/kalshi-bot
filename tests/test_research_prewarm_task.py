@@ -1759,6 +1759,85 @@ async def test_politics_in_band_ignores_stale_research_task_cooldown(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_politics_retries_untradeable_missing_counter_when_official_source(
+    monkeypatch, tmp_path
+):
+    import config as config_module
+    from utils.event_news_research import EVENT_NEWS_COHORT_ID
+
+    monkeypatch.setattr(config_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
+    monkeypatch.setattr("utils.event_news_research.cfg", config_module.cfg)
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    await store.record_research_run(
+        "KXFISAEXTEND-26JUN-27",
+        "run-terminal",
+        trigger_headline="",
+        trigger_source="research_prewarm",
+        attempted=True,
+        summary="Google counter exhausted",
+        verdict_status=ResearchStatus.UNTRADEABLE.value,
+        skip_reason="contradictory_evidence_unresolved",
+        decision_grade_status=ResearchStatus.UNTRADEABLE.value,
+    )
+    with sqlite3.connect(tmp_path / "research_dossier.db") as conn:
+        conn.execute(
+            """
+            UPDATE research_tasks
+            SET state = 'untradeable',
+                terminal_reason = 'contradictory_evidence_unresolved',
+                cooldown_until_ts = NULL,
+                backoff_seconds = 0,
+                updated_ts = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+            WHERE market_ticker = 'KXFISAEXTEND-26JUN-27'
+            """
+        )
+    calls: list[str] = []
+
+    async def research_gate(_news, market, **_kwargs):
+        calls.append(market.ticker)
+        return SimpleNamespace(
+            status=ResearchStatus.DECISION_GRADE_CANDIDATE,
+            attempted=True,
+            queries=[],
+            evidence=[],
+            force_side="yes",
+            estimated_probability=0.72,
+        )
+
+    market = SimpleNamespace(
+        ticker="KXFISAEXTEND-26JUN-27",
+        title="Will FISA section 702 be extended?",
+        rules_primary="Resolves from official FISA enactment.",
+        rules_secondary="",
+        settlement_sources=("https://www.congress.gov/",),
+        contract_terms_url="https://kalshi.com/terms/KXFISAEXTEND.pdf",
+        status="open",
+        close_time="2099-12-31T23:59:59Z",
+        series_ticker="KXFISAEXTEND",
+        event_ticker="KXFISAEXTEND-26JUN",
+        yes_ask_cents=62,
+        no_ask_cents=40,
+        yes_ask=62,
+        no_ask=40,
+        yes_ask_size=50.0,
+        no_ask_size=50.0,
+        open_interest_fp=200.0,
+        volume_24h_fp=80.0,
+    )
+    task = ResearchPrewarmTask(
+        store=store,
+        research_gate=research_gate,
+        target_cooldown_seconds=300.0,
+    )
+    results = await task.run_once([market])
+
+    assert calls == ["KXFISAEXTEND-26JUN-27"]
+    assert results[0].attempted is True
+    assert results[0].status != "skipped_terminal"
+
+
+@pytest.mark.asyncio
 async def test_prewarm_emits_terminal_decision_grade_to_market_result_sink(tmp_path):
     store = ResearchDossierStore(tmp_path / "research_dossier.db")
     await store.initialize()
