@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
 from analysis import SignalAnalysis
+from analysis.regime_classifier import compute_regime_weights
 from analysis.research_gate import ResearchEvidence
 from tasks.blend_task import BlendTask, BlendTaskResult, TradeCandidate
 from tasks.evidence_store import DossierState, EvidenceRecord, StructuralPriorRecord
@@ -391,8 +392,6 @@ class ResearchPaperAdmissionBridge:
         if not getattr(market, "regime_weights", None):
             # Politics prewarm uses REST quotes with empty regime_weights.
             # Uniform 1/3 → rc=0 → scaled_confidence=0 → G1 always fails.
-            from analysis.regime_classifier import compute_regime_weights
-
             market.regime_weights = compute_regime_weights(market)
         analysis = _signal_analysis_from_research(market, current_signal)
         claim_admission = getattr(

@@ -158,7 +158,8 @@ class TestSeriesClassification:
                        # these series existed but had no explicit prior.
                        # `_time_prior` default already covers them, but
                        # explicit entries here pin behavior in tests.
-                       "KXCHINAANNOUNCE", "KXNEWDEAL"):
+                       "KXCHINAANNOUNCE", "KXNEWDEAL",
+                       "KXTRUTHSOCIAL", "KXTRUMPSAY"):
             w = compute_regime_weights(_market(series_ticker=prefix))
             assert w[FAST] > w[INTERPRETATION], f"{prefix}: {w}"
             assert w[FAST] > w[STRUCTURAL], f"{prefix}: {w}"
@@ -239,6 +240,7 @@ class TestSeriesClassification:
             "KXTXRUNOFFENDORSE", "KXUSAIRANAGREEMENT", "KXNEWTARIFFS",
             # PROFIT-PRIORS-003 additions
             "KXCHINAANNOUNCE", "KXNEWDEAL",
+            "KXTRUTHSOCIAL", "KXTRUMPSAY",
         )
         for prefix in new_prefixes:
             w = compute_regime_weights(_market(series_ticker=prefix))
@@ -253,6 +255,22 @@ class TestSeriesClassification:
         # KXNFL-2025-SUPERB should still match KXNFL prefix
         w = compute_regime_weights(_market(series_ticker="KXNFL-2025-SUPERB"))
         assert w[FAST] > 0.70
+
+    def test_truth_social_prior_survives_missing_close_time(self):
+        """REST quotes with empty close_time must not fall to uniform rc=0."""
+        import math
+        from tasks.trade_readiness_gate import G4_REGIME_CONFIDENCE_THRESHOLD
+
+        market = _market(
+            ticker="KXTRUTHSOCIAL-26AUG29-T240",
+            series_ticker="KXTRUTHSOCIAL",
+        )
+        market.close_time = None
+        w = compute_regime_weights(market)
+        ent = -sum(v * math.log(v) for v in w.values() if v > 0)
+        rc = 1.0 - ent / math.log(3)
+        assert rc >= G4_REGIME_CONFIDENCE_THRESHOLD
+        assert w[FAST] > w[INTERPRETATION]
 
     def test_market_ticker_fallback_when_series_empty(self):
         # series_ticker is empty but market ticker has known prefix

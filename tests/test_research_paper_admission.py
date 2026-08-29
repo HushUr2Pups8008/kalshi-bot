@@ -1544,8 +1544,12 @@ class _HarshLlmCalibration:
 
 
 @pytest.mark.asyncio
-async def test_official_research_survives_llm_calibration_g1_kill() -> None:
+async def test_official_research_survives_llm_calibration_g1_kill(monkeypatch) -> None:
     """T240 died at G1 because news-lane calibration scaled official p."""
+    monkeypatch.setattr(
+        "utils.event_news_research.is_event_news_paper_cohort",
+        lambda _config=None: True,
+    )
     queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
     logger = SpyLogger()
 

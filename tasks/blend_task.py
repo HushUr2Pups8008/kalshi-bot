@@ -1001,9 +1001,12 @@ class BlendTask:
         # Official research p is not an LLM guess. Applying the news-lane
         # calibration scale (and a fake accumulation dossier) dropped
         # T240/T7 below G1 after the research gate had already admitted.
+        from utils.event_news_research import is_event_news_paper_cohort
+
         research_grade = (
             str(getattr(fast_lane_result, "signal_type", "") or "")
             == "research_decision_grade"
+            and is_event_news_paper_cohort()
         )
         fast_scale = 1.0 if research_grade else self._calibration_scale("fast")
         fast = LaneInput(
@@ -1377,7 +1380,10 @@ def _readiness_input(
 ) -> dict[str, Any]:
     source_lane = "accumulation" if (dossier is not None and dossier.current_estimate is not None) else "fast"
     if str(getattr(analysis, "signal_type", "") or "") == "research_decision_grade":
-        source_lane = "fast"
+        from utils.event_news_research import is_event_news_paper_cohort
+
+        if is_event_news_paper_cohort():
+            source_lane = "fast"
     readiness_records = _readiness_records(recent_records, trigger_record)
     return {
         "source_lane": source_lane,

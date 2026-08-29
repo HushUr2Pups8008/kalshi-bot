@@ -126,6 +126,8 @@ _SERIES_PRIORS: dict[str, tuple[float, float, float]] = {
     # Weights concentrated to clear G4=0.20 (see Trump-say existing prior at
     # rc=0.157 — too dispersed; we err on the more concentrated side here).
     "KXTRUMPACT":    (0.65, 0.25, 0.10),  # Executive actions / orders (rc≈0.22)
+    "KXTRUTHSOCIAL": (0.65, 0.25, 0.10),  # Weekly Truth Social count (rc≈0.22)
+    "KXTRUMPSAY":    (0.65, 0.25, 0.10),  # Phrase contracts; official Factbase p (rc≈0.22)
     "KXTRUMPENDORSE":(0.65, 0.25, 0.10),  # Endorsement events (rc≈0.22)
     "KXTRUMPCHINA":  (0.65, 0.25, 0.10),  # China-related decisions (rc≈0.22)
     "KXTRUMPCRYPTOCONF": (0.65, 0.25, 0.10),  # Crypto conference attendance / announcements (rc≈0.22)

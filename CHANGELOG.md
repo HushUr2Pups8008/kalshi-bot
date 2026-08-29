@@ -19,6 +19,15 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.68] - 2026-08-29
+
+### Fixed
+
+- **T240 G1 does not depend on REST close_time.** KXTRUTHSOCIAL and
+  KXTRUMPSAY now have fast-dominant priors (same shape as KXTRUMPACT),
+  so empty REST `regime_weights` still yield rc≈0.22. The calibration
+  bypass is politics-cohort only. Freeze stays locked.
+
 ## [0.33.67] - 2026-08-28
 
 ### Fixed
