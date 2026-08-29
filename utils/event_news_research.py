@@ -649,6 +649,113 @@ def event_news_finalize_prewarm_batch(
     return event_news_one_market_per_event(eligible, config=config)
 
 
+def event_news_reorder_prewarm_batch(
+    markets: list[Any],
+    due_tickers: list[str] | tuple[str, ...] | None = None,
+    *,
+    config: Any = None,
+) -> list[Any]:
+    """Keep the live in-band set. Due-task order may sort inside it only.
+
+    Out-of-band, denylisted, and non-reserve tickers never enter the batch.
+    Freeze is a no-op.
+    """
+    in_band = event_news_finalize_prewarm_batch(markets, config=config)
+    if not is_event_news_paper_cohort(config):
+        return in_band
+    by_ticker: dict[str, Any] = {}
+    for market in in_band:
+        ticker = str(getattr(market, "ticker", "") or "").strip()
+        if ticker and ticker not in by_ticker:
+            by_ticker[ticker] = market
+    ordered: list[Any] = []
+    seen: set[str] = set()
+    for raw in due_tickers or ():
+        ticker = str(raw or "").strip()
+        market = by_ticker.get(ticker)
+        if market is None or ticker in seen:
+            continue
+        seen.add(ticker)
+        ordered.append(market)
+    for market in in_band:
+        ticker = str(getattr(market, "ticker", "") or "").strip()
+        if not ticker or ticker in seen:
+            continue
+        seen.add(ticker)
+        ordered.append(market)
+    return ordered
+
+
+def event_news_news_may_refresh_research(
+    market: Any,
+    *,
+    settlement_source_match: bool | None = None,
+    config: Any = None,
+) -> bool:
+    """News may attach to an in-band book or force a settlement-source refresh.
+
+    Matcher Jaccard must not add soccer/CPI/macro books to the research set.
+    Settlement-source refresh is reserve-series only. Freeze is unchanged.
+    """
+    if not is_event_news_paper_cohort(config):
+        return True
+    if event_news_prewarm_allows(market, config=config):
+        return True
+    if not settlement_source_match:
+        return False
+    if event_news_non_politics_series(market, config=config):
+        return False
+    return event_news_is_reserve_series(market, config=config)
+
+
+def event_news_admission_outcome_retryable(outcome_reason: str | None) -> bool:
+    reason = str(outcome_reason or "").strip().lower()
+    if not reason:
+        return False
+    return any(
+        fragment in reason
+        for fragment in (
+            "capped_dollars",
+            "consumer_error",
+            "attributeerror",
+            "news_item",
+        )
+    )
+
+
+def event_news_should_retry_admission(
+    *,
+    has_paper_exposure: bool,
+    state: str | None = None,
+    enqueued: bool | None = None,
+    outcome_reason: str | None = None,
+    allow_unfilled_enqueue: bool = False,
+    config: Any = None,
+) -> bool:
+    """Retry DG admission on politics unless this ticker already has paper risk.
+
+    Allow failed admits, G1/not-enqueued completes, crash/$0 outcomes, and an
+    unfilled enqueue when the caller confirmed no open paper exposure.
+    Never steal a live `claimed` row. Freeze keeps the one-claim invariant.
+    """
+    if not is_event_news_paper_cohort(config):
+        return False
+    if has_paper_exposure:
+        return False
+    state_name = str(state or "").strip()
+    if state_name == "failed":
+        return True
+    if state_name == "claimed":
+        return False
+    if event_news_admission_outcome_retryable(outcome_reason):
+        return True
+    if state_name == "completed" and not enqueued:
+        return True
+    if state_name == "completed" and enqueued and allow_unfilled_enqueue:
+        return True
+    return False
+
+
 def event_news_prewarm_allows(market: Any, *, config: Any = None) -> bool:
     return event_news_prewarm_skip_reason(market, config=config) is None
 

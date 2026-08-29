@@ -17,7 +17,10 @@ from utils.event_news_research import (
     event_news_missing_snapshot_ask,
     event_news_non_politics_series,
     event_news_finalize_prewarm_batch,
+    event_news_news_may_refresh_research,
     event_news_one_market_per_event,
+    event_news_reorder_prewarm_batch,
+    event_news_should_retry_admission,
     event_news_pin_matcher_series,
     event_news_forecast_refresh_series,
     event_news_official_research_kwargs,
@@ -807,6 +810,165 @@ def test_one_market_per_event_prefers_yes_favorite():
         market.ticker
         for market in event_news_finalize_prewarm_batch(extras + [press], config=politics)
     }
+
+
+def test_reorder_prewarm_batch_does_not_inject_out_of_band(monkeypatch):
+    politics = _politics_config()
+    freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
+
+    def rung(ticker: str, event: str, yes_ask: int, no_ask: int, size: float):
+        return SimpleNamespace(
+            ticker=ticker,
+            event_ticker=event,
+            series_ticker=ticker.split("-", 1)[0],
+            yes_ask_cents=yes_ask,
+            no_ask_cents=no_ask,
+            yes_ask=yes_ask,
+            no_ask=no_ask,
+            yes_ask_size=size,
+            no_ask_size=size,
+            open_interest_fp=1000.0,
+            volume_24h_fp=500.0,
+        )
+
+    t240 = rung("KXTRUTHSOCIAL-26AUG29-T240", "KXTRUTHSOCIAL-26AUG29", 18, 83, 280.0)
+    bibi = rung("KXTRUMPSAY-26AUG31-BIBI", "KXTRUMPSAY-26AUG31", 22, 79, 50.0)
+    armo = rung("KXARMOMINF-26SEP10-T1.8", "KXARMOMINF-26SEP10", 60, 42, 10.0)
+    soccer = rung("KXFACUPADVANCE-26AUG29", "KXFACUPADVANCE-26AUG29", 70, 32, 20.0)
+    batch = event_news_reorder_prewarm_batch(
+        [t240, bibi, armo, soccer],
+        ["KXARMOMINF-26SEP10-T1.8", "KXTRUMPSAY-26AUG31-BIBI", "KXFACUPADVANCE-26AUG29"],
+        config=politics,
+    )
+    assert [market.ticker for market in batch] == [
+        "KXTRUMPSAY-26AUG31-BIBI",
+        "KXTRUTHSOCIAL-26AUG29-T240",
+    ]
+    freeze_batch = event_news_reorder_prewarm_batch(
+        [t240, armo],
+        ["KXARMOMINF-26SEP10-T1.8"],
+        config=freeze,
+    )
+    assert [market.ticker for market in freeze_batch] == [t240.ticker, armo.ticker]
+
+
+def test_news_may_refresh_research_only_in_band_or_settlement_source():
+    politics = _politics_config()
+    freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
+    t240 = SimpleNamespace(
+        ticker="KXTRUTHSOCIAL-26AUG29-T240",
+        series_ticker="KXTRUTHSOCIAL",
+        yes_ask_cents=18,
+        no_ask_cents=83,
+        yes_ask=18,
+        no_ask=83,
+        yes_ask_size=280.0,
+        no_ask_size=280.0,
+        open_interest_fp=1000.0,
+        volume_24h_fp=500.0,
+    )
+    armo = SimpleNamespace(
+        ticker="KXARMOMINF-26SEP10-T1.8",
+        series_ticker="KXARMOMINF",
+        yes_ask_cents=60,
+        no_ask_cents=42,
+        yes_ask=60,
+        no_ask=42,
+        yes_ask_size=10.0,
+        no_ask_size=10.0,
+        open_interest_fp=1000.0,
+        volume_24h_fp=500.0,
+    )
+    assert event_news_news_may_refresh_research(t240, config=politics) is True
+    assert event_news_news_may_refresh_research(armo, config=politics) is False
+    assert (
+        event_news_news_may_refresh_research(
+            armo, settlement_source_match=True, config=politics
+        )
+        is False
+    )
+    leave = SimpleNamespace(
+        ticker="KXLEAVECONGRESS-26AUG",
+        series_ticker="KXLEAVECONGRESS",
+        yes_ask_cents=3,
+        no_ask_cents=98,
+        yes_ask=3,
+        no_ask=98,
+        yes_ask_size=50.0,
+        no_ask_size=50.0,
+        open_interest_fp=1000.0,
+        volume_24h_fp=500.0,
+    )
+    assert (
+        event_news_news_may_refresh_research(
+            leave, settlement_source_match=True, config=politics
+        )
+        is True
+    )
+    assert event_news_news_may_refresh_research(armo, config=freeze) is True
+
+
+def test_politics_retries_admission_without_paper_exposure():
+    politics = _politics_config()
+    freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
+    assert (
+        event_news_should_retry_admission(
+            has_paper_exposure=False,
+            state="completed",
+            enqueued=True,
+            outcome_reason=None,
+            allow_unfilled_enqueue=True,
+            config=politics,
+        )
+        is True
+    )
+    assert (
+        event_news_should_retry_admission(
+            has_paper_exposure=False,
+            state="completed",
+            enqueued=True,
+            outcome_reason=None,
+            config=politics,
+        )
+        is False
+    )
+    assert (
+        event_news_should_retry_admission(
+            has_paper_exposure=False,
+            state="claimed",
+            config=politics,
+        )
+        is False
+    )
+    assert (
+        event_news_should_retry_admission(
+            has_paper_exposure=True,
+            state="completed",
+            enqueued=True,
+            outcome_reason=None,
+            config=politics,
+        )
+        is False
+    )
+    assert (
+        event_news_should_retry_admission(
+            has_paper_exposure=False,
+            state="completed",
+            enqueued=False,
+            outcome_reason="G1_blended_confidence",
+            config=politics,
+        )
+        is True
+    )
+    assert (
+        event_news_should_retry_admission(
+            has_paper_exposure=False,
+            state="completed",
+            enqueued=True,
+            config=freeze,
+        )
+        is False
+    )
 
 
 def test_matcher_reserve_pins_politics_series_and_ignores_freeze():

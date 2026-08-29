@@ -125,6 +125,16 @@ class ResearchTaskSnapshot:
     updated_ts: str | None = None
 
 
+@dataclass(frozen=True)
+class ResearchPaperAdmissionSnapshot:
+    market_ticker: str
+    research_run_id: str
+    contract_fingerprint: str
+    state: str
+    enqueued: bool | None
+    outcome_reason: str | None
+
+
 class ResearchDossierStore:
     def __init__(self, db_path: Path = DEFAULT_RESEARCH_DOSSIER_DB_PATH) -> None:
         self.db_path = Path(db_path)
@@ -251,6 +261,48 @@ class ResearchDossierStore:
             state=state,
             enqueued=enqueued,
             outcome_reason=outcome_reason,
+        )
+
+    async def get_research_paper_admission(
+        self,
+        market_ticker: str,
+        research_run_id: str,
+        contract_fingerprint: str,
+    ) -> ResearchPaperAdmissionSnapshot | None:
+        return await asyncio.to_thread(
+            self._get_research_paper_admission_sync,
+            market_ticker,
+            research_run_id,
+            contract_fingerprint,
+        )
+
+    async def clear_research_paper_admission(
+        self,
+        market_ticker: str,
+        research_run_id: str,
+        contract_fingerprint: str,
+    ) -> None:
+        await asyncio.to_thread(
+            self._clear_research_paper_admission_sync,
+            market_ticker,
+            research_run_id,
+            contract_fingerprint,
+        )
+
+    async def reclaim_research_paper_admission(
+        self,
+        market_ticker: str,
+        research_run_id: str,
+        contract_fingerprint: str,
+        *,
+        allow_unfilled_enqueue: bool = False,
+    ) -> bool:
+        return await asyncio.to_thread(
+            self._reclaim_research_paper_admission_sync,
+            market_ticker,
+            research_run_id,
+            contract_fingerprint,
+            allow_unfilled_enqueue=allow_unfilled_enqueue,
         )
 
     async def get_recent_evidence(
@@ -659,6 +711,120 @@ class ResearchDossierStore:
             )
             if cursor.rowcount != 1:
                 raise LookupError("claimed research paper admission not found")
+
+    def _get_research_paper_admission_sync(
+        self,
+        market_ticker: str,
+        research_run_id: str,
+        contract_fingerprint: str,
+    ) -> ResearchPaperAdmissionSnapshot | None:
+        self._initialize_sync()
+        with self._connection() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    market_ticker,
+                    research_run_id,
+                    contract_fingerprint,
+                    state,
+                    enqueued,
+                    outcome_reason
+                FROM research_paper_admissions
+                WHERE market_ticker=?
+                  AND research_run_id=?
+                  AND contract_fingerprint=?
+                """,
+                (market_ticker, research_run_id, contract_fingerprint),
+            ).fetchone()
+        if row is None:
+            return None
+        enqueued = row["enqueued"]
+        return ResearchPaperAdmissionSnapshot(
+            market_ticker=row["market_ticker"],
+            research_run_id=row["research_run_id"],
+            contract_fingerprint=row["contract_fingerprint"],
+            state=row["state"],
+            enqueued=None if enqueued is None else bool(enqueued),
+            outcome_reason=row["outcome_reason"],
+        )
+
+    def _clear_research_paper_admission_sync(
+        self,
+        market_ticker: str,
+        research_run_id: str,
+        contract_fingerprint: str,
+    ) -> None:
+        self._initialize_sync()
+        with self._connection() as conn:
+            conn.execute(
+                """
+                DELETE FROM research_paper_admissions
+                WHERE market_ticker=?
+                  AND research_run_id=?
+                  AND contract_fingerprint=?
+                """,
+                (market_ticker, research_run_id, contract_fingerprint),
+            )
+
+    def _reclaim_research_paper_admission_sync(
+        self,
+        market_ticker: str,
+        research_run_id: str,
+        contract_fingerprint: str,
+        *,
+        allow_unfilled_enqueue: bool,
+    ) -> bool:
+        from utils.event_news_research import event_news_should_retry_admission
+
+        self._initialize_sync()
+        with self._connection() as conn:
+            row = conn.execute(
+                """
+                SELECT state, enqueued, outcome_reason
+                FROM research_paper_admissions
+                WHERE market_ticker=?
+                  AND research_run_id=?
+                  AND contract_fingerprint=?
+                """,
+                (market_ticker, research_run_id, contract_fingerprint),
+            ).fetchone()
+            if row is None:
+                cursor = conn.execute(
+                    """
+                    INSERT OR IGNORE INTO research_paper_admissions (
+                        market_ticker, research_run_id, contract_fingerprint, state
+                    ) VALUES (?, ?, ?, 'claimed')
+                    """,
+                    (market_ticker, research_run_id, contract_fingerprint),
+                )
+                return cursor.rowcount == 1
+            enqueued = row["enqueued"]
+            if not event_news_should_retry_admission(
+                has_paper_exposure=False,
+                state=row["state"],
+                enqueued=None if enqueued is None else bool(enqueued),
+                outcome_reason=row["outcome_reason"],
+                allow_unfilled_enqueue=bool(allow_unfilled_enqueue),
+            ):
+                return False
+            conn.execute(
+                """
+                DELETE FROM research_paper_admissions
+                WHERE market_ticker=?
+                  AND research_run_id=?
+                  AND contract_fingerprint=?
+                """,
+                (market_ticker, research_run_id, contract_fingerprint),
+            )
+            conn.execute(
+                """
+                INSERT INTO research_paper_admissions (
+                    market_ticker, research_run_id, contract_fingerprint, state
+                ) VALUES (?, ?, ?, 'claimed')
+                """,
+                (market_ticker, research_run_id, contract_fingerprint),
+            )
+            return True
 
     def _add_evidence_sync(
         self,

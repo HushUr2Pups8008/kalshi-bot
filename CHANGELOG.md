@@ -19,6 +19,20 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.71] - 2026-08-29
+
+### Fixed
+
+- **Politics prewarm researches the live favorite-band set.** Due-task overlay
+  was filling 25 slots with soccer/CPI/Argentina inflation, finalize dropped
+  them, and cooldown was stamped on selection, so every cycle was
+  `markets=0` while 7 in-band books were logged. The event-news desk now
+  keeps that in-band one-per-event set, may only reorder inside it, stamps
+  cooldown after an attempted research run, and retries decision-grade
+  admission when the last admit crashed, sized to $0, or never filled.
+  RSS/matcher cannot add out-of-band books to the research set. Freeze,
+  Polymarket, and live stay locked.
+
 ## [0.33.70] - 2026-08-29
 
 ### Fixed

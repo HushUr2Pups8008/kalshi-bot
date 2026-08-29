@@ -246,6 +246,15 @@ class ResearchPrewarmTask:
                 ticker,
                 prewarm_skip,
             )
+            from utils.event_news_research import is_event_news_paper_cohort
+
+            if is_event_news_paper_cohort():
+                return ResearchPrewarmResult(
+                    market_ticker=ticker,
+                    status="needs_research",
+                    attempted=False,
+                    skip_reason=prewarm_skip,
+                )
             return await self._queued_skip_result(
                 ticker,
                 status="needs_research",
@@ -520,6 +529,15 @@ class ResearchPrewarmTask:
         contract_question: str | None = None,
         market: Any | None = None,
     ) -> ResearchPrewarmResult:
+        from utils.event_news_research import is_event_news_paper_cohort
+
+        if is_event_news_paper_cohort():
+            return ResearchPrewarmResult(
+                market_ticker=ticker,
+                status=status,
+                attempted=False,
+                skip_reason=result_skip_reason,
+            )
         if result_skip_reason == "no_reliable_source_path":
             snapshot = await self.store.get_research_task_snapshot(ticker)
             projected_same_reason_count = (
@@ -760,12 +778,32 @@ class ResearchPrewarmTask:
                 and market_has_research_source_path(market)
             ):
                 return None
+            run_id = None
+            fingerprint = None
+            if snapshot.state == "decision_grade_candidate":
+                try:
+                    dossier = await self.store.get_dossier_snapshot(ticker)
+                except Exception:
+                    dossier = None
+                if dossier is not None:
+                    run_id = dossier.last_research_run_id
+                    fingerprint = dossier.last_contract_fingerprint
             return ResearchPrewarmResult(
                 market_ticker=ticker,
                 status="skipped_terminal",
                 attempted=False,
                 skip_reason=snapshot.terminal_reason or snapshot.state,
+                research_run_id=run_id,
+                research_contract_fingerprint=fingerprint,
             )
+        from utils.event_news_research import event_news_prewarm_skip_reason
+
+        if (
+            is_event_news_paper_cohort()
+            and market is not None
+            and event_news_prewarm_skip_reason(market) is None
+        ):
+            return None
         if bypass_persisted_cooldown or (
             market is not None
             and bool(getattr(market, "_research_prewarm_bypass_cooldown", False))

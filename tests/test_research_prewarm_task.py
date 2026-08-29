@@ -1536,7 +1536,119 @@ async def test_prewarm_skips_terminal_decision_grade_candidate(tmp_path):
     assert result.status == "skipped_terminal"
     assert result.attempted is False
     assert result.skip_reason == ResearchStatus.DECISION_GRADE_CANDIDATE.value
+    assert result.research_run_id == "run-decision-old"
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_politics_prewarm_skip_does_not_stamp_cooldown(monkeypatch, tmp_path):
+    import config as config_module
+    from utils.event_news_research import EVENT_NEWS_COHORT_ID
+
+    monkeypatch.setattr(config_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
+    monkeypatch.setattr("utils.event_news_research.cfg", config_module.cfg)
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    calls: list[str] = []
+
+    async def research_gate(_news, market, **_kwargs):
+        calls.append(market.ticker)
+        return SimpleNamespace(
+            status=ResearchStatus.NEEDS_RESEARCH,
+            attempted=True,
+            queries=[],
+            evidence=[],
+        )
+
+    task = ResearchPrewarmTask(
+        store=store,
+        research_gate=research_gate,
+        target_cooldown_seconds=300.0,
+    )
+    result = await task.process_market(_market("KXARMOMINF-26SEP10-T1.8"))
+
+    assert result.attempted is False
+    assert result.skip_reason in {"non_politics_series", "not_reserve_series"}
+    assert calls == []
+    assert await store.get_research_task_snapshot("KXARMOMINF-26SEP10-T1.8") is None
+    assert task._last_attempted_by_ticker == {}
+
+
+@pytest.mark.asyncio
+async def test_politics_in_band_ignores_stale_research_task_cooldown(monkeypatch, tmp_path):
+    import config as config_module
+    from utils.event_news_research import EVENT_NEWS_COHORT_ID
+
+    monkeypatch.setattr(config_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
+    monkeypatch.setattr("utils.event_news_research.cfg", config_module.cfg)
+    store = ResearchDossierStore(tmp_path / "research_dossier.db")
+    await store.initialize()
+    await store.record_research_run(
+        "KXTRUTHSOCIAL-26AUG29-T240",
+        "run-stale",
+        trigger_headline="",
+        trigger_source="research_prewarm",
+        attempted=False,
+        summary="stale illiquid skip",
+        verdict_status=ResearchStatus.NEEDS_RESEARCH.value,
+        skip_reason="illiquid_open_interest",
+        decision_grade_status=ResearchStatus.NEEDS_RESEARCH.value,
+    )
+    future = (datetime.now(timezone.utc) + timedelta(hours=6)).isoformat().replace(
+        "+00:00", "Z"
+    )
+    with sqlite3.connect(tmp_path / "research_dossier.db") as conn:
+        conn.execute(
+            """
+            UPDATE research_tasks
+            SET backoff_seconds = 21600.0,
+                cooldown_until_ts = ?,
+                updated_ts = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+            WHERE market_ticker = 'KXTRUTHSOCIAL-26AUG29-T240'
+            """,
+            (future,),
+        )
+    calls: list[str] = []
+
+    async def research_gate(_news, market, **_kwargs):
+        calls.append(market.ticker)
+        return SimpleNamespace(
+            status=ResearchStatus.NEEDS_RESEARCH,
+            attempted=True,
+            queries=[],
+            evidence=[],
+            skip_reason="official_data_pending",
+        )
+
+    market = SimpleNamespace(
+        ticker="KXTRUTHSOCIAL-26AUG29-T240",
+        title="Will Trump post 240 times?",
+        rules_primary="Factbase weekly post count resolves the market.",
+        rules_secondary="",
+        settlement_sources=(),
+        contract_terms_url="",
+        status="open",
+        close_time="2099-12-31T23:59:59Z",
+        series_ticker="KXTRUTHSOCIAL",
+        event_ticker="KXTRUTHSOCIAL-26AUG29",
+        yes_ask_cents=18,
+        no_ask_cents=83,
+        yes_ask=18,
+        no_ask=83,
+        yes_ask_size=280.0,
+        no_ask_size=280.0,
+        open_interest_fp=1000.0,
+        volume_24h_fp=500.0,
+    )
+    task = ResearchPrewarmTask(
+        store=store,
+        research_gate=research_gate,
+        target_cooldown_seconds=300.0,
+    )
+    results = await task.run_once([market])
+
+    assert calls == ["KXTRUTHSOCIAL-26AUG29-T240"]
+    assert results[0].attempted is True
 
 
 @pytest.mark.asyncio
@@ -1641,6 +1753,7 @@ async def test_prewarm_emits_terminal_decision_grade_to_market_result_sink(tmp_p
         ("KXRESEARCH-DECISION", "skipped_terminal")
     ]
     assert results[0].skip_reason == ResearchStatus.DECISION_GRADE_CANDIDATE.value
+    assert results[0].research_run_id == "run-decision-old"
     assert emitted == [
         (
             "KXRESEARCH-DECISION",

@@ -1266,6 +1266,7 @@ class TradingBot:
             logger=trade_log,
             now=lambda: datetime.now(timezone.utc),
             route_analysis=self._route_research_analysis_through_blend,
+            paper_exposure_checker=self._event_news_has_paper_exposure,
         )
         self._accumulation_task = AccumulationTask()
         self._structural_task = StructuralTask()
@@ -1345,6 +1346,38 @@ class TradingBot:
                         book[ticker] = started_at
             setattr(self, attr, book)
         return book
+
+    def _event_news_has_paper_exposure(self, ticker: str) -> bool:
+        """True when politics already has open or queued paper risk on this ticker."""
+        wanted = str(ticker or "").strip()
+        if not wanted:
+            return False
+        try:
+            portfolio = getattr(self.paper, "portfolio", None)
+            open_positions = getattr(portfolio, "open_positions", None)
+            if callable(open_positions):
+                for position in open_positions() or []:
+                    if str(getattr(position, "ticker", "") or "").strip() == wanted:
+                        return True
+            queue = getattr(self, "_trading_queue", None)
+            peek = getattr(queue, "_queue", None) if queue is not None else None
+            if peek:
+                for item in list(peek):
+                    analysis = getattr(item, "fast_lane_analysis", item)
+                    market = getattr(analysis, "market", None)
+                    queued_ticker = str(
+                        getattr(market, "ticker", getattr(item, "ticker", "")) or ""
+                    ).strip()
+                    if queued_ticker == wanted:
+                        return True
+        except Exception:
+            log.warning(
+                "[EVENT_NEWS_PREWARM] paper exposure lookup failed ticker=%s",
+                wanted,
+                exc_info=True,
+            )
+            return True
+        return False
 
     def _research_prewarm_target_cooldown_seconds(self) -> float:
         return float(getattr(cfg, "research_prewarm_target_cooldown_seconds", 1800.0))
@@ -1548,6 +1581,34 @@ class TradingBot:
                 dict(rejected),
                 [str(getattr(market, "ticker", "") or "") for market in market_list],
             )
+            from utils.event_news_research import event_news_reorder_prewarm_batch
+
+            due_tickers = [
+                task.market_ticker
+                for task in self._research_prewarm_due_tasks(
+                    limit=max(len(market_list), 1),
+                    cooldown_seconds=self._research_prewarm_target_cooldown_seconds(),
+                )
+                if not _research_prewarm_ticker_blocked(task.market_ticker)
+            ]
+            reordered = event_news_reorder_prewarm_batch(market_list, due_tickers)
+            for market in reordered:
+                self._enrich_research_prewarm_market_source_path(market)
+            log.info(
+                "[EVENT_NEWS_PREWARM] runtime_batch markets=%d tickers=%s due_in_band=%s",
+                len(reordered),
+                [str(getattr(market, "ticker", "") or "") for market in reordered],
+                [
+                    ticker
+                    for ticker in due_tickers
+                    if ticker
+                    in {
+                        str(getattr(market, "ticker", "") or "")
+                        for market in reordered
+                    }
+                ],
+            )
+            return reordered
         now_monotonic = time.monotonic()
         cooldown = self._research_prewarm_target_cooldown_seconds()
         due_tasks = [
@@ -1887,7 +1948,7 @@ class TradingBot:
         return open_markets_by_price(market_list)[:max_markets]
 
     def _research_prewarm_runtime_markets(self) -> list[object]:
-        """Politics drops due-task ladder refill so one event cannot mill 25 books."""
+        """Politics prewarm is the live favorite-band set only."""
         markets = self._research_prewarm_market_provider()
         from utils.event_news_research import event_news_finalize_prewarm_batch
 
@@ -2071,6 +2132,13 @@ class TradingBot:
             bypass_persisted_cooldown=True,
         )
         await prewarm.emit_result(result)
+        from utils.event_news_research import is_event_news_paper_cohort
+
+        if result.attempted and is_event_news_paper_cohort():
+            self._mark_research_prewarm_started(
+                str(getattr(market, "ticker", "") or ""),
+                now_monotonic=time.monotonic(),
+            )
         await self._admit_research_prewarm_paper_review(result, market)
         log.info(
             "[RESEARCH_PREWARM] targeted ticker=%s source_skip_reason=%s "
@@ -2104,16 +2172,41 @@ class TradingBot:
                 admission.market_ticker,
                 admission.enqueued,
             )
-        elif getattr(result, "status", None) == "decision_grade_candidate":
+        elif getattr(result, "status", None) in {
+            "decision_grade_candidate",
+            "skipped_terminal",
+        }:
             log.info(
                 "[RESEARCH_PAPER_ADMISSION] blocked ticker=%s reason=%s",
                 admission.market_ticker,
                 admission.reason,
             )
 
-    def _schedule_targeted_research_prewarm(self, market, skip_reason: str | None) -> bool:
+    def _schedule_targeted_research_prewarm(
+        self,
+        market,
+        skip_reason: str | None,
+        *,
+        settlement_source_match: bool | None = None,
+    ) -> bool:
+        from utils.event_news_research import (
+            event_news_news_may_refresh_research,
+            is_event_news_paper_cohort,
+        )
+
         reason = str(skip_reason or "").strip()
-        if reason not in self._RETRYABLE_RESEARCH_PREWARM_REASONS:
+        if is_event_news_paper_cohort():
+            if not event_news_news_may_refresh_research(
+                market,
+                settlement_source_match=settlement_source_match,
+            ):
+                return False
+            if (
+                reason not in self._RETRYABLE_RESEARCH_PREWARM_REASONS
+                and reason != "settlement_source_refresh"
+            ):
+                return False
+        elif reason not in self._RETRYABLE_RESEARCH_PREWARM_REASONS:
             return False
         research_mode = str(getattr(cfg, "real_web_research_mode", "off") or "off").lower()
         if research_mode not in {"production", "shadow"}:
@@ -2123,6 +2216,13 @@ class TradingBot:
             return False
         if not hasattr(self, "_targeted_research_prewarm_tasks"):
             self._targeted_research_prewarm_tasks = set()
+        if is_event_news_paper_cohort():
+            target_name = f"research_prewarm_target:{ticker}"
+            if any(
+                not task.done() and task.get_name() == target_name
+                for task in self._targeted_research_prewarm_tasks
+            ):
+                return False
         now_monotonic = time.monotonic()
         cooldown = self._research_prewarm_target_cooldown_seconds()
         if not self._research_prewarm_ticker_available(
@@ -2131,7 +2231,8 @@ class TradingBot:
             cooldown_seconds=cooldown,
         ):
             return False
-        self._mark_research_prewarm_started(ticker, now_monotonic=now_monotonic)
+        if not is_event_news_paper_cohort():
+            self._mark_research_prewarm_started(ticker, now_monotonic=now_monotonic)
         task = asyncio.create_task(
             self._run_targeted_research_prewarm(market, reason),
             name=f"research_prewarm_target:{ticker}",
@@ -2836,6 +2937,13 @@ class TradingBot:
         if is_event_news_paper_cohort():
             skip_reason = event_news_prewarm_skip_reason(market)
             if skip_reason:
+                settlement_match = _settlement_source_match(news, market)
+                if settlement_match:
+                    self._schedule_targeted_research_prewarm(
+                        market,
+                        "settlement_source_refresh",
+                        settlement_source_match=True,
+                    )
                 log.info(
                     "[EVENT_NEWS_NEWS] skip ticker=%s source=%s reason=%s",
                     market.ticker,

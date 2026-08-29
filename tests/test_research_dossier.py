@@ -637,6 +637,43 @@ async def test_research_paper_admission_claim_is_sequentially_at_most_once(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_research_paper_admission_reclaim_is_atomic_for_unfilled_politics(
+    tmp_path,
+    monkeypatch,
+):
+    import config as config_module
+    from utils.event_news_research import EVENT_NEWS_COHORT_ID
+
+    monkeypatch.setattr(config_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
+    monkeypatch.setattr("utils.event_news_research.cfg", config_module.cfg)
+    store = ResearchDossierStore(tmp_path / "research.db")
+    await store.initialize()
+    assert await store.claim_research_paper_admission(
+        "KXTEST-26", "run-1", "fingerprint-1"
+    )
+    await store.complete_research_paper_admission(
+        "KXTEST-26",
+        "run-1",
+        "fingerprint-1",
+        state="completed",
+        enqueued=True,
+        outcome_reason=None,
+    )
+    assert await store.reclaim_research_paper_admission(
+        "KXTEST-26",
+        "run-1",
+        "fingerprint-1",
+        allow_unfilled_enqueue=True,
+    )
+    assert not await store.reclaim_research_paper_admission(
+        "KXTEST-26",
+        "run-1",
+        "fingerprint-1",
+        allow_unfilled_enqueue=True,
+    )
+
+
+@pytest.mark.asyncio
 async def test_research_paper_admission_claim_is_atomic_across_stores(
     tmp_path,
     monkeypatch,

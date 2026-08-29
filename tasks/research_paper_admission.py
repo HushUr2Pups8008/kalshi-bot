@@ -100,6 +100,29 @@ class ResearchAdmissionStore(Protocol):
         outcome_reason: str | None,
     ) -> None: ...
 
+    async def get_research_paper_admission(
+        self,
+        market_ticker: str,
+        research_run_id: str,
+        contract_fingerprint: str,
+    ) -> Any | None: ...
+
+    async def clear_research_paper_admission(
+        self,
+        market_ticker: str,
+        research_run_id: str,
+        contract_fingerprint: str,
+    ) -> None: ...
+
+    async def reclaim_research_paper_admission(
+        self,
+        market_ticker: str,
+        research_run_id: str,
+        contract_fingerprint: str,
+        *,
+        allow_unfilled_enqueue: bool = False,
+    ) -> bool: ...
+
 
 @dataclass(frozen=True)
 class ResearchPaperSignal:
@@ -321,6 +344,7 @@ class ResearchPaperAdmissionBridge:
         now: Callable[[], datetime] | None = None,
         signal_provider: ResearchPaperSignalProvider | None = None,
         route_analysis: (Callable[[SignalAnalysis, ResearchBackedBlendStore], Awaitable[Any]] | None) = None,
+        paper_exposure_checker: Callable[[str], bool] | None = None,
     ) -> None:
         self.provider = signal_provider or ResearchPaperSignalProvider(
             research_store,
@@ -330,6 +354,7 @@ class ResearchPaperAdmissionBridge:
         self.logger = logger
         self._now = now or (lambda: datetime.now(UTC))
         self._route_analysis = route_analysis
+        self._paper_exposure_checker = paper_exposure_checker
 
     async def admit_prewarm_result(
         self,
@@ -416,6 +441,25 @@ class ResearchPaperAdmissionBridge:
             current_signal.research_run_id,
             current_signal.contract_fingerprint,
         )
+        if not claimed and is_event_news_paper_cohort():
+            has_exposure = True
+            if callable(self._paper_exposure_checker):
+                try:
+                    has_exposure = bool(self._paper_exposure_checker(ticker))
+                except Exception:
+                    has_exposure = True
+            reclaim = getattr(
+                self.provider.store,
+                "reclaim_research_paper_admission",
+                None,
+            )
+            if not has_exposure and callable(reclaim):
+                claimed = await reclaim(
+                    ticker,
+                    current_signal.research_run_id,
+                    current_signal.contract_fingerprint,
+                    allow_unfilled_enqueue=True,
+                )
         if not claimed:
             return ResearchPaperAdmissionResult(
                 market_ticker=ticker,

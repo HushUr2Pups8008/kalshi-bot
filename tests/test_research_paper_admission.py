@@ -103,6 +103,69 @@ class FakeResearchStore:
             }
         )
 
+    async def get_research_paper_admission(
+        self,
+        market_ticker: str,
+        research_run_id: str,
+        contract_fingerprint: str,
+    ):
+        key = (market_ticker, research_run_id, contract_fingerprint)
+        if key not in self.claims:
+            return None
+        completion = next(
+            (item for item in reversed(self.completions) if item["key"] == key),
+            None,
+        )
+        return SimpleNamespace(
+            market_ticker=market_ticker,
+            research_run_id=research_run_id,
+            contract_fingerprint=contract_fingerprint,
+            state=completion["state"] if completion else "claimed",
+            enqueued=completion["enqueued"] if completion else None,
+            outcome_reason=completion["outcome_reason"] if completion else None,
+        )
+
+    async def clear_research_paper_admission(
+        self,
+        market_ticker: str,
+        research_run_id: str,
+        contract_fingerprint: str,
+    ) -> None:
+        self.claims.discard((market_ticker, research_run_id, contract_fingerprint))
+
+    async def reclaim_research_paper_admission(
+        self,
+        market_ticker: str,
+        research_run_id: str,
+        contract_fingerprint: str,
+        *,
+        allow_unfilled_enqueue: bool = False,
+    ) -> bool:
+        from utils.event_news_research import event_news_should_retry_admission
+
+        snapshot = await self.get_research_paper_admission(
+            market_ticker,
+            research_run_id,
+            contract_fingerprint,
+        )
+        key = (market_ticker, research_run_id, contract_fingerprint)
+        if snapshot is None:
+            if key in self.claims:
+                return False
+            self.claims.add(key)
+            return True
+        if not event_news_should_retry_admission(
+            has_paper_exposure=False,
+            state=snapshot.state,
+            enqueued=snapshot.enqueued,
+            outcome_reason=snapshot.outcome_reason,
+            allow_unfilled_enqueue=allow_unfilled_enqueue,
+        ):
+            return False
+        self.claims.discard(key)
+        self.claims.add(key)
+        return True
+
 
 class SpyLogger:
     def __init__(self) -> None:
@@ -500,6 +563,60 @@ async def test_research_admission_claim_routes_same_proof_once() -> None:
             "outcome_reason": None,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_politics_retries_unfilled_decision_grade_admission(monkeypatch) -> None:
+    import config as config_module
+    from utils.event_news_research import EVENT_NEWS_COHORT_ID
+
+    monkeypatch.setattr(config_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
+    monkeypatch.setattr(
+        "utils.event_news_research.cfg",
+        config_module.cfg,
+    )
+    store = FakeResearchStore(snapshot=_snapshot(), evidence=_valid_evidence())
+    routed = []
+
+    async def route_analysis(analysis, _store):
+        routed.append(analysis)
+        return SimpleNamespace(ready=True, enqueued=True, trade_blocked_reason=None)
+
+    bridge = ResearchPaperAdmissionBridge(
+        research_store=store,
+        trading_queue=asyncio.Queue(),
+        logger=SpyLogger(),
+        now=lambda: datetime(2026, 7, 2, 16, 5, tzinfo=UTC),
+        route_analysis=route_analysis,
+        paper_exposure_checker=lambda _ticker: False,
+    )
+    prewarm = ResearchPrewarmResult(
+        market_ticker="KXRESEARCH-1",
+        status="skipped_terminal",
+        attempted=False,
+        skip_reason="decision_grade_candidate",
+        research_run_id="rr-decision",
+        research_contract_fingerprint="contract-v1",
+    )
+
+    first = await bridge.admit_prewarm_result(prewarm, _market())
+    second = await bridge.admit_prewarm_result(prewarm, _market())
+
+    assert first.admitted is True
+    assert second.admitted is True
+    assert len(routed) == 2
+
+    blocked = ResearchPaperAdmissionBridge(
+        research_store=store,
+        trading_queue=asyncio.Queue(),
+        logger=SpyLogger(),
+        now=lambda: datetime(2026, 7, 2, 16, 5, tzinfo=UTC),
+        route_analysis=route_analysis,
+        paper_exposure_checker=lambda _ticker: True,
+    )
+    third = await blocked.admit_prewarm_result(prewarm, _market())
+    assert third.admitted is False
+    assert third.reason == "duplicate_research_admission"
 
 
 @pytest.mark.asyncio

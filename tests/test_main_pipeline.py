@@ -383,6 +383,85 @@ def test_create_research_prewarm_runtime_task_enabled(monkeypatch):
     ]
 
 
+def test_politics_prewarm_provider_keeps_in_band_and_drops_due_task_junk(monkeypatch):
+    from utils.event_news_research import EVENT_NEWS_COHORT_ID
+
+    monkeypatch.setattr(_cfg_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID, raising=False)
+    monkeypatch.setattr("utils.event_news_research.cfg", _cfg_module.cfg)
+    monkeypatch.setattr(_cfg_module.cfg, "research_prewarm_max_markets", 25, raising=False)
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "llm_allowed_price_bands",
+        [(0.55, 0.99)],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        _cfg_module.cfg,
+        "llm_excluded_price_bands",
+        [(0.00, 0.35)],
+        raising=False,
+    )
+    bot = _make_bot_stub()
+
+    def _in_band(ticker: str, series: str, yes: int, no: int):
+        return SimpleNamespace(
+            ticker=ticker,
+            series_ticker=series,
+            event_ticker="-".join(ticker.split("-")[:2]),
+            status="active",
+            close_time="2026-12-31T23:59:59Z",
+            yes_ask_cents=yes,
+            no_ask_cents=no,
+            yes_ask=yes,
+            no_ask=no,
+            yes_ask_size=80.0,
+            no_ask_size=80.0,
+            open_interest_fp=1000.0,
+            volume_24h_fp=500.0,
+            settlement_sources=(SettlementSource(label="Official", domain="whitehouse.gov"),),
+            rules_primary="Official source resolves the market.",
+        )
+
+    t240 = _in_band("KXTRUTHSOCIAL-26AUG29-T240", "KXTRUTHSOCIAL", 18, 83)
+    bibi = _in_band("KXTRUMPSAY-26AUG31-BIBI", "KXTRUMPSAY", 22, 79)
+    armo = _in_band("KXARMOMINF-26SEP10-T1.8", "KXARMOMINF", 60, 42)
+    soccer = _in_band("KXFACUPADVANCE-26AUG29", "KXFACUPADVANCE", 70, 32)
+
+    def get_markets(*, status="open", series_ticker=None, limit=200):
+        if series_ticker == "KXTRUTHSOCIAL":
+            return [t240], None
+        if series_ticker == "KXTRUMPSAY":
+            return [bibi], None
+        return [], None
+
+    bot.rest.get_markets.side_effect = get_markets
+    bot.matcher._cache._markets = [armo, soccer]
+    bot._research_prewarm_due_tasks = lambda *, limit, cooldown_seconds: [
+        SimpleNamespace(
+            market_ticker=ticker,
+            last_skip_reason="not_reserve_series",
+            terminal_reason=None,
+        )
+        for ticker in (
+            armo.ticker,
+            soccer.ticker,
+            t240.ticker,
+            "KXAAAGASW-26AUG24-4.096",
+        )
+    ]
+
+    selected = bot._research_prewarm_market_provider()
+    tickers = [market.ticker for market in selected]
+    assert t240.ticker in tickers
+    assert bibi.ticker in tickers
+    assert armo.ticker not in tickers
+    assert soccer.ticker not in tickers
+    assert "KXAAAGASW-26AUG24-4.096" not in tickers
+    assert tickers[0] == t240.ticker
+    bot.rest.get_market.assert_not_called()
+    assert bot._research_prewarm_cooldown_book() == {}
+
+
 def test_research_prewarm_market_provider_prioritizes_recent_empty_keyword_backlog(
     monkeypatch, tmp_path
 ):
