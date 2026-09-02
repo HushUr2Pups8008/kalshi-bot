@@ -2152,15 +2152,34 @@ def _decision_grade_persistence_quality(
     if is_event_news_paper_cohort():
         both_sides_p = _evidence_has_both_sides_probability(evidence)
         if not both_sides_p and side in {"yes", "no"}:
-            from utils.event_news_research import event_news_google_counter_not_required
-
-            official_without_google = event_news_google_counter_not_required(
-                ticker=ticker,
-                evidence=evidence,
-                estimated_probability=0.5,
-                force_side=side,
-                require_favorite_band=False,
+            from utils.event_news_research import (
+                event_news_google_counter_not_required,
+                event_news_has_structured_official_metric,
             )
+
+            persist_p = None
+            for item in evidence:
+                metric = str(getattr(item, "metric_name", "") or "").strip()
+                value = getattr(item, "metric_value", None)
+                if not metric or value is None:
+                    continue
+                if "probability" in metric:
+                    try:
+                        persist_p = float(value)
+                    except (TypeError, ValueError):
+                        persist_p = None
+                else:
+                    persist_p = 0.02
+                if persist_p is not None:
+                    break
+            if persist_p is not None and event_news_has_structured_official_metric(evidence):
+                official_without_google = event_news_google_counter_not_required(
+                    ticker=ticker,
+                    evidence=evidence,
+                    estimated_probability=persist_p,
+                    force_side=side,
+                    require_favorite_band=False,
+                )
     waive_google_counter = both_sides_p or official_without_google
     return {
         "has_reliable_source_path": has_reliable_research_source_path(evidence)

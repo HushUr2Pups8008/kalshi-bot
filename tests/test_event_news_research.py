@@ -1068,6 +1068,15 @@ def test_google_counter_not_required_for_in_band_official_reserve():
             claim_type="official_resolution",
             source_url="https://rollcall.com/wp-json/factbase/v1/twitter",
             metric_name="truth_social_range_probability",
+            metric_value=0.98,
+        )
+    ]
+    name_only = [
+        SimpleNamespace(
+            source_class="official_primary",
+            claim_type="official_resolution",
+            source_url="https://rollcall.com/wp-json/factbase/v1/twitter",
+            metric_name="truth_social_range_probability",
         )
     ]
     assert (
@@ -1170,6 +1179,18 @@ def test_google_counter_not_required_for_in_band_official_reserve():
             yes_ask=0.85,
             no_ask=0.16,
             evidence=[],
+            estimated_probability=0.98,
+            force_side="yes",
+            config=politics,
+        )
+        is False
+    )
+    assert (
+        event_news_google_counter_not_required(
+            ticker="KXTRUTHSOCIAL-26AUG29-T240",
+            yes_ask=0.85,
+            no_ask=0.16,
+            evidence=name_only,
             estimated_probability=0.98,
             force_side="yes",
             config=politics,

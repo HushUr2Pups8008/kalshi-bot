@@ -19,6 +19,15 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.77] - 2026-09-02
+
+### Fixed
+
+- **Structured count persist no longer uses a 0.5 shrug sentinel.** Dossier
+  quality now waives Google only when a named metric has a value; URL-only
+  official pages stay fail-closed. Name-only metric stamps do not waive.
+  Freeze stays locked. Live stays locked.
+
 ## [0.33.76] - 2026-09-02
 
 ### Changed

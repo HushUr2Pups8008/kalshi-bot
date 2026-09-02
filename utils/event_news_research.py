@@ -823,11 +823,14 @@ def event_news_uninformative_shrug_p(probability: float) -> bool:
 
 
 def event_news_has_structured_official_metric(evidence: list[Any] | None) -> bool:
-    """True when evidence carries a named official count/range metric."""
+    """True when evidence carries a named official count/range metric with a value."""
     for item in evidence or ():
         metric = str(getattr(item, "metric_name", "") or "").strip()
-        if metric in _STRUCTURED_OFFICIAL_METRICS:
-            return True
+        if metric not in _STRUCTURED_OFFICIAL_METRICS:
+            continue
+        if getattr(item, "metric_value", None) is None:
+            continue
+        return True
     return False
 
 

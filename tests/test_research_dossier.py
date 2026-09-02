@@ -3191,7 +3191,7 @@ def test_persistence_keeps_decision_grade_for_white_house_remaining_time_p(monke
     assert skip is None
 
 
-def test_persistence_keeps_politics_official_source_p_without_google_counter(monkeypatch):
+def test_persistence_url_only_official_p_still_requires_google_counter(monkeypatch):
     monkeypatch.setattr(
         "utils.event_news_research.is_event_news_paper_cohort",
         lambda _config=None: True,
@@ -3224,20 +3224,40 @@ def test_persistence_keeps_politics_official_source_p_without_google_counter(mon
         queries=[SimpleNamespace(query="fisa official", query_intent="official_resolution")],
         evidence=evidence,
     )
-    assert quality["has_counter_evidence"] is True
-    assert quality["has_counter_query"] is True
-    status, grade, skip = _validated_research_status(
-        market_ticker="KXFISAEXTEND-26JUN-27",
-        verdict_status="decision_grade_candidate",
-        decision_grade_status="decision_grade_candidate",
-        skip_reason="missing_counter_evidence",
-        force_side="yes",
-        queries=[],
+    assert quality["has_counter_evidence"] is False
+
+
+def test_persistence_keeps_structured_count_without_google_counter(monkeypatch):
+    monkeypatch.setattr(
+        "utils.event_news_research.is_event_news_paper_cohort",
+        lambda _config=None: True,
+    )
+    retrieved = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    evidence = [
+        ResearchEvidence(
+            source_class="official_primary",
+            source_name="Roll Call Factbase Truth Social records",
+            source_url="https://rollcall.com/wp-json/factbase/v1/twitter",
+            title="Factbase weekly post count",
+            snippet="Factbase records 14 posts this week.",
+            claim_type="official_resolution",
+            supports_direction="no",
+            supports_confidence=0.95,
+            retrieved_at=retrieved,
+            metric_name="truth_social_weekly_post_count",
+            metric_value=14.0,
+            metric_unit="posts",
+            extraction_confidence=0.96,
+        )
+    ]
+    quality = _decision_grade_persistence_quality(
+        ticker="KXTRUTHSOCIAL-26SEP05-T240",
+        side="no",
+        queries=[SimpleNamespace(query="ts official", query_intent="official_resolution")],
         evidence=evidence,
     )
-    assert status == "decision_grade_candidate"
-    assert grade == "decision_grade_candidate"
-    assert skip is None
+    assert quality["has_counter_evidence"] is True
+    assert quality["has_counter_query"] is True
 
 
 def replace_wh_source(item: ResearchEvidence) -> ResearchEvidence:
