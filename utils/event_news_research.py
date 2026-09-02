@@ -278,6 +278,39 @@ def event_news_exposure_prefix(market: Any, fallback: str, *, config: Any = None
     return fallback
 
 
+def event_news_blocking_open_ticker(
+    market: Any,
+    open_tickers: list[str] | tuple[str, ...] | None,
+    *,
+    config: Any = None,
+    default_cap: int = 1,
+) -> str | None:
+    """Existing open paper ticker that occupies this event, else None.
+
+    Politics allows one open row per event_ticker. Sibling strikes
+    (T6 vs T8) share the event and must not enqueue a second fill.
+    """
+    if not is_event_news_paper_cohort(config):
+        return None
+    cap = event_news_open_prefix_cap(default_cap, config=config)
+    if cap <= 0:
+        return None
+    fallback = str(getattr(market, "ticker", "") or "").strip()
+    prefix = event_news_exposure_prefix(market, fallback, config=config)
+    if not prefix:
+        return None
+    occupied: list[str] = []
+    for raw in open_tickers or ():
+        ticker = str(raw or "").strip()
+        if not ticker:
+            continue
+        if ticker == prefix or ticker.startswith(f"{prefix}-"):
+            occupied.append(ticker)
+    if len(occupied) < cap:
+        return None
+    return occupied[0]
+
+
 def event_news_settle_statuses(*, config: Any = None) -> tuple[str, ...]:
     """Paper auto-resolve statuses. Politics may write on determined+result."""
     if is_event_news_paper_cohort(config):

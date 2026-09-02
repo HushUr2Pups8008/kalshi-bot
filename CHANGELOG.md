@@ -19,6 +19,18 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.74] - 2026-09-02
+
+### Fixed
+
+- **Politics official-p admission honors the per-event open cap before
+  enqueue.** Sibling strikes (e.g. TRUMPACT T6 while T8 is open) no longer
+  enter `trading_queue` as `official_p` NO 0.02 admits. Executor already
+  capped one open row per `event_ticker`; admission now logs
+  `event_open_prefix_cap` and skips `put`. Does not change 0.02/0.98 clips,
+  settlement, or existing paper rows. Freeze stays locked. Live stays
+  locked.
+
 ## [0.33.73] - 2026-08-29
 
 ### Fixed

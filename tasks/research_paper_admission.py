@@ -31,6 +31,7 @@ from utils.research_evidence_quality import (
 from utils.research_market_eligibility import research_market_eligibility
 from utils.event_news_research import (
     event_news_admission_gate_reason,
+    event_news_blocking_open_ticker,
     event_news_official_p_ready,
     is_event_news_paper_cohort,
 )
@@ -370,6 +371,7 @@ class ResearchPaperAdmissionBridge:
         signal_provider: ResearchPaperSignalProvider | None = None,
         route_analysis: (Callable[[SignalAnalysis, ResearchBackedBlendStore], Awaitable[Any]] | None) = None,
         paper_exposure_checker: Callable[[str], bool] | None = None,
+        open_paper_tickers: Callable[[], list[str]] | None = None,
     ) -> None:
         self.provider = signal_provider or ResearchPaperSignalProvider(
             research_store,
@@ -380,6 +382,7 @@ class ResearchPaperAdmissionBridge:
         self._now = now or (lambda: datetime.now(UTC))
         self._route_analysis = route_analysis
         self._paper_exposure_checker = paper_exposure_checker
+        self._open_paper_tickers = open_paper_tickers
 
     async def admit_prewarm_result(
         self,
@@ -462,6 +465,34 @@ class ResearchPaperAdmissionBridge:
                     market_ticker=ticker,
                     admitted=False,
                     reason=gate_reason,
+                )
+            open_tickers: list[str] = []
+            if callable(self._open_paper_tickers):
+                try:
+                    open_tickers = [
+                        str(item or "").strip()
+                        for item in (self._open_paper_tickers() or [])
+                        if str(item or "").strip()
+                    ]
+                except Exception:
+                    _event_news_log.warning(
+                        "[EVENT_NEWS_ADMIT] open paper ticker lookup failed ticker=%s",
+                        ticker,
+                        exc_info=True,
+                    )
+                    open_tickers = []
+            occupied = event_news_blocking_open_ticker(market, open_tickers)
+            if occupied:
+                _event_news_log.info(
+                    "[EVENT_NEWS_ADMIT] blocked reason=event_open_prefix_cap "
+                    "open=%s blocked=%s",
+                    occupied,
+                    ticker,
+                )
+                return ResearchPaperAdmissionResult(
+                    market_ticker=ticker,
+                    admitted=False,
+                    reason="event_open_prefix_cap",
                 )
         claim_admission = getattr(
             self.provider.store,

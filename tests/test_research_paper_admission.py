@@ -723,6 +723,65 @@ async def test_politics_official_p_bypasses_blend_task(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_politics_official_p_blocks_sibling_when_event_already_open(
+    monkeypatch, caplog
+) -> None:
+    import logging
+
+    import config as config_module
+    from utils.event_news_research import EVENT_NEWS_COHORT_ID
+
+    monkeypatch.setattr(config_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
+    monkeypatch.setattr("utils.event_news_research.cfg", config_module.cfg)
+    monkeypatch.setattr(
+        "tasks.research_paper_admission.is_event_news_paper_cohort",
+        lambda _config=None: True,
+    )
+    ticker = "KXTRUMPACT-26AUG30-T6"
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    market = _politics_in_band_market()
+    market.ticker = ticker
+    market.series_ticker = "KXTRUMPACT"
+    market.event_ticker = "KXTRUMPACT-26AUG30"
+    store = FakeResearchStore(
+        snapshot=replace(_snapshot(), market_ticker=ticker),
+        evidence=_official_range_evidence(ticker=ticker),
+        has_counter_query=False,
+    )
+    bridge = ResearchPaperAdmissionBridge(
+        research_store=store,
+        trading_queue=queue,
+        logger=SpyLogger(),
+        now=lambda: datetime(2026, 7, 2, 16, 5, tzinfo=UTC),
+        paper_exposure_checker=lambda _ticker: False,
+        open_paper_tickers=lambda: ["KXTRUMPACT-26AUG30-T8"],
+    )
+    with caplog.at_level(logging.INFO, logger="event_news_research"):
+        result = await bridge.admit_prewarm_result(
+            ResearchPrewarmResult(
+                market_ticker=ticker,
+                status="skipped_terminal",
+                attempted=False,
+                skip_reason="decision_grade_candidate",
+                research_run_id="rr-decision",
+                research_contract_fingerprint="contract-v1",
+            ),
+            market,
+        )
+    assert result.admitted is False
+    assert result.enqueued is False
+    assert result.reason == "event_open_prefix_cap"
+    assert queue.empty()
+    assert store.claims == set()
+    assert any(
+        "event_open_prefix_cap" in record.message
+        and "open=KXTRUMPACT-26AUG30-T8" in record.message
+        and "blocked=KXTRUMPACT-26AUG30-T6" in record.message
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
 async def test_politics_official_source_p_admits_without_google_counter(monkeypatch) -> None:
     import config as config_module
     from utils.event_news_research import EVENT_NEWS_COHORT_ID

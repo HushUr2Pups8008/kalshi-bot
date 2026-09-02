@@ -343,6 +343,29 @@ def test_event_prefix_and_cap_isolated_from_freeze():
     assert event_news_open_prefix_cap(2, config=politics) == 1
 
 
+def test_event_news_blocking_open_ticker_stops_sibling_not_new_event():
+    from utils.event_news_research import event_news_blocking_open_ticker
+
+    freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
+    politics = SimpleNamespace(paper_cohort_id=EVENT_NEWS_COHORT_ID)
+    t6 = SimpleNamespace(
+        ticker="KXTRUMPACT-26AUG30-T6",
+        event_ticker="KXTRUMPACT-26AUG30",
+    )
+    new_event = SimpleNamespace(
+        ticker="KXCANUSDEAL-26-26DEC01",
+        event_ticker="KXCANUSDEAL-26",
+    )
+    open_tickers = ["KXTRUMPACT-26AUG30-T8", "KXTRUTHSOCIAL-26SEP05-T240"]
+    assert (
+        event_news_blocking_open_ticker(t6, open_tickers, config=politics)
+        == "KXTRUMPACT-26AUG30-T8"
+    )
+    assert event_news_blocking_open_ticker(t6, [], config=politics) is None
+    assert event_news_blocking_open_ticker(new_event, open_tickers, config=politics) is None
+    assert event_news_blocking_open_ticker(t6, open_tickers, config=freeze) is None
+
+
 def test_determined_status_only_on_politics():
     freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
     politics = SimpleNamespace(paper_cohort_id=EVENT_NEWS_COHORT_ID)

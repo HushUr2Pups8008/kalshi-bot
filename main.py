@@ -1267,6 +1267,7 @@ class TradingBot:
             now=lambda: datetime.now(timezone.utc),
             route_analysis=self._route_research_analysis_through_blend,
             paper_exposure_checker=self._event_news_has_paper_exposure,
+            open_paper_tickers=self._event_news_open_paper_tickers,
         )
         self._accumulation_task = AccumulationTask()
         self._structural_task = StructuralTask()
@@ -1378,6 +1379,28 @@ class TradingBot:
             )
             return True
         return False
+
+    def _event_news_open_paper_tickers(self) -> list[str]:
+        """Open paper tickers for the politics per-event admission cap."""
+        try:
+            portfolio = getattr(self.paper, "portfolio", None)
+            open_positions = getattr(portfolio, "open_positions", None)
+            if not callable(open_positions):
+                return []
+            tickers: list[str] = []
+            seen: set[str] = set()
+            for position in open_positions() or []:
+                ticker = str(getattr(position, "ticker", "") or "").strip()
+                if ticker and ticker not in seen:
+                    seen.add(ticker)
+                    tickers.append(ticker)
+            return tickers
+        except Exception:
+            log.warning(
+                "[EVENT_NEWS_ADMIT] open paper ticker lookup failed",
+                exc_info=True,
+            )
+            return []
 
     def _research_prewarm_target_cooldown_seconds(self) -> float:
         return float(getattr(cfg, "research_prewarm_target_cooldown_seconds", 1800.0))
