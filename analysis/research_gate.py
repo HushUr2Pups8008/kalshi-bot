@@ -2176,7 +2176,10 @@ def _decision_grade_verdict(
     no_ask: float | None = None,
     market: Any | None = None,
 ) -> ResearchVerdict:
-    from utils.event_news_research import event_news_google_counter_not_required
+    from utils.event_news_research import (
+        event_news_google_counter_not_required,
+        event_news_uninformative_shrug_p,
+    )
 
     official_p_without_google = event_news_google_counter_not_required(
         market=market,
@@ -2247,10 +2250,17 @@ def _decision_grade_verdict(
         # An official structured p already prices YES and NO. Requiring a
         # Google "no contrary" snippet here is why Factbase counts never
         # admitted. Freeze/live keep the search-phrase counter check.
-        if official_p_without_google or (
-            score_both_sides
-            and _probability_from_structured_evidence(list(candidate.evidence))
-            is not None
+        # A 0.5 shrug (URL mill / empty packet) is not an official p.
+        structured_p = _probability_from_structured_evidence(list(candidate.evidence))
+        shrug_p = event_news_uninformative_shrug_p(
+            candidate.estimated_probability
+        ) or (
+            structured_p is not None
+            and event_news_uninformative_shrug_p(structured_p)
+        )
+        if not shrug_p and (
+            official_p_without_google
+            or (score_both_sides and structured_p is not None)
         ):
             if official_p_without_google:
                 log.warning(
@@ -7343,8 +7353,10 @@ def _fetch_direct_source(
         raw = response.read(300_000)
     if raw.startswith(b"%PDF") or cleaned_url.lower().endswith(".pdf"):
         title, snippet = _extract_pdf_text(raw)
-        if not snippet:
-            snippet = "kalshi_official_pdf"
+        cleaned_snippet = str(snippet or "").strip()
+        if not cleaned_snippet or cleaned_snippet in {"<", "kalshi_official_pdf"}:
+            return None
+        snippet = cleaned_snippet
     else:
         title, snippet = _extract_page_text(raw)
     domain = _domain_from_url(cleaned_url)
@@ -7446,17 +7458,15 @@ def _should_direct_fetch_source(
     cleaned_url = _clean(url)
     if not cleaned_url:
         return False
-    if allow_official_pdf_and_homepage:
-        return True
     parsed = urllib.parse.urlparse(
         cleaned_url if "://" in cleaned_url else f"https://{cleaned_url}"
     )
     path = (parsed.path or "").strip()
     lower_path = path.lower()
-    if lower_path.endswith(".pdf"):
-        return False
     if claim_type == "settlement_source" and path in {"", "/"}:
         return False
+    if lower_path.endswith(".pdf"):
+        return bool(allow_official_pdf_and_homepage)
     return True
 
 

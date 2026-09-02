@@ -19,6 +19,18 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.75] - 2026-09-02
+
+### Fixed
+
+- **Politics stops treating inconclusive p=0.5 as official_p.** Counter-waiver
+  and blend bypass now require a named structured metric (Factbase/WH count or
+  range probability, not a URL or empty PDF) and a p that is not the 0.5
+  shrug. Domain-root homepages and empty/binary PDFs cannot be the sole
+  settlement observation; path-specific pages such as
+  `/presidential-actions/` still fetch. Structured 0.02/0.98 clips still
+  waive Google. Freeze stays locked. Live stays locked.
+
 ## [0.33.74] - 2026-09-02
 
 ### Fixed

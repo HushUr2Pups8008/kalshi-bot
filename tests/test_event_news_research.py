@@ -1032,6 +1032,15 @@ def test_official_p_ready_and_admission_gate_politics_only():
         )
         is False
     )
+    assert (
+        event_news_official_p_ready(
+            estimated_probability=0.5,
+            force_side="yes",
+            market=t240,
+            config=politics,
+        )
+        is False
+    )
     assert event_news_admission_gate_reason(t240, edge=0.12, config=politics) is None
     assert event_news_dossier_is_stale(
         "2026-08-28T18:17:34Z",
@@ -1046,43 +1055,51 @@ def test_official_p_ready_and_admission_gate_politics_only():
 def test_google_counter_not_required_for_in_band_official_reserve():
     politics = _politics_config()
     freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
-    evidence = [
+    url_only = [
         SimpleNamespace(
             source_class="official_primary",
             claim_type="official_resolution",
             source_url="https://www.congress.gov/bill/119th-congress/house-bill/1",
         )
     ]
+    structured = [
+        SimpleNamespace(
+            source_class="official_primary",
+            claim_type="official_resolution",
+            source_url="https://rollcall.com/wp-json/factbase/v1/twitter",
+            metric_name="truth_social_range_probability",
+        )
+    ]
+    assert (
+        event_news_google_counter_not_required(
+            ticker="KXTRUTHSOCIAL-26AUG29-T240",
+            yes_ask=0.85,
+            no_ask=0.16,
+            evidence=structured,
+            estimated_probability=0.98,
+            force_side="yes",
+            config=politics,
+        )
+        is True
+    )
+    assert (
+        event_news_google_counter_not_required(
+            ticker="KXTRUTHSOCIAL-26SEP05-T240",
+            yes_ask=0.26,
+            no_ask=0.74,
+            evidence=structured,
+            estimated_probability=0.02,
+            force_side="no",
+            config=politics,
+        )
+        is True
+    )
     assert (
         event_news_google_counter_not_required(
             ticker="KXFISAEXTEND-26JUN-27",
             yes_ask=0.62,
             no_ask=0.40,
-            evidence=evidence,
-            estimated_probability=0.72,
-            force_side="yes",
-            config=politics,
-        )
-        is True
-    )
-    assert (
-        event_news_google_counter_not_required(
-            ticker="KXFISAEXTEND-26JUN-27",
-            yes_ask=0.20,
-            no_ask=0.81,
-            evidence=evidence,
-            estimated_probability=0.72,
-            force_side="yes",
-            config=politics,
-        )
-        is True
-    )
-    assert (
-        event_news_google_counter_not_required(
-            ticker="KXFISAEXTEND-26JUN-27",
-            yes_ask=0.20,
-            no_ask=0.25,
-            evidence=evidence,
+            evidence=url_only,
             estimated_probability=0.72,
             force_side="yes",
             config=politics,
@@ -1091,11 +1108,47 @@ def test_google_counter_not_required_for_in_band_official_reserve():
     )
     assert (
         event_news_google_counter_not_required(
-            ticker="KXFISAEXTEND-26JUN-27",
+            ticker="KXSBUDGETRES-26JUN-27JAN01",
             yes_ask=0.62,
             no_ask=0.40,
-            evidence=evidence,
+            evidence=url_only,
+            estimated_probability=0.5,
+            force_side="yes",
+            config=politics,
+        )
+        is False
+    )
+    assert (
+        event_news_google_counter_not_required(
+            ticker="KXTRUTHSOCIAL-26AUG29-T240",
+            yes_ask=0.85,
+            no_ask=0.16,
+            evidence=structured,
+            estimated_probability=0.5,
+            force_side="yes",
+            config=politics,
+        )
+        is False
+    )
+    assert (
+        event_news_google_counter_not_required(
+            ticker="KXFISAEXTEND-26JUN-27",
+            yes_ask=0.20,
+            no_ask=0.81,
+            evidence=url_only,
             estimated_probability=0.72,
+            force_side="yes",
+            config=politics,
+        )
+        is False
+    )
+    assert (
+        event_news_google_counter_not_required(
+            ticker="KXTRUTHSOCIAL-26AUG29-T240",
+            yes_ask=0.85,
+            no_ask=0.16,
+            evidence=structured,
+            estimated_probability=0.98,
             force_side="yes",
             config=freeze,
         )
@@ -1103,9 +1156,9 @@ def test_google_counter_not_required_for_in_band_official_reserve():
     )
     assert (
         event_news_google_counter_not_required(
-            ticker="KXFISAEXTEND-26JUN-27",
-            evidence=evidence,
-            estimated_probability=0.72,
+            ticker="KXTRUTHSOCIAL-26AUG29-T240",
+            evidence=structured,
+            estimated_probability=0.98,
             force_side="yes",
             config=politics,
         )
@@ -1113,46 +1166,15 @@ def test_google_counter_not_required_for_in_band_official_reserve():
     )
     assert (
         event_news_google_counter_not_required(
-            ticker="KXFISAEXTEND-26JUN-27",
-            yes_ask=0.62,
-            no_ask=0.40,
+            ticker="KXTRUTHSOCIAL-26AUG29-T240",
+            yes_ask=0.85,
+            no_ask=0.16,
             evidence=[],
-            estimated_probability=0.72,
+            estimated_probability=0.98,
             force_side="yes",
             config=politics,
         )
         is False
-    )
-    assert (
-        event_news_google_counter_not_required(
-            ticker="KXFISAEXTEND-26JUN-27",
-            yes_ask=0.40,
-            no_ask=0.40,
-            evidence=evidence,
-            estimated_probability=0.72,
-            force_side="yes",
-            config=politics,
-        )
-        is False
-    )
-    market = SimpleNamespace(
-        ticker="KXFISAEXTEND-26JUN-27",
-        series_ticker="KXFISAEXTEND",
-        yes_ask_cents=62,
-        no_ask_cents=40,
-        yes_ask=62,
-        no_ask=40,
-        settlement_sources=("https://www.congress.gov/",),
-        contract_terms_url="https://kalshi.com/terms/KXFISAEXTEND.pdf",
-    )
-    assert (
-        event_news_google_counter_not_required(
-            market=market,
-            estimated_probability=0.72,
-            force_side="yes",
-            config=politics,
-        )
-        is True
     )
 
 

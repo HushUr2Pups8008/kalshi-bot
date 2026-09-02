@@ -5680,13 +5680,69 @@ def test_official_pdf_and_homepage_allowed_when_flag_set():
         "contract_terms",
         allow_official_pdf_and_homepage=True,
     )
-    assert _should_direct_fetch_source(
+    assert not _should_direct_fetch_source(
         "https://www.pm.gc.ca",
         "settlement_source",
         allow_official_pdf_and_homepage=True,
     )
-    assert _should_direct_fetch_source(
+    assert not _should_direct_fetch_source(
         "https://ustr.gov/",
+        "settlement_source",
+        allow_official_pdf_and_homepage=True,
+    )
+    assert _should_direct_fetch_source(
+        "https://www.whitehouse.gov/presidential-actions/",
+        "settlement_source",
+        allow_official_pdf_and_homepage=True,
+    )
+
+
+def test_empty_or_binary_pdf_is_not_a_settlement_observation(monkeypatch):
+    class _Resp:
+        def read(self, _n: int = 0) -> bytes:
+            return b"%PDF-1.4 binary"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc) -> bool:
+            return False
+
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: _Resp(),
+    )
+    monkeypatch.setattr(
+        research_gate_module,
+        "_extract_pdf_text",
+        lambda _raw: ("contract_terms_pdf", ""),
+    )
+    assert (
+        research_gate_module._fetch_direct_source(
+            "https://assets.kalshi.com/contract_terms/BILL.pdf",
+            "rules_source",
+            "contract_terms",
+            allow_official_pdf_and_homepage=True,
+        )
+        is None
+    )
+    monkeypatch.setattr(
+        research_gate_module,
+        "_extract_pdf_text",
+        lambda _raw: ("contract_terms_pdf", "kalshi_official_pdf"),
+    )
+    assert (
+        research_gate_module._fetch_direct_source(
+            "https://assets.kalshi.com/contract_terms/APPROVE.pdf",
+            "resolution_source",
+            "settlement_source",
+            allow_official_pdf_and_homepage=True,
+        )
+        is None
+    )
+    assert _should_direct_fetch_source(
+        "https://www.whitehouse.gov/presidential-actions/",
         "settlement_source",
         allow_official_pdf_and_homepage=True,
     )
@@ -13328,7 +13384,7 @@ def test_white_house_remaining_time_p_is_decision_grade_without_second_url():
     assert verdict.estimated_probability == pytest.approx(0.98)
 
 
-def test_politics_official_source_p_does_not_need_google_counter(monkeypatch):
+def test_politics_url_only_official_p_still_requires_google_counter(monkeypatch):
     monkeypatch.setattr(
         "utils.event_news_research.is_event_news_paper_cohort",
         lambda _config=None: True,
@@ -13378,10 +13434,77 @@ def test_politics_official_source_p_does_not_need_google_counter(monkeypatch):
         ],
         contract_ticker="KXFISAEXTEND-26JUN-27",
     )
-    assert verdict.skip_reason != "missing_counter_evidence"
-    assert verdict.status == ResearchStatus.DECISION_GRADE_CANDIDATE
-    assert verdict.force_side == "yes"
-    assert verdict.estimated_probability == pytest.approx(0.72)
+    assert verdict.skip_reason == "missing_counter_evidence"
+    assert verdict.status != ResearchStatus.DECISION_GRADE_CANDIDATE
+
+
+def test_politics_p05_url_mill_does_not_ignore_missing_counter(monkeypatch, caplog):
+    import logging
+
+    monkeypatch.setattr(
+        "utils.event_news_research.is_event_news_paper_cohort",
+        lambda _config=None: True,
+    )
+    fresh = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    evidence = [
+        ResearchEvidence(
+            source_class="rules_source",
+            source_name="Kalshi",
+            source_url="https://assets.kalshi.com/contract_terms/BILL.pdf",
+            title="BILL.pdf",
+            snippet="kalshi_official_pdf",
+            claim_type="contract_terms",
+            supports_direction="neutral",
+            supports_confidence=0.0,
+            retrieved_at=fresh,
+        ),
+        ResearchEvidence(
+            source_class="official_primary",
+            source_name="White House",
+            source_url="https://www.whitehouse.gov/",
+            title="White House homepage",
+            snippet="The White House",
+            claim_type="official_resolution",
+            supports_direction="yes",
+            supports_confidence=0.88,
+            retrieved_at=fresh,
+        ),
+    ]
+    with caplog.at_level(logging.WARNING, logger="research_gate"):
+        verdict = decide_research_verdict(
+            evidence=evidence,
+            model_direction="yes",
+            model_confidence=0.5,
+            model_reason="Inconclusive official page.",
+            estimated_probability_yes=0.5,
+            yes_ask=0.62,
+            no_ask=0.40,
+            live_mode=False,
+            require_decision_grade=True,
+            score_both_sides=True,
+            queries=[
+                ResearchQuery("budget official", "official_resolution", "official_primary"),
+            ],
+            contract_ticker="KXSBUDGETRES-26JUN-27JAN01",
+            market=SimpleNamespace(
+                ticker="KXSBUDGETRES-26JUN-27JAN01",
+                series_ticker="KXSBUDGETRES",
+                contract_terms_url="https://assets.kalshi.com/contract_terms/BILL.pdf",
+                settlement_sources=("https://www.whitehouse.gov/",),
+            ),
+        )
+    assert verdict.status != ResearchStatus.DECISION_GRADE_CANDIDATE
+    assert verdict.skip_reason in {
+        "missing_counter_evidence",
+        "no_reliable_source_path",
+        "missing_directional_support",
+        "neutral_only_evidence",
+    }
+    assert not any(
+        "ignored official_p" in record.message
+        and "p=0.5" in record.message
+        for record in caplog.records
+    )
 
 
 def test_politics_longshot_still_requires_counter_without_favorite_band(monkeypatch):

@@ -795,6 +795,42 @@ def event_news_prewarm_allows(market: Any, *, config: Any = None) -> bool:
     return event_news_prewarm_skip_reason(market, config=config) is None
 
 
+# Keep aligned with analysis.research_gate._STRUCTURED_SIGNAL_METRICS.
+_STRUCTURED_OFFICIAL_METRICS = frozenset(
+    {
+        "cpi_monthly_change_single_decimal",
+        "getty_trump_distinct_photo_days",
+        "gdpnow_real_gdp_growth_saar",
+        "nws_daily_high_temp_f",
+        "white_house_presidential_actions_count",
+        "white_house_action_range_probability",
+        "truth_social_weekly_post_count",
+        "truth_social_range_probability",
+        "truth_social_phrase_probability",
+    }
+)
+_UNINFORMATIVE_P = 0.5
+_UNINFORMATIVE_P_TOL = 1e-6
+
+
+def event_news_uninformative_shrug_p(probability: float) -> bool:
+    """True for the LLM/empty-packet 0.5 shrug, not clipped 0.02/0.98 counts."""
+    try:
+        value = float(probability)
+    except (TypeError, ValueError):
+        return False
+    return abs(value - _UNINFORMATIVE_P) < _UNINFORMATIVE_P_TOL
+
+
+def event_news_has_structured_official_metric(evidence: list[Any] | None) -> bool:
+    """True when evidence carries a named official count/range metric."""
+    for item in evidence or ():
+        metric = str(getattr(item, "metric_name", "") or "").strip()
+        if metric in _STRUCTURED_OFFICIAL_METRICS:
+            return True
+    return False
+
+
 def event_news_google_counter_not_required(
     *,
     market: Any | None = None,
@@ -807,11 +843,12 @@ def event_news_google_counter_not_required(
     require_favorite_band: bool = True,
     config: Any = None,
 ) -> bool:
-    """Politics reserve favorites may keep an official p without a Google counter.
+    """Politics reserve favorites may keep a structured official p without Google.
 
-    Fail closed without an official source, executable 0.55-0.99 ask, or p+side.
-    Longshot 0.00-0.35 asks do not qualify. Freeze is unchanged.
-    Persist/admission may skip the ask band; those callers re-check quotes later.
+    Fail closed on the uninformative 0.5 shrug, URL-only official pages, missing
+    named count/range metric, executable 0.00-0.35 asks, or missing p+side.
+    Freeze is unchanged. Persist/admission may skip the ask band; those callers
+    re-check quotes later.
     """
     if not is_event_news_paper_cohort(config):
         return False
@@ -823,6 +860,10 @@ def event_news_google_counter_not_required(
     except (TypeError, ValueError):
         return False
     if not 0.0 < probability < 1.0:
+        return False
+    if event_news_uninformative_shrug_p(probability):
+        return False
+    if not event_news_has_structured_official_metric(evidence):
         return False
     if market is not None:
         if event_news_non_politics_series(market, config=config):
@@ -853,12 +894,7 @@ def event_news_google_counter_not_required(
             and (yes_norm + no_norm) < 1.0 - 1e-12
         ):
             return False
-    if market is not None:
-        if str(getattr(market, "contract_terms_url", "") or "").strip():
-            return True
-        if tuple(getattr(market, "settlement_sources", ()) or ()):
-            return True
-    return _event_news_has_official_settlement_evidence(evidence)
+    return True
 
 
 def _event_news_norm_ask(raw: float | None) -> float | None:
@@ -928,6 +964,8 @@ def event_news_official_p_ready(
     except (TypeError, ValueError):
         return False
     if not 0.0 < probability < 1.0:
+        return False
+    if event_news_uninformative_shrug_p(probability):
         return False
     if event_news_prewarm_skip_reason(market, config=config) is not None:
         return False

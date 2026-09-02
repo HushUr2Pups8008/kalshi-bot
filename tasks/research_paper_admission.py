@@ -32,6 +32,7 @@ from utils.research_market_eligibility import research_market_eligibility
 from utils.event_news_research import (
     event_news_admission_gate_reason,
     event_news_blocking_open_ticker,
+    event_news_google_counter_not_required,
     event_news_official_p_ready,
     is_event_news_paper_cohort,
 )
@@ -450,10 +451,20 @@ class ResearchPaperAdmissionBridge:
             # Uniform 1/3 → rc=0 → scaled_confidence=0 → G1 always fails.
             market.regime_weights = compute_regime_weights(market)
         analysis = _signal_analysis_from_research(market, current_signal)
-        bypass_blend = is_event_news_paper_cohort() and event_news_official_p_ready(
-            estimated_probability=current_signal.estimated_probability,
-            force_side=current_signal.side,
-            market=market,
+        bypass_blend = (
+            is_event_news_paper_cohort()
+            and event_news_official_p_ready(
+                estimated_probability=current_signal.estimated_probability,
+                force_side=current_signal.side,
+                market=market,
+            )
+            and event_news_google_counter_not_required(
+                market=market,
+                evidence=list(current_signal.evidence),
+                estimated_probability=current_signal.estimated_probability,
+                force_side=current_signal.side,
+                require_favorite_band=False,
+            )
         )
         if bypass_blend:
             gate_reason = event_news_admission_gate_reason(

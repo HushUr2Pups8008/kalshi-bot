@@ -782,6 +782,78 @@ async def test_politics_official_p_blocks_sibling_when_event_already_open(
 
 
 @pytest.mark.asyncio
+async def test_politics_p05_url_only_does_not_bypass_blend(monkeypatch) -> None:
+    import config as config_module
+    from utils.event_news_research import EVENT_NEWS_COHORT_ID
+
+    monkeypatch.setattr(config_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
+    monkeypatch.setattr("utils.event_news_research.cfg", config_module.cfg)
+    monkeypatch.setattr(
+        "tasks.research_paper_admission.is_event_news_paper_cohort",
+        lambda _config=None: True,
+    )
+    ticker = "KXSBUDGETRES-26JUN-27JAN01"
+    routed: list[object] = []
+
+    async def route_analysis(analysis, _store):
+        routed.append(analysis)
+        return SimpleNamespace(ready=False, enqueued=False, trade_blocked_reason="no_edge")
+
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    market = _politics_in_band_market()
+    market.ticker = ticker
+    market.series_ticker = "KXSBUDGETRES"
+    market.event_ticker = "KXSBUDGETRES-26JUN"
+    evidence = [
+        ResearchEvidence(
+            source_class="official_primary",
+            source_name="Kalshi",
+            source_url="https://assets.kalshi.com/contract_terms/BILL.pdf",
+            title="BILL.pdf",
+            snippet="kalshi_official_pdf",
+            claim_type="contract_terms",
+            supports_direction="neutral",
+            supports_confidence=0.0,
+            retrieved_at="2026-07-02T16:00:00+00:00",
+            inserted_at="2026-07-02T16:00:00+00:00",
+            contract_fingerprint="contract-v1",
+        )
+    ]
+    bridge = ResearchPaperAdmissionBridge(
+        research_store=FakeResearchStore(
+            snapshot=replace(
+                _snapshot(),
+                market_ticker=ticker,
+                last_estimated_probability=0.5,
+                last_estimated_edge=0.0,
+                last_force_side="yes",
+            ),
+            evidence=evidence,
+            has_counter_query=False,
+        ),
+        trading_queue=queue,
+        logger=SpyLogger(),
+        now=lambda: datetime(2026, 7, 2, 16, 5, tzinfo=UTC),
+        route_analysis=route_analysis,
+        paper_exposure_checker=lambda _ticker: False,
+    )
+    result = await bridge.admit_prewarm_result(
+        ResearchPrewarmResult(
+            market_ticker=ticker,
+            status="skipped_terminal",
+            attempted=False,
+            skip_reason="decision_grade_candidate",
+            research_run_id="rr-decision",
+            research_contract_fingerprint="contract-v1",
+        ),
+        market,
+    )
+    assert queue.empty()
+    assert result.enqueued is False
+    assert result.reason != "event_open_prefix_cap"
+
+
+@pytest.mark.asyncio
 async def test_politics_official_source_p_admits_without_google_counter(monkeypatch) -> None:
     import config as config_module
     from utils.event_news_research import EVENT_NEWS_COHORT_ID
@@ -875,17 +947,17 @@ async def test_politics_official_source_p_admits_without_google_counter(monkeypa
         ),
         market,
     )
-    assert result.reason != "missing_counter_evidence"
-    assert result.reason != "missing_counter_query"
-    if result.admitted:
-        candidate = queue.get_nowait()
-        assert candidate.fast_lane_analysis.estimated_probability == pytest.approx(0.72)
-    else:
-        assert result.reason in {
-            "below_fee_net_min_edge",
-            "no_positive_edge",
-            "ask_outside_favorite_band",
-        }
+    assert result.enqueued is False
+    assert queue.empty()
+    assert result.reason in {
+        "missing_counter_evidence",
+        "missing_counter_query",
+        "below_fee_net_min_edge",
+        "no_positive_edge",
+        "ask_outside_favorite_band",
+        "no_reliable_source_path",
+        "missing_directional_support",
+    }
 
 
 @pytest.mark.asyncio
