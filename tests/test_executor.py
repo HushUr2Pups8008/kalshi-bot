@@ -2153,6 +2153,33 @@ class TestPerPrefixPositionCap:
         assert "per-prefix cap" in reason
         assert "KXTXRUNOFFENDORSE" in reason
 
+    @pytest.mark.asyncio
+    async def test_prefix_cap_skip_logs_info(self, monkeypatch, caplog):
+        existing = [
+            SimpleNamespace(ticker="KXTRUMPACT-26AUG30-T8"),
+        ]
+        ex, paper = self._setup(monkeypatch, open_in_prefix=existing, cap=1)
+        analysis = _make_analysis(
+            ticker="KXTRUMPACT-26AUG30-T6",
+            side="no",
+            yes_price=18.0,
+            edge=0.16,
+            estimated_prob=0.02,
+        )
+        monkeypatch.setattr(
+            "trading.executor.write_trade_log_async",
+            AsyncMock(),
+        )
+        with caplog.at_level(logging.INFO, logger="executor"):
+            trade_id = await ex.execute(analysis)
+        assert trade_id is None
+        assert any(
+            "[DECISION] skip" in record.message
+            and "per-prefix cap" in record.message
+            and record.levelno >= logging.INFO
+            for record in caplog.records
+        )
+
     def test_different_prefix_unaffected(self, monkeypatch):
         # 2 open in KXTRUMPIRAN, but trade is on KXTXRUNOFFENDORSE
         existing = [

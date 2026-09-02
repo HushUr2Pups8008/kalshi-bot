@@ -19,6 +19,15 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.76] - 2026-09-02
+
+### Changed
+
+- **Executor prefix-cap skips log at INFO.** Politics T6-style
+  `per-prefix cap` rejects were debug-only and invisible in the desk
+  log. The skip string is unchanged. Freeze stays locked. Live stays
+  locked.
+
 ## [0.33.75] - 2026-09-02
 
 ### Fixed

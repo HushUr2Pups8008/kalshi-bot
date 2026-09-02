@@ -345,7 +345,10 @@ class TradeExecutor:
                 )
                 else "keyword"
             )
-            log.debug(
+            skip_log = (
+                log.info if "per-prefix cap" in skip_reason else log.debug
+            )
+            skip_log(
                 "[DECISION] skip ticker=%s mode=%s side=%s reason=%s",
                 analysis.market.ticker,
                 "paper" if self._is_paper else "live",
