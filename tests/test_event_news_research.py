@@ -15,6 +15,7 @@ from utils.event_news_research import (
     event_news_illiquid,
     event_news_in_allowed_ask_band,
     event_news_admission_gate_reason,
+    event_news_executed_side_skip_reason,
     event_news_dossier_is_stale,
     event_news_google_counter_not_required,
     event_news_min_edge,
@@ -1041,7 +1042,76 @@ def test_official_p_ready_and_admission_gate_politics_only():
         )
         is False
     )
-    assert event_news_admission_gate_reason(t240, edge=0.12, config=politics) is None
+    assert event_news_admission_gate_reason(
+        t240, edge=0.12, force_side="no", config=politics
+    ) is None
+
+
+def test_executed_side_excluded_band_skips_t4_shaped_no_and_admits_favorites():
+    politics = _politics_config()
+    freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
+    t4 = SimpleNamespace(
+        ticker="KXTRUMPACT-26SEP06-T4",
+        series_ticker="KXTRUMPACT",
+        yes_ask_cents=74,
+        no_ask_cents=33,
+        yes_ask=74,
+        no_ask=33,
+        yes_ask_size=20.0,
+        no_ask_size=20.0,
+        open_interest_fp=40.0,
+        volume_24h_fp=20.0,
+    )
+    t8 = SimpleNamespace(
+        ticker="KXTRUMPACT-26AUG30-T8",
+        series_ticker="KXTRUMPACT",
+        yes_ask_cents=18,
+        no_ask_cents=82,
+        yes_ask=18,
+        no_ask=82,
+        yes_ask_size=20.0,
+        no_ask_size=20.0,
+        open_interest_fp=40.0,
+        volume_24h_fp=20.0,
+    )
+    ts_no = SimpleNamespace(
+        ticker="KXTRUTHSOCIAL-26SEP05-T240",
+        series_ticker="KXTRUTHSOCIAL",
+        yes_ask_cents=26,
+        no_ask_cents=74,
+        yes_ask=26,
+        no_ask=74,
+        yes_ask_size=20.0,
+        no_ask_size=20.0,
+        open_interest_fp=40.0,
+        volume_24h_fp=20.0,
+    )
+    assert event_news_in_allowed_ask_band(t4, config=politics) is True
+    assert (
+        event_news_executed_side_skip_reason(t4, "no", config=politics)
+        == "executed_ask_in_excluded_band"
+    )
+    assert (
+        event_news_admission_gate_reason(
+            t4, edge=0.65, force_side="no", config=politics
+        )
+        == "executed_ask_in_excluded_band"
+    )
+    assert event_news_executed_side_skip_reason(t4, "no", config=freeze) is None
+    assert event_news_executed_side_skip_reason(t8, "no", config=politics) is None
+    assert (
+        event_news_admission_gate_reason(
+            t8, edge=0.16, force_side="no", config=politics
+        )
+        is None
+    )
+    assert event_news_executed_side_skip_reason(ts_no, "no", config=politics) is None
+    assert (
+        event_news_admission_gate_reason(
+            ts_no, edge=0.24, force_side="no", config=politics
+        )
+        is None
+    )
     assert event_news_dossier_is_stale(
         "2026-08-28T18:17:34Z",
         now=datetime(2026, 8, 29, 14, 22, tzinfo=timezone.utc),

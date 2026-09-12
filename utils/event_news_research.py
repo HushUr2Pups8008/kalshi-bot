@@ -454,6 +454,44 @@ def event_news_in_allowed_ask_band(market: Any, *, config: Any = None) -> bool:
     return side is not None
 
 
+def event_news_executed_side_skip_reason(
+    market: Any,
+    side: str | None,
+    *,
+    config: Any = None,
+) -> str | None:
+    """Skip when the fill-side snapshot ask is in the excluded longshot band.
+
+    Favorite-side TRUMPACT 0.12-0.90 is a research-routing override only.
+    The executed ask still uses llm_excluded_price_bands (0.00-0.35).
+    Freeze never uses this.
+    """
+    if not is_event_news_paper_cohort(config):
+        return None
+    executed = str(side or "").strip().lower()
+    if executed not in {"yes", "no"}:
+        return None
+    yes_ask, no_ask = snapshot_ask_cents(market)
+    cents = yes_ask if executed == "yes" else no_ask
+    if cents is None:
+        return None
+    price = cents / 100.0
+    active = config if config is not None else cfg
+    excluded = list(getattr(active, "llm_excluded_price_bands", ()) or ())
+    if not excluded:
+        excluded = [(0.00, 0.35)]
+    if any(_price_in_band(price, low, high) for low, high in excluded):
+        log.info(
+            "[EVENT_NEWS_RISK] executed_ask_in_excluded_band ticker=%s "
+            "side=%s ask=%s",
+            getattr(market, "ticker", ""),
+            executed,
+            cents,
+        )
+        return "executed_ask_in_excluded_band"
+    return None
+
+
 def event_news_crossed_asks(market: Any, *, config: Any = None) -> str | None:
     """Skip locked/crossed books (YES ask + NO ask < 100c) on politics only."""
     if not is_event_news_paper_cohort(config):
@@ -980,14 +1018,20 @@ def event_news_admission_gate_reason(
     market: Any,
     *,
     edge: float | None = None,
+    force_side: str | None = None,
     config: Any = None,
 ) -> str | None:
-    """Re-apply favorite-band / crossed / last-ask / fee-net edge at admit time."""
+    """Re-apply favorite-band / executed-ask / last-ask / fee-net edge at admit time."""
     if not is_event_news_paper_cohort(config):
         return None
     skip = event_news_prewarm_skip_reason(market, config=config)
     if skip:
         return skip
+    executed = event_news_executed_side_skip_reason(
+        market, force_side, config=config
+    )
+    if executed:
+        return executed
     divergence = event_news_spread_disagreement(market, config=config)
     if divergence:
         return divergence

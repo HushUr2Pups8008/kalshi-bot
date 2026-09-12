@@ -488,6 +488,18 @@ class TradeExecutor:
         if yes_price < price_floor or yes_price > price_ceil:
             return f"price {yes_price:.1f}c is near limit (too illiquid)"
 
+        from utils.event_news_research import (
+            event_news_executed_side_skip_reason,
+            is_event_news_paper_cohort,
+        )
+
+        if is_event_news_paper_cohort():
+            executed_reason = event_news_executed_side_skip_reason(
+                analysis.market, analysis.side
+            )
+            if executed_reason:
+                return executed_reason
+
         if self._is_paper:
             from utils.event_news_research import (
                 event_news_crossed_asks,

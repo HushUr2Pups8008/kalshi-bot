@@ -2180,6 +2180,77 @@ class TestPerPrefixPositionCap:
             for record in caplog.records
         )
 
+    def test_politics_executed_ask_excluded_band(self, monkeypatch):
+        from utils.event_news_research import EVENT_NEWS_COHORT_ID
+
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        monkeypatch.setattr(_cfg_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
+        monkeypatch.setattr(
+            _cfg_module.cfg, "llm_excluded_price_bands", [(0.00, 0.35)]
+        )
+        monkeypatch.setattr(_cfg_module.cfg, "paper_ticker_cooldown", 0)
+        monkeypatch.setattr(_cfg_module.cfg, "min_edge", 0.04)
+        monkeypatch.setattr(_cfg_module.cfg, "max_open_positions_per_prefix", 8)
+        rest = MagicMock()
+        paper = MagicMock()
+        paper.get_notional_bankroll.return_value = 500.0
+        paper.portfolio.open_positions.return_value = []
+        paper.portfolio.open_positions_by_prefix.return_value = []
+        paper.portfolio.is_concentration_ok.return_value = True
+        paper.portfolio.exposure.return_value = 0.0
+        ex = TradeExecutor(rest, paper)
+
+        t4 = _make_analysis(
+            ticker="KXTRUMPACT-26SEP06-T4",
+            side="no",
+            yes_price=33.0,
+            edge=0.65,
+            estimated_prob=0.02,
+        )
+        t4.market.series_ticker = "KXTRUMPACT"
+        t4.market.yes_ask_cents = 74
+        t4.market.no_ask_cents = 33
+        t4.market.yes_ask = 74
+        t4.market.no_ask = 33
+        t4.market.last_price_cents = 74
+        t4.market.last_price = 74
+        t4.executed_price_cents = 33
+        assert ex._validate(t4) == "executed_ask_in_excluded_band"
+
+        t8 = _make_analysis(
+            ticker="KXTRUMPACT-26AUG30-T8",
+            side="no",
+            yes_price=82.0,
+            edge=0.16,
+            estimated_prob=0.02,
+        )
+        t8.market.series_ticker = "KXTRUMPACT"
+        t8.market.yes_ask_cents = 18
+        t8.market.no_ask_cents = 82
+        t8.market.yes_ask = 18
+        t8.market.no_ask = 82
+        t8.market.last_price_cents = 18
+        t8.market.last_price = 18
+        t8.executed_price_cents = 82
+        assert ex._validate(t8) is None
+
+        ts_no = _make_analysis(
+            ticker="KXTRUTHSOCIAL-26SEP05-T240",
+            side="no",
+            yes_price=74.0,
+            edge=0.24,
+            estimated_prob=0.02,
+        )
+        ts_no.market.series_ticker = "KXTRUTHSOCIAL"
+        ts_no.market.yes_ask_cents = 26
+        ts_no.market.no_ask_cents = 74
+        ts_no.market.yes_ask = 26
+        ts_no.market.no_ask = 74
+        ts_no.market.last_price_cents = 26
+        ts_no.market.last_price = 26
+        ts_no.executed_price_cents = 74
+        assert ex._validate(ts_no) is None
+
     def test_different_prefix_unaffected(self, monkeypatch):
         # 2 open in KXTRUMPIRAN, but trade is on KXTXRUNOFFENDORSE
         existing = [

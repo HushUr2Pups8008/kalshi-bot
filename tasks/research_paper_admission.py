@@ -470,6 +470,7 @@ class ResearchPaperAdmissionBridge:
             gate_reason = event_news_admission_gate_reason(
                 market,
                 edge=current_signal.estimated_edge,
+                force_side=current_signal.side,
             )
             if gate_reason:
                 return ResearchPaperAdmissionResult(

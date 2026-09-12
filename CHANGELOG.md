@@ -19,6 +19,16 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.78] - 2026-09-12
+
+### Fixed
+
+- **Politics executed-side ask uses the 0.00-0.35 excluded band.** T4-style
+  books (YES 74¢ in TRUMPACT 0.12-0.90, official-p NO @ 33¢) no longer
+  admit or execute. Favorite-side 0.12 override stays research-routing
+  only. T8-style NO@82 and TS NO@74 still admit. Freeze stays locked.
+  Live stays locked.
+
 ## [0.33.77] - 2026-09-02
 
 ### Fixed

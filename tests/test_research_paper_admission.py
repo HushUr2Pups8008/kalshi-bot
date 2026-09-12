@@ -691,7 +691,15 @@ async def test_politics_official_p_bypasses_blend_task(monkeypatch) -> None:
 
     bridge = ResearchPaperAdmissionBridge(
         research_store=FakeResearchStore(
-            snapshot=replace(_snapshot(), market_ticker=ticker),
+            snapshot=replace(
+                _snapshot(
+                    side="no",
+                    estimated_probability=0.02,
+                    market_price=0.83,
+                    estimated_edge=0.14,
+                ),
+                market_ticker=ticker,
+            ),
             evidence=_official_range_evidence(ticker=ticker),
             has_counter_query=False,
         ),
@@ -744,7 +752,15 @@ async def test_politics_official_p_blocks_sibling_when_event_already_open(
     market.series_ticker = "KXTRUMPACT"
     market.event_ticker = "KXTRUMPACT-26AUG30"
     store = FakeResearchStore(
-        snapshot=replace(_snapshot(), market_ticker=ticker),
+        snapshot=replace(
+            _snapshot(
+                side="no",
+                estimated_probability=0.02,
+                market_price=0.83,
+                estimated_edge=0.14,
+            ),
+            market_ticker=ticker,
+        ),
         evidence=_official_range_evidence(ticker=ticker),
         has_counter_query=False,
     )
