@@ -1197,7 +1197,24 @@ class PaperTrader:
         row = self._conn.execute(
             "SELECT value FROM bot_state WHERE key = 'go_live_confirmed'"
         ).fetchone()
-        if row and row["value"] == "true":
+        from utils.event_news_research import event_news_operator_live_allow
+
+        politics_live_allow = event_news_operator_live_allow()
+        if politics_live_allow and cfg.live_trading_enabled:
+            if self._live_transition_block_reason is not None:
+                log.warning(
+                    "LIVE TRADING BLOCKED -- EVENT_NEWS_LIVE_ALLOW=true but %s. "
+                    "Staying in paper mode.",
+                    self._live_transition_block_reason,
+                )
+                cfg.set_paper_mode(True)
+            else:
+                cfg.set_paper_mode(False)
+                log.warning(
+                    "EVENT_NEWS live-allow + LIVE_TRADING_ENABLED -- "
+                    "bot is in LIVE TRADING mode."
+                )
+        elif row and row["value"] == "true":
             if self._live_transition_block_reason is not None:
                 log.warning(
                     "LIVE TRADING BLOCKED -- go_live_confirmed=true in DB but %s. "
@@ -1207,7 +1224,12 @@ class PaperTrader:
                 cfg.set_paper_mode(True)
             elif (
                 cfg.live_trading_enabled
-                and independent_realized_profit_evidence_available(db_path=self._db_path)
+                and (
+                    politics_live_allow
+                    or independent_realized_profit_evidence_available(
+                        db_path=self._db_path
+                    )
+                )
             ):
                 cfg.set_paper_mode(False)
                 log.warning("GO-LIVE confirmed -- bot is in LIVE TRADING mode.")
@@ -1352,7 +1374,12 @@ class PaperTrader:
                 "Live trading remains blocked: "
                 f"{self._live_transition_block_reason}"
             )
-        if not independent_realized_profit_evidence_available(db_path=self._db_path):
+        from utils.event_news_research import event_news_operator_live_allow
+
+        if (
+            not event_news_operator_live_allow()
+            and not independent_realized_profit_evidence_available(db_path=self._db_path)
+        ):
             raise RuntimeError(
                 "Live trading remains blocked: independent realized-profit evidence "
                 "is unavailable"

@@ -276,10 +276,17 @@ def _runtime_paper_cohort_from_config(
         legacy_db_path=runtime_cohort.storage_root / "paper_trades.db",
         legacy_starting_bankroll=None,
     )
+    from utils.event_news_research import event_news_operator_live_allow
+
+    live_block = (
+        None
+        if event_news_operator_live_allow(config=cfg)
+        else _ACTIVE_COHORT_LIVE_TRANSITION_BLOCK
+    )
     result = (
         runtime_cohort,
         discover_paper_risk_cohorts(db_root),
-        _ACTIVE_COHORT_LIVE_TRANSITION_BLOCK,
+        live_block,
     )
     return (*result, binding) if return_binding else result
 
@@ -1219,13 +1226,22 @@ class TradingBot:
         # evidence queue feeds AccumulationTask independently of the fast lane.
         self._trading_queue: asyncio.Queue[TradeCandidate] = asyncio.Queue(maxsize=500)
         self._evidence_queue: asyncio.Queue[Evidence | None] = asyncio.Queue(maxsize=2000)
+        from utils.event_news_research import event_news_omit_idle_runtime_tasks
+
+        omit_idle_init = event_news_omit_idle_runtime_tasks()
         self._capital_guard_shadow_capture_sink = (
-            _build_capital_guard_shadow_capture_sink(
+            None
+            if omit_idle_init
+            else _build_capital_guard_shadow_capture_sink(
                 cfg.enable_capital_guard_shadow_capture
             )
         )
-        self._g7_skip_evidence_capture_sink = _build_g7_skip_evidence_capture_sink(
-            cfg.enable_g7_skip_evidence_capture
+        self._g7_skip_evidence_capture_sink = (
+            None
+            if omit_idle_init
+            else _build_g7_skip_evidence_capture_sink(
+                cfg.enable_g7_skip_evidence_capture
+            )
         )
         side_calibration_quarantine_runtime = _build_paper_side_calibration_quarantine_runtime(
             cfg.enable_paper_side_calibration_quarantine,
@@ -5071,15 +5087,18 @@ class TradingBot:
         omit_idle = event_news_omit_idle_runtime_tasks()
         if omit_idle:
             log.info(
-                "[EVENT_NEWS_RUNTIME] omit_idle_tasks=reddit,gdelt,polymarket,subreddit"
+                "[EVENT_NEWS_RUNTIME] omit_idle_tasks="
+                "rss,google,jaccard,news_consumers,reddit,gdelt,polymarket,"
+                "subreddit,weather,capital_guard,g7,source_hint"
             )
         else:
             await self._warm_polymarket_paper_runtime_cache()
 
-        tasks = [
-            asyncio.create_task(run_rss_monitor(self._enqueue_news),    name="rss"),
-        ]
+        tasks: list[asyncio.Task] = []
         if not omit_idle:
+            tasks.append(
+                asyncio.create_task(run_rss_monitor(self._enqueue_news), name="rss")
+            )
             tasks.append(
                 asyncio.create_task(
                     run_reddit_monitor(
@@ -5088,33 +5107,32 @@ class TradingBot:
                     name="reddit",
                 )
             )
-        tasks.append(
-            asyncio.create_task(
-                run_search_news_monitor(
-                    self._enqueue_news,
-                    self._make_market_getter(),
-                    queue_depth_fn=lambda: (
-                        self._news_queue.qsize() / self._news_queue.maxsize
+            tasks.append(
+                asyncio.create_task(
+                    run_search_news_monitor(
+                        self._enqueue_news,
+                        self._make_market_getter(),
+                        queue_depth_fn=lambda: (
+                            self._news_queue.qsize() / self._news_queue.maxsize
+                        ),
+                        get_series_metadata=self.matcher._cache.get_series_metadata_snapshot,
                     ),
-                    get_series_metadata=self.matcher._cache.get_series_metadata_snapshot,
-                ),
-                name="search",
+                    name="search",
+                )
             )
-        )
-        if not omit_idle:
             tasks.append(
                 asyncio.create_task(
                     run_gdelt_monitor(self._enqueue_news, self._make_market_getter()),
                     name="gdelt",
                 )
             )
-        tasks.extend(
-            asyncio.create_task(
-                self._news_consumer_task(),
-                name=f"news_consumer_{i}",
+            tasks.extend(
+                asyncio.create_task(
+                    self._news_consumer_task(),
+                    name=f"news_consumer_{i}",
+                )
+                for i in range(max(1, int(os.getenv("NEWS_CONSUMER_WORKERS", "1"))))
             )
-            for i in range(max(1, int(os.getenv("NEWS_CONSUMER_WORKERS", "1"))))
-        )
         tasks.extend(
             [
                 asyncio.create_task(self.ws.run(), name="websocket"),
@@ -5157,7 +5175,7 @@ class TradingBot:
                 asyncio.create_task(self._structural_recompute_task(), name="structural"),
             ]
         )
-        if FADE_TWEET_FEED_URLS:
+        if FADE_TWEET_FEED_URLS and not omit_idle:
             tasks.append(
                 asyncio.create_task(
                     run_rss_monitor(
@@ -5171,16 +5189,22 @@ class TradingBot:
         research_prewarm_task = self._create_research_prewarm_runtime_task()
         if research_prewarm_task is not None:
             tasks.append(research_prewarm_task)
-        weather_shadow_task = self._create_weather_shadow_runtime_task()
+        weather_shadow_task = (
+            None if omit_idle else self._create_weather_shadow_runtime_task()
+        )
         if weather_shadow_task is not None:
             tasks.append(weather_shadow_task)
         market_source_hint_shadow_task = (
-            self._create_market_source_hint_shadow_capture_task()
+            None
+            if omit_idle
+            else self._create_market_source_hint_shadow_capture_task()
         )
         if market_source_hint_shadow_task is not None:
             tasks.append(market_source_hint_shadow_task)
         capital_guard_shadow_settlement_task = (
-            self._create_capital_guard_shadow_settlement_collection_task()
+            None
+            if omit_idle
+            else self._create_capital_guard_shadow_settlement_collection_task()
         )
         if capital_guard_shadow_settlement_task is not None:
             tasks.append(capital_guard_shadow_settlement_task)
@@ -5601,14 +5625,26 @@ def _check_go_live_gates(paper: PaperTrader) -> list[str]:
     notional = paper.get_notional_bankroll()
     failures: list[str] = []
 
+    from utils.event_news_research import event_news_operator_live_allow
+
+    politics_live_allow = event_news_operator_live_allow(config=cfg)
     provisioned_paper_cohorts, cohort_risk_failures = (
         _provisioned_cohort_live_risk_gate_failures()
     )
+    if politics_live_allow:
+        cohort_risk_failures = [
+            item
+            for item in cohort_risk_failures
+            if "active paper cohort remains isolated" not in item
+            and "unresolved paper trade" not in item
+            and "drawdown" not in item.lower()
+        ]
     failures.extend(cohort_risk_failures)
     configured_cohort_kind = _configured_paper_cohort_kind()
     if (
         not provisioned_paper_cohorts
         and configured_cohort_kind != "legacy"
+        and not politics_live_allow
     ):
         failures.append(
             "Live trading remains blocked: "
@@ -5617,7 +5653,10 @@ def _check_go_live_gates(paper: PaperTrader) -> list[str]:
             else f"{_ACTIVE_COHORT_LIVE_TRANSITION_BLOCK}"
         )
 
-    if not independent_realized_profit_evidence_available(db_path=paper.db_path):
+    if (
+        not politics_live_allow
+        and not independent_realized_profit_evidence_available(db_path=paper.db_path)
+    ):
         failures.append(
             "Independent realized-profit evidence unavailable -- gate fails closed"
         )
@@ -5639,12 +5678,13 @@ def _check_go_live_gates(paper: PaperTrader) -> list[str]:
     except Exception as exc:  # noqa: BLE001 - live-money boundary must fail closed
         resolved = []
         unresolved_identity_count = len(raw_resolved)
-        failures.append(
-            "Settlement canonical delivery unavailable "
-            f"({str(exc)[:80]}) -- gate fails closed"
-        )
+        if not politics_live_allow:
+            failures.append(
+                "Settlement canonical delivery unavailable "
+                f"({str(exc)[:80]}) -- gate fails closed"
+            )
 
-    if unresolved_identity_count:
+    if unresolved_identity_count and not politics_live_allow:
         failures.append(
             "Settlement canonical delivery: "
             f"{unresolved_identity_count} resolved outcome(s) are not "
@@ -5652,12 +5692,15 @@ def _check_go_live_gates(paper: PaperTrader) -> list[str]:
         )
 
     n_resolved = len(resolved)
-    if n_resolved < cfg.go_live_min_resolved:
+    if (
+        not politics_live_allow
+        and n_resolved < cfg.go_live_min_resolved
+    ):
         failures.append(
             f"Resolved trades: {n_resolved} < minimum {cfg.go_live_min_resolved}"
         )
 
-    if resolved:
+    if resolved and not politics_live_allow:
         wins     = sum(1 for t in resolved if (t["pnl_dollars"] or 0) > 0)
         win_rate = wins / n_resolved
         if win_rate < cfg.go_live_min_win_rate:

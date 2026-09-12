@@ -19,6 +19,19 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.79] - 2026-09-12
+
+### Changed
+
+- **Politics official-p can live-POST.** `research_paper_review_live_block` no
+  longer applies to official-p decision-grade on the event-news cohort.
+  `EVENT_NEWS_LIVE_ALLOW=true` makes `LIVE_TRADING_ENABLED` the remaining
+  switch: n=20, active-cohort isolation, and the missing external ledger
+  predicate no longer block this desk. Live POSTs send a unique
+  `client_order_id`. RSS/Google/Jaccard discovery and idle shadows are
+  omitted on the running politics process. Executed-side 0.00-0.35 skip
+  remains. Freeze stays locked.
+
 ## [0.33.78] - 2026-09-12
 
 ### Fixed

@@ -242,6 +242,9 @@ class TestLiveSubmissionNoRetry:
 
         assert order_id == "test-order-123"
         rest.place_limit_order.assert_called_once()
+        live_kwargs = rest.place_limit_order.call_args.kwargs
+        assert live_kwargs["client_order_id"]
+        assert live_kwargs["ticker"] == analysis.market.ticker
         trade_log_mock.log_live_submission_intent.assert_called_once()
         intent_kwargs = trade_log_mock.log_live_submission_intent.call_args.kwargs
         live_order_kwargs = trade_log_mock.log_live_order.call_args.kwargs
@@ -954,6 +957,98 @@ class TestBlendedCandidateCompatibility:
         assert kwargs["method"] == "research_decision_grade"
         assert kwargs["side"] == candidate.side
         assert kwargs["signal_meta"] == candidate.signal_meta
+
+    @pytest.mark.asyncio
+    async def test_live_executor_allows_politics_official_p_candidate(self, monkeypatch):
+        from utils.event_news_research import EVENT_NEWS_COHORT_ID
+
+        ex, rest, paper = _make_executor(monkeypatch)
+        monkeypatch.setattr(_cfg_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
+        monkeypatch.setattr(
+            _cfg_module.cfg, "llm_excluded_price_bands", [(0.00, 0.35)]
+        )
+        rest.get_balance.return_value = 500.0
+        paper.portfolio.open_positions_by_prefix.return_value = []
+        ex._final_execution_plan = AsyncMock(
+            return_value=(
+                FinalExecutionTerms(price_cents=82, contracts=8, cost_dollars=6.56),
+                None,
+            )
+        )
+        ex._execute_live = AsyncMock(return_value="live-official-p")
+        base = _make_analysis(
+            ticker="KXTRUMPACT-26AUG30-T8",
+            side="no",
+            yes_price=82.0,
+            edge=0.16,
+            estimated_prob=0.02,
+        )
+        base.market.series_ticker = "KXTRUMPACT"
+        base.market.yes_ask_cents = 18
+        base.market.no_ask_cents = 82
+        base.market.yes_ask = 18
+        base.market.no_ask = 82
+        base.market.last_price_cents = 18
+        base.market.last_price = 18
+        base.executed_price_cents = 82
+        candidate = _make_blended_candidate(
+            base_analysis=base,
+            blended_probability=0.02,
+            side="no",
+            signal_meta={
+                "source_lane": "research_official_p",
+                "blend_bypassed": True,
+                "blend_bypass_reason": "official_p",
+                "research_admission_status": "decision_grade_candidate",
+                "research_run_id": "rr-official",
+            },
+        )
+        with patch("trading.executor.trade_log"):
+            trade_id = await ex.execute(candidate)
+        assert trade_id == "live-official-p"
+        ex._execute_live.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_live_executor_blocks_t4_shaped_executed_ask(self, monkeypatch):
+        from utils.event_news_research import EVENT_NEWS_COHORT_ID
+
+        ex, rest, paper = _make_executor(monkeypatch)
+        monkeypatch.setattr(_cfg_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
+        monkeypatch.setattr(
+            _cfg_module.cfg, "llm_excluded_price_bands", [(0.00, 0.35)]
+        )
+        paper.portfolio.open_positions_by_prefix.return_value = []
+        ex._execute_live = AsyncMock(return_value="must-not-post")
+        base = _make_analysis(
+            ticker="KXTRUMPACT-26SEP06-T4",
+            side="no",
+            yes_price=33.0,
+            edge=0.65,
+            estimated_prob=0.02,
+        )
+        base.market.series_ticker = "KXTRUMPACT"
+        base.market.yes_ask_cents = 74
+        base.market.no_ask_cents = 33
+        base.market.yes_ask = 74
+        base.market.no_ask = 33
+        base.market.last_price_cents = 74
+        base.market.last_price = 74
+        base.executed_price_cents = 33
+        candidate = _make_blended_candidate(
+            base_analysis=base,
+            blended_probability=0.02,
+            side="no",
+            signal_meta={
+                "source_lane": "research_official_p",
+                "blend_bypass_reason": "official_p",
+                "research_admission_status": "decision_grade_candidate",
+            },
+        )
+        with patch("trading.executor.trade_log"):
+            trade_id = await ex.execute(candidate)
+        assert trade_id is None
+        ex._execute_live.assert_not_called()
+        rest.place_limit_order.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_non_kalshi_blended_candidate_skips_kalshi_refetch(self, monkeypatch):

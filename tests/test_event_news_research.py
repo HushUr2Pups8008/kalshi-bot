@@ -31,6 +31,7 @@ from utils.event_news_research import (
     event_news_forecast_refresh_series,
     event_news_official_research_kwargs,
     event_news_omit_idle_runtime_tasks,
+    event_news_operator_live_allow,
     event_news_executable_top_notional,
     event_news_executable_top_size,
     event_news_open_prefix_cap,
@@ -1348,3 +1349,15 @@ def test_idle_runtime_tasks_and_forecast_refresh_isolated_from_freeze():
     assert event_news_omit_idle_runtime_tasks(config=politics) is True
     assert event_news_forecast_refresh_series(("KXDJI",), config=freeze) == ("KXDJI",)
     assert event_news_forecast_refresh_series(("KXDJI", "KXCPI"), config=politics) == ()
+
+
+def test_operator_live_allow_is_politics_only():
+    freeze = SimpleNamespace(
+        paper_cohort_id="kalshi-macro-20260820",
+        event_news_live_allow=True,
+    )
+    politics_off = _politics_config(event_news_live_allow=False)
+    politics_on = _politics_config(event_news_live_allow=True)
+    assert event_news_operator_live_allow(config=freeze) is False
+    assert event_news_operator_live_allow(config=politics_off) is False
+    assert event_news_operator_live_allow(config=politics_on) is True

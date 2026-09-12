@@ -59,6 +59,7 @@ def _cfg(
     max_dd=0.20,
     paper_cohort_id="legacy",
     paper_cohort_kind=None,
+    event_news_live_allow=False,
 ):
     return SimpleNamespace(
         bankroll=bankroll,
@@ -67,6 +68,7 @@ def _cfg(
         go_live_max_drawdown_pct=max_dd,
         paper_cohort_id=paper_cohort_id,
         paper_cohort_kind=paper_cohort_kind,
+        event_news_live_allow=event_news_live_allow,
     )
 
 
@@ -142,6 +144,40 @@ def test_gate_fails_closed_when_canonical_delivery_cannot_be_verified():
 
     assert any("canonical delivery unavailable" in failure for failure in failures)
     assert any("Resolved trades: 0 < minimum 20" in failure for failure in failures)
+
+
+def test_event_news_live_allow_skips_n_count_isolation_and_evidence():
+    from utils.event_news_research import EVENT_NEWS_COHORT_ID
+
+    paper = _paper(notional=40.0, resolved_trades=_passing_resolved(n=3))
+    cfg = _cfg(
+        paper_cohort_id=EVENT_NEWS_COHORT_ID,
+        paper_cohort_kind="active",
+        min_resolved=20,
+        event_news_live_allow=True,
+    )
+    with patch.object(main, "cfg", cfg), patch(
+        "utils.event_news_research.cfg", cfg
+    ), patch.object(
+        main,
+        "_provisioned_cohort_live_risk_gate_failures",
+        return_value=(
+            True,
+            [
+                "Live trading remains blocked: active paper cohort remains isolated from "
+                "live trading until all-cohort settlement"
+            ],
+        ),
+    ), patch.object(
+        main,
+        "independent_realized_profit_evidence_available",
+        return_value=False,
+    ):
+        failures = main._check_go_live_gates(paper)
+
+    assert not any("Resolved trades:" in item for item in failures)
+    assert not any("active paper cohort remains isolated" in item for item in failures)
+    assert not any("Independent realized-profit" in item for item in failures)
 
 
 def test_gate_requires_independent_realized_profit_evidence():

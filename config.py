@@ -1466,6 +1466,14 @@ class BotConfig:
         )
     )
 
+    # Politics-only operator live-allow. Does nothing unless PAPER_COHORT_ID is
+    # kalshi-event-news-20260820. LIVE_TRADING_ENABLED remains the kill switch.
+    event_news_live_allow: bool = field(
+        default_factory=lambda: (
+            os.getenv("EVENT_NEWS_LIVE_ALLOW", "false").lower() == "true"
+        )
+    )
+
     # Live session loss limit: halt all trading if live Kalshi balance drops more than
     # this fraction of BANKROLL below the session-start balance. Default 10% ($50 on $500).
     # Set to 1.0 to disable. Checked on every live trade attempt via get_balance().

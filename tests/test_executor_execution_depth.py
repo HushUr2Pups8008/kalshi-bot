@@ -405,12 +405,13 @@ async def test_live_execution_uses_final_depth_plan_and_journals_it(monkeypatch,
         result = await executor.execute(analysis)
 
     assert result == "live-depth-1"
-    rest.place_limit_order.assert_called_once_with(
-        ticker=analysis.market.ticker,
-        side="yes",
-        count=20,
-        limit_price=50,
-    )
+    rest.place_limit_order.assert_called_once()
+    live_kwargs = rest.place_limit_order.call_args.kwargs
+    assert live_kwargs["ticker"] == analysis.market.ticker
+    assert live_kwargs["side"] == "yes"
+    assert live_kwargs["count"] == 20
+    assert live_kwargs["limit_price"] == 50
+    assert live_kwargs["client_order_id"]
     intent_kwargs = next(
         call.kwargs
         for call in write_log.await_args_list

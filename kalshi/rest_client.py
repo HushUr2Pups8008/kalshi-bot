@@ -13,6 +13,7 @@ import math
 import re
 import threading
 import time
+import uuid
 import urllib.error
 import urllib.parse
 from collections.abc import Awaitable
@@ -1048,18 +1049,23 @@ class KalshiRestClient:
         count: int,          # number of contracts
         limit_price: int,    # cents (1–99)
         expiration_ts: Optional[int] = None,
+        client_order_id: Optional[str] = None,
     ) -> OrderResult:
         """
         Place a limit order on Kalshi.
 
         count × limit_price cents = total risk (for yes orders).
+        Every POST carries a unique client_order_id. Callers must not retry
+        an unknown outcome with a new id.
         """
+        order_client_id = str(client_order_id or "").strip() or uuid.uuid4().hex
         payload: dict[str, Any] = {
             "ticker":   ticker,
             "action":   "buy",
             "type":     "limit",
             "side":     side,
             "count":    count,
+            "client_order_id": order_client_id,
             "yes_price" if side == "yes" else "no_price": limit_price,
         }
         if expiration_ts:

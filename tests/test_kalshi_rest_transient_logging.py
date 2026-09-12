@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from unittest.mock import MagicMock
 
@@ -72,6 +73,8 @@ def test_legacy_order_post_disables_redirects() -> None:
     assert result.order_id == "order-123"
     request_kwargs = client._session.request.call_args.kwargs  # noqa: SLF001
     assert request_kwargs["allow_redirects"] is False
+    payload = json.loads(request_kwargs["data"])
+    assert payload["client_order_id"]
 
 
 def test_legacy_order_redirect_is_sanitized_error(caplog) -> None:

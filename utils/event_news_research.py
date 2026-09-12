@@ -1075,8 +1075,19 @@ def event_news_official_research_kwargs(*, config: Any = None) -> dict[str, bool
 
 
 def event_news_omit_idle_runtime_tasks(*, config: Any = None) -> bool:
-    """Politics does not start Reddit/GDELT/Polymarket/subreddit shells."""
+    """Politics does not start news-discovery or second-venue shells."""
     return is_event_news_paper_cohort(config)
+
+
+def event_news_operator_live_allow(*, config: Any = None) -> bool:
+    """Explicit politics live-allow. LIVE_TRADING_ENABLED remains the kill switch.
+
+    Does not apply to freeze/DJI. Does not by itself place live orders.
+    """
+    if not is_event_news_paper_cohort(config):
+        return False
+    active = config if config is not None else cfg
+    return bool(getattr(active, "event_news_live_allow", False))
 
 
 def event_news_forecast_refresh_series(

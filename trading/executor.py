@@ -103,6 +103,17 @@ def _is_research_paper_review_signal(signal_meta: dict[str, Any]) -> bool:
     return str(signal_meta.get("research_admission_status") or "") == "decision_grade_candidate"
 
 
+def _event_news_official_p_may_live(signal_meta: dict[str, Any]) -> bool:
+    """Politics official-p decision-grade may live-POST; generic LLM review may not."""
+    from utils.event_news_research import is_event_news_paper_cohort
+
+    if not is_event_news_paper_cohort():
+        return False
+    if str(signal_meta.get("blend_bypass_reason") or "") == "official_p":
+        return True
+    return str(signal_meta.get("source_lane") or "") == "research_official_p"
+
+
 def _skip_headline(analysis: SignalAnalysis) -> str:
     news = getattr(analysis, "news_item", None)
     headline = getattr(news, "headline", None)
@@ -290,7 +301,11 @@ class TradeExecutor:
             analysis.confidence,
         )
         signal_meta = self._signal_meta(analysis)
-        if not self._is_paper and _is_research_paper_review_signal(signal_meta):
+        if (
+            not self._is_paper
+            and _is_research_paper_review_signal(signal_meta)
+            and not _event_news_official_p_may_live(signal_meta)
+        ):
             skip_reason = "research_paper_review_live_block"
             log.warning(
                 "[DECISION] skip ticker=%s mode=live side=%s reason=%s",
@@ -1122,8 +1137,10 @@ class TradeExecutor:
             log.warning("Live order aborted: contracts=0 for $%.2f @ %dc", analysis.capped_dollars, price_cents)
             return None
 
+        client_order_id = uuid.uuid4().hex
         submission_summary = {
             "submission_id": uuid.uuid4().hex,
+            "client_order_id": client_order_id,
             "ticker": analysis.market.ticker,
             "side": analysis.side,
             "contracts": contracts,
@@ -1208,6 +1225,7 @@ class TradeExecutor:
                     side=analysis.side,
                     count=contracts,
                     limit_price=price_cents,
+                    client_order_id=client_order_id,
                 ),
             )
             result_error = result.error
