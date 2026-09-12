@@ -19,6 +19,14 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.80] - 2026-09-12
+
+### Changed
+
+- **Politics process LIVE_TRADING_ENABLED=true.** Event-news operator
+  live-allow is on; freeze mill stays disabled. Executed-side 0.00-0.35
+  skip remains. 10% live loss kill remains. Bankroll stays $50-class.
+
 ## [0.33.79] - 2026-09-12
 
 ### Changed

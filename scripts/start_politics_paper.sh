@@ -17,7 +17,7 @@ export BOT_RUNTIME_LOCK_NAME=bot_runtime.kalshi-event-news-20260820.lock
 
 # Live / second venue stay locked until Phase 2. EVENT_NEWS_LIVE_ALLOW
 # makes LIVE_TRADING_ENABLED the remaining switch for this cohort only.
-export LIVE_TRADING_ENABLED=false
+export LIVE_TRADING_ENABLED=true
 export EVENT_NEWS_LIVE_ALLOW=true
 export POLYMARKET_US_ENABLED=false
 export POLYMARKET_US_LIVE_TRADING_ENABLED=false
