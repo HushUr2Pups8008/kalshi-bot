@@ -1201,19 +1201,13 @@ class PaperTrader:
 
         politics_live_allow = event_news_operator_live_allow()
         if politics_live_allow and cfg.live_trading_enabled:
-            if self._live_transition_block_reason is not None:
-                log.warning(
-                    "LIVE TRADING BLOCKED -- EVENT_NEWS_LIVE_ALLOW=true but %s. "
-                    "Staying in paper mode.",
-                    self._live_transition_block_reason,
-                )
-                cfg.set_paper_mode(True)
-            else:
-                cfg.set_paper_mode(False)
-                log.warning(
-                    "EVENT_NEWS live-allow + LIVE_TRADING_ENABLED -- "
-                    "bot is in LIVE TRADING mode."
-                )
+            # Operator live-allow replaces active-cohort isolation for this desk.
+            self._live_transition_block_reason = None
+            cfg.set_paper_mode(False)
+            log.warning(
+                "EVENT_NEWS live-allow + LIVE_TRADING_ENABLED -- "
+                "bot is in LIVE TRADING mode."
+            )
         elif row and row["value"] == "true":
             if self._live_transition_block_reason is not None:
                 log.warning(

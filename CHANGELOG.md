@@ -19,6 +19,15 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.81] - 2026-09-12
+
+### Fixed
+
+- **Politics live-allow overrides active-cohort isolation at PaperTrader
+  startup.** 0.33.80 exported LIVE=true but stayed in paper because the
+  isolation string was still passed in. Operator live-allow now clears it.
+  Freeze stays locked.
+
 ## [0.33.80] - 2026-09-12
 
 ### Changed
