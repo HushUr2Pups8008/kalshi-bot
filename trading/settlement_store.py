@@ -607,10 +607,7 @@ def _paper_trade_settled_outbox_base(
         "won": trade["won"],
         "settled_at": created_at,
         "signal_source": trade["signal_source"],
-        "series_ticker": (
-            str(trade["series_ticker"] or "").strip()
-            or str(trade["ticker"] or "").split("-", 1)[0]
-        ),
+        "series_ticker": trade["series_ticker"],
         "entry_ts": trade["entry_ts"],
         "estimated_prob": trade["estimated_prob"],
         "entry_price_cents": trade["entry_price_cents"],

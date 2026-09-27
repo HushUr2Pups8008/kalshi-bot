@@ -25,9 +25,7 @@ request-vs-response status contract that the P-7 author misread.
 
 - **Live POSTs no longer die on a journal TypeError.** `client_order_id` is
   passed only to `place_limit_order`, not `log_live_submission_intent`.
-  Intent/unknown journal failures log with traceback. New settlement
-  payloads derive `series_ticker` from the ticker prefix when the trade
-  row is empty. Freeze stays locked.
+  Intent/unknown journal failures log with traceback. Freeze stays locked.
 
 ## [0.33.81] - 2026-09-12
 
