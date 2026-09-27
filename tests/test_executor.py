@@ -248,8 +248,39 @@ class TestLiveSubmissionNoRetry:
         trade_log_mock.log_live_submission_intent.assert_called_once()
         intent_kwargs = trade_log_mock.log_live_submission_intent.call_args.kwargs
         live_order_kwargs = trade_log_mock.log_live_order.call_args.kwargs
+        assert "client_order_id" not in intent_kwargs
+        assert "client_order_id" not in live_order_kwargs
         assert intent_kwargs["submission_id"] == live_order_kwargs["submission_id"]
         assert len(intent_kwargs["submission_id"]) == 32
+
+    @pytest.mark.asyncio
+    async def test_live_intent_typeerror_is_logged_with_exc_info(
+        self, monkeypatch, tmp_path, caplog
+    ):
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", False)
+        monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+        rest = MagicMock()
+        paper = MagicMock()
+        ex = TradeExecutor(
+            rest,
+            paper,
+            live_submission_hold_path=tmp_path / "unknown_submission_holds.json",
+        )
+        with (
+            patch(
+                "trading.executor.trade_log.log_live_submission_intent",
+                side_effect=TypeError("unexpected keyword argument 'client_order_id'"),
+            ),
+            caplog.at_level(logging.ERROR, logger="executor"),
+        ):
+            order_id = await ex._execute_live(_make_analysis())
+        assert order_id is None
+        rest.place_limit_order.assert_not_called()
+        assert any(
+            "submission intent persistence failed" in rec.message
+            and rec.exc_info is not None
+            for rec in caplog.records
+        )
 
     @pytest.mark.asyncio
     async def test_fresh_executor_blocks_while_initial_post_is_reserved(

@@ -1140,7 +1140,6 @@ class TradeExecutor:
         client_order_id = uuid.uuid4().hex
         submission_summary = {
             "submission_id": uuid.uuid4().hex,
-            "client_order_id": client_order_id,
             "ticker": analysis.market.ticker,
             "side": analysis.side,
             "contracts": contracts,
@@ -1164,6 +1163,7 @@ class TradeExecutor:
             log.error(
                 "[LIVE] BLOCKED order for %s: submission intent persistence failed",
                 analysis.market.ticker,
+                exc_info=True,
             )
             return None
 
@@ -1203,6 +1203,7 @@ class TradeExecutor:
                 log.error(
                     "[LIVE] Submission outcome persistence failed for %s; manual reconciliation required",
                     analysis.market.ticker,
+                    exc_info=True,
                 )
 
         log.info(

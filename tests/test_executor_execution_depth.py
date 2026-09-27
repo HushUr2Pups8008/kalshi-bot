@@ -417,6 +417,7 @@ async def test_live_execution_uses_final_depth_plan_and_journals_it(monkeypatch,
         for call in write_log.await_args_list
         if call.args[0] is trade_log_mock.log_live_submission_intent
     )
+    assert "client_order_id" not in intent_kwargs
     order_kwargs = next(
         call.kwargs
         for call in write_log.await_args_list
