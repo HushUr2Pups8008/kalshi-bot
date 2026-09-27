@@ -58,9 +58,18 @@ def test_rest_client_retry_policy_explicitly_excludes_post(monkeypatch) -> None:
 def test_legacy_order_post_disables_redirects() -> None:
     client = KalshiRestClient()
     response = MagicMock()
-    response.status_code = 200
-    response.text = '{"order": {"order_id": "order-123"}}'
-    response.json.return_value = {"order": {"order_id": "order-123"}}
+    response.status_code = 201
+    response.text = (
+        '{"order_id":"order-123","client_order_id":"abc","fill_count":"0.00",'
+        '"remaining_count":"2.00","ts_ms":1}'
+    )
+    response.json.return_value = {
+        "order_id": "order-123",
+        "client_order_id": "abc",
+        "fill_count": "0.00",
+        "remaining_count": "2.00",
+        "ts_ms": 1,
+    }
     client._session.request = MagicMock(return_value=response)  # noqa: SLF001
 
     result = client.place_limit_order(
@@ -68,13 +77,56 @@ def test_legacy_order_post_disables_redirects() -> None:
         side="yes",
         count=2,
         limit_price=50,
+        client_order_id="abc",
     )
 
     assert result.order_id == "order-123"
-    request_kwargs = client._session.request.call_args.kwargs  # noqa: SLF001
+    assert result.error is None
+    args = client._session.request.call_args
+    assert args.args[0] == "POST"
+    assert str(args.args[1]).endswith("/portfolio/events/orders")
+    request_kwargs = args.kwargs
     assert request_kwargs["allow_redirects"] is False
     payload = json.loads(request_kwargs["data"])
-    assert payload["client_order_id"]
+    assert payload["client_order_id"] == "abc"
+    assert payload["side"] == "bid"
+    assert payload["count"] == "2.00"
+    assert payload["price"] == "0.5000"
+    assert payload["time_in_force"] == "good_till_canceled"
+
+
+def test_v2_no_buy_posts_ask_at_complement_yes_price() -> None:
+    client = KalshiRestClient()
+    response = MagicMock()
+    response.status_code = 201
+    response.text = (
+        '{"order_id":"order-no","fill_count":"0.00","remaining_count":"8.00","ts_ms":1}'
+    )
+    response.json.return_value = {
+        "order_id": "order-no",
+        "fill_count": "0.00",
+        "remaining_count": "8.00",
+        "ts_ms": 1,
+    }
+    client._session.request = MagicMock(return_value=response)  # noqa: SLF001
+
+    result = client.place_limit_order(
+        ticker="KXTRUTHSOCIAL-26OCT03-B149",
+        side="no",
+        count=8,
+        limit_price=84,
+        client_order_id="new-id-not-410",
+    )
+
+    assert result.order_id == "order-no"
+    args = client._session.request.call_args
+    assert args[0][0] == "POST"
+    assert args[0][1].endswith("/portfolio/events/orders")
+    payload = json.loads(args.kwargs["data"])
+    assert payload["side"] == "ask"
+    assert payload["price"] == "0.1600"
+    assert payload["count"] == "8.00"
+    assert payload["client_order_id"] == "new-id-not-410"
 
 
 def test_legacy_order_redirect_is_sanitized_error(caplog) -> None:

@@ -19,6 +19,15 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.83] - 2026-09-27
+
+### Fixed
+
+- **Live orders use Kalshi Create Order V2.** POST
+  `/portfolio/events/orders` with YES-book `bid`/`ask` and dollar prices.
+  Unique `client_order_id` and UNKNOWN hold unchanged. V1
+  `/portfolio/orders` 410 is no longer the live path. Freeze stays locked.
+
 ## [0.33.82] - 2026-09-27
 
 ### Fixed

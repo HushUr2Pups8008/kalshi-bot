@@ -1051,43 +1051,79 @@ class KalshiRestClient:
         expiration_ts: Optional[int] = None,
         client_order_id: Optional[str] = None,
     ) -> OrderResult:
-        """
-        Place a limit order on Kalshi.
+        """Place a buy on Kalshi Create Order V2.
 
-        count × limit_price cents = total risk (for yes orders).
-        Every POST carries a unique client_order_id. Callers must not retry
-        an unknown outcome with a new id.
+        Event-market V2 quotes the YES book only: bid buys YES, ask sells YES
+        (economically a NO buy at 1 - price). Callers must not retry an
+        unknown outcome with a new client_order_id.
         """
-        order_client_id = str(client_order_id or "").strip() or uuid.uuid4().hex
-        payload: dict[str, Any] = {
-            "ticker":   ticker,
-            "action":   "buy",
-            "type":     "limit",
-            "side":     side,
-            "count":    count,
-            "client_order_id": order_client_id,
-            "yes_price" if side == "yes" else "no_price": limit_price,
-        }
-        if expiration_ts:
-            payload["expiration_ts"] = expiration_ts
-
-        try:
-            data = self._request(
-                "POST",
-                "/portfolio/orders",
-                payload=payload,
-                allow_redirects=False,
-            )
-            order = data.get("order", data)
-            cost = count * limit_price / 100.0
+        executed = str(side or "").strip().lower()
+        if executed not in {"yes", "no"}:
             return OrderResult(
-                order_id=order.get("order_id", "unknown"),
+                order_id="",
                 ticker=ticker,
                 side=side,
                 contracts=count,
                 price_cents=limit_price,
-                status=order.get("status", "resting"),
-                filled=int(order.get("count_filled", 0) or 0),
+                status="error",
+                error=f"invalid side {side!r}",
+            )
+        if not 1 <= int(limit_price) <= 99:
+            return OrderResult(
+                order_id="",
+                ticker=ticker,
+                side=side,
+                contracts=count,
+                price_cents=limit_price,
+                status="error",
+                error=f"invalid limit_price {limit_price}",
+            )
+        order_client_id = str(client_order_id or "").strip() or uuid.uuid4().hex
+        yes_cents = int(limit_price) if executed == "yes" else 100 - int(limit_price)
+        payload: dict[str, Any] = {
+            "ticker": ticker,
+            "client_order_id": order_client_id,
+            "side": "bid" if executed == "yes" else "ask",
+            "count": f"{int(count):.2f}",
+            "price": f"{yes_cents / 100:.4f}",
+            "time_in_force": "good_till_canceled",
+            "self_trade_prevention_type": "taker_at_cross",
+        }
+        if expiration_ts:
+            payload["expiration_time"] = int(expiration_ts)
+
+        try:
+            data = self._request(
+                "POST",
+                "/portfolio/events/orders",
+                payload=payload,
+                allow_redirects=False,
+            )
+            order = data.get("order", data) if isinstance(data, dict) else {}
+            if not isinstance(order, dict):
+                order = {}
+            fill_raw = order.get("fill_count", order.get("count_filled", 0))
+            try:
+                filled = int(Decimal(str(fill_raw)))
+            except (InvalidOperation, TypeError, ValueError):
+                filled = 0
+            remaining_raw = order.get("remaining_count")
+            try:
+                remaining = Decimal(str(remaining_raw)) if remaining_raw is not None else None
+            except (InvalidOperation, TypeError, ValueError):
+                remaining = None
+            if remaining is not None and remaining == 0 and filled > 0:
+                status = "executed"
+            else:
+                status = str(order.get("status") or "resting")
+            return OrderResult(
+                order_id=str(order.get("order_id") or ""),
+                ticker=ticker,
+                side=side,
+                contracts=count,
+                price_cents=limit_price,
+                status=status,
+                filled=filled,
                 error=None,
             )
         except Exception as exc:
