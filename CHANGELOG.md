@@ -19,6 +19,15 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.84] - 2026-10-02
+
+### Fixed
+
+- **V2 Create Order signs timestamp+METHOD+path only.** POST
+  `/portfolio/events/orders` no longer RSA-PSS-signs the JSON body.
+  GET `/portfolio/balance` already 200d; the extra body was the 401.
+  Query string stripped. Freeze stays locked.
+
 ## [0.33.83] - 2026-09-27
 
 ### Fixed

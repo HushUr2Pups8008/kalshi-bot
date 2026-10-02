@@ -451,16 +451,17 @@ class KalshiRestClient:
     # ── Auth helpers ──────────────────────────────────────────────────────────
 
     def _sign(self, method: str, path: str, body: str = "") -> dict[str, str]:
-        """
-        Build the RSA-PSS signature headers required by Kalshi v2.
+        """Build Kalshi v2 RSA-PSS headers.
 
-        Kalshi uses:
-          timestamp  = milliseconds since epoch (string)
-          message    = timestamp + method.upper() + path + body
-          signature  = RSA-PSS/SHA-256 (DIGEST_LENGTH salt), base64-encoded
+        Pre-sign text is timestamp + METHOD + path, with query stripped.
+        The JSON body is not signed. GET /portfolio/balance already 200s
+        because its body is empty; signing POST bodies was the V2 401.
+        `body` is accepted for call-site compatibility and ignored.
         """
+        del body
         ts = str(int(time.time() * 1000))
-        message = (ts + method.upper() + path + body).encode()
+        path_without_query = path.split("?", 1)[0]
+        message = (ts + method.upper() + path_without_query).encode("utf-8")
         try:
             sig = self._private_key.sign(
                 message,

@@ -88,6 +88,60 @@ def test_rest_client_sign_raises_no_network_call(monkeypatch):
     mock_request.assert_not_called()
 
 
+def test_rest_sign_message_is_timestamp_method_path_without_body(monkeypatch):
+    """POST auth signs timestamp+METHOD+path; JSON body is not in the message."""
+    import kalshi.rest_client as rest_client_module
+
+    valid_pem = _generate_valid_pem()
+    monkeypatch.setattr(_cfg_module.cfg, "api_key_id", "test-key-id")
+    monkeypatch.setattr(_cfg_module.cfg, "api_key_secret", valid_pem)
+    monkeypatch.setattr(rest_client_module.time, "time", lambda: 1_703_123_456.0)
+
+    client = KalshiRestClient()
+    captured: list[bytes] = []
+    inner = client._private_key
+
+    class _CapturingKey:
+        def sign(self, message, *args, **kwargs):
+            captured.append(message)
+            return inner.sign(message, *args, **kwargs)
+
+    client._private_key = _CapturingKey()
+    body = '{"ticker":"KXTEST","count":"1.00","price":"0.5000"}'
+    headers = client._headers(
+        "POST",
+        "/trade-api/v2/portfolio/events/orders",
+        body,
+    )
+
+    assert captured == [b"1703123456000POST/trade-api/v2/portfolio/events/orders"]
+    assert headers["KALSHI-ACCESS-TIMESTAMP"] == "1703123456000"
+    assert "ticker" not in captured[0].decode("utf-8")
+
+
+def test_rest_sign_strips_query_string(monkeypatch):
+    import kalshi.rest_client as rest_client_module
+
+    valid_pem = _generate_valid_pem()
+    monkeypatch.setattr(_cfg_module.cfg, "api_key_id", "test-key-id")
+    monkeypatch.setattr(_cfg_module.cfg, "api_key_secret", valid_pem)
+    monkeypatch.setattr(rest_client_module.time, "time", lambda: 1_703_123_456.0)
+
+    client = KalshiRestClient()
+    captured: list[bytes] = []
+    inner = client._private_key
+
+    class _CapturingKey:
+        def sign(self, message, *args, **kwargs):
+            captured.append(message)
+            return inner.sign(message, *args, **kwargs)
+
+    client._private_key = _CapturingKey()
+    client._sign("GET", "/trade-api/v2/portfolio/orders?ticker=KXTEST")
+
+    assert captured == [b"1703123456000GET/trade-api/v2/portfolio/orders"]
+
+
 # ---------------------------------------------------------------------------
 # WebSocket auth-headers function tests
 # ---------------------------------------------------------------------------
