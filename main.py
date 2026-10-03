@@ -1262,20 +1262,26 @@ class TradingBot:
             if side_calibration_quarantine_runtime is None
             else side_calibration_quarantine_runtime.prequeue_book_provenance_provider
         )
-        self._blend_task = BlendTask(
-            trading_queue=self._trading_queue,
-            calibration=self._calibration_task,
-            execution_liquidity_provider=self._execution_liquidity_provider,
-            open_exposure_drawdown_provider=lambda: _paper_open_exposure_drawdown_snapshot(
-                self.paper
-            ),
-            capital_guard_capture_sink=self._capital_guard_shadow_capture_sink,
-            g7_skip_evidence_capture_sink=self._g7_skip_evidence_capture_sink,
-            runtime_paper_cohort_id=self.paper_cohort.cohort_id,
-            runtime_paper_cohort_kind=runtime_cohort_kind,
-            prequeue_book_provenance_provider=self._prequeue_book_provenance_provider,
-            side_calibration_quarantine_sink=self._side_calibration_quarantine_sink,
-        )
+        if omit_idle_init:
+            self._blend_task = None
+            log.info(
+                "[EVENT_NEWS_RUNTIME] omitted BlendTask construction on politics cohort"
+            )
+        else:
+            self._blend_task = BlendTask(
+                trading_queue=self._trading_queue,
+                calibration=self._calibration_task,
+                execution_liquidity_provider=self._execution_liquidity_provider,
+                open_exposure_drawdown_provider=lambda: _paper_open_exposure_drawdown_snapshot(
+                    self.paper
+                ),
+                capital_guard_capture_sink=self._capital_guard_shadow_capture_sink,
+                g7_skip_evidence_capture_sink=self._g7_skip_evidence_capture_sink,
+                runtime_paper_cohort_id=self.paper_cohort.cohort_id,
+                runtime_paper_cohort_kind=runtime_cohort_kind,
+                prequeue_book_provenance_provider=self._prequeue_book_provenance_provider,
+                side_calibration_quarantine_sink=self._side_calibration_quarantine_sink,
+            )
         self._research_paper_admission_bridge = ResearchPaperAdmissionBridge(
             research_store=default_research_dossier_store(),
             trading_queue=self._trading_queue,
@@ -1397,26 +1403,49 @@ class TradingBot:
         return False
 
     def _event_news_open_paper_tickers(self) -> list[str]:
-        """Open paper tickers for the politics per-event admission cap."""
+        """Open paper and live tickers for politics family/prefix admission caps."""
+        tickers: list[str] = []
+        seen: set[str] = set()
         try:
             portfolio = getattr(self.paper, "portfolio", None)
             open_positions = getattr(portfolio, "open_positions", None)
-            if not callable(open_positions):
-                return []
-            tickers: list[str] = []
-            seen: set[str] = set()
-            for position in open_positions() or []:
-                ticker = str(getattr(position, "ticker", "") or "").strip()
-                if ticker and ticker not in seen:
-                    seen.add(ticker)
-                    tickers.append(ticker)
-            return tickers
+            if callable(open_positions):
+                for position in open_positions() or []:
+                    ticker = str(getattr(position, "ticker", "") or "").strip()
+                    if ticker and ticker not in seen:
+                        seen.add(ticker)
+                        tickers.append(ticker)
         except Exception:
             log.warning(
                 "[EVENT_NEWS_ADMIT] open paper ticker lookup failed",
                 exc_info=True,
             )
-            return []
+        try:
+            try:
+                live_positions = self.rest.get_open_positions(strict=True)
+            except TypeError:
+                live_positions = self.rest.get_open_positions()
+        except Exception:
+            log.warning(
+                "[EVENT_NEWS_FAMILY_LOCK] live open ticker lookup failed",
+                exc_info=True,
+            )
+            from utils.event_news_research import EVENT_NEWS_LIVE_OCCUPANCY_UNKNOWN
+
+            tickers.append(EVENT_NEWS_LIVE_OCCUPANCY_UNKNOWN)
+            return tickers
+        if isinstance(live_positions, list):
+            for position in live_positions:
+                if isinstance(position, dict):
+                    ticker = str(
+                        position.get("ticker") or position.get("market_ticker") or ""
+                    ).strip()
+                else:
+                    ticker = str(getattr(position, "ticker", "") or "").strip()
+                if ticker and ticker not in seen:
+                    seen.add(ticker)
+                    tickers.append(ticker)
+        return tickers
 
     def _research_prewarm_target_cooldown_seconds(self) -> float:
         return float(getattr(cfg, "research_prewarm_target_cooldown_seconds", 1800.0))
@@ -3752,6 +3781,16 @@ class TradingBot:
                     analysis.market.ticker,
                 )
         task = blend_task or self._blend_task
+        if task is None:
+            log.info(
+                "[EVENT_NEWS_RUNTIME] blend_task omitted ticker=%s",
+                analysis.market.ticker,
+            )
+            return SimpleNamespace(
+                ready=False,
+                enqueued=False,
+                trade_blocked_reason="blend_task_omitted",
+            )
         blend_result = await task.process_fast_lane_result(analysis)
         if watch:
             self.ws.watch([analysis.market.ticker])
@@ -3769,6 +3808,19 @@ class TradingBot:
         store: ResearchBackedBlendStore,
     ):
         """Route research proof through blend without feed-only side effects."""
+        from utils.event_news_research import event_news_omit_idle_runtime_tasks
+
+        if event_news_omit_idle_runtime_tasks():
+            log.info(
+                "[EVENT_NEWS_RUNTIME] skipped BlendTask construction for research "
+                "route ticker=%s",
+                analysis.market.ticker,
+            )
+            return SimpleNamespace(
+                ready=False,
+                enqueued=False,
+                trade_blocked_reason="blend_task_omitted",
+            )
         runtime_cohort = getattr(self, "paper_cohort", None)
         task = BlendTask(
             trading_queue=self._trading_queue,

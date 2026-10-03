@@ -1799,6 +1799,24 @@ class PaperTrader:
                 getattr(analysis.market, "ticker", "<unknown>"),
             )
             return PaperTradeWriteResult("", created=False)
+        from utils.event_news_research import (
+            event_news_clamp_execution_terms,
+            event_news_fill_series_ticker,
+        )
+
+        ticker = str(getattr(analysis.market, "ticker", "") or "")
+        # kelly_contracts: what Kelly sizes for this trade before the event-news
+        # contract clamp. Retained as a stored column for analytics.
+        kelly_contracts = derived_terms.contracts
+        derived_terms = event_news_clamp_execution_terms(
+            derived_terms,
+            ticker=ticker,
+        )
+        if execution_terms is not None:
+            execution_terms = event_news_clamp_execution_terms(
+                execution_terms,
+                ticker=ticker,
+            )
         if execution_terms is not None and execution_terms != derived_terms:
             log.error(
                 "[PAPER] Skipping record_trade for %s: final execution terms do not match analysis",
@@ -1808,9 +1826,6 @@ class PaperTrader:
         terms = execution_terms or derived_terms
         price_cents = terms.price_cents
         side = str(analysis.side).lower()
-        # kelly_contracts: what Kelly sizes for this trade. Retained as a stored
-        # column for analytics (and the §7e flat-vs-Kelly history pre-cutover).
-        kelly_contracts = derived_terms.contracts
         # PROFIT-SIZING-001b: paper now MIRRORS live -- size by Kelly (not flat-5)
         # so the paper cohort predicts live behaviour. With the min-bet floor
         # removed (PROFIT-SIZING-001) trades size down to the natural 1-contract
@@ -1974,7 +1989,10 @@ class PaperTrader:
             bankroll_before,
             bankroll_after,
             market_snapshot,
-            analysis.market.series_ticker,
+            event_news_fill_series_ticker(
+                ticker,
+                getattr(analysis.market, "series_ticker", ""),
+            ),
             getattr(analysis, "signal_type", "news"),
             getattr(analysis, "match_score", None),
             getattr(analysis, "llm_direction", None),

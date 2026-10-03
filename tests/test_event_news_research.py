@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -35,6 +36,9 @@ from utils.event_news_research import (
     event_news_executable_top_notional,
     event_news_executable_top_size,
     event_news_open_prefix_cap,
+    event_news_clamp_execution_terms,
+    event_news_family_lock_ticker,
+    event_news_fill_series_ticker,
     event_news_bypass_quote_skip_cooldown,
     event_news_prewarm_allows,
     event_news_prewarm_seed_markets,
@@ -366,6 +370,78 @@ def test_event_news_blocking_open_ticker_stops_sibling_not_new_event():
     assert event_news_blocking_open_ticker(t6, [], config=politics) is None
     assert event_news_blocking_open_ticker(new_event, open_tickers, config=politics) is None
     assert event_news_blocking_open_ticker(t6, open_tickers, config=freeze) is None
+
+
+def test_event_news_family_lock_second_truth_social_week():
+    freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
+    politics = SimpleNamespace(paper_cohort_id=EVENT_NEWS_COHORT_ID)
+    week_b = SimpleNamespace(
+        ticker="KXTRUTHSOCIAL-26OCT10-B200",
+        series_ticker="KXTRUTHSOCIAL",
+        event_ticker="KXTRUTHSOCIAL-26OCT10",
+    )
+    trump = SimpleNamespace(
+        ticker="KXTRUMPACT-26AUG30-T8",
+        series_ticker="KXTRUMPACT",
+        event_ticker="KXTRUMPACT-26AUG30",
+    )
+    open_week_a = ["KXTRUTHSOCIAL-26OCT03-B169"]
+    assert (
+        event_news_family_lock_ticker(week_b, open_week_a, config=politics)
+        == "KXTRUTHSOCIAL-26OCT03-B169"
+    )
+    assert event_news_family_lock_ticker(week_b, [], config=politics) is None
+    assert event_news_family_lock_ticker(trump, open_week_a, config=politics) is None
+    assert event_news_family_lock_ticker(week_b, open_week_a, config=freeze) is None
+
+
+def test_event_news_clamp_22_lots_becomes_8(caplog):
+    from trading.execution_terms import FinalExecutionTerms
+
+    freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
+    politics = SimpleNamespace(paper_cohort_id=EVENT_NEWS_COHORT_ID)
+    terms = FinalExecutionTerms(price_cents=33, contracts=22, cost_dollars=7.26)
+    with caplog.at_level(logging.INFO, logger="event_news_research"):
+        clamped = event_news_clamp_execution_terms(
+            terms,
+            ticker="KXTRUMPACT-26SEP06-T4",
+            config=politics,
+        )
+    assert clamped.contracts == 8
+    assert clamped.price_cents == 33
+    assert clamped.cost_dollars == pytest.approx(2.64)
+    assert any(
+        "EVENT_NEWS_SIZE_CAP" in record.message
+        and "ticker=KXTRUMPACT-26SEP06-T4" in record.message
+        and "contracts=22" in record.message
+        and "cap=8" in record.message
+        for record in caplog.records
+    )
+    frozen = event_news_clamp_execution_terms(
+        terms,
+        ticker="KXTRUMPACT-26SEP06-T4",
+        config=freeze,
+    )
+    assert frozen.contracts == 22
+    small = FinalExecutionTerms(price_cents=82, contracts=8, cost_dollars=6.56)
+    assert (
+        event_news_clamp_execution_terms(
+            small, ticker="KXTRUMPACT-26AUG30-T8", config=politics
+        ).contracts
+        == 8
+    )
+
+
+def test_event_news_fill_series_ticker_on_new_rows_only():
+    assert (
+        event_news_fill_series_ticker("KXTRUTHSOCIAL-26OCT03-B169", "")
+        == "KXTRUTHSOCIAL"
+    )
+    assert (
+        event_news_fill_series_ticker("KXTRUTHSOCIAL-26OCT03-B169", "KXTRUTHSOCIAL")
+        == "KXTRUTHSOCIAL"
+    )
+    assert event_news_fill_series_ticker("KXTRUMPACT-26SEP06-T4", None) == "KXTRUMPACT"
 
 
 def test_determined_status_only_on_politics():

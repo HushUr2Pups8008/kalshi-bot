@@ -8,6 +8,7 @@ Covers: live loss limit breach triggers halt, halt persists across subsequent ca
 import asyncio
 import logging
 import threading
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
@@ -216,6 +217,13 @@ class TestLiveLossLimit:
 
 
 class TestLiveSubmissionNoRetry:
+    @pytest.fixture(autouse=True)
+    def _isolate_live_fill_log(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(
+            "trading.executor.LIVE_FILL_LOG_PATH",
+            tmp_path / "live-fill-log.md",
+        )
+
     @pytest.mark.asyncio
     async def test_execute_live_succeeds_on_first_attempt(self, monkeypatch, tmp_path):
         monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", False)
@@ -252,6 +260,60 @@ class TestLiveSubmissionNoRetry:
         assert "client_order_id" not in live_order_kwargs
         assert intent_kwargs["submission_id"] == live_order_kwargs["submission_id"]
         assert len(intent_kwargs["submission_id"]) == 32
+
+    @pytest.mark.asyncio
+    async def test_live_fill_log_on_2xx_and_business_reject(self, monkeypatch, tmp_path):
+        from trading.executor import LIVE_FILL_LOG_PATH
+
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", False)
+        monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+        log_path = tmp_path / "desk-live-fill-log.md"
+        monkeypatch.setattr("trading.executor.LIVE_FILL_LOG_PATH", log_path)
+
+        rest = MagicMock()
+        paper = MagicMock()
+        ok = MagicMock()
+        ok.error = None
+        ok.order_id = "filled-1"
+        ok.status = "resting"
+        ok.filled = 0
+        ok.http_status = 201
+        rest.place_limit_order.return_value = ok
+        ex = TradeExecutor(
+            rest,
+            paper,
+            live_submission_hold_path=tmp_path / "unknown_submission_holds.json",
+        )
+        analysis = _make_analysis()
+        with patch("trading.executor.trade_log"):
+            order_id = await ex._execute_live(analysis)
+        assert order_id == "filled-1"
+        text = log_path.read_text(encoding="utf-8")
+        assert analysis.market.ticker in text
+        assert "201" in text
+        client_order_id = rest.place_limit_order.call_args.kwargs["client_order_id"]
+        assert client_order_id in text
+        assert "KALSHI-ACCESS" not in text
+
+        reject = MagicMock()
+        reject.error = "404 Client Error: Not Found for url: https://api.elections.kalshi.com/trade-api/v2/portfolio/events/orders"
+        reject.order_id = ""
+        reject.status = "error"
+        reject.filled = 0
+        reject.http_status = 404
+        rest.place_limit_order.return_value = reject
+        ex2 = TradeExecutor(
+            rest,
+            paper,
+            live_submission_hold_path=tmp_path / "unknown_submission_holds2.json",
+        )
+        with patch("trading.executor.trade_log"):
+            rejected = await ex2._execute_live(_make_analysis(ticker="KXFAKE-404"))
+        assert rejected is None
+        text = log_path.read_text(encoding="utf-8")
+        assert "KXFAKE-404" in text
+        assert "404" in text
+        assert LIVE_FILL_LOG_PATH != log_path
 
     @pytest.mark.asyncio
     async def test_live_intent_typeerror_is_logged_with_exc_info(
@@ -2376,6 +2438,146 @@ class TestPerPrefixPositionCap:
         ts_no.market.last_price = 26
         ts_no.executed_price_cents = 74
         assert ex._validate(ts_no) is None
+
+    def test_politics_family_lock_blocks_second_truth_social_week(self, monkeypatch, caplog):
+        from utils.event_news_research import EVENT_NEWS_COHORT_ID
+
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        monkeypatch.setattr(_cfg_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
+        monkeypatch.setattr(
+            _cfg_module.cfg, "llm_excluded_price_bands", [(0.00, 0.35)]
+        )
+        monkeypatch.setattr(_cfg_module.cfg, "paper_ticker_cooldown", 0)
+        monkeypatch.setattr(_cfg_module.cfg, "min_edge", 0.04)
+        monkeypatch.setattr(_cfg_module.cfg, "max_open_positions_per_prefix", 8)
+        rest = MagicMock()
+        paper = MagicMock()
+        paper.get_notional_bankroll.return_value = 500.0
+        paper.portfolio.open_positions.side_effect = (
+            lambda ticker=None: [
+                SimpleNamespace(ticker="KXTRUTHSOCIAL-26OCT03-B169", side="no")
+            ]
+            if ticker is None
+            else []
+        )
+        paper.portfolio.open_positions_by_prefix.return_value = []
+        paper.portfolio.is_concentration_ok.return_value = True
+        paper.portfolio.exposure.return_value = 0.0
+        ex = TradeExecutor(rest, paper)
+        week_b = _make_analysis(
+            ticker="KXTRUTHSOCIAL-26OCT10-B200",
+            side="no",
+            yes_price=74.0,
+            edge=0.24,
+            estimated_prob=0.02,
+        )
+        week_b.market.series_ticker = "KXTRUTHSOCIAL"
+        week_b.market.event_ticker = "KXTRUTHSOCIAL-26OCT10"
+        week_b.market.yes_ask_cents = 26
+        week_b.market.no_ask_cents = 74
+        week_b.market.yes_ask = 26
+        week_b.market.no_ask = 74
+        week_b.market.last_price_cents = 26
+        week_b.market.last_price = 26
+        week_b.executed_price_cents = 74
+        with caplog.at_level(logging.INFO, logger="executor"):
+            reason = ex._validate(week_b)
+        assert reason is not None
+        assert "event_news_family_lock" in reason
+        assert any("EVENT_NEWS_FAMILY_LOCK" in record.message for record in caplog.records)
+
+    def test_politics_family_lock_fail_closed_when_live_lookup_fails(
+        self, monkeypatch, caplog
+    ):
+        from utils.event_news_research import EVENT_NEWS_COHORT_ID
+
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        monkeypatch.setattr(_cfg_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
+        monkeypatch.setattr(
+            _cfg_module.cfg, "llm_excluded_price_bands", [(0.00, 0.35)]
+        )
+        monkeypatch.setattr(_cfg_module.cfg, "paper_ticker_cooldown", 0)
+        monkeypatch.setattr(_cfg_module.cfg, "min_edge", 0.04)
+        rest = MagicMock()
+        rest.get_open_positions.side_effect = RuntimeError("positions down")
+        paper = MagicMock()
+        paper.get_notional_bankroll.return_value = 500.0
+        paper.portfolio.open_positions.return_value = []
+        paper.portfolio.open_positions_by_prefix.return_value = []
+        paper.portfolio.is_concentration_ok.return_value = True
+        paper.portfolio.exposure.return_value = 0.0
+        ex = TradeExecutor(rest, paper)
+        week_b = _make_analysis(
+            ticker="KXTRUTHSOCIAL-26OCT10-B200",
+            side="no",
+            yes_price=74.0,
+            edge=0.24,
+            estimated_prob=0.02,
+        )
+        week_b.market.series_ticker = "KXTRUTHSOCIAL"
+        week_b.market.event_ticker = "KXTRUTHSOCIAL-26OCT10"
+        week_b.market.yes_ask_cents = 26
+        week_b.market.no_ask_cents = 74
+        week_b.market.yes_ask = 26
+        week_b.market.no_ask = 74
+        week_b.market.last_price_cents = 26
+        week_b.market.last_price = 26
+        week_b.executed_price_cents = 74
+        with caplog.at_level(logging.INFO):
+            reason = ex._validate(week_b)
+        assert reason is not None
+        assert "event_news_family_lock" in reason
+
+    @pytest.mark.asyncio
+    async def test_politics_clamps_22_contracts_to_8(self, monkeypatch, caplog):
+        from trading.orderbook import ExecutableLiquidity
+
+        from utils.event_news_research import EVENT_NEWS_COHORT_ID
+
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
+        monkeypatch.setattr(_cfg_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
+        rest = MagicMock()
+        paper = MagicMock()
+        paper.get_notional_bankroll.return_value = 500.0
+        ex = TradeExecutor(rest, paper)
+        analysis = _make_analysis(
+            ticker="KXTRUMPACT-26SEP06-T4",
+            side="no",
+            yes_price=33.0,
+            edge=0.65,
+            estimated_prob=0.02,
+            capped_dollars=7.26,
+        )
+        analysis.market.series_ticker = "KXTRUMPACT"
+        analysis.executed_price_cents = 33
+        liquidity = ExecutableLiquidity(
+            market_ticker=analysis.market.ticker,
+            side="no",
+            limit_price=Decimal("0.33"),
+            best_price=Decimal("0.33"),
+            executable_quantity=Decimal("50"),
+            executable_notional=Decimal("16.50"),
+            as_of=datetime.now(timezone.utc),
+            raw_payload_hash="a" * 64,
+        )
+        with (
+            patch(
+                "trading.executor.fetch_kalshi_execution_liquidity",
+                new=AsyncMock(return_value=liquidity),
+            ),
+            caplog.at_level(logging.INFO, logger="event_news_research"),
+        ):
+            plan, reason = await ex._final_execution_plan(analysis)
+        assert reason is None
+        assert plan is not None
+        assert plan.contracts == 8
+        assert plan.price_cents == 33
+        assert any(
+            "EVENT_NEWS_SIZE_CAP" in record.message
+            and "contracts=22" in record.message
+            and "cap=8" in record.message
+            for record in caplog.records
+        )
 
     def test_different_prefix_unaffected(self, monkeypatch):
         # 2 open in KXTRUMPIRAN, but trade is on KXTXRUNOFFENDORSE

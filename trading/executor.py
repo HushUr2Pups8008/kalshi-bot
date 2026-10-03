@@ -45,6 +45,18 @@ from utils.logger import get_logger, trade_log, write_trade_log_async
 
 log = get_logger("executor")
 
+LIVE_FILL_LOG_PATH = (
+    Path(__file__).resolve().parents[1] / "docs" / "reports" / "live-fill-log.md"
+)
+_LIVE_BUSINESS_REJECT_STATUSES = frozenset({400, 404, 409, 422})
+_LIVE_BUSINESS_REJECT_TOKENS = (
+    "not_found",
+    "insufficient",
+    "invalid_order",
+    "invalid_price",
+    "price_band",
+)
+
 # Cooldowns moved to BotConfig (cfg.live_ticker_cooldown / cfg.paper_ticker_cooldown).
 # Read from cfg at call time so .env changes take effect without code edits.
 
@@ -112,6 +124,74 @@ def _event_news_official_p_may_live(signal_meta: dict[str, Any]) -> bool:
     if str(signal_meta.get("blend_bypass_reason") or "") == "official_p":
         return True
     return str(signal_meta.get("source_lane") or "") == "research_official_p"
+
+
+def _position_market_ticker(position: Any) -> str:
+    if isinstance(position, dict):
+        return str(position.get("ticker") or position.get("market_ticker") or "").strip()
+    return str(getattr(position, "ticker", "") or "").strip()
+
+
+def _position_is_open(position: Any) -> bool:
+    if isinstance(position, dict):
+        for key in ("position", "exposure", "yes_count", "no_count", "contracts"):
+            raw = position.get(key)
+            if isinstance(raw, bool) or raw is None:
+                continue
+            try:
+                if abs(float(raw)) > 0:
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return bool(_position_market_ticker(position))
+    return True
+
+
+def _live_http_result(result: Any) -> str:
+    status = getattr(result, "http_status", None)
+    error = getattr(result, "error", None)
+    if not error:
+        return str(status or "2xx")
+    if status is not None:
+        return f"{status} {error}".strip()
+    return str(error)
+
+
+def _is_live_business_reject(result: Any) -> bool:
+    status = getattr(result, "http_status", None)
+    if status in _LIVE_BUSINESS_REJECT_STATUSES:
+        return True
+    error = str(getattr(result, "error", "") or "").lower()
+    return any(token in error for token in _LIVE_BUSINESS_REJECT_TOKENS)
+
+
+def append_live_fill_log(
+    *,
+    ticker: str,
+    side: str,
+    price_cents: int,
+    contracts: int,
+    client_order_id: str,
+    http_result: str,
+    path: Path | None = None,
+) -> None:
+    """Append one Desk Ops line. Never logs keys."""
+    target = path or LIVE_FILL_LOG_PATH
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    line = (
+        f"{stamp}, {ticker}, {side}, {price_cents}, {contracts}, "
+        f"{client_order_id}, {http_result}\n"
+    )
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("a", encoding="utf-8") as handle:
+            handle.write(line)
+    except Exception:
+        log.warning(
+            "[LIVE_FILL_LOG] append failed ticker=%s",
+            ticker,
+            exc_info=True,
+        )
 
 
 def _skip_headline(analysis: SignalAnalysis) -> str:
@@ -469,6 +549,52 @@ class TradeExecutor:
                 return float(value)
         return float(self._paper.get_notional_bankroll())
 
+    def _event_news_open_exposure_tickers(self) -> list[str]:
+        """Paper plus live open tickers for politics family/prefix gates."""
+        tickers: list[str] = []
+        seen: set[str] = set()
+        try:
+            open_positions = getattr(self._paper.portfolio, "open_positions", None)
+            positions = open_positions() if callable(open_positions) else []
+            for position in positions or []:
+                ticker = str(getattr(position, "ticker", "") or "").strip()
+                if ticker and ticker not in seen:
+                    seen.add(ticker)
+                    tickers.append(ticker)
+        except Exception:
+            log.warning(
+                "[EVENT_NEWS_FAMILY_LOCK] paper open ticker lookup failed",
+                exc_info=True,
+            )
+        getter = getattr(self._rest, "get_open_positions", None)
+        if callable(getter):
+            live_positions: Any = None
+            try:
+                try:
+                    live_positions = getter(strict=True)
+                except TypeError:
+                    live_positions = getter()
+            except Exception:
+                log.warning(
+                    "[EVENT_NEWS_FAMILY_LOCK] live open ticker lookup failed",
+                    exc_info=True,
+                )
+                from utils.event_news_research import EVENT_NEWS_LIVE_OCCUPANCY_UNKNOWN
+
+                tickers.append(EVENT_NEWS_LIVE_OCCUPANCY_UNKNOWN)
+                return tickers
+            if isinstance(live_positions, list):
+                for position in live_positions:
+                    ticker = _position_market_ticker(position)
+                    if (
+                        ticker
+                        and ticker not in seen
+                        and _position_is_open(position)
+                    ):
+                        seen.add(ticker)
+                        tickers.append(ticker)
+        return tickers
+
     def _validate(self, analysis: SignalAnalysis) -> Optional[str]:
         """Return skip reason, or None if the trade should proceed."""
         # Use relaxed edge threshold during paper trading
@@ -572,6 +698,29 @@ class TradeExecutor:
                         f"open={open_tickers})"
                     )
 
+        from utils.event_news_research import (
+            event_news_family_lock_ticker,
+            is_event_news_paper_cohort,
+        )
+
+        family_occupied = (
+            event_news_family_lock_ticker(
+                analysis.market,
+                self._event_news_open_exposure_tickers(),
+            )
+            if is_event_news_paper_cohort()
+            else None
+        )
+        if family_occupied:
+            log.info(
+                "[EVENT_NEWS_FAMILY_LOCK] open=%s blocked=%s series=KXTRUTHSOCIAL",
+                family_occupied,
+                analysis.market.ticker,
+            )
+            return (
+                f"event_news_family_lock: open {family_occupied} occupies KXTRUTHSOCIAL"
+            )
+
         # Multi-position guard: block opposing trades (no hedges) and duplicate
         # signals (same side, same probability estimate, same market price).
         # Reads from the in-memory Portfolio — no DB query at decision time.
@@ -633,6 +782,12 @@ class TradeExecutor:
                 },
             )
             return "G8_execution_depth_invalid_terms"
+        from utils.event_news_research import event_news_clamp_execution_terms
+
+        final_terms = event_news_clamp_execution_terms(
+            final_terms,
+            ticker=str(analysis.market.ticker),
+        )
         if self._is_paper:
             # PROFIT-SIZING-001b: paper sizes by Kelly now (mirrors live, matches
             # paper_trader). Concentration pre-check uses the actual Kelly
@@ -709,6 +864,12 @@ class TradeExecutor:
                 },
             )
             return None, "G8_execution_depth_invalid_terms"
+        from utils.event_news_research import event_news_clamp_execution_terms
+
+        plan = event_news_clamp_execution_terms(
+            plan,
+            ticker=str(analysis.market.ticker),
+        )
         if self._venue_value(analysis.market) != Venue.KALSHI.value:
             return plan, None
 
@@ -1127,7 +1288,25 @@ class TradeExecutor:
                 return None
             price_cents = max(1, min(99, int(analysis.executed_price_cents)))
             contracts = contracts_from_dollars(analysis.capped_dollars, float(price_cents))
-            cost_dollars = contracts * price_cents / 100.0
+            from utils.event_news_research import (
+                EVENT_NEWS_MAX_CONTRACTS,
+                event_news_clamp_execution_terms,
+                is_event_news_paper_cohort,
+            )
+
+            if is_event_news_paper_cohort() and contracts > EVENT_NEWS_MAX_CONTRACTS:
+                fallback_terms = event_news_clamp_execution_terms(
+                    FinalExecutionTerms(
+                        price_cents=price_cents,
+                        contracts=contracts,
+                        cost_dollars=contracts * price_cents / 100.0,
+                    ),
+                    ticker=str(analysis.market.ticker),
+                )
+                contracts = fallback_terms.contracts
+                cost_dollars = fallback_terms.cost_dollars
+            else:
+                cost_dollars = contracts * price_cents / 100.0
         else:
             price_cents = execution_plan.price_cents
             contracts = execution_plan.contracts
@@ -1240,6 +1419,16 @@ class TradeExecutor:
                 analysis.market.ticker,
             )
             return None
+
+        if not result_error or _is_live_business_reject(result):
+            append_live_fill_log(
+                ticker=str(analysis.market.ticker),
+                side=str(analysis.side),
+                price_cents=price_cents,
+                contracts=contracts,
+                client_order_id=client_order_id,
+                http_result=_live_http_result(result),
+            )
 
         if result_error:
             await record_unknown_and_hold("error_result")

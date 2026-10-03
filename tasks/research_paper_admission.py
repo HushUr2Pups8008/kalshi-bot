@@ -32,6 +32,7 @@ from utils.research_market_eligibility import research_market_eligibility
 from utils.event_news_research import (
     event_news_admission_gate_reason,
     event_news_blocking_open_ticker,
+    event_news_family_lock_ticker,
     event_news_google_counter_not_required,
     event_news_official_p_ready,
     is_event_news_paper_cohort,
@@ -493,6 +494,18 @@ class ResearchPaperAdmissionBridge:
                         exc_info=True,
                     )
                     open_tickers = []
+            family_occupied = event_news_family_lock_ticker(market, open_tickers)
+            if family_occupied:
+                _event_news_log.info(
+                    "[EVENT_NEWS_FAMILY_LOCK] open=%s blocked=%s series=KXTRUTHSOCIAL",
+                    family_occupied,
+                    ticker,
+                )
+                return ResearchPaperAdmissionResult(
+                    market_ticker=ticker,
+                    admitted=False,
+                    reason="event_news_family_lock",
+                )
             occupied = event_news_blocking_open_ticker(market, open_tickers)
             if occupied:
                 _event_news_log.info(

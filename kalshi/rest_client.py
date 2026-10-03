@@ -965,13 +965,19 @@ class KalshiRestClient:
             log.warning("get_balance failed: %s", exc)
             return 0.0
 
-    def get_open_positions(self) -> list[dict]:
-        """Return list of current open positions."""
+    def get_open_positions(self, *, strict: bool = False) -> list[dict]:
+        """Return list of current open positions.
+
+        ``strict=True`` raises on request failure so callers can fail-closed.
+        """
         try:
             data = self._request("GET", "/portfolio/positions")
-            return data.get("market_positions", [])
+            positions = data.get("market_positions", [])
+            return positions if isinstance(positions, list) else []
         except Exception as exc:
             log.warning("get_open_positions failed: %s", exc)
+            if strict:
+                raise
             return []
 
     # ── Authenticated execution receipts ─────────────────────────────────────
@@ -1126,6 +1132,20 @@ class KalshiRestClient:
                 status=status,
                 filled=filled,
                 error=None,
+                http_status=201,
+            )
+        except requests.HTTPError as exc:
+            response = getattr(exc, "response", None)
+            status_code = getattr(response, "status_code", None)
+            return OrderResult(
+                order_id="",
+                ticker=ticker,
+                side=side,
+                contracts=count,
+                price_cents=limit_price,
+                status="error",
+                error=str(exc),
+                http_status=status_code if isinstance(status_code, int) else None,
             )
         except Exception as exc:
             return OrderResult(

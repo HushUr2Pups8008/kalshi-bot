@@ -19,6 +19,18 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.85] - 2026-10-03
+
+### Changed
+
+- **Politics money gates after T4 22@33c.** Event-news live and paper clamp
+  order size to 8 contracts after Kelly (`EVENT_NEWS_SIZE_CAP`). One open
+  KXTRUTHSOCIAL week across paper and live (`EVENT_NEWS_FAMILY_LOCK`).
+  BlendTask is not constructed on this cohort. New paper INSERTs fill empty
+  `series_ticker` from the ticker prefix; old outbox rows are not rewritten.
+  Live 2xx and business rejects append `docs/reports/live-fill-log.md`.
+  0.00-0.35 executed-ask skip unchanged. Freeze stays locked.
+
 ## [0.33.84] - 2026-10-02
 
 ### Fixed

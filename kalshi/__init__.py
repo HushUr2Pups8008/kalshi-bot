@@ -226,3 +226,4 @@ class OrderResult:
     status:      str
     filled:      int = 0
     error:       Optional[str] = None
+    http_status: Optional[int] = None

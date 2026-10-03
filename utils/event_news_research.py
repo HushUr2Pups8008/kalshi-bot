@@ -53,6 +53,13 @@ _FAVORITE_ASK_CERTAIN_CENTS = 91
 # Kalshi general taker fee is 0.07 * p * (1-p). Buffer keeps min-edge above fee.
 _TAKER_FEE_COEFFICIENT = 0.07
 _MIN_EDGE_FEE_BUFFER = 0.005
+# T4 bought 22 lots at 33c and lost $7.60. Dollar cap held; contract count did not.
+# Clamp AFTER Kelly conversion. Do not change kelly_bet math.
+EVENT_NEWS_MAX_CONTRACTS = 8
+# One open Truth Social week: event_ticker cap still allows two KXTRUTHSOCIAL weeks.
+_TRUTH_SOCIAL_FAMILY = "KXTRUTHSOCIAL"
+# Fail-closed occupancy marker when live GET /portfolio/positions fails.
+EVENT_NEWS_LIVE_OCCUPANCY_UNKNOWN = "KXTRUTHSOCIAL-LIVE-UNKNOWN"
 # Commodity / macro / weather ladders that steal favorite-band prewarm.
 _NON_POLITICS_SERIES_PREFIXES = (
     "KXAAAGAS",
@@ -309,6 +316,77 @@ def event_news_blocking_open_ticker(
     if len(occupied) < cap:
         return None
     return occupied[0]
+
+
+def event_news_series_prefix(ticker: str) -> str:
+    """Ticker prefix before the first hyphen. KXTRUTHSOCIAL-26OCT03-B169 -> KXTRUTHSOCIAL."""
+    return str(ticker or "").strip().split("-", 1)[0].strip().upper()
+
+
+def event_news_fill_series_ticker(ticker: str, series_ticker: Any = "") -> str:
+    """Fill empty series_ticker from the ticker prefix. New rows only."""
+    existing = str(series_ticker or "").strip()
+    if existing:
+        return existing
+    return str(ticker or "").strip().split("-", 1)[0].strip()
+
+
+def event_news_family_lock_ticker(
+    market: Any,
+    open_tickers: list[str] | tuple[str, ...] | None,
+    *,
+    config: Any = None,
+) -> str | None:
+    """Occupying KXTRUTHSOCIAL ticker if another week is already open, else None.
+
+    Politics allows one open Truth Social week across paper and live rows.
+    Sibling strikes of the same event still use event_open_prefix_cap.
+    Does not cancel an existing open row.
+    """
+    if not is_event_news_paper_cohort(config):
+        return None
+    ticker = str(getattr(market, "ticker", "") or "").strip()
+    series = str(getattr(market, "series_ticker", "") or "").strip().upper()
+    if not series:
+        series = event_news_series_prefix(ticker)
+    if series != _TRUTH_SOCIAL_FAMILY:
+        return None
+    for raw in open_tickers or ():
+        occupied = str(raw or "").strip()
+        if not occupied:
+            continue
+        if event_news_series_prefix(occupied) == _TRUTH_SOCIAL_FAMILY:
+            return occupied
+    return None
+
+
+def event_news_clamp_execution_terms(
+    terms: Any,
+    *,
+    ticker: str = "",
+    config: Any = None,
+) -> Any:
+    """Clamp event-news contracts after Kelly. Leaves kelly_bet math unchanged."""
+    if not is_event_news_paper_cohort(config):
+        return terms
+    contracts = int(getattr(terms, "contracts", 0) or 0)
+    if contracts <= EVENT_NEWS_MAX_CONTRACTS:
+        return terms
+    from trading.execution_terms import FinalExecutionTerms
+
+    price_cents = int(terms.price_cents)
+    log.info(
+        "[EVENT_NEWS_SIZE_CAP] ticker=%s contracts=%s cap=%s",
+        ticker,
+        contracts,
+        EVENT_NEWS_MAX_CONTRACTS,
+    )
+    clamped = EVENT_NEWS_MAX_CONTRACTS
+    return FinalExecutionTerms(
+        price_cents=price_cents,
+        contracts=clamped,
+        cost_dollars=clamped * price_cents / 100.0,
+    )
 
 
 def event_news_settle_statuses(*, config: Any = None) -> tuple[str, ...]:
