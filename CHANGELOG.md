@@ -19,6 +19,17 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.87] - 2026-10-11
+
+### Changed
+
+- **Politics Grok veto budget.** Live YES/NO uses roster model
+  `grok-4.20-0309-non-reasoning` (real packet YES/NO under 15s), 45s timeout,
+  and `max_tokens=256`. Parses the final YES or NO. Logs
+  `EVENT_NEWS_GROK_VETO result=yes|no|timeout` plus `elapsed_ms`. Timeout,
+  parse fail, and missing key still fail closed. Kelly, clips, size cap, and
+  official-p pricing are unchanged.
+
 ## [0.33.86] - 2026-10-11
 
 ### Added

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -11,6 +12,9 @@ import requests
 import config as _cfg_module
 from trading.executor import TradeExecutor
 from utils.event_news_grok_veto import (
+    GROK_MAX_TOKENS,
+    GROK_MODEL,
+    GROK_TIMEOUT_SECONDS,
     EventNewsGrokVetoPacket,
     event_news_grok_veto_allows_live_post,
     event_news_grok_veto_decision,
@@ -107,11 +111,16 @@ def test_missing_key_is_timeout_and_does_not_post(politics_cohort, caplog):
     assert result == "timeout"
     assert posts == []
     assert any("EVENT_NEWS_GROK_VETO" in r.message and "result=timeout" in r.message for r in caplog.records)
+    assert any("elapsed_ms=" in r.message for r in caplog.records)
 
 
 def test_yes_parse(politics_cohort):
+    captured = {}
+
     def _post(*args, **kwargs):
+        captured["json"] = kwargs["json"]
         assert "Bearer secret-key" in kwargs["headers"]["Authorization"]
+        assert kwargs["timeout"] == GROK_TIMEOUT_SECONDS
         return _FakeResponse(200, _chat_payload("YES"))
 
     result = event_news_grok_veto_decision(
@@ -120,6 +129,11 @@ def test_yes_parse(politics_cohort):
         post=_post,
     )
     assert result == "yes"
+    assert captured["json"]["model"] == GROK_MODEL
+    assert captured["json"]["max_tokens"] == GROK_MAX_TOKENS
+    assert GROK_MODEL == "grok-4.20-0309-non-reasoning"
+    assert GROK_TIMEOUT_SECONDS == 45.0
+    assert GROK_MAX_TOKENS == 256
 
 
 def test_no_parse(politics_cohort, caplog):
@@ -133,7 +147,7 @@ def test_no_parse(politics_cohort, caplog):
             post=_post,
         )
     assert result == "no"
-    assert any("result=no" in r.message for r in caplog.records)
+    assert any("result=no" in r.message and "elapsed_ms=" in r.message for r in caplog.records)
     assert "secret-key" not in caplog.text
 
 
@@ -148,7 +162,7 @@ def test_timeout_exception(politics_cohort, caplog):
             post=_post,
         )
     assert result == "timeout"
-    assert any("result=timeout" in r.message for r in caplog.records)
+    assert any("result=timeout" in r.message and "elapsed_ms=" in r.message for r in caplog.records)
 
 
 def test_parse_fail_is_timeout(politics_cohort):
@@ -161,6 +175,31 @@ def test_parse_fail_is_timeout(politics_cohort):
         post=_post,
     )
     assert result == "timeout"
+
+
+def test_parse_final_yes_no_token(politics_cohort):
+    def _yes(*args, **kwargs):
+        return _FakeResponse(200, _chat_payload("reasoning dump\nYES"))
+
+    def _no(*args, **kwargs):
+        return _FakeResponse(200, _chat_payload("YES then the packet fails NO"))
+
+    assert (
+        event_news_grok_veto_decision(
+            _packet(),
+            environ={"XAI_API_KEY": "secret-key"},
+            post=_yes,
+        )
+        == "yes"
+    )
+    assert (
+        event_news_grok_veto_decision(
+            _packet(),
+            environ={"XAI_API_KEY": "secret-key"},
+            post=_no,
+        )
+        == "no"
+    )
 
 
 def test_excluded_band_does_not_call_grok(politics_cohort):
@@ -309,3 +348,28 @@ async def test_execute_live_yes_is_only_path_that_places(
     assert kwargs["ticker"] == "KXTRUTHSOCIAL-26OCT17-B129"
     assert kwargs["count"] == 8
     assert kwargs["client_order_id"]
+
+
+@pytest.mark.asyncio
+async def test_execute_live_slow_yes_still_places(
+    politics_cohort, monkeypatch, tmp_path
+):
+    ex, rest = _live_executor(monkeypatch, tmp_path)
+
+    def _slow_yes(*args, **kwargs):
+        time.sleep(0.25)
+        return "yes"
+
+    with (
+        patch(
+            "utils.event_news_grok_veto.event_news_grok_veto_decision",
+            side_effect=_slow_yes,
+        ),
+        patch("trading.executor.trade_log"),
+    ):
+        started = time.monotonic()
+        order_id = await ex._execute_live(_analysis())
+        elapsed = time.monotonic() - started
+    assert elapsed >= 0.25
+    assert order_id == "ord-1"
+    rest.place_limit_order.assert_called_once()

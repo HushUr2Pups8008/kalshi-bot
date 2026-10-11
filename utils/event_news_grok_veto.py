@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
@@ -25,8 +26,9 @@ log = get_logger("event_news_grok_veto")
 
 XAI_CHAT_URL = "https://api.x.ai/v1/chat/completions"
 XAI_API_KEY_ENV = "XAI_API_KEY"
-GROK_MODEL = "grok-4.7"
-GROK_TIMEOUT_SECONDS = 12.0
+GROK_MODEL = "grok-4.20-0309-non-reasoning"
+GROK_TIMEOUT_SECONDS = 45.0
+GROK_MAX_TOKENS = 256
 _YES_NO_SYSTEM = (
     "Answer only YES or NO. YES means the official packet supports buying "
     "this side at this snapshot price. NO means it does not."
@@ -146,13 +148,15 @@ def event_news_grok_veto_packet(
 
 
 def _parse_yes_no(content: str) -> str:
-    token = str(content or "").strip().split()[0] if str(content or "").strip() else ""
-    token = token.strip(".,:;!?\"'").upper()
-    if token == "YES":
-        return "yes"
-    if token == "NO":
-        return "no"
-    return "timeout"
+    """Return yes/no from the last YES or NO token; anything else is timeout."""
+    last = None
+    for raw in str(content or "").split():
+        token = raw.strip(".,:;!?\"'").upper()
+        if token == "YES":
+            last = "yes"
+        elif token == "NO":
+            last = "no"
+    return last if last is not None else "timeout"
 
 
 def event_news_grok_veto_decision(
@@ -163,19 +167,25 @@ def event_news_grok_veto_decision(
     timeout_seconds: float = GROK_TIMEOUT_SECONDS,
 ) -> str:
     """Return yes, no, or timeout. Never logs the API key."""
+    started = time.monotonic()
+
+    def _elapsed_ms() -> int:
+        return int(round((time.monotonic() - started) * 1000))
+
     env = os.environ if environ is None else environ
     key = str(env.get(XAI_API_KEY_ENV) or "").strip()
     if not key:
         log.info(
-            "[EVENT_NEWS_GROK_VETO] result=timeout ticker=%s reason=missing_key",
+            "[EVENT_NEWS_GROK_VETO] result=timeout ticker=%s elapsed_ms=%s reason=missing_key",
             packet.ticker,
+            _elapsed_ms(),
         )
         return "timeout"
 
     payload = {
         "model": GROK_MODEL,
         "temperature": 0,
-        "max_tokens": 8,
+        "max_tokens": GROK_MAX_TOKENS,
         "messages": [
             {"role": "system", "content": _YES_NO_SYSTEM},
             {
@@ -198,22 +208,25 @@ def event_news_grok_veto_decision(
         )
     except requests.Timeout:
         log.info(
-            "[EVENT_NEWS_GROK_VETO] result=timeout ticker=%s reason=timeout",
+            "[EVENT_NEWS_GROK_VETO] result=timeout ticker=%s elapsed_ms=%s reason=timeout",
             packet.ticker,
+            _elapsed_ms(),
         )
         return "timeout"
     except Exception:
         log.info(
-            "[EVENT_NEWS_GROK_VETO] result=timeout ticker=%s reason=request_error",
+            "[EVENT_NEWS_GROK_VETO] result=timeout ticker=%s elapsed_ms=%s reason=request_error",
             packet.ticker,
+            _elapsed_ms(),
         )
         return "timeout"
 
     status = getattr(response, "status_code", None)
     if status != 200:
         log.info(
-            "[EVENT_NEWS_GROK_VETO] result=timeout ticker=%s reason=http_%s",
+            "[EVENT_NEWS_GROK_VETO] result=timeout ticker=%s elapsed_ms=%s reason=http_%s",
             packet.ticker,
+            _elapsed_ms(),
             status,
         )
         return "timeout"
@@ -222,16 +235,18 @@ def event_news_grok_veto_decision(
         content = body["choices"][0]["message"]["content"]
     except Exception:
         log.info(
-            "[EVENT_NEWS_GROK_VETO] result=timeout ticker=%s reason=parse_fail",
+            "[EVENT_NEWS_GROK_VETO] result=timeout ticker=%s elapsed_ms=%s reason=parse_fail",
             packet.ticker,
+            _elapsed_ms(),
         )
         return "timeout"
     result = _parse_yes_no(str(content))
     log.info(
-        "[EVENT_NEWS_GROK_VETO] result=%s ticker=%s contracts=%s",
+        "[EVENT_NEWS_GROK_VETO] result=%s ticker=%s contracts=%s elapsed_ms=%s",
         result,
         packet.ticker,
         packet.proposed_contracts,
+        _elapsed_ms(),
     )
     return result
 
