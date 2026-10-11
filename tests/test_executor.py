@@ -147,11 +147,15 @@ def _make_blended_candidate(
 
 
 @pytest.fixture(autouse=True)
-def _bypass_event_news_grok_veto(monkeypatch):
+def _bypass_event_news_grok_veto(monkeypatch, tmp_path):
     """Existing live tests do not exercise the politics Grok veto."""
     monkeypatch.setattr(
         "utils.event_news_grok_veto.event_news_grok_veto_allows_live_post",
         lambda *a, **k: True,
+    )
+    monkeypatch.setattr(
+        "trading.executor.LIVE_FILL_LOG_PATH",
+        tmp_path / "live-fill-log.md",
     )
 
 
