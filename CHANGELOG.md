@@ -19,6 +19,17 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.89] - 2026-10-11
+
+### Fixed
+
+- **Politics watch packet uses the series source.** When a market has no
+  settlement URLs, the daily open-row watch copies `settlement_sources` and
+  `contract_terms_url` from the series. An empty URL list does not call
+  Grok and logs `EVENT_NEWS_GROK_WATCH result=skipped reason=no_sources`.
+  The raw reply is stored next to the parsed token. CONTRADICT still does
+  not place or cancel an order. Kelly, clips, and the size cap are unchanged.
+
 ## [0.33.88] - 2026-10-11
 
 ### Added

@@ -36,10 +36,17 @@ _LONGSHOT_FILL = 0.35
 
 
 class EventNewsGrokWatchResult:
-    def __init__(self, result: str, reason: str, elapsed_ms: int) -> None:
+    def __init__(
+        self,
+        result: str,
+        reason: str,
+        elapsed_ms: int,
+        reply: str = "",
+    ) -> None:
         self.result = result
         self.reason = reason
         self.elapsed_ms = elapsed_ms
+        self.reply = reply
 
 
 def event_news_grok_watch_decision(
@@ -106,12 +113,40 @@ def event_news_grok_watch_decision(
         return result
     parsed = _parse_contradict_ok(content)
     if parsed is None:
-        result = EventNewsGrokWatchResult("timeout", "parse_fail", _elapsed_ms(started))
+        result = EventNewsGrokWatchResult(
+            "timeout",
+            "parse_fail",
+            _elapsed_ms(started),
+            reply=content,
+        )
         _log_watch(result, ticker, side)
         return result
-    result = EventNewsGrokWatchResult(parsed, "", _elapsed_ms(started))
+    result = EventNewsGrokWatchResult(
+        parsed,
+        "",
+        _elapsed_ms(started),
+        reply=content,
+    )
     _log_watch(result, ticker, side)
     return result
+
+
+def event_news_watch_series_record(
+    market: Any,
+    *,
+    event_series_ticker: Callable[[str], str],
+    series_metadata: Callable[[str], Any],
+) -> Any:
+    """Return the series record for a market whose own source fields are empty."""
+    series_ticker = str(getattr(market, "series_ticker", "") or "").strip()
+    if not series_ticker:
+        event_ticker = str(getattr(market, "event_ticker", "") or "").strip()
+        if not event_ticker:
+            return None
+        series_ticker = str(event_series_ticker(event_ticker) or "").strip()
+        if not series_ticker:
+            return None
+    return series_metadata(series_ticker)
 
 
 def run_event_news_grok_watch_once(
@@ -119,6 +154,7 @@ def run_event_news_grok_watch_once(
     *,
     market_lookup: Callable[[str], Any],
     state_path: Path,
+    series_lookup: Callable[[Any], Any] | None = None,
     now: datetime | None = None,
     environ: Mapping[str, str] | None = None,
     post: Callable[..., Any] | None = None,
@@ -139,7 +175,7 @@ def run_event_news_grok_watch_once(
         if not ticker or count is None or count == 0.0:
             continue
         side = "no" if count < 0 else "yes"
-        if state.get(ticker) == today:
+        if _state_day(state.get(ticker)) == today:
             continue
         fill = _fill_price(row, count)
         if fill is None:
@@ -156,17 +192,29 @@ def run_event_news_grok_watch_once(
             results.append(EventNewsGrokWatchResult("timeout", "market_lookup", 0))
             _log_watch(results[-1], ticker, side)
             continue
+        urls, terms, lookup_error = _sources_for_packet(market, series_lookup)
+        if not urls:
+            reason = "series_lookup" if lookup_error else "no_sources"
+            result_name = "timeout" if lookup_error else "skipped"
+            result = EventNewsGrokWatchResult(result_name, reason, 0)
+            _log_watch(result, ticker, side)
+            results.append(result)
+            continue
         packet = {
             "ticker": ticker,
             "side": side,
             "fill_price": fill,
-            "settlement_sources": _settlement_urls(market),
-            "contract_terms_url": str(getattr(market, "contract_terms_url", "") or ""),
+            "settlement_sources": urls,
+            "contract_terms_url": terms,
         }
         result = event_news_grok_watch_decision(packet, environ=environ, post=post)
         results.append(result)
         if result.reason != "missing_key":
-            state[ticker] = today
+            state[ticker] = {
+                "date": today,
+                "result": result.result,
+                "reply": result.reply,
+            }
             changed = True
     if changed:
         _save_state(state_path, state)
@@ -221,6 +269,30 @@ def _field(row: Any, *names: str) -> Any:
     return None
 
 
+def _sources_for_packet(
+    market: Any,
+    series_lookup: Callable[[Any], Any] | None,
+) -> tuple[list[str], str, str]:
+    """Fill empty market source fields from the series. Do not replace real ones."""
+    urls = _settlement_urls(market)
+    terms = str(getattr(market, "contract_terms_url", "") or "").strip()
+    if urls and terms:
+        return urls, terms, ""
+    if series_lookup is None:
+        return urls, terms, ""
+    try:
+        series = series_lookup(market)
+    except Exception:
+        return urls, terms, "series_lookup"
+    if series is None:
+        return urls, terms, ""
+    if not urls:
+        urls = _settlement_urls(series)
+    if not terms:
+        terms = str(getattr(series, "contract_terms_url", "") or "").strip()
+    return urls, terms, ""
+
+
 def _settlement_urls(market: Any) -> list[str]:
     found: list[str] = []
     for source in getattr(market, "settlement_sources", ()) or ():
@@ -236,21 +308,38 @@ def _settlement_urls(market: Any) -> list[str]:
     return found
 
 
-def _load_state(path: Path) -> dict[str, str]:
+def _load_state(path: Path) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
     if not isinstance(payload, dict):
         return {}
-    return {
-        str(ticker): str(day)
-        for ticker, day in payload.items()
-        if str(ticker).strip() and str(day).strip()
-    }
+    loaded: dict[str, Any] = {}
+    for ticker, value in payload.items():
+        key = str(ticker).strip()
+        if not key:
+            continue
+        if isinstance(value, str) and value.strip():
+            loaded[key] = value.strip()
+        elif isinstance(value, dict) and str(value.get("date") or "").strip():
+            loaded[key] = {
+                "date": str(value.get("date") or "").strip(),
+                "result": str(value.get("result") or ""),
+                "reply": str(value.get("reply") or ""),
+            }
+    return loaded
 
 
-def _save_state(path: Path, state: Mapping[str, str]) -> None:
+def _state_day(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return str(value.get("date") or "")
+    return ""
+
+
+def _save_state(path: Path, state: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_suffix(path.suffix + ".tmp")
     temp.write_text(
@@ -264,7 +353,27 @@ def _elapsed_ms(started: float) -> int:
     return int(round((time.monotonic() - started) * 1000))
 
 
+def _log_reply(reply: str) -> str:
+    text = " ".join(str(reply or "").split())
+    if len(text) > 500:
+        return text[:500]
+    return text
+
+
 def _log_watch(result: EventNewsGrokWatchResult, ticker: str, side: str) -> None:
+    reply = _log_reply(result.reply)
+    if result.reason and reply:
+        log.info(
+            "[EVENT_NEWS_GROK_WATCH] result=%s ticker=%s side=%s elapsed_ms=%s "
+            "reason=%s reply=%s",
+            result.result,
+            ticker,
+            side,
+            result.elapsed_ms,
+            result.reason,
+            reply,
+        )
+        return
     if result.reason:
         log.info(
             "[EVENT_NEWS_GROK_WATCH] result=%s ticker=%s side=%s elapsed_ms=%s reason=%s",
@@ -273,6 +382,16 @@ def _log_watch(result: EventNewsGrokWatchResult, ticker: str, side: str) -> None
             side,
             result.elapsed_ms,
             result.reason,
+        )
+        return
+    if reply:
+        log.info(
+            "[EVENT_NEWS_GROK_WATCH] result=%s ticker=%s side=%s elapsed_ms=%s reply=%s",
+            result.result,
+            ticker,
+            side,
+            result.elapsed_ms,
+            reply,
         )
         return
     log.info(

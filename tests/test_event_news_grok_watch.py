@@ -14,6 +14,7 @@ import config as _cfg_module
 from utils.event_news_grok_veto import XAI_CHAT_URL
 from utils.event_news_grok_watch import (
     event_news_grok_watch_decision,
+    event_news_watch_series_record,
     run_event_news_grok_watch_once,
 )
 from utils.event_news_research import EVENT_NEWS_COHORT_ID
@@ -86,9 +87,13 @@ def test_contradict_does_not_call_place_limit_order(politics_cohort, caplog, tmp
     assert "0.85" in packet
     assert "https://rollcall.com/factbase/trump/topic/social/" in packet
     assert any(
-        "EVENT_NEWS_GROK_WATCH" in record.message and "result=contradict" in record.message
+        "EVENT_NEWS_GROK_WATCH" in record.message
+        and "result=contradict" in record.message
+        and "reply=thinking CONTRADICT" in record.message
         for record in caplog.records
     )
+    saved = (tmp_path / "event_news_grok_watch.json").read_text(encoding="utf-8")
+    assert "thinking\\nCONTRADICT" in saved
     assert _SECRET not in " ".join(record.message for record in caplog.records)
     source = Path("utils/event_news_grok_watch.py").read_text(encoding="utf-8")
     assert "place_limit_order" not in source
@@ -221,3 +226,113 @@ def test_freeze_cohort_does_not_call(monkeypatch, tmp_path):
     assert results == []
     assert calls == [1]
     assert direct.result == "contradict"
+
+
+def _empty_market():
+    return SimpleNamespace(
+        series_ticker="",
+        event_ticker="KXTRUTHSOCIAL-26OCT17",
+        settlement_sources=(),
+        contract_terms_url="",
+    )
+
+
+def test_empty_url_list_does_not_call_grok(politics_cohort, tmp_path, caplog):
+    def _post(*_args, **_kwargs):
+        raise AssertionError("empty sources must not call Grok")
+
+    def _series(_market):
+        return SimpleNamespace(settlement_sources=(), contract_terms_url="")
+
+    path = tmp_path / "watch.json"
+    with caplog.at_level(logging.INFO):
+        results = run_event_news_grok_watch_once(
+            [_position()],
+            market_lookup=lambda _ticker: _empty_market(),
+            series_lookup=_series,
+            state_path=path,
+            now=_NOW,
+            environ={"XAI_API_KEY": _SECRET},
+            post=_post,
+        )
+    assert results[0].result == "skipped"
+    assert results[0].reason == "no_sources"
+    assert not path.exists()
+    assert any(
+        "result=skipped" in record.message and "reason=no_sources" in record.message
+        for record in caplog.records
+    )
+
+
+def test_series_url_included_when_market_field_empty(politics_cohort, tmp_path):
+    calls = []
+    looked_up = []
+
+    def _event_series(event_ticker):
+        looked_up.append(("event", event_ticker))
+        return "KXTRUTHSOCIAL"
+
+    def _series_metadata(series_ticker):
+        looked_up.append(("series", series_ticker))
+        return SimpleNamespace(
+            settlement_sources=(
+                SimpleNamespace(url="https://rollcall.com/factbase/trump/topic/social/"),
+            ),
+            contract_terms_url="https://assets.kalshi.com/contract_terms/POLITICALSTAT.pdf",
+        )
+
+    def _series(market):
+        return event_news_watch_series_record(
+            market,
+            event_series_ticker=_event_series,
+            series_metadata=_series_metadata,
+        )
+
+    def _post(url, json=None, headers=None, timeout=None):
+        calls.append(json)
+        return _Response("OK")
+
+    results = run_event_news_grok_watch_once(
+        [_position()],
+        market_lookup=lambda _ticker: _empty_market(),
+        series_lookup=_series,
+        state_path=tmp_path / "watch.json",
+        now=_NOW,
+        environ={"XAI_API_KEY": _SECRET},
+        post=_post,
+    )
+    assert results[0].result == "ok"
+    assert looked_up == [
+        ("event", "KXTRUTHSOCIAL-26OCT17"),
+        ("series", "KXTRUTHSOCIAL"),
+    ]
+    packet = calls[0]["messages"][1]["content"]
+    assert "https://rollcall.com/factbase/trump/topic/social/" in packet
+    assert "https://assets.kalshi.com/contract_terms/POLITICALSTAT.pdf" in packet
+    assert "place_limit_order" not in Path("utils/event_news_grok_watch.py").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_legacy_date_mark_does_not_call_again(politics_cohort, tmp_path):
+    path = tmp_path / "watch.json"
+    path.write_text(
+        '{"KXTRUTHSOCIAL-26OCT17-B129": "2026-10-11"}\n',
+        encoding="utf-8",
+    )
+
+    def _post(*_args, **_kwargs):
+        raise AssertionError("a row already watched today must not call Grok")
+
+    results = run_event_news_grok_watch_once(
+        [_position()],
+        market_lookup=lambda _ticker: _market(),
+        state_path=path,
+        now=_NOW,
+        environ={"XAI_API_KEY": _SECRET},
+        post=_post,
+    )
+    assert results == []
+    assert path.read_text(encoding="utf-8") == (
+        '{"KXTRUTHSOCIAL-26OCT17-B129": "2026-10-11"}\n'
+    )

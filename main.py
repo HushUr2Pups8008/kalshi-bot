@@ -2073,6 +2073,15 @@ class TradingBot:
                 )
             await asyncio.sleep(3600)
 
+    def _event_news_watch_series(self, market: Any) -> Any:
+        from utils.event_news_grok_watch import event_news_watch_series_record
+
+        return event_news_watch_series_record(
+            market,
+            event_series_ticker=self.rest.get_event_series_ticker,
+            series_metadata=self.rest.get_series,
+        )
+
     def _run_event_news_grok_watch_once(self) -> None:
         from utils.event_news_grok_watch import run_event_news_grok_watch_once
 
@@ -2080,6 +2089,7 @@ class TradingBot:
         run_event_news_grok_watch_once(
             positions,
             market_lookup=self.rest.get_market_exact,
+            series_lookup=self._event_news_watch_series,
             state_path=DATA_DIR / "event_news_grok_watch.json",
         )
 
