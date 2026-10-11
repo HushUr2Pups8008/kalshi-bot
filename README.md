@@ -1,6 +1,6 @@
 # kalshi-bot
 
-[![Version](https://img.shields.io/badge/version-0.33.85-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.33.86-blue)](CHANGELOG.md)
 [![Mode](https://img.shields.io/badge/default-paper%20trading-orange)](.env.example)
 
 Automated Kalshi paper-trading research bot for geopolitical and US-political

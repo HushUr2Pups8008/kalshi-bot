@@ -146,6 +146,15 @@ def _make_blended_candidate(
     )
 
 
+@pytest.fixture(autouse=True)
+def _bypass_event_news_grok_veto(monkeypatch):
+    """Existing live tests do not exercise the politics Grok veto."""
+    monkeypatch.setattr(
+        "utils.event_news_grok_veto.event_news_grok_veto_allows_live_post",
+        lambda *a, **k: True,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Loss limit
 # ---------------------------------------------------------------------------
@@ -222,6 +231,10 @@ class TestLiveSubmissionNoRetry:
         monkeypatch.setattr(
             "trading.executor.LIVE_FILL_LOG_PATH",
             tmp_path / "live-fill-log.md",
+        )
+        monkeypatch.setattr(
+            "utils.event_news_grok_veto.event_news_grok_veto_allows_live_post",
+            lambda *a, **k: True,
         )
 
     @pytest.mark.asyncio
@@ -2124,6 +2137,14 @@ class TestExecutorStatus:
 
 class TestLiveExecuteErrorPaths:
     """`_execute_live` defensive-path coverage."""
+
+    @pytest.fixture(autouse=True)
+    def _bypass_grok_veto(self, monkeypatch):
+        monkeypatch.setattr(
+            "utils.event_news_grok_veto.event_news_grok_veto_allows_live_post",
+            lambda *a, **k: True,
+        )
+
 
     @pytest.mark.asyncio
     async def test_zero_contracts_aborts_order(self, monkeypatch):

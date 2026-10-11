@@ -1316,6 +1316,20 @@ class TradeExecutor:
             log.warning("Live order aborted: contracts=0 for $%.2f @ %dc", analysis.capped_dollars, price_cents)
             return None
 
+        from utils.event_news_research import is_event_news_paper_cohort
+        from utils.event_news_grok_veto import event_news_grok_veto_allows_live_post
+
+        if is_event_news_paper_cohort():
+            if not event_news_grok_veto_allows_live_post(
+                analysis,
+                contracts=contracts,
+            ):
+                log.info(
+                    "[LIVE] BLOCKED %s: EVENT_NEWS_GROK_VETO did not return yes; no POST",
+                    analysis.market.ticker,
+                )
+                return None
+
         client_order_id = uuid.uuid4().hex
         submission_summary = {
             "submission_id": uuid.uuid4().hex,

@@ -19,6 +19,17 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.86] - 2026-10-11
+
+### Added
+
+- **Politics Grok pre-POST veto.** After Kelly size cap and before
+  `place_limit_order`, event-news live sends one official packet to xAI Grok
+  (`XAI_API_KEY`). YES posts; NO, timeout, parse fail, or missing key do not.
+  Logs `EVENT_NEWS_GROK_VETO result=yes|no|timeout`. Does not call Grok on
+  0.00-0.35 executed-ask skips or no_edge books. Does not fall back to 7b.
+  Kelly, clips, and the 8-contract cap are unchanged.
+
 ## [0.33.85] - 2026-10-03
 
 ### Changed
