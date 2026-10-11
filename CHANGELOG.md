@@ -19,6 +19,25 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.88] - 2026-10-11
+
+### Added
+
+- **Politics Grok source reader.** On the event-news cohort only, one xAI
+  call runs when the in-band book has no named structured metric and the
+  fetched evidence is a domain root or an empty PDF. A named count may set
+  `estimated_probability` and `force_side` through the existing Truth Social
+  or White House range calculators. No fact, timeout, parse fail, vote, or
+  status stays `needs_counter_evidence`. Grok does not pick tickers or emit
+  a probability. A structured count is not called and is not overwritten.
+  0.00-0.35 executed-ask skips and no_edge books are not called.
+- **Politics open-position watch.** Once per open live row per UTC day, Grok
+  answers CONTRADICT or OK against the settlement URLs. Logs
+  `EVENT_NEWS_GROK_WATCH`. Does not exit, cancel, or call
+  `place_limit_order`. Same key and fail-closed rule as the veto. The key
+  is not logged. Kelly, clips, size cap, and official-p on a named
+  structured count are unchanged. Freeze, RSS, and Polymarket stay off.
+
 ## [0.33.87] - 2026-10-11
 
 ### Changed

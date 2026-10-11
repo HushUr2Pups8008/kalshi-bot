@@ -84,6 +84,12 @@ _GENERIC_SEARCH_CIRCUIT: GenericSearchCircuit | None = None
 _GENERIC_SEARCH_CIRCUIT_EVENT_COLLECTOR: ContextVar[
     list[GenericSearchCircuitEvent] | None
 ] = ContextVar("generic_search_circuit_event_collector", default=None)
+# Mutable list shared into the direct-fetch thread. None means "do not record",
+# so unit tests of an empty PDF still return None without a Grok call.
+_BAD_OFFICIAL_FETCHES: ContextVar[list[str] | None] = ContextVar(
+    "bad_official_fetches",
+    default=None,
+)
 _GENERIC_WEB_SEARCH_MAX_CONCURRENCY = 4
 _GENERIC_WEB_SEARCH_SLOW_ADMISSION_MS = 100
 _GENERIC_SEARCH_TRANSPORT_PROVIDER_LABELS = {
@@ -7330,6 +7336,32 @@ def _extract_pdf_text(raw: bytes) -> tuple[str, str]:
     return "contract_terms_pdf", snippet
 
 
+def _is_domain_root_url(url: str) -> bool:
+    cleaned = _clean(url)
+    if not cleaned:
+        return False
+    parsed = urllib.parse.urlparse(
+        cleaned if "://" in cleaned else f"https://{cleaned}"
+    )
+    return (parsed.path or "").strip() in {"", "/"}
+
+
+def _note_bad_official_fetch(url: str, reason: str) -> None:
+    """Record a homepage or empty PDF. No-op unless this run opted in."""
+    del reason
+    bucket = _BAD_OFFICIAL_FETCHES.get()
+    if bucket is None:
+        return
+    cleaned = _clean(url)
+    if cleaned and cleaned not in bucket:
+        bucket.append(cleaned)
+
+
+def _note_skipped_direct_source(url: str, claim_type: str) -> None:
+    if claim_type == "settlement_source" and _is_domain_root_url(url):
+        _note_bad_official_fetch(url, "domain_root")
+
+
 def _fetch_direct_source(
     url: str,
     source_class: str,
@@ -7355,6 +7387,7 @@ def _fetch_direct_source(
         title, snippet = _extract_pdf_text(raw)
         cleaned_snippet = str(snippet or "").strip()
         if not cleaned_snippet or cleaned_snippet in {"<", "kalshi_official_pdf"}:
+            _note_bad_official_fetch(cleaned_url, "empty_pdf")
             return None
         snippet = cleaned_snippet
     else:
@@ -7630,6 +7663,75 @@ async def default_ollama_adjudicator(
         return None
 
 
+async def _append_grok_source_evidence(
+    *,
+    grok_source_reader: Callable[..., Awaitable[Any]] | None,
+    market: Any,
+    evidence: list[ResearchEvidence],
+    fresh_evidence: list[ResearchEvidence],
+    existing: set[str],
+    bad_urls: tuple[str, ...],
+    yes_ask: float | None,
+    no_ask: float | None,
+    cache_only: bool,
+    contract_fingerprint: str,
+    ticker: str,
+    collection_budget_exhausted: bool,
+) -> None:
+    """Ask the politics source reader once. A structured count is not sent."""
+    if grok_source_reader is None or not bad_urls:
+        return
+    if collection_budget_exhausted:
+        log.info(
+            "[EVENT_NEWS_GROK_SOURCE] result=skipped ticker=%s elapsed_ms=0 "
+            "reason=research_budget",
+            ticker,
+        )
+        return
+    from utils.event_news_grok_source import event_news_grok_source_skip_reason
+
+    skip = event_news_grok_source_skip_reason(
+        market=market,
+        evidence=evidence,
+        bad_urls=bad_urls,
+        cache_only=cache_only,
+    )
+    if skip is not None:
+        log.info(
+            "[EVENT_NEWS_GROK_SOURCE] result=skipped ticker=%s elapsed_ms=0 reason=%s",
+            ticker,
+            skip,
+        )
+        return
+    try:
+        extra = await grok_source_reader(
+            market=market,
+            evidence=list(evidence),
+            bad_urls=bad_urls,
+            yes_ask=yes_ask,
+            no_ask=no_ask,
+            cache_only=cache_only,
+        )
+    except Exception as exc:
+        log.warning(
+            "[EVENT_NEWS_GROK_SOURCE] result=timeout ticker=%s elapsed_ms=0 "
+            "reason=request_error error_type=%s",
+            ticker,
+            type(exc).__name__,
+        )
+        return
+    for item in extra or ():
+        if not isinstance(item, ResearchEvidence):
+            continue
+        identity = _evidence_identity(item)
+        if identity in existing:
+            continue
+        existing.add(identity)
+        stamped = replace(item, contract_fingerprint=contract_fingerprint)
+        evidence.append(stamped)
+        fresh_evidence.append(stamped)
+
+
 async def run_research_gate(
     news: Any,
     market: Any,
@@ -7652,6 +7754,7 @@ async def run_research_gate(
     require_decision_grade: bool = False,
     allow_official_pdf_and_homepage: bool = False,
     prefer_official_sources: bool = False,
+    grok_source_reader: Callable[..., Awaitable[Any]] | None = None,
 ) -> ResearchVerdict:
     if prewarm_phase_timeouts is not None and (
         live_mode
@@ -7784,6 +7887,7 @@ async def run_research_gate(
         ]
 
     async def finalize_verdict(verdict: ResearchVerdict) -> ResearchVerdict:
+        _BAD_OFFICIAL_FETCHES.set(None)
         open_questions = research_questions_for_skip(
             verdict.skip_reason,
             verdict.open_questions,
@@ -7993,6 +8097,7 @@ async def run_research_gate(
     else:
         evidence = list(usable_cached_evidence)
         existing = {_evidence_identity(item) for item in evidence}
+        _BAD_OFFICIAL_FETCHES.set([])
         inner_fetcher = (
             default_direct_fetcher if direct_fetcher is None else direct_fetcher
         )
@@ -8031,6 +8136,7 @@ async def run_research_gate(
                 claim_type,
                 allow_official_pdf_and_homepage=allow_official_pdf_and_homepage,
             ):
+                _note_skipped_direct_source(url, claim_type)
                 if require_decision_grade:
                     log.info(
                         "[RESEARCH_GATE] direct source skipped ticker=%s url=%s "
@@ -8251,6 +8357,22 @@ async def run_research_gate(
                             item = replace(item, contract_fingerprint=contract_fingerprint)
                             evidence.append(item)
                             fresh_evidence.append(item)
+        bad_official_urls = tuple(_BAD_OFFICIAL_FETCHES.get() or ())
+        _BAD_OFFICIAL_FETCHES.set(None)
+        await _append_grok_source_evidence(
+            grok_source_reader=grok_source_reader,
+            market=market,
+            evidence=evidence,
+            fresh_evidence=fresh_evidence,
+            existing=existing,
+            bad_urls=bad_official_urls,
+            yes_ask=yes_ask,
+            no_ask=no_ask,
+            cache_only=cache_only,
+            contract_fingerprint=contract_fingerprint,
+            ticker=ticker,
+            collection_budget_exhausted=collection_budget_exhausted,
+        )
     if require_decision_grade and evidence:
         evidence = _apply_structured_indicator_evidence(evidence, market)
     if (

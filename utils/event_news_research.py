@@ -1356,6 +1356,8 @@ async def apply_event_news_live_research(
             llm_conf,
         )
 
+    from utils.event_news_grok_source import event_news_grok_source_reader
+
     store = dossier_store if dossier_store is not None else default_research_dossier_store()
     active = config if config is not None else cfg
     log.info(
@@ -1380,6 +1382,7 @@ async def apply_event_news_live_research(
         require_decision_grade=True,
         allow_official_pdf_and_homepage=True,
         prefer_official_sources=True,
+        grok_source_reader=event_news_grok_source_reader,
     )
     used = (
         verdict.status in _PRIMARY_STATUSES

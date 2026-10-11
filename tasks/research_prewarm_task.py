@@ -144,6 +144,15 @@ class ResearchPrewarmResult:
     research_generic_search_blocked_call_delta: int = 0
 
 
+def _politics_grok_source_reader_kwargs() -> dict[str, Any]:
+    """Pass the source reader only on the politics desk. Freeze stays unchanged."""
+    if not is_event_news_paper_cohort():
+        return {}
+    from utils.event_news_grok_source import event_news_grok_source_reader
+
+    return {"grok_source_reader": event_news_grok_source_reader}
+
+
 class ResearchPrewarmTask:
     """Async worker that builds research dossiers before signal-time rejection."""
 
@@ -318,6 +327,7 @@ class ResearchPrewarmTask:
                 ),
                 require_decision_grade=True,
                 **event_news_official_research_kwargs(),
+                **_politics_grok_source_reader_kwargs(),
             )
             if getattr(verdict, "research_persisted", False) is not True:
                 fallback_run_id = getattr(verdict, "research_run_id", None) or (

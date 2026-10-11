@@ -1597,7 +1597,6 @@ class TradingBot:
 
     def _research_prewarm_market_provider(self) -> list[object]:
         from utils.event_news_research import (
-            event_news_prewarm_allows,
             is_event_news_paper_cohort,
         )
 
@@ -2049,6 +2048,39 @@ class TradingBot:
                 ),
             ),
             name="research_prewarm",
+        )
+
+    def _create_event_news_grok_watch_task(self) -> asyncio.Task | None:
+        """Politics open-row watch. Freeze does not start it. It does not order."""
+        from utils.event_news_research import is_event_news_paper_cohort
+
+        if not is_event_news_paper_cohort():
+            return None
+        return asyncio.create_task(
+            self._event_news_grok_watch_loop(),
+            name="event_news_grok_watch",
+        )
+
+    async def _event_news_grok_watch_loop(self) -> None:
+        await asyncio.sleep(30)
+        while True:
+            try:
+                await asyncio.to_thread(self._run_event_news_grok_watch_once)
+            except Exception as exc:
+                log.warning(
+                    "[EVENT_NEWS_GROK_WATCH] cycle failed error_type=%s",
+                    type(exc).__name__,
+                )
+            await asyncio.sleep(3600)
+
+    def _run_event_news_grok_watch_once(self) -> None:
+        from utils.event_news_grok_watch import run_event_news_grok_watch_once
+
+        positions = self.rest.get_open_positions(strict=True)
+        run_event_news_grok_watch_once(
+            positions,
+            market_lookup=self.rest.get_market_exact,
+            state_path=DATA_DIR / "event_news_grok_watch.json",
         )
 
     def _create_weather_shadow_runtime_task(self) -> asyncio.Task | None:
@@ -5241,6 +5273,9 @@ class TradingBot:
         research_prewarm_task = self._create_research_prewarm_runtime_task()
         if research_prewarm_task is not None:
             tasks.append(research_prewarm_task)
+        grok_watch_task = self._create_event_news_grok_watch_task()
+        if grok_watch_task is not None:
+            tasks.append(grok_watch_task)
         weather_shadow_task = (
             None if omit_idle else self._create_weather_shadow_runtime_task()
         )

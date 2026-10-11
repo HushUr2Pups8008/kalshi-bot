@@ -21,6 +21,8 @@ data/*.db-shm
 data/*.db-wal
 data/*.lock
 data/*.pid
+data/event_news_grok_watch.json
+data/event_news_grok_watch.json.tmp
 logs/*.log
 logs/*.log.*
 logs/app/
