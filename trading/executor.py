@@ -1619,6 +1619,14 @@ class TradeExecutor:
                     analysis.market.ticker,
                 )
                 return None
+            from utils.event_news_rules_check import event_news_rules_check_skip
+
+            if event_news_rules_check_skip(analysis, live=False):
+                log.info(
+                    "[EVENT_NEWS_RULES] skip=mismatch ticker=%s",
+                    analysis.market.ticker,
+                )
+                return None
         entry_request_id: str | None = None
         fee_net_accounting = bool(cfg.enable_fee_net_paper_accounting)
         if fee_net_accounting:
@@ -1770,6 +1778,7 @@ class TradeExecutor:
             return None
 
         from utils.event_news_desk_flags import (
+            EVENT_NEWS_GROK_RULES_CHECK,
             EVENT_NEWS_MAKER_FIRST,
             event_news_desk_flag_enabled,
         )
@@ -1795,6 +1804,18 @@ class TradeExecutor:
         )
         # New desk skips return before a client_order_id exists. The 0-35c
         # band still mints an id only so the existing skip line can name it.
+        if (
+            not band_blocked
+            and event_news_desk_flag_enabled(EVENT_NEWS_GROK_RULES_CHECK, live=True)
+        ):
+            from utils.event_news_rules_check import event_news_rules_check_skip
+
+            if event_news_rules_check_skip(analysis, live=True):
+                log.info(
+                    "[EVENT_NEWS_RULES] skip=mismatch ticker=%s",
+                    analysis.market.ticker,
+                )
+                return None
         if not band_blocked and self._event_news_plan_skip(
             analysis,
             FinalExecutionTerms(
