@@ -1028,6 +1028,9 @@ class TradeExecutor:
             plan,
             ticker=str(analysis.market.ticker),
         )
+        plan, risk_reason = self._event_news_risk_capped_plan(analysis, plan)
+        if risk_reason is not None or plan is None:
+            return None, risk_reason
         if self._venue_value(analysis.market) != Venue.KALSHI.value:
             return plan, None
 
@@ -1384,6 +1387,55 @@ class TradeExecutor:
         )
         return reason
 
+    def _event_news_risk_capped_plan(
+        self,
+        analysis: SignalAnalysis,
+        execution_plan: FinalExecutionTerms,
+    ) -> tuple[FinalExecutionTerms | None, str | None]:
+        """min(Kelly size, 8, floor(cap / ask)). Off leaves the 8-lot cap alone."""
+        from utils.event_news_desk_flags import (
+            EVENT_NEWS_MAX_RISK,
+            event_news_desk_flag_enabled,
+            event_news_risk_capped_contracts,
+        )
+        from utils.event_news_research import is_event_news_paper_cohort
+
+        if not is_event_news_paper_cohort():
+            return execution_plan, None
+        live = not self._is_paper
+        if not event_news_desk_flag_enabled(EVENT_NEWS_MAX_RISK, live=live):
+            return execution_plan, None
+        capped = event_news_risk_capped_contracts(
+            execution_plan.contracts,
+            execution_plan.price_cents,
+            live=live,
+        )
+        ticker = getattr(getattr(analysis, "market", None), "ticker", "")
+        if capped <= 0:
+            log.info(
+                "[EVENT_NEWS_RISK_CAP] ticker=%s ask=%s contracts=0",
+                ticker,
+                execution_plan.price_cents,
+            )
+            return None, "risk_cap"
+        if capped < execution_plan.contracts:
+            log.info(
+                "[EVENT_NEWS_RISK_CAP] ticker=%s ask=%s contracts=%s capped=%s",
+                ticker,
+                execution_plan.price_cents,
+                execution_plan.contracts,
+                capped,
+            )
+            return (
+                FinalExecutionTerms(
+                    price_cents=execution_plan.price_cents,
+                    contracts=capped,
+                    cost_dollars=capped * execution_plan.price_cents / 100.0,
+                ),
+                None,
+            )
+        return execution_plan, None
+
     def _event_news_pre_post_band_skip(
         self,
         analysis: SignalAnalysis,
@@ -1441,11 +1493,15 @@ class TradeExecutor:
             client_order_id="",
         ):
             return None
-        if execution_plan is not None and self._event_news_plan_skip(
-            analysis,
-            execution_plan,
-        ):
-            return None
+        if execution_plan is not None:
+            execution_plan, risk_reason = self._event_news_risk_capped_plan(
+                analysis,
+                execution_plan,
+            )
+            if risk_reason is not None or execution_plan is None:
+                return None
+            if self._event_news_plan_skip(analysis, execution_plan):
+                return None
         entry_request_id: str | None = None
         fee_net_accounting = bool(cfg.enable_fee_net_paper_accounting)
         if fee_net_accounting:
@@ -1574,6 +1630,20 @@ class TradeExecutor:
             price_cents = execution_plan.price_cents
             contracts = execution_plan.contracts
             cost_dollars = execution_plan.cost_dollars
+
+        execution_plan, risk_reason = self._event_news_risk_capped_plan(
+            analysis,
+            FinalExecutionTerms(
+                price_cents=price_cents,
+                contracts=contracts,
+                cost_dollars=cost_dollars,
+            ),
+        )
+        if risk_reason is not None or execution_plan is None:
+            return None
+        price_cents = execution_plan.price_cents
+        contracts = execution_plan.contracts
+        cost_dollars = execution_plan.cost_dollars
 
         if contracts <= 0:
             log.warning("Live order aborted: contracts=0 for $%.2f @ %dc", analysis.capped_dollars, price_cents)

@@ -1080,6 +1080,40 @@ async def test_ask_89c_keeps_size_cap_and_family_lock(monkeypatch, tmp_path, cap
 
 
 @pytest.mark.asyncio
+async def test_paper_risk_cap_shrinks_an_89c_yes_to_four_contracts(
+    monkeypatch, tmp_path, caplog
+):
+    """400 cents at 89c is 4 contracts. The hard maximum stays 8."""
+    _band_flags_unset(monkeypatch)
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
+    executor = _executor(monkeypatch, tmp_path, paper=True)
+    analysis = _analysis()
+    analysis.executed_price_cents = 89
+    executor._paper.record_trade.return_value = "paper-risk"
+    with (
+        patch(
+            "trading.executor.final_execution_terms",
+            return_value=FinalExecutionTerms(89, 8, 7.12),
+        ),
+        patch(
+            "trading.executor.fetch_kalshi_execution_liquidity",
+            new=AsyncMock(return_value=_liquidity("0.89")),
+        ),
+        caplog.at_level(logging.INFO),
+    ):
+        plan, reason = await executor._final_execution_plan(analysis)
+        trade_id = await executor._execute_paper(analysis, execution_plan=plan)
+    assert reason is None
+    assert plan is not None
+    assert plan.contracts == 4
+    assert plan.price_cents == 89
+    assert trade_id == "paper-risk"
+    assert "EVENT_NEWS_RISK_CAP" in caplog.text
+    recorded = executor._paper.record_trade.call_args.kwargs["execution_terms"]
+    assert recorded.contracts == 4
+
+
+@pytest.mark.asyncio
 async def test_paper_mode_skips_the_same_excluded_asks(monkeypatch, tmp_path, caplog):
     _band_flags_unset(monkeypatch)
     monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
