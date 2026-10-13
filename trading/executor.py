@@ -305,6 +305,7 @@ def append_live_fill_log(
     fee_cents: int | str | None = None,
     order_id: str | None = None,
     environ: Mapping[str, str] | None = None,
+    role: str | None = None,
 ) -> None:
     """Append one Desk Ops line. Never logs keys.
 
@@ -326,6 +327,8 @@ def append_live_fill_log(
         fee_text = "" if fee_cents is None else str(fee_cents)
         order_text = "" if not order_id else str(order_id).replace(",", "")
         line = f"{line}, {filled_text}, {avg_text}, {fee_text}, {order_text}"
+    if role in {"maker", "taker"}:
+        line = f"{line}, role={role}"
     line = f"{line}\n"
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -580,6 +583,8 @@ class TradeExecutor:
         execution_plan: FinalExecutionTerms | None = None
         if skip_reason is None:
             execution_plan, skip_reason = await self._final_execution_plan(analysis)
+        if skip_reason is None and execution_plan is not None:
+            skip_reason = self._event_news_plan_skip(analysis, execution_plan)
         if skip_reason is None and self._is_paper:
             assert execution_plan is not None
             skip_reason = self._paper_fee_admission_skip_reason(
@@ -1026,6 +1031,9 @@ class TradeExecutor:
             plan,
             ticker=str(analysis.market.ticker),
         )
+        plan, risk_reason = self._event_news_risk_capped_plan(analysis, plan)
+        if risk_reason is not None or plan is None:
+            return None, risk_reason
         if self._venue_value(analysis.market) != Venue.KALSHI.value:
             return plan, None
 
@@ -1356,6 +1364,183 @@ class TradeExecutor:
             return "fee_admission_non_positive_net_edge"
         return None
 
+    def _event_news_plan_skip(
+        self,
+        analysis: SignalAnalysis,
+        execution_plan: FinalExecutionTerms,
+    ) -> str | None:
+        """Politics desk skips. Paper defaults on. Live stays off until the env is set."""
+        from utils.event_news_desk_flags import event_news_yes_floor_skip_reason
+        from utils.event_news_research import is_event_news_paper_cohort
+
+        if not is_event_news_paper_cohort():
+            return None
+        reason = event_news_yes_floor_skip_reason(
+            getattr(analysis, "side", ""),
+            execution_plan.price_cents,
+            live=not self._is_paper,
+        )
+        if reason is not None:
+            log.info(
+                "[EVENT_NEWS_RISK] yes_below_floor ticker=%s side=%s ask=%s",
+                getattr(getattr(analysis, "market", None), "ticker", ""),
+                getattr(analysis, "side", ""),
+                execution_plan.price_cents,
+            )
+            return reason
+        family_reason = self._event_news_family_skip(analysis)
+        if family_reason is not None:
+            return family_reason
+        return self._event_news_exposure_skip(analysis, execution_plan)
+
+    def _event_news_family_skip(self, analysis: SignalAnalysis) -> str | None:
+        from utils.event_news_desk_flags import (
+            EVENT_NEWS_ONE_PER_FAMILY,
+            event_news_desk_flag_enabled,
+            event_news_family_skip_reason,
+        )
+
+        live = not self._is_paper
+        if not event_news_desk_flag_enabled(EVENT_NEWS_ONE_PER_FAMILY, live=live):
+            return None
+        ticker = str(getattr(getattr(analysis, "market", None), "ticker", "") or "")
+        reason = event_news_family_skip_reason(
+            ticker,
+            self._event_news_open_exposure_tickers(),
+            live=live,
+        )
+        if reason is None:
+            return None
+        log.info(
+            "[EVENT_NEWS_RISK] one_per_family ticker=%s",
+            ticker,
+        )
+        return reason
+
+    def _event_news_equity_and_open_cost_cents(self) -> tuple[int | None, int | None]:
+        """Cash plus portfolio value, and open market exposure, both in cents."""
+        request = getattr(self._rest, "_request", None)
+        if not callable(request):
+            return None, None
+        try:
+            balance = request("GET", "/portfolio/balance")
+            positions = request("GET", "/portfolio/positions")
+        except Exception:
+            log.warning("[EVENT_NEWS_RISK] exposure read failed", exc_info=True)
+            return None, None
+        if not isinstance(balance, dict) or not isinstance(positions, dict):
+            return None, None
+        try:
+            cash = int(balance["balance"])
+            portfolio_value = int(balance.get("portfolio_value") or 0)
+        except (KeyError, TypeError, ValueError):
+            return None, None
+        rows = positions.get("market_positions")
+        if not isinstance(rows, list):
+            return None, None
+        open_cost = 0
+        for row in rows:
+            if not isinstance(row, dict):
+                return None, None
+            size = str(row.get("position_fp") or "").strip()
+            if size in {"", "0", "0.0", "0.00"}:
+                continue
+            try:
+                dollars = float(row.get("market_exposure_dollars"))
+            except (TypeError, ValueError):
+                return None, None
+            open_cost += int(round(dollars * 100))
+        return cash + portfolio_value, open_cost
+
+    def _event_news_exposure_skip(
+        self,
+        analysis: SignalAnalysis,
+        execution_plan: FinalExecutionTerms,
+    ) -> str | None:
+        from utils.event_news_desk_flags import (
+            EVENT_NEWS_MAX_EXPOSURE_PCT,
+            event_news_desk_flag_enabled,
+            event_news_exposure_skip_reason,
+        )
+
+        live = not self._is_paper
+        if not event_news_desk_flag_enabled(EVENT_NEWS_MAX_EXPOSURE_PCT, live=live):
+            return None
+        ticker = str(getattr(getattr(analysis, "market", None), "ticker", "") or "")
+        equity, open_cost = self._event_news_equity_and_open_cost_cents()
+        order_cost = int(execution_plan.contracts) * int(execution_plan.price_cents)
+        if equity is None or open_cost is None:
+            log.info(
+                "[EVENT_NEWS_RISK] exposure_cap ticker=%s reason=unreadable",
+                ticker,
+            )
+            return "exposure_cap"
+        reason = event_news_exposure_skip_reason(
+            open_cost,
+            order_cost,
+            equity,
+            live=live,
+        )
+        if reason is None:
+            return None
+        log.info(
+            "[EVENT_NEWS_RISK] exposure_cap ticker=%s open_cost=%s order_cost=%s equity=%s",
+            ticker,
+            open_cost,
+            order_cost,
+            equity,
+        )
+        return reason
+
+    def _event_news_risk_capped_plan(
+        self,
+        analysis: SignalAnalysis,
+        execution_plan: FinalExecutionTerms,
+    ) -> tuple[FinalExecutionTerms | None, str | None]:
+        """min(Kelly size, 8, floor(cap / ask)). Off leaves the 8-lot cap alone."""
+        from utils.event_news_desk_flags import (
+            EVENT_NEWS_MAX_RISK,
+            event_news_desk_flag_enabled,
+            event_news_risk_capped_contracts,
+        )
+        from utils.event_news_research import is_event_news_paper_cohort
+
+        if not is_event_news_paper_cohort():
+            return execution_plan, None
+        live = not self._is_paper
+        if not event_news_desk_flag_enabled(EVENT_NEWS_MAX_RISK, live=live):
+            return execution_plan, None
+        capped = event_news_risk_capped_contracts(
+            execution_plan.contracts,
+            execution_plan.price_cents,
+            live=live,
+        )
+        ticker = getattr(getattr(analysis, "market", None), "ticker", "")
+        if capped <= 0:
+            log.info(
+                "[EVENT_NEWS_RISK_CAP] ticker=%s ask=%s contracts=0",
+                ticker,
+                execution_plan.price_cents,
+            )
+            return None, "risk_cap"
+        if capped < execution_plan.contracts:
+            log.info(
+                "[EVENT_NEWS_RISK_CAP] ticker=%s ask=%s contracts=%s capped=%s",
+                ticker,
+                execution_plan.price_cents,
+                execution_plan.contracts,
+                capped,
+            )
+            return (
+                FinalExecutionTerms(
+                    price_cents=execution_plan.price_cents,
+                    contracts=capped,
+                    cost_dollars=capped * execution_plan.price_cents / 100.0,
+                ),
+                None,
+            )
+        return execution_plan, None
+
     def _event_news_pre_post_band_skip(
         self,
         analysis: SignalAnalysis,
@@ -1413,6 +1598,35 @@ class TradeExecutor:
             client_order_id="",
         ):
             return None
+        if execution_plan is not None:
+            execution_plan, risk_reason = self._event_news_risk_capped_plan(
+                analysis,
+                execution_plan,
+            )
+            if risk_reason is not None or execution_plan is None:
+                return None
+            if self._event_news_plan_skip(analysis, execution_plan):
+                return None
+            self._event_news_log_paper_maker(analysis, execution_plan)
+            from utils.event_news_grok_veto import event_news_paper_grounding_skip
+
+            if event_news_paper_grounding_skip(
+                analysis,
+                contracts=execution_plan.contracts,
+            ):
+                log.info(
+                    "[EVENT_NEWS_GROK_GROUNDING] skip=no ticker=%s",
+                    analysis.market.ticker,
+                )
+                return None
+            from utils.event_news_rules_check import event_news_rules_check_skip
+
+            if event_news_rules_check_skip(analysis, live=False):
+                log.info(
+                    "[EVENT_NEWS_RULES] skip=mismatch ticker=%s",
+                    analysis.market.ticker,
+                )
+                return None
         entry_request_id: str | None = None
         fee_net_accounting = bool(cfg.enable_fee_net_paper_accounting)
         if fee_net_accounting:
@@ -1475,6 +1689,9 @@ class TradeExecutor:
         analysis: SignalAnalysis,
         *,
         execution_plan: FinalExecutionTerms | None = None,
+        maker_passthrough: bool = False,
+        post_only: bool = False,
+        fill_role: str | None = None,
     ) -> Optional[str]:
         """Place one legacy live order, preserving unknown outcomes for reconciliation."""
         # Hard safety gate: executor initialized in paper mode must never place live orders.
@@ -1542,9 +1759,38 @@ class TradeExecutor:
             contracts = execution_plan.contracts
             cost_dollars = execution_plan.cost_dollars
 
+        execution_plan, risk_reason = self._event_news_risk_capped_plan(
+            analysis,
+            FinalExecutionTerms(
+                price_cents=price_cents,
+                contracts=contracts,
+                cost_dollars=cost_dollars,
+            ),
+        )
+        if risk_reason is not None or execution_plan is None:
+            return None
+        price_cents = execution_plan.price_cents
+        contracts = execution_plan.contracts
+        cost_dollars = execution_plan.cost_dollars
+
         if contracts <= 0:
             log.warning("Live order aborted: contracts=0 for $%.2f @ %dc", analysis.capped_dollars, price_cents)
             return None
+
+        from utils.event_news_desk_flags import (
+            EVENT_NEWS_GROK_RULES_CHECK,
+            EVENT_NEWS_MAKER_FIRST,
+            event_news_desk_flag_enabled,
+        )
+        from utils.event_news_research import is_event_news_paper_cohort as _cohort_for_maker
+
+        # One check when the flag is off. The body below stays the taker path.
+        if (
+            not maker_passthrough
+            and _cohort_for_maker()
+            and event_news_desk_flag_enabled(EVENT_NEWS_MAKER_FIRST, live=True)
+        ):
+            return await self._event_news_maker_first(analysis, execution_plan)
 
         from utils.event_news_research import is_event_news_paper_cohort
         from utils.event_news_grok_veto import event_news_grok_veto_allows_live_post
@@ -1556,6 +1802,29 @@ class TradeExecutor:
             client_order_id="",
             log_skip=False,
         )
+        # New desk skips return before a client_order_id exists. The 0-35c
+        # band still mints an id only so the existing skip line can name it.
+        if (
+            not band_blocked
+            and event_news_desk_flag_enabled(EVENT_NEWS_GROK_RULES_CHECK, live=True)
+        ):
+            from utils.event_news_rules_check import event_news_rules_check_skip
+
+            if event_news_rules_check_skip(analysis, live=True):
+                log.info(
+                    "[EVENT_NEWS_RULES] skip=mismatch ticker=%s",
+                    analysis.market.ticker,
+                )
+                return None
+        if not band_blocked and self._event_news_plan_skip(
+            analysis,
+            FinalExecutionTerms(
+                price_cents=price_cents,
+                contracts=contracts,
+                cost_dollars=cost_dollars,
+            ),
+        ):
+            return None
         if not band_blocked and is_event_news_paper_cohort():
             if not event_news_grok_veto_allows_live_post(
                 analysis,
@@ -1657,15 +1926,18 @@ class TradeExecutor:
 
         loop = asyncio.get_running_loop()
         try:
+            order_kwargs = {
+                "ticker": analysis.market.ticker,
+                "side": analysis.side,
+                "count": contracts,
+                "limit_price": price_cents,
+                "client_order_id": client_order_id,
+            }
+            if post_only:
+                order_kwargs["post_only"] = True
             result: OrderResult = await loop.run_in_executor(
                 None,
-                lambda: self._rest.place_limit_order(
-                    ticker=analysis.market.ticker,
-                    side=analysis.side,
-                    count=contracts,
-                    limit_price=price_cents,
-                    client_order_id=client_order_id,
-                ),
+                lambda: self._rest.place_limit_order(**order_kwargs),
             )
             result_error = result.error
         except asyncio.CancelledError:
@@ -1701,6 +1973,7 @@ class TradeExecutor:
                 avg_fill_cents=detail.get("avg_fill_cents"),
                 fee_cents=detail.get("fee_cents"),
                 order_id=detail.get("order_id"),
+                role=fill_role,
             )
 
         if result_error:
@@ -1776,7 +2049,208 @@ class TradeExecutor:
             status,
             filled,
         )
+        try:
+            analysis._event_news_last_filled = int(filled)
+            analysis._event_news_last_status = str(status)
+        except Exception:
+            log.warning("[EVENT_NEWS_MAKER] fill stamp failed ticker=%s", analysis.market.ticker)
         return order_id
+
+    def _event_news_log_paper_maker(
+        self,
+        analysis: SignalAnalysis,
+        execution_plan: FinalExecutionTerms,
+    ) -> None:
+        """Paper records the maker price it would post. It does not sleep."""
+        from utils.event_news_desk_flags import (
+            EVENT_NEWS_MAKER_FIRST,
+            EVENT_NEWS_YES_FLOOR,
+            event_news_desk_flag_enabled,
+            event_news_maker_limit_cents,
+            event_news_yes_floor_cents,
+        )
+        from utils.event_news_grok_flags import EVENT_NEWS_BAND_FLOOR_CENTS
+        from utils.event_news_research import is_event_news_paper_cohort
+
+        if not self._is_paper or not is_event_news_paper_cohort():
+            return
+        if not event_news_desk_flag_enabled(EVENT_NEWS_MAKER_FIRST, live=False):
+            return
+        side = str(getattr(analysis, "side", "") or "").lower()
+        if side == "yes" and event_news_desk_flag_enabled(EVENT_NEWS_YES_FLOOR, live=False):
+            floor = event_news_yes_floor_cents()
+        else:
+            floor = EVENT_NEWS_BAND_FLOOR_CENTS
+        limit = event_news_maker_limit_cents(execution_plan.price_cents, floor_cents=floor)
+        log.info(
+            "[EVENT_NEWS_MAKER] paper role=maker limit=%s ask=%s sleep=0 ticker=%s",
+            "" if limit is None else limit,
+            execution_plan.price_cents,
+            getattr(getattr(analysis, "market", None), "ticker", ""),
+        )
+
+    async def _event_news_maker_first(
+        self,
+        analysis: SignalAnalysis,
+        execution_plan: FinalExecutionTerms | None,
+    ) -> Optional[str]:
+        """Post one post-only order, then take the remainder only if the edge holds.
+
+        A new client_order_id is minted inside each _execute_live call.
+        Cancel uses the maker order id only. An unknown maker result is not
+        cancelled and is not followed by a taker.
+        """
+        from utils.event_news_desk_flags import (
+            EVENT_NEWS_YES_FLOOR,
+            event_news_desk_flag_enabled,
+            event_news_maker_limit_cents,
+            event_news_maker_wait_s,
+            event_news_yes_floor_cents,
+        )
+        from utils.event_news_grok_flags import EVENT_NEWS_BAND_FLOOR_CENTS
+        from utils.event_news_research import event_news_fresh_ask_cents
+
+        if execution_plan is None:
+            return None
+        side = str(getattr(analysis, "side", "") or "").lower()
+        if side == "yes" and event_news_desk_flag_enabled(EVENT_NEWS_YES_FLOOR, live=True):
+            floor = event_news_yes_floor_cents()
+        else:
+            floor = EVENT_NEWS_BAND_FLOOR_CENTS
+        maker_price = event_news_maker_limit_cents(
+            execution_plan.price_cents,
+            floor_cents=floor,
+        )
+        if maker_price is None:
+            log.info(
+                "[EVENT_NEWS_MAKER] no_rest ticker=%s ask=%s",
+                analysis.market.ticker,
+                execution_plan.price_cents,
+            )
+            return await self._execute_live(
+                analysis,
+                execution_plan=execution_plan,
+                maker_passthrough=True,
+                fill_role="taker",
+            )
+        if self._event_news_pre_post_band_skip(
+            analysis,
+            limit_cents=maker_price,
+            client_order_id="",
+            log_skip=True,
+        ):
+            return None
+        maker_plan = FinalExecutionTerms(
+            price_cents=maker_price,
+            contracts=execution_plan.contracts,
+            cost_dollars=execution_plan.contracts * maker_price / 100.0,
+        )
+        maker_order_id = await self._execute_live(
+            analysis,
+            execution_plan=maker_plan,
+            maker_passthrough=True,
+            post_only=True,
+            fill_role="maker",
+        )
+        if not _is_verified_order_id(maker_order_id):
+            return None
+        filled = getattr(analysis, "_event_news_last_filled", 0)
+        status = str(getattr(analysis, "_event_news_last_status", "") or "")
+        try:
+            filled_count = int(filled)
+        except (TypeError, ValueError):
+            filled_count = 0
+        if status == "executed" or filled_count >= execution_plan.contracts:
+            return str(maker_order_id)
+        await asyncio.sleep(event_news_maker_wait_s())
+        filled_after_wait = self._event_news_maker_filled_after_wait(str(maker_order_id))
+        if filled_after_wait is None:
+            log.info("[EVENT_NEWS_MAKER] fill_unknown order_id=%s", maker_order_id)
+            try:
+                self._rest.cancel_order(str(maker_order_id))
+            except Exception:
+                log.warning(
+                    "[EVENT_NEWS_MAKER] cancel_failed order_id=%s",
+                    maker_order_id,
+                    exc_info=True,
+                )
+            return str(maker_order_id)
+        filled_count = filled_after_wait
+        if filled_count >= execution_plan.contracts:
+            return str(maker_order_id)
+        try:
+            cancelled = bool(self._rest.cancel_order(str(maker_order_id)))
+        except Exception:
+            log.warning(
+                "[EVENT_NEWS_MAKER] cancel_failed order_id=%s",
+                maker_order_id,
+                exc_info=True,
+            )
+            return str(maker_order_id)
+        if not cancelled:
+            log.info(
+                "[EVENT_NEWS_MAKER] cancel_failed order_id=%s no_taker",
+                maker_order_id,
+            )
+            return str(maker_order_id)
+        remaining = execution_plan.contracts - max(filled_count, 0)
+        if remaining <= 0:
+            return str(maker_order_id)
+        try:
+            liquidity = await fetch_kalshi_execution_liquidity(self._rest, analysis)
+            fresh, invalid = event_news_fresh_ask_cents(liquidity.best_price)
+        except Exception:
+            log.info("[EVENT_NEWS_MAKER] requote_unavailable ticker=%s", analysis.market.ticker)
+            return str(maker_order_id) if filled_count > 0 else None
+        analysis._event_news_final_ask_cents = fresh
+        analysis._event_news_final_ask_invalid = invalid is True
+        if invalid or not isinstance(fresh, int):
+            return str(maker_order_id) if filled_count > 0 else None
+        if self._event_news_pre_post_band_skip(
+            analysis,
+            limit_cents=fresh,
+            client_order_id="",
+            log_skip=True,
+        ):
+            return str(maker_order_id) if filled_count > 0 else None
+        estimated = float(getattr(analysis, "estimated_probability", 0.0) or 0.0)
+        market_p = fresh / 100.0
+        edge = (estimated - market_p) if side == "yes" else ((1.0 - estimated) - market_p)
+        if edge <= self._min_edge_threshold(analysis):
+            log.info(
+                "[EVENT_NEWS_MAKER] edge_gone ticker=%s edge=%s ask=%s",
+                analysis.market.ticker,
+                edge,
+                fresh,
+            )
+            return str(maker_order_id) if filled_count > 0 else None
+        taker_plan = FinalExecutionTerms(
+            price_cents=fresh,
+            contracts=remaining,
+            cost_dollars=remaining * fresh / 100.0,
+        )
+        return await self._execute_live(
+            analysis,
+            execution_plan=taker_plan,
+            maker_passthrough=True,
+            fill_role="taker",
+        )
+
+    def _event_news_maker_filled_after_wait(self, order_id: str) -> int | None:
+        """Read the maker fill after the wait. Unknown means do not take."""
+        try:
+            order = self._rest.get_order_receipt(order_id)
+        except Exception:
+            log.info("[EVENT_NEWS_MAKER] receipt_unavailable order_id=%s", order_id)
+            return None
+        if not isinstance(order, Mapping):
+            return None
+        count = _detail_number(order.get("fill_count_fp"))
+        if count is None:
+            count = _detail_number(order.get("fill_count"))
+        if count is None or count < 0:
+            return None
+        return int(count.to_integral_value(rounding="ROUND_FLOOR"))
 
     def status(self) -> dict:
         return {

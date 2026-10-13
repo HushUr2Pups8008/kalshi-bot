@@ -15,6 +15,11 @@ from typing import Any, Callable, Mapping
 
 import requests
 
+from utils.event_news_grounding_log import (
+    append_event_news_grounding_record,
+    response_id,
+    response_sources,
+)
 from utils.event_news_grok_flags import (
     event_news_grok_grounding_enabled,
     event_news_grok_trace_enabled,
@@ -67,6 +72,7 @@ def event_news_grok_watch_decision(
     *,
     environ: Mapping[str, str] | None = None,
     post: Callable[..., Any] | None = None,
+    grounded: bool | None = None,
 ) -> EventNewsGrokWatchResult:
     """Return contradict, ok, or timeout. Never submits an order."""
     started = time.monotonic()
@@ -78,7 +84,9 @@ def event_news_grok_watch_decision(
         result = EventNewsGrokWatchResult("timeout", "missing_key", _elapsed_ms(started))
         _log_watch(result, ticker, side)
         return result
-    grounded = event_news_grok_grounding_enabled(env)
+    use_grounding = (
+        event_news_grok_grounding_enabled(env) if grounded is None else grounded
+    )
     user_content = (
         _WATCH_USER
         + "\n"
@@ -91,11 +99,13 @@ def event_news_grok_watch_decision(
         "messages": [
             {
                 "role": "system",
-                "content": _GROUNDED_WATCH_SYSTEM if grounded else _WATCH_SYSTEM,
+                "content": _GROUNDED_WATCH_SYSTEM if use_grounding else _WATCH_SYSTEM,
             },
             {"role": "user", "content": user_content},
         ],
     }
+    if use_grounding:
+        payload["search_parameters"] = {"mode": "on", "return_citations": True}
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
@@ -139,7 +149,7 @@ def event_news_grok_watch_decision(
             urls,
             latency_ms=_elapsed_ms(started),
         )
-    if grounded:
+    if use_grounding:
         parsed = event_news_grok_grounded_verdict(
             content,
             yes_no=False,
@@ -173,6 +183,29 @@ def event_news_grok_watch_decision(
         reply=content,
     )
     _log_watch(result, ticker, side)
+    if use_grounding:
+        sources = response_sources(body)
+        if not sources:
+            sources = _watch_urls(packet)
+        try:
+            append_event_news_grounding_record(
+                kind="watch",
+                ticker=ticker,
+                side=side,
+                verdict=result.result,
+                response_id=response_id(body),
+                sources=sources,
+            )
+        except Exception:
+            log.warning("[EVENT_NEWS_GROK_GROUNDING] journal_failed ticker=%s", ticker)
+        log.info(
+            "[EVENT_NEWS_GROK_GROUNDING] kind=watch ticker=%s verdict=%s "
+            "response_id=%s sources=%s",
+            ticker,
+            result.result,
+            response_id(body),
+            ",".join(sources)[:500],
+        )
     return result
 
 

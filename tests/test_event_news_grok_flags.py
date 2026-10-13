@@ -565,6 +565,20 @@ def _analysis():
     return analysis
 
 
+def _stub_equity(executor, *, balance=100000, portfolio_value=0, positions=None):
+    """Readable equity so the paper exposure cap does not fail closed."""
+
+    def _request(method, path, **kwargs):
+        assert method == "GET"
+        if path == "/portfolio/balance":
+            return {"balance": balance, "portfolio_value": portfolio_value}
+        if path == "/portfolio/positions":
+            return {"market_positions": [] if positions is None else positions}
+        raise AssertionError(path)
+
+    executor._rest._request.side_effect = _request
+
+
 def _band_flags_unset(monkeypatch):
     monkeypatch.delenv(EVENT_NEWS_REQUOTE_BAND_CHECK, raising=False)
     monkeypatch.delenv(EVENT_NEWS_EXCLUDE_EXACT_35, raising=False)
@@ -1080,10 +1094,464 @@ async def test_ask_89c_keeps_size_cap_and_family_lock(monkeypatch, tmp_path, cap
 
 
 @pytest.mark.asyncio
+async def test_paper_risk_cap_shrinks_an_89c_yes_to_four_contracts(
+    monkeypatch, tmp_path, caplog
+):
+    """400 cents at 89c is 4 contracts. The hard maximum stays 8."""
+    _band_flags_unset(monkeypatch)
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
+    executor = _executor(monkeypatch, tmp_path, paper=True)
+    _stub_equity(executor)
+    analysis = _analysis()
+    analysis.executed_price_cents = 89
+    executor._paper.record_trade.return_value = "paper-risk"
+    with (
+        patch(
+            "trading.executor.final_execution_terms",
+            return_value=FinalExecutionTerms(89, 8, 7.12),
+        ),
+        patch(
+            "trading.executor.fetch_kalshi_execution_liquidity",
+            new=AsyncMock(return_value=_liquidity("0.89")),
+        ),
+        caplog.at_level(logging.INFO),
+    ):
+        plan, reason = await executor._final_execution_plan(analysis)
+        trade_id = await executor._execute_paper(analysis, execution_plan=plan)
+    assert reason is None
+    assert plan is not None
+    assert plan.contracts == 4
+    assert plan.price_cents == 89
+    assert trade_id == "paper-risk"
+    assert "EVENT_NEWS_RISK_CAP" in caplog.text
+    recorded = executor._paper.record_trade.call_args.kwargs["execution_terms"]
+    assert recorded.contracts == 4
+
+
+@pytest.mark.asyncio
+async def test_paper_exposure_and_family_skips_log_and_do_not_record(
+    monkeypatch, tmp_path, caplog
+):
+    _band_flags_unset(monkeypatch)
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
+    executor = _executor(monkeypatch, tmp_path, paper=True)
+    _stub_equity(
+        executor,
+        balance=2920,
+        portfolio_value=1720,
+        positions=[
+            {
+                "ticker": "KXTRUMPACT-26OCT11-T5",
+                "position_fp": "-8.00",
+                "market_exposure_dollars": "4.80",
+            },
+            {
+                "ticker": "KXTRUTHSOCIAL-26OCT17-B129",
+                "position_fp": "-8.00",
+                "market_exposure_dollars": "6.80",
+            },
+            {
+                "ticker": "KXTRUMPSAY-26OCT19-GOLF",
+                "position_fp": "8.00",
+                "market_exposure_dollars": "7.12",
+            },
+        ],
+    )
+    crowded = _analysis()
+    crowded.executed_price_cents = 60
+    with caplog.at_level(logging.INFO):
+        reason = executor._event_news_plan_skip(
+            crowded,
+            FinalExecutionTerms(60, 4, 2.40),
+        )
+    assert reason == "exposure_cap"
+    assert "exposure_cap" in caplog.text
+    executor._paper.record_trade.assert_not_called()
+
+    roomy = _executor(monkeypatch, tmp_path, paper=True)
+    _stub_equity(roomy)
+    roomy._paper.portfolio.open_positions.return_value = [
+        SimpleNamespace(ticker="KXTRUMPSAY-26OCT19-GOLF", side="yes")
+    ]
+    sibling = _analysis()
+    sibling.market.ticker = "KXTRUMPSAY-26OCT20-NEXT"
+    sibling.executed_price_cents = 60
+    with caplog.at_level(logging.INFO):
+        family = roomy._event_news_plan_skip(
+            sibling,
+            FinalExecutionTerms(60, 4, 2.40),
+        )
+    assert family == "one_per_family"
+    assert "one_per_family" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_live_exposure_flag_off_does_not_get_balance(monkeypatch, tmp_path):
+    _band_flags_unset(monkeypatch)
+    executor = _executor(monkeypatch, tmp_path)
+    analysis = _analysis()
+    analysis.executed_price_cents = 36
+    plan, reason, order_id = await _plan_then_live(
+        executor,
+        analysis,
+        FinalExecutionTerms(36, 8, 2.88),
+        _liquidity("0.36"),
+        lambda *args, **kwargs: True,
+    )
+    assert reason is None and order_id == "ord-1"
+    executor._rest._request.assert_not_called()
+    executor._rest.cancel_order.assert_not_called()
+
+
+def _resting(order_id: str, *, filled: int = 0, status: str = "resting"):
+    return SimpleNamespace(
+        error=None,
+        order_id=order_id,
+        status=status,
+        filled=filled,
+        http_status=201,
+    )
+
+
+@pytest.mark.asyncio
+async def test_maker_first_uses_a_new_id_after_cancelling_only_that_order(
+    monkeypatch, tmp_path
+):
+    _band_flags_unset(monkeypatch)
+    monkeypatch.setenv("EVENT_NEWS_MAKER_FIRST", "true")
+    monkeypatch.setattr(_cfg_module.cfg, "min_edge", 0.0)
+    executor = _executor(monkeypatch, tmp_path)
+    analysis = _analysis()
+    analysis.estimated_probability = 0.95
+    analysis.executed_price_cents = 89
+    executor._rest.place_limit_order.side_effect = [
+        _resting("maker-ord"),
+        _resting("taker-ord", filled=8, status="executed"),
+    ]
+    executor._rest.cancel_order.return_value = True
+    executor._rest.get_order_receipt.return_value = {
+        "order_id": "maker-ord",
+        "fill_count_fp": "0.00",
+    }
+    sleep = AsyncMock()
+    journal, fill_log = _quiet_live_side_effects()
+    with (
+        patch("trading.executor.asyncio.sleep", new=sleep),
+        patch(
+            "utils.event_news_grok_veto.event_news_grok_veto_allows_live_post",
+            return_value=True,
+        ),
+        patch(
+            "trading.executor.fetch_kalshi_execution_liquidity",
+            new=AsyncMock(return_value=_liquidity("0.88")),
+        ),
+        journal,
+        fill_log as logged,
+    ):
+        order_id = await executor._execute_live(
+            analysis,
+            execution_plan=FinalExecutionTerms(89, 8, 7.12),
+        )
+    assert order_id == "taker-ord"
+    sleep.assert_awaited_once_with(180)
+    posts = executor._rest.place_limit_order.call_args_list
+    assert len(posts) == 2
+    assert posts[0].kwargs["post_only"] is True
+    assert posts[0].kwargs["limit_price"] == 88
+    assert posts[1].kwargs["limit_price"] == 88
+    assert "post_only" not in posts[1].kwargs
+    assert posts[0].kwargs["client_order_id"] != posts[1].kwargs["client_order_id"]
+    executor._rest.cancel_order.assert_called_once_with("maker-ord")
+    roles = [call.kwargs.get("role") for call in logged.call_args_list]
+    assert roles == ["maker", "taker"]
+
+
+@pytest.mark.asyncio
+async def test_unknown_maker_result_does_not_cancel_or_take(monkeypatch, tmp_path):
+    _band_flags_unset(monkeypatch)
+    monkeypatch.setenv("EVENT_NEWS_MAKER_FIRST", "true")
+    executor = _executor(monkeypatch, tmp_path)
+    analysis = _analysis()
+    executor._rest.place_limit_order.side_effect = RuntimeError("boom")
+    journal, fill_log = _quiet_live_side_effects()
+    with (
+        patch("trading.executor.asyncio.sleep", new=AsyncMock()) as sleep,
+        patch(
+            "utils.event_news_grok_veto.event_news_grok_veto_allows_live_post",
+            return_value=True,
+        ),
+        journal,
+        fill_log,
+    ):
+        order_id = await executor._execute_live(
+            analysis,
+            execution_plan=FinalExecutionTerms(89, 8, 7.12),
+        )
+    assert order_id is None
+    assert executor._rest.place_limit_order.call_count == 1
+    executor._rest.cancel_order.assert_not_called()
+    sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_maker_cancel_failure_does_not_take(monkeypatch, tmp_path):
+    _band_flags_unset(monkeypatch)
+    monkeypatch.setenv("EVENT_NEWS_MAKER_FIRST", "true")
+    executor = _executor(monkeypatch, tmp_path)
+    analysis = _analysis()
+    executor._rest.place_limit_order.return_value = _resting("maker-ord")
+    executor._rest.cancel_order.return_value = False
+    journal, fill_log = _quiet_live_side_effects()
+    with (
+        patch("trading.executor.asyncio.sleep", new=AsyncMock()),
+        patch(
+            "utils.event_news_grok_veto.event_news_grok_veto_allows_live_post",
+            return_value=True,
+        ),
+        journal,
+        fill_log,
+    ):
+        order_id = await executor._execute_live(
+            analysis,
+            execution_plan=FinalExecutionTerms(89, 8, 7.12),
+        )
+    assert order_id == "maker-ord"
+    assert executor._rest.place_limit_order.call_count == 1
+    executor._rest.cancel_order.assert_called_once_with("maker-ord")
+
+
+@pytest.mark.asyncio
+async def test_maker_fill_during_the_wait_shrinks_the_taker(monkeypatch, tmp_path):
+    _band_flags_unset(monkeypatch)
+    monkeypatch.setenv("EVENT_NEWS_MAKER_FIRST", "true")
+    monkeypatch.setattr(_cfg_module.cfg, "min_edge", 0.0)
+    executor = _executor(monkeypatch, tmp_path)
+    analysis = _analysis()
+    analysis.estimated_probability = 0.95
+    analysis.executed_price_cents = 89
+    executor._rest.place_limit_order.side_effect = [
+        _resting("maker-ord"),
+        _resting("taker-ord", filled=5, status="executed"),
+    ]
+    executor._rest.cancel_order.return_value = True
+    executor._rest.get_order_receipt.return_value = {
+        "order_id": "maker-ord",
+        "fill_count_fp": "3.00",
+    }
+    journal, fill_log = _quiet_live_side_effects()
+    with (
+        patch("trading.executor.asyncio.sleep", new=AsyncMock()),
+        patch(
+            "utils.event_news_grok_veto.event_news_grok_veto_allows_live_post",
+            return_value=True,
+        ),
+        patch(
+            "trading.executor.fetch_kalshi_execution_liquidity",
+            new=AsyncMock(return_value=_liquidity("0.88")),
+        ),
+        journal,
+        fill_log,
+    ):
+        order_id = await executor._execute_live(
+            analysis,
+            execution_plan=FinalExecutionTerms(89, 8, 7.12),
+        )
+    assert order_id == "taker-ord"
+    taker = executor._rest.place_limit_order.call_args_list[1].kwargs
+    assert taker["count"] == 5
+    assert "post_only" not in taker
+
+
+@pytest.mark.asyncio
+async def test_maker_full_fill_during_the_wait_does_not_take(monkeypatch, tmp_path):
+    _band_flags_unset(monkeypatch)
+    monkeypatch.setenv("EVENT_NEWS_MAKER_FIRST", "true")
+    executor = _executor(monkeypatch, tmp_path)
+    analysis = _analysis()
+    executor._rest.place_limit_order.return_value = _resting("maker-ord")
+    executor._rest.get_order_receipt.return_value = {
+        "order_id": "maker-ord",
+        "fill_count_fp": "8.00",
+    }
+    journal, fill_log = _quiet_live_side_effects()
+    with (
+        patch("trading.executor.asyncio.sleep", new=AsyncMock()),
+        patch(
+            "utils.event_news_grok_veto.event_news_grok_veto_allows_live_post",
+            return_value=True,
+        ),
+        journal,
+        fill_log,
+    ):
+        order_id = await executor._execute_live(
+            analysis,
+            execution_plan=FinalExecutionTerms(89, 8, 7.12),
+        )
+    assert order_id == "maker-ord"
+    assert executor._rest.place_limit_order.call_count == 1
+    executor._rest.cancel_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_full_maker_fill_does_not_cancel_or_take(monkeypatch, tmp_path):
+    _band_flags_unset(monkeypatch)
+    monkeypatch.setenv("EVENT_NEWS_MAKER_FIRST", "true")
+    executor = _executor(monkeypatch, tmp_path)
+    analysis = _analysis()
+    executor._rest.place_limit_order.return_value = _resting(
+        "maker-ord",
+        filled=8,
+        status="executed",
+    )
+    journal, fill_log = _quiet_live_side_effects()
+    with (
+        patch("trading.executor.asyncio.sleep", new=AsyncMock()) as sleep,
+        patch(
+            "utils.event_news_grok_veto.event_news_grok_veto_allows_live_post",
+            return_value=True,
+        ),
+        journal,
+        fill_log,
+    ):
+        order_id = await executor._execute_live(
+            analysis,
+            execution_plan=FinalExecutionTerms(89, 8, 7.12),
+        )
+    assert order_id == "maker-ord"
+    executor._rest.cancel_order.assert_not_called()
+    assert executor._rest.place_limit_order.call_count == 1
+    sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_maker_price_does_not_cross_the_36c_band(monkeypatch, tmp_path):
+    _band_flags_unset(monkeypatch)
+    monkeypatch.setenv("EVENT_NEWS_MAKER_FIRST", "true")
+    executor = _executor(monkeypatch, tmp_path)
+    analysis = _analysis()
+    analysis.side = "no"
+    analysis.executed_price_cents = 36
+    executor._rest.place_limit_order.return_value = _resting(
+        "taker-ord",
+        filled=8,
+        status="executed",
+    )
+    journal, fill_log = _quiet_live_side_effects()
+    with (
+        patch("trading.executor.asyncio.sleep", new=AsyncMock()) as sleep,
+        patch(
+            "utils.event_news_grok_veto.event_news_grok_veto_allows_live_post",
+            return_value=True,
+        ),
+        journal,
+        fill_log,
+    ):
+        order_id = await executor._execute_live(
+            analysis,
+            execution_plan=FinalExecutionTerms(36, 8, 2.88),
+        )
+    assert order_id == "taker-ord"
+    posted = executor._rest.place_limit_order.call_args.kwargs
+    assert posted["limit_price"] == 36
+    assert "post_only" not in posted
+    executor._rest.cancel_order.assert_not_called()
+    sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_paper_maker_flag_does_not_sleep(monkeypatch, tmp_path, caplog):
+    _band_flags_unset(monkeypatch)
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
+    executor = _executor(monkeypatch, tmp_path, paper=True)
+    _stub_equity(executor)
+    analysis = _analysis()
+    analysis.executed_price_cents = 60
+    executor._paper.record_trade.return_value = "paper-maker"
+    sleep = AsyncMock()
+    with (
+        patch("trading.executor.asyncio.sleep", new=sleep),
+        patch(
+            "trading.executor.final_execution_terms",
+            return_value=FinalExecutionTerms(60, 8, 4.80),
+        ),
+        patch(
+            "trading.executor.fetch_kalshi_execution_liquidity",
+            new=AsyncMock(return_value=_liquidity("0.60")),
+        ),
+        caplog.at_level(logging.INFO),
+    ):
+        plan, reason = await executor._final_execution_plan(analysis)
+        trade_id = await executor._execute_paper(analysis, execution_plan=plan)
+    assert reason is None and trade_id == "paper-maker"
+    sleep.assert_not_awaited()
+    assert "sleep=0" in caplog.text
+    executor._rest.place_limit_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_paper_grounding_no_does_not_record(monkeypatch, tmp_path):
+    _band_flags_unset(monkeypatch)
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
+    executor = _executor(monkeypatch, tmp_path, paper=True)
+    _stub_equity(executor)
+    analysis = _analysis()
+    analysis.executed_price_cents = 60
+    analysis.signal_meta = {"blend_bypass_reason": "official_p"}
+    executor._paper.record_trade.return_value = "paper-ground"
+    with (
+        patch(
+            "utils.event_news_grok_veto.event_news_paper_grounding_skip",
+            return_value=True,
+        ),
+        patch(
+            "trading.executor.final_execution_terms",
+            return_value=FinalExecutionTerms(60, 8, 4.80),
+        ),
+        patch(
+            "trading.executor.fetch_kalshi_execution_liquidity",
+            new=AsyncMock(return_value=_liquidity("0.60")),
+        ),
+    ):
+        plan, reason = await executor._final_execution_plan(analysis)
+        trade_id = await executor._execute_paper(analysis, execution_plan=plan)
+    assert reason is None and trade_id is None
+    executor._paper.record_trade.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_paper_grounding_timeout_still_records(monkeypatch, tmp_path):
+    _band_flags_unset(monkeypatch)
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
+    executor = _executor(monkeypatch, tmp_path, paper=True)
+    _stub_equity(executor)
+    analysis = _analysis()
+    analysis.executed_price_cents = 60
+    executor._paper.record_trade.return_value = "paper-ground"
+    with (
+        patch(
+            "utils.event_news_grok_veto.event_news_paper_grounding_skip",
+            return_value=False,
+        ),
+        patch(
+            "trading.executor.final_execution_terms",
+            return_value=FinalExecutionTerms(60, 8, 4.80),
+        ),
+        patch(
+            "trading.executor.fetch_kalshi_execution_liquidity",
+            new=AsyncMock(return_value=_liquidity("0.60")),
+        ),
+    ):
+        plan, _reason = await executor._final_execution_plan(analysis)
+        trade_id = await executor._execute_paper(analysis, execution_plan=plan)
+    assert trade_id == "paper-ground"
+
+
+@pytest.mark.asyncio
 async def test_paper_mode_skips_the_same_excluded_asks(monkeypatch, tmp_path, caplog):
     _band_flags_unset(monkeypatch)
     monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
     executor = _executor(monkeypatch, tmp_path, paper=True)
+    _stub_equity(executor)
     assert executor._is_paper is True
 
     cheap = _analysis()
@@ -1126,9 +1594,50 @@ async def test_paper_mode_skips_the_same_excluded_asks(monkeypatch, tmp_path, ca
     executor._paper.record_trade.assert_not_called()
     executor._paper.record_trade_result.assert_not_called()
 
+    below = _analysis()
+    below.executed_price_cents = 36
+    with (
+        patch(
+            "trading.executor.final_execution_terms",
+            return_value=FinalExecutionTerms(36, 8, 2.88),
+        ),
+        patch(
+            "trading.executor.fetch_kalshi_execution_liquidity",
+            new=AsyncMock(return_value=_liquidity("0.36")),
+        ),
+        caplog.at_level(logging.INFO),
+    ):
+        plan, reason = await executor._final_execution_plan(below)
+        trade_id = await executor._execute_paper(below, execution_plan=plan)
+    assert reason is None and plan is not None
+    assert trade_id is None
+    executor._paper.record_trade.assert_not_called()
+    assert "yes_below_floor" in caplog.text
+
     allowed = _analysis()
-    allowed.executed_price_cents = 36
+    allowed.executed_price_cents = 60
     executor._paper.record_trade.return_value = "paper-1"
+    with (
+        patch(
+            "trading.executor.final_execution_terms",
+            return_value=FinalExecutionTerms(60, 8, 4.80),
+        ),
+        patch(
+            "trading.executor.fetch_kalshi_execution_liquidity",
+            new=AsyncMock(return_value=_liquidity("0.60")),
+        ),
+    ):
+        plan, reason = await executor._final_execution_plan(allowed)
+        trade_id = await executor._execute_paper(allowed, execution_plan=plan)
+    assert trade_id == "paper-1"
+    executor._paper.record_trade.assert_called_once()
+    executor._rest.place_limit_order.assert_not_called()
+
+    no_side = _analysis()
+    no_side.side = "no"
+    no_side.executed_price_cents = 36
+    executor._paper.record_trade.reset_mock()
+    executor._paper.record_trade.return_value = "paper-no"
     with (
         patch(
             "trading.executor.final_execution_terms",
@@ -1139,11 +1648,10 @@ async def test_paper_mode_skips_the_same_excluded_asks(monkeypatch, tmp_path, ca
             new=AsyncMock(return_value=_liquidity("0.36")),
         ),
     ):
-        plan, reason = await executor._final_execution_plan(allowed)
-        trade_id = await executor._execute_paper(allowed, execution_plan=plan)
-    assert trade_id == "paper-1"
+        plan, reason = await executor._final_execution_plan(no_side)
+        trade_id = await executor._execute_paper(no_side, execution_plan=plan)
+    assert trade_id == "paper-no"
     executor._paper.record_trade.assert_called_once()
-    executor._rest.place_limit_order.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1241,8 +1749,15 @@ def test_boot_line_prints_resolved_flag_values(monkeypatch, tmp_path, caplog):
     assert state_at < flags_at
     assert line == (
         "[EVENT_NEWS_FLAGS] REQUOTE_BAND_CHECK=off EXCLUDE_EXACT_35=on "
-        "GROK_GROUNDING=on GROK_TRACE=off GROK_WATCH_SKIP_SETTLED=off "
+        "GROK_GROUNDING=on GROK_GROUNDING_MODE live=on paper=on "
+        "GROK_TRACE=off GROK_WATCH_SKIP_SETTLED=off "
         "FILL_LOG_DETAIL=off band_floor_cents=36"
+        " YES_FLOOR live=off paper=on cents=55"
+        " RISK_CAP live=off paper=on cents=400"
+        " EXPOSURE_PCT live=off paper=on pct=25"
+        " ONE_PER_FAMILY live=off paper=on"
+        " MAKER_FIRST live=off paper=on wait_s=180"
+        " RULES_CHECK live=off paper=on"
     )
     assert "[EVENT_NEWS_FLAGS] FATAL band guard off in LIVE" not in caplog.text
 
@@ -1261,8 +1776,15 @@ def test_boot_line_defaults_band_on_and_the_other_four_off(monkeypatch, tmp_path
         _executor(monkeypatch, tmp_path)
     assert _boot_line(caplog) == (
         "[EVENT_NEWS_FLAGS] REQUOTE_BAND_CHECK=on EXCLUDE_EXACT_35=on "
-        "GROK_GROUNDING=off GROK_TRACE=off GROK_WATCH_SKIP_SETTLED=off "
+        "GROK_GROUNDING=off GROK_GROUNDING_MODE live=off paper=on "
+        "GROK_TRACE=off GROK_WATCH_SKIP_SETTLED=off "
         "FILL_LOG_DETAIL=off band_floor_cents=36"
+        " YES_FLOOR live=off paper=on cents=55"
+        " RISK_CAP live=off paper=on cents=400"
+        " EXPOSURE_PCT live=off paper=on pct=25"
+        " ONE_PER_FAMILY live=off paper=on"
+        " MAKER_FIRST live=off paper=on wait_s=180"
+        " RULES_CHECK live=off paper=on"
     )
     assert "[EVENT_NEWS_FLAGS] FATAL band guard off in LIVE" not in caplog.text
 
@@ -1334,20 +1856,21 @@ async def test_paper_still_runs_when_band_flags_are_off(
     monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
     with caplog.at_level(logging.INFO):
         executor = _executor(monkeypatch, tmp_path, paper=True)
+    _stub_equity(executor)
     assert executor._is_paper is True
     assert "[EVENT_NEWS_FLAGS] FATAL band guard off in LIVE" not in caplog.text
     assert "REQUOTE_BAND_CHECK=off EXCLUDE_EXACT_35=off" in _boot_line(caplog)
     allowed = _analysis()
-    allowed.executed_price_cents = 36
+    allowed.executed_price_cents = 60
     executor._paper.record_trade.return_value = "paper-flags-off"
     with (
         patch(
             "trading.executor.final_execution_terms",
-            return_value=FinalExecutionTerms(36, 8, 2.88),
+            return_value=FinalExecutionTerms(60, 8, 4.80),
         ),
         patch(
             "trading.executor.fetch_kalshi_execution_liquidity",
-            new=AsyncMock(return_value=_liquidity("0.36")),
+            new=AsyncMock(return_value=_liquidity("0.60")),
         ),
     ):
         plan, reason = await executor._final_execution_plan(allowed)

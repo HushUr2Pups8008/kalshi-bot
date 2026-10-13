@@ -1057,6 +1057,7 @@ class KalshiRestClient:
         limit_price: int,    # cents (1–99)
         expiration_ts: Optional[int] = None,
         client_order_id: Optional[str] = None,
+        post_only: bool = False,
     ) -> OrderResult:
         """Place a buy on Kalshi Create Order V2.
 
@@ -1098,6 +1099,8 @@ class KalshiRestClient:
         }
         if expiration_ts:
             payload["expiration_time"] = int(expiration_ts)
+        if post_only:
+            payload["post_only"] = True
 
         try:
             data = self._request(

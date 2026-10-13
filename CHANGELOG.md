@@ -19,6 +19,20 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.94] - 2026-10-13
+
+### Added
+
+- **Paper desk flags default on in paper and off in live.** Each flag is its own env key. Unset means paper on and live off. The boot line prints both. The 0c-35c band, the size cap of 8, and the existing KXTRUTHSOCIAL family lock stay.
+- **`EVENT_NEWS_YES_FLOOR_CENTS` defaults to 55.** A YES buy skips when the executed ask is below the floor. The log reason is `yes_below_floor`. NO still uses the 36c floor.
+- **`EVENT_NEWS_MAX_RISK_CENTS` defaults to 400.** Contracts are the minimum of the Kelly size, 8, and `floor(cap / ask_cents)`. An 89c ask is 4 contracts. A shrink logs `[EVENT_NEWS_RISK_CAP]`.
+- **`EVENT_NEWS_MAX_EXPOSURE_PCT` defaults to 25.** Open cost plus the new order must stay at or below that share of cash plus portfolio value. A failed equity read skips. **`EVENT_NEWS_ONE_PER_FAMILY`** allows one open row in each of KXTRUMPACT, KXTRUMPSAY, and KXTRUTHSOCIAL.
+- **`EVENT_NEWS_MAKER_FIRST` posts a post-only limit one cent better than the ask.** The limit cannot go below the floor or into the 0c-35c band. It waits up to `EVENT_NEWS_MAKER_WAIT_S` (default 180), then cancels only that order id. A new client_order_id is used for the taker, and only when the edge still holds. An unknown maker result is not cancelled and is not replaced. Paper logs the quote and does not sleep.
+- **The replay entry prints a politics fee-net table and still fails closed on an insufficient corpus.** Commit `3a1c6c4` put the history fixture outside `logs/edge_replay/`. Gate thresholds are unchanged.
+- **Paper grounding sends `search_parameters.mode=on`.** A paper skip happens only on an explicit grounded NO. Timeout and a missing key still record. The live veto stays on the env-exact flag. The report recommends live only after 20 vetoes have an outcome. n is 0.
+- **`EVENT_NEWS_GROK_RULES_CHECK` asks what counts, the source, the cutoff, and any trap.** A skip happens only when the JSON answer sets `mismatch` to true. The report recommends live only after 20 flagged trades have an outcome. n is 0.
+- **`scripts/politics_funnel.py` writes `docs/reports/politics-funnel-YYYY-MM-DD.md`.** It counts 14-day drops and the fee-net of paper and live entries. A missing paper database does not fail the script.
+
 ## [0.33.93] - 2026-10-13
 
 ### Fixed
