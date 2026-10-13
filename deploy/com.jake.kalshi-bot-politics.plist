@@ -23,5 +23,12 @@
     <string>/Users/jacobparenti/vscode/kalshi-bot/logs/app/politics.launchd.stdout.log</string>
     <key>StandardErrorPath</key>
     <string>/Users/jacobparenti/vscode/kalshi-bot/logs/app/politics.launchd.stderr.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>EVENT_NEWS_REQUOTE_BAND_CHECK</key>
+        <string>true</string>
+        <key>EVENT_NEWS_EXCLUDE_EXACT_35</key>
+        <string>true</string>
+    </dict>
 </dict>
 </plist>

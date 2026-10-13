@@ -85,5 +85,46 @@ def event_news_exclude_exact_35_enabled(
     return _event_news_flag_default_on(EVENT_NEWS_EXCLUDE_EXACT_35, environ)
 
 
+# 0c through 35c is the excluded band. 36c is the first allowed cent.
+EVENT_NEWS_BAND_FLOOR_CENTS = 36
+EVENT_NEWS_FLAGS_FATAL = "[EVENT_NEWS_FLAGS] FATAL band guard off in LIVE"
+
+
+def _event_news_on_off(enabled: bool) -> str:
+    return "on" if enabled else "off"
+
+
+def event_news_flags_boot_line(
+    environ: Mapping[str, str] | None = None,
+) -> str:
+    """One boot line. Values come from the same flag functions the executor uses."""
+    return (
+        "[EVENT_NEWS_FLAGS] "
+        f"REQUOTE_BAND_CHECK={_event_news_on_off(event_news_requote_band_check_enabled(environ))} "
+        f"EXCLUDE_EXACT_35={_event_news_on_off(event_news_exclude_exact_35_enabled(environ))} "
+        f"GROK_GROUNDING={_event_news_on_off(event_news_grok_grounding_enabled(environ))} "
+        f"GROK_TRACE={_event_news_on_off(event_news_grok_trace_enabled(environ))} "
+        f"GROK_WATCH_SKIP_SETTLED={_event_news_on_off(event_news_watch_skip_settled_enabled(environ))} "
+        f"FILL_LOG_DETAIL={_event_news_on_off(event_news_fill_log_detail_enabled(environ))} "
+        f"band_floor_cents={EVENT_NEWS_BAND_FLOOR_CENTS}"
+    )
+
+
+def event_news_live_band_guard_off(
+    live_trading_enabled: bool,
+    environ: Mapping[str, str] | None = None,
+) -> bool:
+    """True when live trading is on and either band flag resolved off.
+
+    The live path refuses the POST and stays up. A false result leaves
+    the existing order path unchanged. Paper does not call this to block.
+    """
+    if live_trading_enabled is not True:
+        return False
+    return (not event_news_requote_band_check_enabled(environ)) or (
+        not event_news_exclude_exact_35_enabled(environ)
+    )
+
+
 def event_news_market_status_settled(status: object) -> bool:
     return str(status or "").strip().lower() in _SETTLED_MARKET_STATUSES

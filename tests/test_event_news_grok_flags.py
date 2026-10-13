@@ -1072,3 +1072,147 @@ async def test_bad_requote_price_fails_closed(monkeypatch, tmp_path, caplog):
     executor._rest.place_limit_order.assert_not_called()
     found = _skip_line(caplog, "invalid")
     assert re.fullmatch(r"[0-9a-f]{32}", found.group(4))
+
+
+def _boot_line(caplog) -> str:
+    matched = [
+        record.message
+        for record in caplog.records
+        if record.message.startswith("[EVENT_NEWS_FLAGS] REQUOTE_BAND_CHECK=")
+    ]
+    assert matched, [record.message for record in caplog.records]
+    return matched[-1]
+
+
+def test_boot_line_prints_resolved_flag_values(monkeypatch, tmp_path, caplog):
+    """The boot line is the resolved env, read from the executor's flag functions."""
+    monkeypatch.setenv(EVENT_NEWS_REQUOTE_BAND_CHECK, "false")
+    monkeypatch.setenv(EVENT_NEWS_EXCLUDE_EXACT_35, " TRUE ")
+    monkeypatch.setenv(EVENT_NEWS_GROK_GROUNDING, "true")
+    monkeypatch.setenv(EVENT_NEWS_GROK_TRACE, "false")
+    monkeypatch.delenv(EVENT_NEWS_GROK_WATCH_SKIP_SETTLED, raising=False)
+    monkeypatch.setenv(EVENT_NEWS_FILL_LOG_DETAIL, "yes")
+    monkeypatch.setattr(_cfg_module.cfg, "live_trading_enabled", False)
+    with caplog.at_level(logging.INFO):
+        _executor(monkeypatch, tmp_path, paper=True)
+    line = _boot_line(caplog)
+    state_at = caplog.text.index("[EXECUTOR_STATE]")
+    flags_at = caplog.text.index(line)
+    assert state_at < flags_at
+    assert line == (
+        "[EVENT_NEWS_FLAGS] REQUOTE_BAND_CHECK=off EXCLUDE_EXACT_35=on "
+        "GROK_GROUNDING=on GROK_TRACE=off GROK_WATCH_SKIP_SETTLED=off "
+        "FILL_LOG_DETAIL=off band_floor_cents=36"
+    )
+    assert "[EVENT_NEWS_FLAGS] FATAL band guard off in LIVE" not in caplog.text
+
+
+def test_boot_line_defaults_band_on_and_the_other_four_off(monkeypatch, tmp_path, caplog):
+    _band_flags_unset(monkeypatch)
+    for name in (
+        EVENT_NEWS_GROK_GROUNDING,
+        EVENT_NEWS_GROK_TRACE,
+        EVENT_NEWS_GROK_WATCH_SKIP_SETTLED,
+        EVENT_NEWS_FILL_LOG_DETAIL,
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(_cfg_module.cfg, "live_trading_enabled", True)
+    with caplog.at_level(logging.INFO):
+        _executor(monkeypatch, tmp_path)
+    assert _boot_line(caplog) == (
+        "[EVENT_NEWS_FLAGS] REQUOTE_BAND_CHECK=on EXCLUDE_EXACT_35=on "
+        "GROK_GROUNDING=off GROK_TRACE=off GROK_WATCH_SKIP_SETTLED=off "
+        "FILL_LOG_DETAIL=off band_floor_cents=36"
+    )
+    assert "[EVENT_NEWS_FLAGS] FATAL band guard off in LIVE" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "off_name",
+    [EVENT_NEWS_REQUOTE_BAND_CHECK, EVENT_NEWS_EXCLUDE_EXACT_35],
+)
+async def test_live_refuses_post_when_either_band_flag_is_off(
+    monkeypatch, tmp_path, caplog, off_name
+):
+    """LIVE with a band flag off must not POST and must not mint a client_order_id."""
+    _band_flags_unset(monkeypatch)
+    monkeypatch.setenv(off_name, "false")
+    monkeypatch.setattr(_cfg_module.cfg, "live_trading_enabled", True)
+    with caplog.at_level(logging.INFO):
+        executor = _executor(monkeypatch, tmp_path, paper=False)
+    assert "[EVENT_NEWS_FLAGS] FATAL band guard off in LIVE" in caplog.text
+    analysis = _analysis()
+    analysis.executed_price_cents = 89
+    executor._rest.place_limit_order.return_value = _order_result()
+    journal, fill_log = _quiet_live_side_effects()
+    with journal as intent, fill_log, caplog.at_level(logging.ERROR):
+        order_id = await executor._execute_live(
+            analysis,
+            execution_plan=FinalExecutionTerms(89, 8, 7.12),
+        )
+    assert order_id is None
+    executor._rest.place_limit_order.assert_not_called()
+    intent.assert_not_called()
+    assert "[EVENT_NEWS_FLAGS] FATAL band guard off in LIVE" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_live_post_unchanged_when_both_band_flags_are_on(
+    monkeypatch, tmp_path, caplog
+):
+    monkeypatch.setenv(EVENT_NEWS_REQUOTE_BAND_CHECK, "true")
+    monkeypatch.setenv(EVENT_NEWS_EXCLUDE_EXACT_35, "true")
+    monkeypatch.setattr(_cfg_module.cfg, "live_trading_enabled", True)
+    with caplog.at_level(logging.INFO):
+        executor = _executor(monkeypatch, tmp_path)
+    assert "[EVENT_NEWS_FLAGS] FATAL band guard off in LIVE" not in caplog.text
+    analysis = _analysis()
+    analysis.executed_price_cents = 36
+    plan, reason, order_id = await _plan_then_live(
+        executor,
+        analysis,
+        FinalExecutionTerms(36, 8, 2.88),
+        _liquidity("0.36"),
+        lambda *args, **kwargs: True,
+    )
+    assert reason is None
+    assert order_id == "ord-1"
+    executor._rest.place_limit_order.assert_called_once()
+    posted = executor._rest.place_limit_order.call_args.kwargs
+    assert posted["limit_price"] == 36
+    assert posted["count"] == 8
+
+
+@pytest.mark.asyncio
+async def test_paper_still_runs_when_band_flags_are_off(
+    monkeypatch, tmp_path, caplog
+):
+    monkeypatch.setenv(EVENT_NEWS_REQUOTE_BAND_CHECK, "false")
+    monkeypatch.setenv(EVENT_NEWS_EXCLUDE_EXACT_35, "false")
+    monkeypatch.setattr(_cfg_module.cfg, "live_trading_enabled", False)
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
+    with caplog.at_level(logging.INFO):
+        executor = _executor(monkeypatch, tmp_path, paper=True)
+    assert executor._is_paper is True
+    assert "[EVENT_NEWS_FLAGS] FATAL band guard off in LIVE" not in caplog.text
+    assert "REQUOTE_BAND_CHECK=off EXCLUDE_EXACT_35=off" in _boot_line(caplog)
+    allowed = _analysis()
+    allowed.executed_price_cents = 36
+    executor._paper.record_trade.return_value = "paper-flags-off"
+    with (
+        patch(
+            "trading.executor.final_execution_terms",
+            return_value=FinalExecutionTerms(36, 8, 2.88),
+        ),
+        patch(
+            "trading.executor.fetch_kalshi_execution_liquidity",
+            new=AsyncMock(return_value=_liquidity("0.36")),
+        ),
+    ):
+        plan, reason = await executor._final_execution_plan(allowed)
+        trade_id = await executor._execute_paper(allowed, execution_plan=plan)
+    assert reason is None and plan is not None
+    assert trade_id == "paper-flags-off"
+    executor._paper.record_trade.assert_called_once()
+    executor._rest.place_limit_order.assert_not_called()
