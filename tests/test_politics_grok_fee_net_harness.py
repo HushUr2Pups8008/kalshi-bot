@@ -4,13 +4,16 @@ from decimal import Decimal
 
 from scripts.simulations.politics_grok_fee_net_harness import (
     GOLF_FILL,
+    PAPER_SEALED_FEE_NET,
     SETTLED_ROWS,
     bootstrap_mean_ci,
     cash_after_golf_cents,
+    grounding_replay,
     quoted_taker_fee,
     summarize,
     variant_table,
 )
+from utils.event_news_grok_flags import event_news_grok_grounding_enabled
 
 
 def test_quoted_fees_match_exchange_fee_cost():
@@ -59,3 +62,19 @@ def test_bootstrap_ci_is_reproducible_and_veto_is_not_measured():
     assert variants["current_veto"]["mean"] == "not_measured"
     assert variants["grounded_veto"]["leak_safe"] == "no"
     assert variants["grounded_veto"]["total"] == "not_measured"
+
+
+def test_grounding_replay_keeps_the_flag_off_and_does_not_invent_vetoes():
+    """Six sealed paper rows plus six live fills. No seventh live row is stored."""
+    report = grounding_replay()
+    paper_total = sum((fee_net for _ticker, _side, fee_net in PAPER_SEALED_FEE_NET), Decimal("0"))
+    assert paper_total == Decimal("1.5360")
+    assert report["grounding"] == "off"
+    assert event_news_grok_grounding_enabled({}) is False
+    assert report["paper_n"] == 6
+    assert report["live_n"] == 6
+    assert report["n"] == 12
+    assert report["fee_net_without_grounding"] == Decimal("-0.2784")
+    assert report["fee_net_with_grounding"] == "not_measured"
+    assert report["delta"] == "not_measured"
+    assert report["vetoed"] == ()
