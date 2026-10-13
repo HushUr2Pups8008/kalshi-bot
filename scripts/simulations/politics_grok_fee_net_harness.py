@@ -75,6 +75,17 @@ OPEN_COST = {
     "KXTRUMPSAY-26OCT19-GOLF": D("7.12"),
 }
 
+# paper_trade_accounting.fee_net_pnl_dollars for the sealed event-news cohort,
+# read 2026-10-13. Six rows. No API keys.
+PAPER_SEALED_FEE_NET = (
+    ("KXTRUTHSOCIAL-26AUG29-T240", "yes", D("1.1286")),
+    ("KXTRUTHSOCIAL-26SEP05-T240", "no", D("1.9722")),
+    ("KXTRUMPACT-26AUG30-T8", "no", D("1.3573")),
+    ("KXTRUTHSOCIAL-26SEP12-B230", "no", D("0.8464")),
+    ("KXTRUMPACT-26SEP06-T4", "no", D("-7.6005")),
+    ("KXTRUMPSAY-26SEP14-UKRA", "yes", D("3.832")),
+)
+
 GOLF_FILL = {
     "price": D("0.89"),
     "quantity": D("8"),
@@ -184,6 +195,30 @@ def variant_table() -> list[dict[str, str]]:
     ]
 
 
+def grounding_replay() -> dict[str, object]:
+    """Fee-net with the grounding flag left off.
+
+    The fill log has six live rows, not seven. No stored grounded reply
+    exists for these candidates, so this does not call the model.
+    """
+    paper_total = sum((fee_net for _ticker, _side, fee_net in PAPER_SEALED_FEE_NET), D("0"))
+    live_settled = summarize()["total"]
+    live_n = len(SETTLED_ROWS) + len(OPEN_COST)
+    paper_n = len(PAPER_SEALED_FEE_NET)
+    return {
+        "grounding": "off",
+        "paper_n": paper_n,
+        "live_n": live_n,
+        "n": paper_n + live_n,
+        "realized_n": paper_n + len(SETTLED_ROWS),
+        "fee_net_without_grounding": paper_total + live_settled,
+        "fee_net_with_grounding": "not_measured",
+        "delta": "not_measured",
+        "vetoed": (),
+        "reason": "no stored grounded reply; a live model call now can see later news",
+    }
+
+
 def main() -> None:
     stats = summarize()
     low, high = bootstrap_mean_ci([row.fee_net for row in SETTLED_ROWS])
@@ -197,6 +232,15 @@ def main() -> None:
     print(f"cash_cents={balance} unexplained_cents={unexplained}")
     for row in variant_table():
         print(row)
+    replay = grounding_replay()
+    print(
+        "grounding_replay "
+        f"n={replay['n']} paper_n={replay['paper_n']} live_n={replay['live_n']} "
+        f"fee_net_without_grounding={replay['fee_net_without_grounding']} "
+        f"fee_net_with_grounding={replay['fee_net_with_grounding']} "
+        f"delta={replay['delta']} vetoed={replay['vetoed']} "
+        f"grounding={replay['grounding']}"
+    )
 
 
 if __name__ == "__main__":

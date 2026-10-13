@@ -25,6 +25,7 @@ from trading.settlement_store import (
     SettlementStore,
     settlement_result_sha256,
 )
+from utils.event_news_research import event_news_fill_series_ticker
 
 
 log = logging.getLogger(__name__)
@@ -121,11 +122,40 @@ def _event_outbox_id(
     return hashlib.sha256(encoded).hexdigest()
 
 
+class UnmappedSeriesTicker(ValueError):
+    """series_ticker is empty and the ticker has no prefix to copy."""
+
+
 def _require_string(payload: dict[str, Any], field: str) -> str:
     value = payload[field]
     if not isinstance(value, str) or not value:
         raise ValueError(f"{field} must be a non-empty string")
     return value
+
+
+def _fill_empty_series_ticker(payload: dict[str, Any]) -> None:
+    """Backfill a blank series_ticker in memory. Do not rewrite the stored row.
+
+    Paper inserts use event_news_fill_series_ticker. Old outbox rows predate
+    that fill, so the consumer applies the same prefix rule at read time.
+    A row that still has no prefix is skipped by the caller.
+    """
+    raw_ticker = payload.get("ticker")
+    raw_series = payload.get("series_ticker")
+    if not isinstance(raw_ticker, str):
+        return
+    if raw_series is None:
+        raw_series = ""
+    if not isinstance(raw_series, str):
+        return
+    filled = event_news_fill_series_ticker(raw_ticker, raw_series)
+    if filled:
+        payload["series_ticker"] = filled
+        return
+    if not raw_series.strip():
+        raise UnmappedSeriesTicker(
+            f"series_ticker is empty and ticker {raw_ticker!r} has no prefix"
+        )
 
 
 def _require_number(payload: dict[str, Any], field: str) -> float:
@@ -156,6 +186,7 @@ def _validate_payload(payload: object) -> dict[str, Any]:
         raise ValueError("unsupported event version")
     if payload["event_kind"] not in {_EVENT_KIND, _FEE_NET_EVENT_KIND}:
         raise ValueError("unsupported event kind")
+    _fill_empty_series_ticker(payload)
     for field in (
         "outbox_id",
         "observation_sha256",
@@ -532,10 +563,20 @@ class SettlementOutboxTask:
         current: tuple[PendingRequirement, dict[str, Any]] | None = None,
         now: datetime | None = None,
     ) -> None:
-        completed_payloads = {
-            requirement.outbox_id: self._validated_event(store, requirement)
-            for requirement in self._completed_calibration_requirements(store)
-        }
+        completed_payloads: dict[str, dict[str, Any]] = {}
+        for requirement in self._completed_calibration_requirements(store):
+            try:
+                completed_payloads[requirement.outbox_id] = self._validated_event(
+                    store,
+                    requirement,
+                )
+            except UnmappedSeriesTicker as exc:
+                log.warning(
+                    "Settlement calibration rebuild skipped unmapped series_ticker "
+                    "outbox_id=%s: %s",
+                    requirement.outbox_id,
+                    exc,
+                )
         payloads = dict(completed_payloads)
         for outbox_id in completed_payloads:
             self._optimistic_calibration.pop(outbox_id, None)
@@ -655,7 +696,17 @@ class SettlementOutboxTask:
             )
             for requirement in supported[:limit]:
                 try:
-                    payload = self._validated_event(store, requirement)
+                    try:
+                        payload = self._validated_event(store, requirement)
+                    except UnmappedSeriesTicker as exc:
+                        log.warning(
+                            "Settlement outbox skipped unmapped series_ticker: "
+                            "%s/%s: %s",
+                            requirement.outbox_id,
+                            requirement.consumer_name,
+                            exc,
+                        )
+                        continue
                     if (
                         requirement.consumer_name not in _SUPPORTED_CONSUMERS
                         and requirement.consumer_name != _CALIBRATION_CONSUMER

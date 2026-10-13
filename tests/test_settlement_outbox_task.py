@@ -1607,3 +1607,124 @@ async def test_paper_trade_log_emits_void_without_directional_calibration(
         """,
         (seed.outbox_id,),
     ) == [("paper_trade_log",)]
+
+
+def _rewrite_series_ticker(seed: SeededEvent, *, ticker: str, series_ticker: str) -> None:
+    """Shape one historical outbox row. The table is append-only in production.
+
+    The trigger is dropped only in this fixture so the row can look like an
+    insert from before the prefix fill. The consumer must not write it back.
+    """
+    payload = dict(seed.payload)
+    payload["ticker"] = ticker
+    payload["series_ticker"] = series_ticker
+    conn = sqlite3.connect(seed.db_path)
+    try:
+        conn.execute("DROP TRIGGER IF EXISTS immutable_paper_settlement_outbox_update")
+        conn.execute(
+            """
+            UPDATE paper_settlement_outbox
+            SET payload_json=?
+            WHERE outbox_id=?
+            """,
+            (_canonical_json(payload), seed.outbox_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("ticker", "series_prefix"),
+    (
+        ("KXTRUTHSOCIAL-26OCT10-B149", "KXTRUTHSOCIAL"),
+        ("KXTRUMPACT-26OCT04-T6", "KXTRUMPACT"),
+        ("KXTRUTHSOCIAL-26OCT03-B129", "KXTRUTHSOCIAL"),
+    ),
+)
+async def test_empty_series_ticker_backfills_and_records_settled_pnl(
+    monkeypatch,
+    tmp_path,
+    caplog,
+    ticker,
+    series_prefix,
+):
+    """Old outbox rows stored a blank series_ticker. The prefix rule must
+    record settled P&L instead of raising ValueError on the rebuild path.
+    """
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
+    seed = _seed_directional_event(monkeypatch, tmp_path)
+    _rewrite_series_ticker(seed, ticker=ticker, series_ticker="")
+    _record_receipts(seed, ("calibration_state",))
+    trade_logger = MagicMock()
+    calibration = RecordingCalibrationTask()
+    caplog.set_level(logging.ERROR, logger="tasks.settlement_outbox_task")
+
+    processed = await _task(
+        seed,
+        trade_logger=trade_logger,
+        calibration_task=calibration,
+        clock=_clock_from_payload(seed),
+    ).run_once(limit=100)
+
+    assert processed == 3
+    assert "series_ticker must be a non-empty string" not in caplog.text
+    assert "Settlement calibration state rebuild failed" not in caplog.text
+    resolution = trade_logger.log_paper_resolution.call_args.kwargs
+    assert resolution["ticker"] == ticker
+    assert isinstance(resolution["pnl_dollars"], float)
+    observation = trade_logger.log_calibration_observation.call_args.kwargs
+    assert observation["market_prefix"] == series_prefix
+    assert observation["ticker"] == ticker
+    assert {call["market_ticker"] for call in calibration.calls} == {ticker}
+    stored = _rows(
+        seed.db_path,
+        "SELECT payload_json FROM paper_settlement_outbox WHERE outbox_id=?",
+        (seed.outbox_id,),
+    )
+    assert json.loads(stored[0][0])["series_ticker"] == ""
+    keyword_series = _rows(
+        seed.db_path,
+        "SELECT DISTINCT series_ticker FROM keyword_outcomes WHERE ticker=?",
+        (ticker,),
+    )
+    assert keyword_series == [(series_prefix,)]
+
+
+@pytest.mark.asyncio
+async def test_unmapped_series_ticker_is_skipped_without_raising(
+    monkeypatch,
+    tmp_path,
+    caplog,
+):
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
+    seed = _seed_directional_event(monkeypatch, tmp_path)
+    _rewrite_series_ticker(seed, ticker="", series_ticker="")
+    _record_receipts(seed, ("calibration_state",))
+    trade_logger = MagicMock()
+    calibration = RecordingCalibrationTask()
+    before_pending = _pending_consumers(seed)
+    caplog.set_level(logging.WARNING, logger="tasks.settlement_outbox_task")
+
+    processed = await _task(
+        seed,
+        trade_logger=trade_logger,
+        calibration_task=calibration,
+        clock=_clock_from_payload(seed),
+    ).run_once(limit=100)
+
+    assert processed == 0
+    assert trade_logger.log_paper_resolution.call_count == 0
+    assert calibration.calls == []
+    assert "Settlement calibration state rebuild failed" not in caplog.text
+    assert "unmapped series_ticker" in caplog.text
+    assert _pending_consumers(seed) == before_pending
+    assert _rows(
+        seed.db_path,
+        """
+        SELECT consumer_name FROM paper_settlement_consumer_receipts
+        WHERE outbox_id=? AND consumer_name='paper_trade_log'
+        """,
+        (seed.outbox_id,),
+    ) == []

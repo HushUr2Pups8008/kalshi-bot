@@ -29,6 +29,12 @@
         <string>true</string>
         <key>EVENT_NEWS_EXCLUDE_EXACT_35</key>
         <string>true</string>
+        <key>EVENT_NEWS_FILL_LOG_DETAIL</key>
+        <string>true</string>
+        <key>EVENT_NEWS_GROK_WATCH_SKIP_SETTLED</key>
+        <string>true</string>
+        <key>EVENT_NEWS_GROK_TRACE</key>
+        <string>true</string>
     </dict>
 </dict>
 </plist>

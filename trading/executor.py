@@ -166,6 +166,131 @@ def _is_live_business_reject(result: Any) -> bool:
     return any(token in error for token in _LIVE_BUSINESS_REJECT_TOKENS)
 
 
+def _detail_number(value: Any) -> Decimal | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        number = Decimal(str(value).strip())
+    except Exception:
+        return None
+    if not number.is_finite():
+        return None
+    return number
+
+
+def _detail_number_text(value: Decimal) -> str:
+    integral = value.to_integral()
+    if value == integral:
+        return str(int(integral))
+    return format(value.normalize(), "f")
+
+
+def _detail_cents_text(dollars: Decimal) -> str:
+    return _detail_number_text(dollars * Decimal("100"))
+
+
+def fill_log_detail_from_receipts(
+    *,
+    side: str,
+    order: Mapping[str, Any] | None,
+    fills: list[Any] | None,
+) -> dict[str, str | None]:
+    """Map a GET order receipt and fills page onto the four detail columns.
+
+    Economics come from the fills page when it has usable rows, and from the
+    order receipt otherwise. The logged order_id is the receipt's order_id.
+    """
+    price_key = "yes_price_dollars" if str(side).lower() == "yes" else "no_price_dollars"
+    order_id = None
+    if isinstance(order, Mapping):
+        raw_order_id = order.get("order_id")
+        if isinstance(raw_order_id, str) and raw_order_id.strip():
+            order_id = raw_order_id.strip()
+    filled_count = None
+    avg_fill_cents = None
+    fee_cents = None
+    total_count = Decimal("0")
+    total_cost = Decimal("0")
+    total_fee = Decimal("0")
+    usable_fills = False
+    for fill in fills or ():
+        if not isinstance(fill, Mapping):
+            continue
+        count = _detail_number(fill.get("count_fp"))
+        price = _detail_number(fill.get(price_key))
+        fee_dollars = _detail_number(fill.get("fee_cost"))
+        if count is None or price is None or fee_dollars is None or count <= 0:
+            continue
+        total_count += count
+        total_cost += count * price
+        total_fee += fee_dollars
+        usable_fills = True
+    if usable_fills and total_count > 0:
+        filled_count = _detail_number_text(total_count)
+        avg_fill_cents = _detail_cents_text(total_cost / total_count)
+        fee_cents = _detail_cents_text(total_fee)
+    elif isinstance(order, Mapping):
+        count = _detail_number(order.get("fill_count_fp"))
+        price = _detail_number(order.get(price_key))
+        taker = _detail_number(order.get("taker_fees_dollars"))
+        maker = _detail_number(order.get("maker_fees_dollars"))
+        if count is not None:
+            filled_count = _detail_number_text(count)
+        if price is not None:
+            avg_fill_cents = _detail_cents_text(price)
+        if taker is not None or maker is not None:
+            fee_cents = _detail_cents_text((taker or Decimal("0")) + (maker or Decimal("0")))
+    return {
+        "filled_count": filled_count,
+        "avg_fill_cents": avg_fill_cents,
+        "fee_cents": fee_cents,
+        "order_id": order_id,
+    }
+
+
+def fetch_live_fill_detail(rest: Any, order_id: str, side: str) -> dict[str, str | None]:
+    """Read fill detail after a 201. A failed GET leaves the columns blank.
+
+    The 201 order_id is only the lookup key. It is not copied into the log.
+    """
+    blank = {
+        "filled_count": None,
+        "avg_fill_cents": None,
+        "fee_cents": None,
+        "order_id": None,
+    }
+    lookup = str(order_id or "").strip()
+    if not lookup:
+        log.warning("[LIVE_FILL_LOG] detail GET skipped; 201 had no order_id")
+        return blank
+    order = None
+    fills = None
+    reasons: list[str] = []
+    try:
+        fetched_order = rest.get_order_receipt(lookup)
+        if isinstance(fetched_order, Mapping):
+            order = fetched_order
+        else:
+            reasons.append("order:not_object")
+    except Exception as exc:
+        reasons.append("order:" + type(exc).__name__)
+    try:
+        page, _cursor = rest.get_fills_page(order_id=lookup)
+        if isinstance(page, list):
+            fills = page
+        else:
+            reasons.append("fills:not_list")
+    except Exception as exc:
+        reasons.append("fills:" + type(exc).__name__)
+    detail = fill_log_detail_from_receipts(side=side, order=order, fills=fills)
+    if detail["filled_count"] is None and detail["order_id"] is None:
+        log.warning(
+            "[LIVE_FILL_LOG] detail GET failed reasons=%s",
+            ",".join(reasons) or "empty",
+        )
+    return detail
+
+
 def append_live_fill_log(
     *,
     ticker: str,
@@ -175,17 +300,17 @@ def append_live_fill_log(
     client_order_id: str,
     http_result: str,
     path: Path | None = None,
-    filled_count: int | None = None,
-    avg_fill_cents: int | None = None,
-    fee_cents: int | None = None,
+    filled_count: int | str | None = None,
+    avg_fill_cents: int | str | None = None,
+    fee_cents: int | str | None = None,
     order_id: str | None = None,
     environ: Mapping[str, str] | None = None,
 ) -> None:
     """Append one Desk Ops line. Never logs keys.
 
     Extra columns are written only when EVENT_NEWS_FILL_LOG_DETAIL=true.
-    The 201 response does not include the exchange fee, so fee_cents stays
-    blank unless the caller has it.
+    Callers must pass those fields from a later GET. The 201 body has no
+    exchange fee and is not a fill receipt.
     """
     from utils.event_news_grok_flags import event_news_fill_log_detail_enabled
 
@@ -1557,26 +1682,26 @@ class TradeExecutor:
         if not result_error or _is_live_business_reject(result):
             from utils.event_news_grok_flags import event_news_fill_log_detail_enabled
 
-            if event_news_fill_log_detail_enabled():
-                append_live_fill_log(
-                    ticker=str(analysis.market.ticker),
-                    side=str(analysis.side),
-                    price_cents=price_cents,
-                    contracts=contracts,
-                    client_order_id=client_order_id,
-                    http_result=_live_http_result(result),
-                    filled_count=getattr(result, "filled", None),
-                    order_id=getattr(result, "order_id", None) or None,
+            http_result = _live_http_result(result)
+            detail: dict[str, str | None] = {}
+            if event_news_fill_log_detail_enabled() and http_result == "201":
+                detail = fetch_live_fill_detail(
+                    self._rest,
+                    str(getattr(result, "order_id", "") or ""),
+                    str(analysis.side),
                 )
-            else:
-                append_live_fill_log(
-                    ticker=str(analysis.market.ticker),
-                    side=str(analysis.side),
-                    price_cents=price_cents,
-                    contracts=contracts,
-                    client_order_id=client_order_id,
-                    http_result=_live_http_result(result),
-                )
+            append_live_fill_log(
+                ticker=str(analysis.market.ticker),
+                side=str(analysis.side),
+                price_cents=price_cents,
+                contracts=contracts,
+                client_order_id=client_order_id,
+                http_result=http_result,
+                filled_count=detail.get("filled_count"),
+                avg_fill_cents=detail.get("avg_fill_cents"),
+                fee_cents=detail.get("fee_cents"),
+                order_id=detail.get("order_id"),
+            )
 
         if result_error:
             await record_unknown_and_hold("error_result")

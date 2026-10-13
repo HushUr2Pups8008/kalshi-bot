@@ -1837,6 +1837,32 @@ async def test_politics_retries_untradeable_missing_counter_when_official_source
     assert results[0].status != "skipped_terminal"
 
 
+def test_rules_primary_alone_does_not_retry_a_terminal_counter(monkeypatch):
+    """An official settlement source is required. The rules sentence is not one."""
+    import config as config_module
+    from utils.event_news_research import (
+        EVENT_NEWS_COHORT_ID,
+        event_news_prewarm_retries_terminal_missing_counter,
+    )
+
+    monkeypatch.setattr(config_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
+    monkeypatch.setattr("utils.event_news_research.cfg", config_module.cfg)
+    market = SimpleNamespace(
+        ticker="KXFISAEXTEND-26JUN-27",
+        series_ticker="KXFISAEXTEND",
+        rules_primary="Resolves from official FISA enactment.",
+        settlement_sources=(),
+        yes_ask_cents=62,
+        no_ask_cents=40,
+    )
+    assert event_news_prewarm_retries_terminal_missing_counter(market) is False
+    market.settlement_sources = ("https://www.congress.gov/",)
+    assert event_news_prewarm_retries_terminal_missing_counter(market) is True
+    market.yes_ask_cents = 20
+    market.no_ask_cents = 30
+    assert event_news_prewarm_retries_terminal_missing_counter(market) is False
+
+
 @pytest.mark.asyncio
 async def test_prewarm_emits_terminal_decision_grade_to_market_result_sink(tmp_path):
     store = ResearchDossierStore(tmp_path / "research_dossier.db")

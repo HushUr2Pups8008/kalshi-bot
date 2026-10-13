@@ -131,7 +131,14 @@ def event_news_grok_watch_decision(
         return result
     urls = _watch_urls(packet)
     if event_news_grok_trace_enabled(env):
-        event_news_grok_trace_log("watch", ticker, body, user_content, urls)
+        event_news_grok_trace_log(
+            "watch",
+            ticker,
+            body,
+            user_content,
+            urls,
+            latency_ms=_elapsed_ms(started),
+        )
     if grounded:
         parsed = event_news_grok_grounded_verdict(
             content,

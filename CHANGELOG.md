@@ -19,6 +19,24 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.93] - 2026-10-13
+
+### Fixed
+
+- **The 06:05 live fill-log job can commit and push only its report.** After the copy, `scripts/copy_live_fill_log.py` stages `docs/reports/live-fill-log.md` when that file changed, commits `ops: live fill log YYYY-MM-DD`, fetches, rebases only when origin is ahead, and pushes. A failed push is retried once. A second failure is written to `logs/state/fill-log-push.err` and the job still exits 0. It does not stage any other path.
+- **Settlement outbox rows with a blank `series_ticker` no longer raise.** The consumer fills an empty series from the ticker prefix in memory, using the same rule as paper rows. A row that still has no prefix is logged and skipped. Calibration rebuild continues.
+- **`EVENT_NEWS_FILL_LOG_DETAIL` reads the fill from a GET after the 201.** The log adds `order_id`, `filled_count`, `avg_fill_cents`, and `fee_cents` from `GET /portfolio/orders/{id}` or `GET /portfolio/fills`. The 201 body is only the lookup key. A failed GET leaves the columns blank and does not retry the order. The politics plist turns the flag on.
+- **`EVENT_NEWS_GROK_WATCH_SKIP_SETTLED` skips closed, settled, finalized, and determined markets.** An active market is still checked. The politics plist turns the flag on.
+- **`EVENT_NEWS_GROK_TRACE` logs the response id, model, source count, token counts, latency, and the raw reply** for every veto and watch call. The API key is not logged. The politics plist turns the flag on.
+- **Ruff F601:** the duplicate `KXTRUMPSAY` prior is gone. Runtime already kept the later fast-dominant value `(0.65, 0.25, 0.10)`. `KXTRUMPSAYMONTH` stays `(0.30, 0.45, 0.25)`.
+- **The weather drain test no longer depends on the operator env.** It pins canonical settlement off, does not start the politics watch task, and expects the `news_consumer_0` task name.
+- **A terminal missing-counter prewarm row retries only for an in-band reserve favorite that already names an official settlement source.** `rules_primary` alone does not retry. This does not place an order.
+
+### Added
+
+- **Grounding replay stays off.** `scripts/simulations/politics_grok_fee_net_harness.py` reports the six sealed paper rows plus the six live fills. Realized fee-net without grounding is `-0.2784`. Fee-net with grounding, the delta, and the veto list are `not_measured` because no stored grounded reply exists. `EVENT_NEWS_GROK_GROUNDING` stays off.
+- **A keyless politics history corpus can be generated under `logs/edge_replay/`.** That directory stays gitignored. The committed fixture is `tests/fixtures/edge_replay/corpus_politics_desk_history.jsonl`, outside CI discovery. The replay gate thresholds are unchanged.
+
 ## [0.33.92] - 2026-10-13
 
 ### Changed

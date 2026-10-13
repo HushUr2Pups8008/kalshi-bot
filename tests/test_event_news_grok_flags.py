@@ -253,6 +253,97 @@ def test_grounded_yes_requires_a_quote_from_an_allowed_url():
     assert result == "yes"
 
 
+def test_trace_logs_id_model_sources_tokens_latency_and_raw_reply(caplog):
+    reply = "The full raw reply is YES"
+
+    def _post(url, json=None, headers=None, timeout=None):
+        assert headers["Authorization"] == "Bearer secret-value"
+        return _FakeResponse(
+            reply,
+            body={
+                "id": "resp-trace",
+                "model": "grok-trace",
+                "usage": {
+                    "prompt_tokens": 11,
+                    "completion_tokens": 7,
+                    "num_sources_used": 2,
+                },
+                "choices": [{"message": {"content": reply}}],
+            },
+        )
+
+    with caplog.at_level("INFO"):
+        result = event_news_grok_veto_decision(
+            _packet("KXTRUMPSAY-26OCT19-GOLF"),
+            environ={
+                "XAI_API_KEY": "secret-value",
+                EVENT_NEWS_GROK_TRACE: "true",
+            },
+            post=_post,
+        )
+    assert result == "yes"
+    text = caplog.text
+    assert "kind=veto" in text
+    assert "response_id=resp-trace" in text
+    assert "model=grok-trace" in text
+    assert "num_sources_used=2" in text
+    assert "prompt_tokens=11" in text
+    assert "completion_tokens=7" in text
+    assert "total_tokens=18" in text
+    assert "latency_ms=" in text
+    assert json.dumps(reply) in text
+    assert "secret-value" not in text
+    assert "Bearer" not in text
+
+
+def test_watch_trace_logs_the_raw_reply(monkeypatch, tmp_path, caplog):
+    monkeypatch.setattr(_cfg_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
+    reply = "CONTRADICT because the source says otherwise"
+
+    def _post(url, json=None, headers=None, timeout=None):
+        return _FakeResponse(
+            reply,
+            body={
+                "id": "resp-watch",
+                "model": "grok-watch",
+                "usage": {"prompt_tokens": 4, "completion_tokens": 5, "num_sources_used": 1},
+                "choices": [{"message": {"content": reply}}],
+            },
+        )
+
+    market = MagicMock()
+    market.ticker = "KXTRUMPACT-26OCT11-T5"
+    market.status = "active"
+    market.settlement_sources = ("https://www.whitehouse.gov/presidential-actions/",)
+    market.contract_terms_url = "https://assets.kalshi.com/contract_terms/POLITICALSTAT.pdf"
+    market.series_ticker = "KXTRUMPACT"
+    position = MagicMock()
+    position.ticker = market.ticker
+    position.position_fp = -8
+    position.market_exposure_dollars = 4.80
+    with caplog.at_level("INFO"):
+        run_event_news_grok_watch_once(
+            [position],
+            market_lookup=lambda _ticker: market,
+            state_path=tmp_path / "watch-trace.json",
+            now=datetime(2026, 10, 13, tzinfo=timezone.utc),
+            environ={
+                "XAI_API_KEY": "secret-value",
+                EVENT_NEWS_GROK_TRACE: "true",
+            },
+            post=_post,
+        )
+    assert "kind=watch" in caplog.text
+    assert "response_id=resp-watch" in caplog.text
+    assert "model=grok-watch" in caplog.text
+    assert "num_sources_used=1" in caplog.text
+    assert "prompt_tokens=4" in caplog.text
+    assert "completion_tokens=5" in caplog.text
+    assert "latency_ms=" in caplog.text
+    assert json.dumps(reply) in caplog.text
+    assert "secret-value" not in caplog.text
+
+
 def test_trace_flag_off_does_not_log_response_metadata(caplog):
     def _post(url, json=None, headers=None, timeout=None):
         return _FakeResponse(
@@ -317,6 +408,55 @@ def test_settled_skip_is_off_until_the_flag_is_true(monkeypatch, tmp_path):
     )
     assert calls == []
     assert not (tmp_path / "watch-settled.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("status", "skipped"),
+    (
+        ("closed", True),
+        ("settled", True),
+        ("finalized", True),
+        ("determined", True),
+        ("active", False),
+    ),
+)
+def test_watch_skip_settled_drops_closed_settled_and_finalized_markets(
+    monkeypatch,
+    tmp_path,
+    status,
+    skipped,
+):
+    """The flag only removes the model call. An active market is still checked."""
+    monkeypatch.setattr(_cfg_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
+    calls = []
+
+    def _post(url, json=None, headers=None, timeout=None):
+        calls.append(status)
+        return _FakeResponse("CONTRADICT")
+
+    market = MagicMock()
+    market.ticker = "KXTRUMPACT-26OCT11-T5"
+    market.status = status
+    market.settlement_sources = ("https://www.whitehouse.gov/presidential-actions/",)
+    market.contract_terms_url = "https://assets.kalshi.com/contract_terms/POLITICALSTAT.pdf"
+    market.series_ticker = "KXTRUMPACT"
+    position = MagicMock()
+    position.ticker = market.ticker
+    position.position_fp = -8
+    position.market_exposure_dollars = 4.80
+
+    run_event_news_grok_watch_once(
+        [position],
+        market_lookup=lambda _ticker: market,
+        state_path=tmp_path / f"watch-{status}.json",
+        now=datetime(2026, 10, 13, tzinfo=timezone.utc),
+        environ={
+            "XAI_API_KEY": "secret-value",
+            EVENT_NEWS_GROK_WATCH_SKIP_SETTLED: "true",
+        },
+        post=_post,
+    )
+    assert (calls == []) is skipped
 
 
 def test_fill_log_columns_stay_off_the_line_until_the_flag_is_true(tmp_path):

@@ -1109,6 +1109,44 @@ def event_news_google_counter_not_required(
     return True
 
 
+def event_news_settlement_source_names(market: Any) -> tuple[str, ...]:
+    """Non-empty settlement source strings. rules_primary is not a source."""
+    raw = getattr(market, "settlement_sources", None)
+    if isinstance(raw, str):
+        raw = (raw,)
+    if not isinstance(raw, (list, tuple)):
+        return ()
+    return tuple(str(item).strip() for item in raw if str(item or "").strip())
+
+
+def event_news_prewarm_retries_terminal_missing_counter(
+    market: Any | None,
+    *,
+    config: Any = None,
+) -> bool:
+    """Retry a terminal politics row only for an in-band reserve favorite.
+
+    The market must already name an official settlement source. A
+    rules_primary sentence alone does not retry, and this does not order.
+    """
+    if market is None or not is_event_news_paper_cohort(config):
+        return False
+    if not event_news_is_reserve_series(market, config=config):
+        return False
+    if not event_news_settlement_source_names(market):
+        return False
+    if event_news_non_politics_series(market, config=config):
+        return False
+    if event_news_crossed_asks(market, config=config):
+        return False
+    if event_news_missing_snapshot_ask(market, config=config):
+        return False
+    yes_cents, no_cents = snapshot_ask_cents(market)
+    yes_ask = None if yes_cents is None else yes_cents / 100.0
+    no_ask = None if no_cents is None else no_cents / 100.0
+    return _event_news_favorite_ask_in_trade_band(yes_ask, no_ask)
+
+
 def _event_news_norm_ask(raw: float | None) -> float | None:
     if raw is None:
         return None

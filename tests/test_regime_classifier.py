@@ -164,6 +164,12 @@ class TestSeriesClassification:
             assert w[FAST] > w[INTERPRETATION], f"{prefix}: {w}"
             assert w[FAST] > w[STRUCTURAL], f"{prefix}: {w}"
 
+    def test_kxtrumpsay_prior_is_the_fast_dominant_value(self):
+        """The duplicate dict key kept the later prior. Pin that value."""
+        from analysis.regime_classifier import _SERIES_PRIORS
+
+        assert _SERIES_PRIORS["KXTRUMPSAY"] == (0.65, 0.25, 0.10)
+
     def test_profit_priors_001_lane_shape_unblocks_g1(self):
         """The three markets re-shaped in PROFIT-PRIORS-001 must produce
         scaled_confidence (bc × rc) high enough to clear G1=0.05 when the

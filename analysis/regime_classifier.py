@@ -68,8 +68,9 @@ _SERIES_PRIORS: dict[str, tuple[float, float, float]] = {
     # Polling and approval ratings — slow-moving, structural
     "KXAPRPOTUS":    (0.05, 0.25, 0.70),
     "KXPOLLPOTUS":   (0.05, 0.25, 0.70),
-    # Trump say markets — speech-driven, fast/interpretation
-    "KXTRUMPSAY":        (0.55, 0.35, 0.10),
+    # Month contracts stay interpretation-weighted. Phrase contracts use
+    # the later fast-dominant KXTRUMPSAY prior. The earlier 0.55/0.35/0.10
+    # entry was a duplicate key; Python kept the later value at runtime.
     "KXTRUMPSAYMONTH":   (0.30, 0.45, 0.25),
     # ── Legislative / calendar-driven policy markets ─────────────────────────
     # Bills, budget resolutions, scheduled votes — slow legislative cadence
