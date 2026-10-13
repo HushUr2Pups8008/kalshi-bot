@@ -361,6 +361,15 @@ async def test_run_drains_only_weather_before_existing_cleanup(monkeypatch):
 
     monkeypatch.setattr(config_module.cfg, "polymarket_us_enabled", False)
     monkeypatch.setattr(config_module.cfg, "is_paper_trading", True)
+    # The operator .env turns canonical settlement on, and the event-news
+    # cohort starts a watch task. This test pins the weather drain.
+    monkeypatch.setattr(
+        config_module.cfg,
+        "enable_canonical_persisted_settlement_reconciliation",
+        False,
+    )
+    monkeypatch.setattr(bot, "_create_event_news_grok_watch_task", lambda: None)
+    monkeypatch.setenv("NEWS_CONSUMER_WORKERS", "1")
     monkeypatch.setattr(
         config_module.cfg,
         "enable_market_source_hint_shadow_capture",
@@ -397,7 +406,7 @@ async def test_run_drains_only_weather_before_existing_cleanup(monkeypatch):
             "reddit": 1,
             "search": 1,
             "gdelt": 1,
-            "news_consumer": 1,
+            "news_consumer_0": 1,
             "websocket": 1,
             "ws_warm": 1,
             "market_refresh": 1,

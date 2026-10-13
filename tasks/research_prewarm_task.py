@@ -251,14 +251,10 @@ class ResearchPrewarmTask:
         prewarm_skip = event_news_prewarm_skip_reason(market)
         if prewarm_skip == "ask_outside_favorite_band":
             from utils.event_news_research import (
-                event_news_google_counter_not_required,
+                event_news_prewarm_retries_terminal_missing_counter,
             )
 
-            if event_news_google_counter_not_required(
-                market=market,
-                estimated_probability=0.5,
-                force_side="yes",
-            ):
+            if event_news_prewarm_retries_terminal_missing_counter(market):
                 prewarm_skip = None
         if prewarm_skip:
             _log.info(
@@ -829,18 +825,13 @@ class ResearchPrewarmTask:
                     "contradictory_evidence_unresolved",
                     "insufficient_directional_evidence",
                 }
-                and is_event_news_paper_cohort()
                 and market is not None
             ):
                 from utils.event_news_research import (
-                    event_news_google_counter_not_required,
+                    event_news_prewarm_retries_terminal_missing_counter,
                 )
 
-                if event_news_google_counter_not_required(
-                    market=market,
-                    estimated_probability=0.5,
-                    force_side="yes",
-                ):
+                if event_news_prewarm_retries_terminal_missing_counter(market):
                     _log.info(
                         "[EVENT_NEWS_PREWARM] retry_missing_counter ticker=%s "
                         "terminal=%s",

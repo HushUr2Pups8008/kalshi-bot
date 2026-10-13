@@ -8,7 +8,7 @@ Covers: live loss limit breach triggers halt, halt persists across subsequent ca
 import asyncio
 import logging
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -2116,9 +2116,6 @@ class TestPaperExecutionAsync:
 # Coverage-focused tests — fill gaps identified in the 2026-04-23 baseline
 # (cooldown seeding, input-validation branches, live-mode error paths, status)
 # ---------------------------------------------------------------------------
-
-from datetime import timedelta
-
 
 class TestCooldownSeeding:
     """`_seed_cooldowns_from_db` — populates `_last_traded` from portfolio."""
