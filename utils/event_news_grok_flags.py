@@ -1,7 +1,11 @@
-"""Politics Grok paper flags. Every flag defaults off.
+"""Politics Grok paper flags.
 
-Absent, empty, and any value other than ``true`` leave the live path
-unchanged. Do not set these in the running politics environment.
+Trace, grounding, settled-watch skip, and fill-log detail default off.
+Absent, empty, and any value other than ``true`` leave those four off.
+
+The requote band check and the exact-35c exclusion default on. An absent,
+blank, or unrecognized value keeps the 0c-35c skip in force. Only the
+exact value ``false`` turns either of those two flags off.
 """
 
 from __future__ import annotations
@@ -27,6 +31,22 @@ def event_news_flag_enabled(
 ) -> bool:
     env = os.environ if environ is None else environ
     return str(env.get(name) or "").strip().lower() == "true"
+
+
+def _event_news_flag_default_on(
+    name: str,
+    environ: Mapping[str, str] | None = None,
+) -> bool:
+    """True unless the env value is exactly ``false``.
+
+    Used by the executed-ask band. An unset politics process must keep
+    the skip, so blank and unknown values stay on.
+    """
+    env = os.environ if environ is None else environ
+    raw = env.get(name)
+    if raw is None:
+        return True
+    return str(raw).strip().lower() != "false"
 
 
 def event_news_grok_trace_enabled(
@@ -56,13 +76,13 @@ def event_news_fill_log_detail_enabled(
 def event_news_requote_band_check_enabled(
     environ: Mapping[str, str] | None = None,
 ) -> bool:
-    return event_news_flag_enabled(EVENT_NEWS_REQUOTE_BAND_CHECK, environ)
+    return _event_news_flag_default_on(EVENT_NEWS_REQUOTE_BAND_CHECK, environ)
 
 
 def event_news_exclude_exact_35_enabled(
     environ: Mapping[str, str] | None = None,
 ) -> bool:
-    return event_news_flag_enabled(EVENT_NEWS_EXCLUDE_EXACT_35, environ)
+    return _event_news_flag_default_on(EVENT_NEWS_EXCLUDE_EXACT_35, environ)
 
 
 def event_news_market_status_settled(status: object) -> bool:

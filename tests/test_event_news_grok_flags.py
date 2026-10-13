@@ -1,10 +1,13 @@
-"""Paper flags stay off unless the env value is exactly true."""
+"""Politics Grok flags. Band flags default on. The other four default off."""
 
 from __future__ import annotations
 
 import json
+import logging
+import re
 from datetime import datetime, timezone
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -20,7 +23,9 @@ from utils.event_news_grok_flags import (
     EVENT_NEWS_GROK_TRACE,
     EVENT_NEWS_GROK_WATCH_SKIP_SETTLED,
     EVENT_NEWS_REQUOTE_BAND_CHECK,
+    event_news_exclude_exact_35_enabled,
     event_news_flag_enabled,
+    event_news_requote_band_check_enabled,
 )
 from utils.event_news_grok_veto import (
     GROK_TIMEOUT_SECONDS,
@@ -80,11 +85,21 @@ def test_hard_invariants_stay_at_the_documented_limits():
     assert occupied == "KXTRUTHSOCIAL-26OCT17-B129"
 
 
-def test_exact_35c_stays_allowed_until_the_flag_is_true():
+def test_exact_35c_is_excluded_unless_the_flag_is_false(monkeypatch):
+    monkeypatch.delenv(EVENT_NEWS_EXCLUDE_EXACT_35, raising=False)
     band = MagicMock(llm_excluded_price_bands=[(0.00, 0.35)])
+    assert event_news_cents_in_excluded_band(0, config=band) is True
     assert event_news_cents_in_excluded_band(34, config=band) is True
-    assert event_news_cents_in_excluded_band(35, config=band) is False
+    assert event_news_cents_in_excluded_band(35, config=band) is True
     assert event_news_cents_in_excluded_band(36, config=band) is False
+    assert (
+        event_news_cents_in_excluded_band(
+            35,
+            config=band,
+            environ={EVENT_NEWS_EXCLUDE_EXACT_35: "false"},
+        )
+        is False
+    )
     assert (
         event_news_cents_in_excluded_band(
             35,
@@ -96,6 +111,10 @@ def test_exact_35c_stays_allowed_until_the_flag_is_true():
     assert event_news_requote_skip_reason(Decimal("0.20"), config=band) == (
         "executed_ask_in_excluded_band"
     )
+    assert event_news_requote_skip_reason(Decimal("0.35"), config=band) == (
+        "executed_ask_in_excluded_band"
+    )
+    assert event_news_requote_skip_reason(Decimal("0.36"), config=band) is None
     assert event_news_requote_skip_reason(Decimal("0.89"), config=band) is None
 
 
@@ -352,8 +371,8 @@ def test_fill_log_columns_stay_off_the_line_until_the_flag_is_true(tmp_path):
     ]
 
 
-def _executor(monkeypatch):
-    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", False)
+def _executor(monkeypatch, tmp_path=None, *, paper=False):
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", paper)
     monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
     monkeypatch.setattr(_cfg_module.cfg, "live_loss_limit_pct", 0.10)
     monkeypatch.setattr(_cfg_module.cfg, "live_ticker_cooldown", 0)
@@ -373,7 +392,9 @@ def _executor(monkeypatch):
     paper.portfolio.open_positions.return_value = []
     paper.portfolio.is_concentration_ok.return_value = True
     paper.portfolio.exposure.return_value = 0.0
-    return TradeExecutor(rest, paper)
+    paper.portfolio.tickers.return_value = []
+    hold_path = None if tmp_path is None else tmp_path / "holds.json"
+    return TradeExecutor(rest, paper, live_submission_hold_path=hold_path)
 
 
 def _liquidity(best: str) -> ExecutableLiquidity:
@@ -398,42 +419,32 @@ def _analysis():
     analysis.side = "yes"
     analysis.executed_price_cents = 89
     analysis.capped_dollars = 7.12
+    analysis.edge = 0.10
+    analysis.estimated_probability = 0.90
+    analysis.confidence = 0.80
     return analysis
 
 
-@pytest.mark.asyncio
-async def test_requote_band_does_not_block_until_the_flag_is_true(monkeypatch):
-    executor = _executor(monkeypatch)
+def _band_flags_unset(monkeypatch):
     monkeypatch.delenv(EVENT_NEWS_REQUOTE_BAND_CHECK, raising=False)
-    with (
-        patch(
-            "trading.executor.final_execution_terms",
-            return_value=FinalExecutionTerms(89, 8, 7.12),
-        ),
-        patch(
-            "trading.executor.fetch_kalshi_execution_liquidity",
-            new=AsyncMock(return_value=_liquidity("0.20")),
-        ),
-    ):
-        plan, reason = await executor._final_execution_plan(_analysis())
-    assert reason is None
-    assert plan is not None
-    assert plan.contracts == 8
+    monkeypatch.delenv(EVENT_NEWS_EXCLUDE_EXACT_35, raising=False)
 
-    monkeypatch.setenv(EVENT_NEWS_REQUOTE_BAND_CHECK, "true")
-    with (
-        patch(
-            "trading.executor.final_execution_terms",
-            return_value=FinalExecutionTerms(89, 8, 7.12),
-        ),
-        patch(
-            "trading.executor.fetch_kalshi_execution_liquidity",
-            new=AsyncMock(return_value=_liquidity("0.20")),
-        ),
-    ):
-        plan, reason = await executor._final_execution_plan(_analysis())
-    assert plan is None
-    assert reason == "executed_ask_in_excluded_band"
+
+def _order_result():
+    return SimpleNamespace(
+        error=None,
+        order_id="ord-1",
+        status="executed",
+        filled=8,
+        http_status=201,
+    )
+
+
+def _quiet_live_side_effects():
+    return (
+        patch("trading.executor.write_trade_log_async", new=AsyncMock()),
+        patch("trading.executor.append_live_fill_log"),
+    )
 
 
 _ALLOWED = "https://assets.kalshi.com/contract_terms/TRUMPSAY.pdf"
@@ -459,7 +470,28 @@ def test_flag_values_other_than_true_stay_off():
     assert event_news_flag_enabled(name, {name: " TRUE "}) is True
 
 
-def test_exact_35c_order_skip_stays_off_until_the_flag_is_true(monkeypatch):
+def test_band_flags_stay_on_unless_the_value_is_false():
+    assert event_news_requote_band_check_enabled({}) is True
+    assert event_news_exclude_exact_35_enabled({}) is True
+    for raw in ("", "yes", "1", "TRUE", "falsey"):
+        assert event_news_requote_band_check_enabled(
+            {EVENT_NEWS_REQUOTE_BAND_CHECK: raw}
+        ) is True
+        assert event_news_exclude_exact_35_enabled(
+            {EVENT_NEWS_EXCLUDE_EXACT_35: raw}
+        ) is True
+    assert event_news_requote_band_check_enabled(
+        {EVENT_NEWS_REQUOTE_BAND_CHECK: " false "}
+    ) is False
+    assert event_news_exclude_exact_35_enabled(
+        {EVENT_NEWS_EXCLUDE_EXACT_35: "FALSE"}
+    ) is False
+    assert event_news_flag_enabled(EVENT_NEWS_GROK_GROUNDING, {}) is False
+    assert event_news_flag_enabled(EVENT_NEWS_FILL_LOG_DETAIL, {}) is False
+    assert event_news_flag_enabled(EVENT_NEWS_GROK_WATCH_SKIP_SETTLED, {}) is False
+
+
+def test_exact_35c_snapshot_skips_unless_the_flag_is_false(monkeypatch):
     monkeypatch.delenv(EVENT_NEWS_EXCLUDE_EXACT_35, raising=False)
     market = MagicMock()
     market.ticker = "KXTRUMPSAY-26OCT19-GOLF"
@@ -469,12 +501,12 @@ def test_exact_35c_order_skip_stays_off_until_the_flag_is_true(monkeypatch):
         paper_cohort_id=EVENT_NEWS_COHORT_ID,
         llm_excluded_price_bands=[(0.00, 0.35)],
     )
-    assert event_news_executed_side_skip_reason(market, "yes", config=band) is None
-    monkeypatch.setenv(EVENT_NEWS_EXCLUDE_EXACT_35, "true")
     assert (
         event_news_executed_side_skip_reason(market, "yes", config=band)
         == "executed_ask_in_excluded_band"
     )
+    monkeypatch.setenv(EVENT_NEWS_EXCLUDE_EXACT_35, "false")
+    assert event_news_executed_side_skip_reason(market, "yes", config=band) is None
 
 
 def test_grounded_parser_rejects_blank_quotes_wrong_urls_and_keeps_the_last_object():
@@ -737,46 +769,283 @@ def test_active_market_still_posts_when_the_settled_flag_is_true(monkeypatch, tm
     assert calls == [1]
 
 
+def _skip_line(caplog, ask: str) -> re.Match[str]:
+    matched = [
+        record.message
+        for record in caplog.records
+        if "executed_ask_in_excluded_band" in record.message
+        and f"ask={ask} " in record.message
+    ]
+    assert matched, [record.message for record in caplog.records]
+    found = re.search(
+        r"ticker=(\S+) side=(\S+) ask=(\S+) client_order_id=(\S*)",
+        matched[-1],
+    )
+    assert found is not None
+    return found
+
+
+async def _plan_then_live(executor, analysis, terms, book, veto):
+    executor._rest.place_limit_order.return_value = _order_result()
+    journal, fill_log = _quiet_live_side_effects()
+    with (
+        patch("trading.executor.final_execution_terms", return_value=terms),
+        patch(
+            "trading.executor.fetch_kalshi_execution_liquidity",
+            new=AsyncMock(return_value=book),
+        ),
+        patch(
+            "utils.event_news_grok_veto.event_news_grok_veto_allows_live_post",
+            side_effect=veto,
+        ),
+        journal,
+        fill_log,
+    ):
+        plan, reason = await executor._final_execution_plan(analysis)
+        order_id = None
+        if plan is not None and reason is None:
+            order_id = await executor._execute_live(analysis, execution_plan=plan)
+    return plan, reason, order_id
+
+
 @pytest.mark.asyncio
-async def test_requote_keeps_exact_35c_and_ignores_other_cohorts(monkeypatch):
-    executor = _executor(monkeypatch)
-    monkeypatch.delenv(EVENT_NEWS_EXCLUDE_EXACT_35, raising=False)
-    monkeypatch.setenv(EVENT_NEWS_REQUOTE_BAND_CHECK, "true")
+async def test_snapshot_36c_requote_34c_does_not_post(monkeypatch, tmp_path, caplog):
+    _band_flags_unset(monkeypatch)
+    executor = _executor(monkeypatch, tmp_path)
+    analysis = _analysis()
+    analysis.executed_price_cents = 36
+    veto_calls = []
+
+    def _veto(*args, **kwargs):
+        veto_calls.append(1)
+        return True
+
+    with caplog.at_level(logging.INFO):
+        plan, reason, order_id = await _plan_then_live(
+            executor,
+            analysis,
+            FinalExecutionTerms(36, 8, 2.88),
+            _liquidity("0.34"),
+            _veto,
+        )
+    assert reason is None
+    assert plan is not None
+    assert plan.price_cents == 36
+    assert order_id is None
+    assert veto_calls == []
+    executor._rest.place_limit_order.assert_not_called()
+    found = _skip_line(caplog, "34")
+    assert found.group(1) == "KXTRUMPSAY-26OCT19-GOLF"
+    assert found.group(2) == "yes"
+    assert found.group(3) == "34"
+    assert re.fullmatch(r"[0-9a-f]{32}", found.group(4))
+
+
+@pytest.mark.asyncio
+async def test_exact_35c_does_not_post(monkeypatch, tmp_path, caplog):
+    _band_flags_unset(monkeypatch)
+    executor = _executor(monkeypatch, tmp_path)
+    analysis = _analysis()
+    analysis.executed_price_cents = 35
+    with caplog.at_level(logging.INFO):
+        plan, reason, order_id = await _plan_then_live(
+            executor,
+            analysis,
+            FinalExecutionTerms(35, 8, 2.80),
+            _liquidity("0.35"),
+            lambda *args, **kwargs: True,
+        )
+    assert plan is not None and reason is None
+    assert order_id is None
+    executor._rest.place_limit_order.assert_not_called()
+    found = _skip_line(caplog, "35")
+    assert found.group(3) == "35"
+    assert re.fullmatch(r"[0-9a-f]{32}", found.group(4))
+
+    direct = _analysis()
+    direct.executed_price_cents = 35
+    executor._rest.place_limit_order.reset_mock()
+    journal, fill_log = _quiet_live_side_effects()
+    with (
+        patch(
+            "utils.event_news_grok_veto.event_news_grok_veto_allows_live_post",
+            return_value=True,
+        ),
+        journal,
+        fill_log,
+        caplog.at_level(logging.INFO),
+    ):
+        direct_id = await executor._execute_live(
+            direct,
+            execution_plan=FinalExecutionTerms(35, 8, 2.80),
+        )
+    assert direct_id is None
+    executor._rest.place_limit_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_ask_36c_post_is_allowed(monkeypatch, tmp_path):
+    _band_flags_unset(monkeypatch)
+    executor = _executor(monkeypatch, tmp_path)
+    analysis = _analysis()
+    analysis.executed_price_cents = 36
+    plan, reason, order_id = await _plan_then_live(
+        executor,
+        analysis,
+        FinalExecutionTerms(36, 8, 2.88),
+        _liquidity("0.36"),
+        lambda *args, **kwargs: True,
+    )
+    assert reason is None
+    assert order_id == "ord-1"
+    executor._rest.place_limit_order.assert_called_once()
+    posted = executor._rest.place_limit_order.call_args.kwargs
+    assert posted["limit_price"] == 36
+    assert posted["count"] == 8
+    assert re.fullmatch(r"[0-9a-f]{32}", posted["client_order_id"])
+
+
+@pytest.mark.asyncio
+async def test_ask_89c_keeps_size_cap_and_family_lock(monkeypatch, tmp_path, caplog):
+    _band_flags_unset(monkeypatch)
+    executor = _executor(monkeypatch, tmp_path)
+    analysis = _analysis()
+    analysis.executed_price_cents = 89
+    with caplog.at_level(logging.INFO):
+        plan, reason, order_id = await _plan_then_live(
+            executor,
+            analysis,
+            FinalExecutionTerms(89, 22, 19.58),
+            _liquidity("0.89"),
+            lambda *args, **kwargs: True,
+        )
+    assert reason is None
+    assert plan is not None
+    assert plan.contracts == EVENT_NEWS_MAX_CONTRACTS == 8
+    assert plan.price_cents == 89
+    assert order_id == "ord-1"
+    posted = executor._rest.place_limit_order.call_args.kwargs
+    assert posted["limit_price"] == 89
+    assert posted["count"] == 8
+    assert "executed_ask_in_excluded_band" not in caplog.text
+    week = MagicMock()
+    week.ticker = "KXTRUTHSOCIAL-26OCT24-B200"
+    week.series_ticker = "KXTRUTHSOCIAL"
+    occupied = event_news_family_lock_ticker(
+        week,
+        ["KXTRUTHSOCIAL-26OCT17-B129"],
+        config=MagicMock(paper_cohort_id=EVENT_NEWS_COHORT_ID),
+    )
+    assert occupied == "KXTRUTHSOCIAL-26OCT17-B129"
+
+
+@pytest.mark.asyncio
+async def test_paper_mode_skips_the_same_excluded_asks(monkeypatch, tmp_path, caplog):
+    _band_flags_unset(monkeypatch)
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
+    executor = _executor(monkeypatch, tmp_path, paper=True)
+    assert executor._is_paper is True
+
+    cheap = _analysis()
+    cheap.executed_price_cents = 36
     with (
         patch(
             "trading.executor.final_execution_terms",
-            return_value=FinalExecutionTerms(89, 8, 7.12),
+            return_value=FinalExecutionTerms(36, 8, 2.88),
+        ),
+        patch(
+            "trading.executor.fetch_kalshi_execution_liquidity",
+            new=AsyncMock(return_value=_liquidity("0.34")),
+        ),
+        caplog.at_level(logging.INFO),
+    ):
+        plan, reason = await executor._final_execution_plan(cheap)
+        trade_id = await executor._execute_paper(cheap, execution_plan=plan)
+    assert reason is None and plan is not None
+    assert trade_id is None
+    executor._paper.record_trade.assert_not_called()
+    executor._paper.record_trade_result.assert_not_called()
+    paper_line = _skip_line(caplog, "34")
+    assert paper_line.group(4) == ""
+
+    exact = _analysis()
+    exact.executed_price_cents = 35
+    with (
+        patch(
+            "trading.executor.final_execution_terms",
+            return_value=FinalExecutionTerms(35, 8, 2.80),
         ),
         patch(
             "trading.executor.fetch_kalshi_execution_liquidity",
             new=AsyncMock(return_value=_liquidity("0.35")),
         ),
     ):
-        plan, reason = await executor._final_execution_plan(_analysis())
-    assert reason is None
-    assert plan is not None
-    assert plan.contracts == 8
+        plan, reason = await executor._final_execution_plan(exact)
+        trade_id = await executor._execute_paper(exact, execution_plan=plan)
+    assert trade_id is None
+    executor._paper.record_trade.assert_not_called()
+    executor._paper.record_trade_result.assert_not_called()
 
-    monkeypatch.setattr(_cfg_module.cfg, "paper_cohort_id", "other-cohort")
+    allowed = _analysis()
+    allowed.executed_price_cents = 36
+    executor._paper.record_trade.return_value = "paper-1"
     with (
         patch(
             "trading.executor.final_execution_terms",
-            return_value=FinalExecutionTerms(89, 8, 7.12),
+            return_value=FinalExecutionTerms(36, 8, 2.88),
         ),
         patch(
             "trading.executor.fetch_kalshi_execution_liquidity",
-            new=AsyncMock(return_value=_liquidity("0.20")),
+            new=AsyncMock(return_value=_liquidity("0.36")),
         ),
     ):
-        plan, reason = await executor._final_execution_plan(_analysis())
-    assert reason is None
-    assert plan is not None
+        plan, reason = await executor._final_execution_plan(allowed)
+        trade_id = await executor._execute_paper(allowed, execution_plan=plan)
+    assert trade_id == "paper-1"
+    executor._paper.record_trade.assert_called_once()
+    executor._rest.place_limit_order.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_bad_requote_price_fails_closed(monkeypatch):
-    executor = _executor(monkeypatch)
-    monkeypatch.setenv(EVENT_NEWS_REQUOTE_BAND_CHECK, "true")
+async def test_exact_35c_blocks_politics_post_and_other_cohorts_still_post(
+    monkeypatch, tmp_path, caplog
+):
+    _band_flags_unset(monkeypatch)
+    executor = _executor(monkeypatch, tmp_path)
+    analysis = _analysis()
+    with caplog.at_level(logging.INFO):
+        plan, reason, order_id = await _plan_then_live(
+            executor,
+            analysis,
+            FinalExecutionTerms(89, 8, 7.12),
+            _liquidity("0.35"),
+            lambda *args, **kwargs: True,
+        )
+    assert plan is not None and plan.contracts == 8 and reason is None
+    assert order_id is None
+    executor._rest.place_limit_order.assert_not_called()
+    assert _skip_line(caplog, "35")
+
+    other = _executor(monkeypatch, tmp_path)
+    monkeypatch.setattr(_cfg_module.cfg, "paper_cohort_id", "other-cohort")
+    other_analysis = _analysis()
+    plan, reason, order_id = await _plan_then_live(
+        other,
+        other_analysis,
+        FinalExecutionTerms(89, 8, 7.12),
+        _liquidity("0.20"),
+        lambda *args, **kwargs: True,
+    )
+    assert reason is None
+    assert order_id == "ord-1"
+    other._rest.place_limit_order.assert_called_once()
+    assert other._rest.place_limit_order.call_args.kwargs["count"] == 8
+
+
+@pytest.mark.asyncio
+async def test_bad_requote_price_fails_closed(monkeypatch, tmp_path, caplog):
+    _band_flags_unset(monkeypatch)
+    executor = _executor(monkeypatch, tmp_path)
     book = _liquidity("0.89")
     bad = ExecutableLiquidity(
         market_ticker=book.market_ticker,
@@ -789,16 +1058,17 @@ async def test_bad_requote_price_fails_closed(monkeypatch):
         raw_payload_hash=book.raw_payload_hash,
     )
     object.__setattr__(bad, "best_price", "not-a-price")
-    with (
-        patch(
-            "trading.executor.final_execution_terms",
-            return_value=FinalExecutionTerms(89, 8, 7.12),
-        ),
-        patch(
-            "trading.executor.fetch_kalshi_execution_liquidity",
-            new=AsyncMock(return_value=bad),
-        ),
-    ):
-        plan, reason = await executor._final_execution_plan(_analysis())
-    assert plan is None
-    assert reason == "executed_ask_in_excluded_band"
+    analysis = _analysis()
+    with caplog.at_level(logging.INFO):
+        plan, reason, order_id = await _plan_then_live(
+            executor,
+            analysis,
+            FinalExecutionTerms(89, 8, 7.12),
+            bad,
+            lambda *args, **kwargs: True,
+        )
+    assert plan is not None and reason is None
+    assert order_id is None
+    executor._rest.place_limit_order.assert_not_called()
+    found = _skip_line(caplog, "invalid")
+    assert re.fullmatch(r"[0-9a-f]{32}", found.group(4))

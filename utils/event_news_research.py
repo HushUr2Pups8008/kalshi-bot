@@ -15,7 +15,10 @@ from typing import Any, Mapping
 from analysis.research_gate import ResearchStatus, run_research_gate
 from config import cfg
 from tasks.research_dossier import default_store as default_research_dossier_store
-from utils.event_news_grok_flags import event_news_exclude_exact_35_enabled
+from utils.event_news_grok_flags import (
+    event_news_exclude_exact_35_enabled,
+    event_news_requote_band_check_enabled,
+)
 from utils.logger import get_logger
 
 log = get_logger("event_news_research")
@@ -542,8 +545,9 @@ def event_news_cents_in_excluded_band(
 ) -> bool:
     """True when this ask is inside the executed-side longshot band.
 
-    The default band is half-open at 35c. EVENT_NEWS_EXCLUDE_EXACT_35
-    includes 35c only when it is true.
+    The configured band is half-open at 35c, so 0c is inside and 35c is
+    outside that interval. EVENT_NEWS_EXCLUDE_EXACT_35 defaults on and
+    adds the 35c ask. Only the exact env value ``false`` leaves 35c out.
     """
     if cents is None:
         return False
@@ -559,6 +563,58 @@ def event_news_cents_in_excluded_band(
     return False
 
 
+def event_news_fresh_ask_cents(best_price: Any) -> tuple[int | None, bool]:
+    """Return ``(cents, invalid)`` for the fresh executable ask.
+
+    ``best_price is None`` is absent, not invalid. A value that cannot be
+    converted fails closed at the pre-POST guard.
+    """
+    if best_price is None:
+        return None, False
+    try:
+        cents = int(
+            (Decimal(best_price) * Decimal("100")).to_integral_value(
+                rounding=ROUND_HALF_UP
+            )
+        )
+    except (ArithmeticError, TypeError, ValueError):
+        return None, True
+    return cents, False
+
+
+def event_news_blocked_final_ask(
+    *,
+    limit_cents: int | None,
+    fresh_ask_cents: int | None,
+    fresh_ask_invalid: bool,
+    config: Any = None,
+    environ: Mapping[str, str] | None = None,
+) -> int | str | None:
+    """Ask to log when the politics order must be skipped.
+
+    Checks the fresh executable ask first, then the limit that would be
+    posted. ``"invalid"`` means the fresh ask could not be read. None
+    means this gate does not skip. Non-politics cohorts are ignored.
+    The requote flag defaults on.
+    """
+    if not is_event_news_paper_cohort(config):
+        return None
+    if not event_news_requote_band_check_enabled(environ):
+        return None
+    if fresh_ask_invalid:
+        return "invalid"
+    for cents in (fresh_ask_cents, limit_cents):
+        if cents is None or isinstance(cents, bool):
+            continue
+        try:
+            ask = int(cents)
+        except (TypeError, ValueError):
+            return "invalid"
+        if event_news_cents_in_excluded_band(ask, config=config, environ=environ):
+            return ask
+    return None
+
+
 def event_news_requote_skip_reason(
     best_price: Any,
     *,
@@ -566,13 +622,11 @@ def event_news_requote_skip_reason(
     environ: Mapping[str, str] | None = None,
 ) -> str | None:
     """Skip when a fresh book would take an excluded ask."""
-    if best_price is None:
+    cents, invalid = event_news_fresh_ask_cents(best_price)
+    if invalid:
+        return "executed_ask_in_excluded_band"
+    if cents is None:
         return None
-    cents = int(
-        (Decimal(best_price) * Decimal("100")).to_integral_value(
-            rounding=ROUND_HALF_UP
-        )
-    )
     if event_news_cents_in_excluded_band(cents, config=config, environ=environ):
         return "executed_ask_in_excluded_band"
     return None

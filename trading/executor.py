@@ -948,24 +948,16 @@ class TradeExecutor:
             return None, "G8_execution_depth_insufficient"
         from utils.event_news_grok_flags import event_news_requote_band_check_enabled
         from utils.event_news_research import (
-            event_news_requote_skip_reason,
+            event_news_fresh_ask_cents,
             is_event_news_paper_cohort,
         )
 
+        # Keep the fresh ask for the pre-POST guard. Do not skip here:
+        # the client_order_id does not exist until _execute_live.
         if event_news_requote_band_check_enabled() and is_event_news_paper_cohort():
-            try:
-                requote_reason = event_news_requote_skip_reason(liquidity.best_price)
-            except (ArithmeticError, TypeError, ValueError):
-                requote_reason = "executed_ask_in_excluded_band"
-            if requote_reason is not None:
-                log.info(
-                    "[EVENT_NEWS_RISK] executed_ask_in_excluded_band ticker=%s "
-                    "side=%s ask=%s source=requote",
-                    analysis.market.ticker,
-                    analysis.side,
-                    liquidity.best_price,
-                )
-                return None, requote_reason
+            fresh_cents, fresh_invalid = event_news_fresh_ask_cents(liquidity.best_price)
+            analysis._event_news_final_ask_cents = fresh_cents
+            analysis._event_news_final_ask_invalid = fresh_invalid
         return plan, None
 
     def _event_news_research_rest_execution_plan(
@@ -1227,12 +1219,63 @@ class TradeExecutor:
             return "fee_admission_non_positive_net_edge"
         return None
 
+    def _event_news_pre_post_band_skip(
+        self,
+        analysis: SignalAnalysis,
+        *,
+        limit_cents: int | None,
+        client_order_id: str,
+        log_skip: bool = True,
+    ) -> bool:
+        """Skip a politics order whose final executed ask is 0c through 35c.
+
+        ``limit_cents`` is the price that would be posted. The fresh book
+        ask, when one was stored, is checked too. Call this only after
+        that price is final.
+        """
+        from utils.event_news_research import event_news_blocked_final_ask
+
+        # MagicMock analyses invent missing attributes. Only an explicit
+        # store from the fresh book may fail this gate closed.
+        raw_invalid = getattr(analysis, "_event_news_final_ask_invalid", False)
+        raw_cents = getattr(analysis, "_event_news_final_ask_cents", None)
+        fresh_invalid = raw_invalid is True
+        fresh_cents = raw_cents if type(raw_cents) is int else None
+        blocked = event_news_blocked_final_ask(
+            limit_cents=limit_cents,
+            fresh_ask_cents=fresh_cents,
+            fresh_ask_invalid=fresh_invalid,
+        )
+        if blocked is None:
+            return False
+        if log_skip:
+            log.info(
+                "[EVENT_NEWS_RISK] executed_ask_in_excluded_band ticker=%s "
+                "side=%s ask=%s client_order_id=%s",
+                analysis.market.ticker,
+                analysis.side,
+                blocked,
+                client_order_id,
+            )
+        return True
+
     async def _execute_paper(
         self,
         analysis: SignalAnalysis,
         *,
         execution_plan: FinalExecutionTerms | None = None,
     ) -> Optional[str]:
+        limit_cents = (
+            execution_plan.price_cents
+            if execution_plan is not None
+            else getattr(analysis, "executed_price_cents", None)
+        )
+        if self._event_news_pre_post_band_skip(
+            analysis,
+            limit_cents=limit_cents,
+            client_order_id="",
+        ):
+            return None
         entry_request_id: str | None = None
         fee_net_accounting = bool(cfg.enable_fee_net_paper_accounting)
         if fee_net_accounting:
@@ -1358,7 +1401,14 @@ class TradeExecutor:
         from utils.event_news_research import is_event_news_paper_cohort
         from utils.event_news_grok_veto import event_news_grok_veto_allows_live_post
 
-        if is_event_news_paper_cohort():
+        # price_cents is final. A band skip must not call Grok or POST.
+        band_blocked = self._event_news_pre_post_band_skip(
+            analysis,
+            limit_cents=price_cents,
+            client_order_id="",
+            log_skip=False,
+        )
+        if not band_blocked and is_event_news_paper_cohort():
             if not event_news_grok_veto_allows_live_post(
                 analysis,
                 contracts=contracts,
@@ -1370,6 +1420,14 @@ class TradeExecutor:
                 return None
 
         client_order_id = uuid.uuid4().hex
+        # Last price check before the submission intent, reserve, and POST.
+        # Nothing below assigns price_cents.
+        if self._event_news_pre_post_band_skip(
+            analysis,
+            limit_cents=price_cents,
+            client_order_id=client_order_id,
+        ):
+            return None
         submission_summary = {
             "submission_id": uuid.uuid4().hex,
             "ticker": analysis.market.ticker,
