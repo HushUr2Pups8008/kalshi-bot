@@ -1,6 +1,7 @@
 # Live fill log
 
 One line per live 2xx or live business reject.
+The desk appends to logs/state/live-fill-log.md. This file is the daily copy.
 
 Columns: time, ticker, side, price, contracts, client_order_id, HTTP result.
 

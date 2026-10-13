@@ -36,6 +36,7 @@ logs/tests/
 logs/governance/
 logs/edge_replay/
 logs/backups/
+# Runtime live fills. scripts/copy_live_fill_log.py copies the file into docs/reports.
 logs/state/
 evidence_store.db
 

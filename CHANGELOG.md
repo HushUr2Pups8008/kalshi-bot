@@ -19,6 +19,12 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.92] - 2026-10-13
+
+### Changed
+
+- **Live fill lines append to `logs/state/live-fill-log.md`.** That file is gitignored. `scripts/copy_live_fill_log.py` copies it onto `docs/reports/live-fill-log.md` once a day. A missing or empty runtime file does not replace the report.
+
 ## [0.33.91] - 2026-10-13
 
 ### Fixed

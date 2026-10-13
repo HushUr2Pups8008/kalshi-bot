@@ -45,9 +45,10 @@ from utils.logger import get_logger, trade_log, write_trade_log_async
 
 log = get_logger("executor")
 
-LIVE_FILL_LOG_PATH = (
-    Path(__file__).resolve().parents[1] / "docs" / "reports" / "live-fill-log.md"
-)
+# Runtime appends stay out of git. The daily copy writes the report.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+LIVE_FILL_LOG_PATH = _REPO_ROOT / "logs" / "state" / "live-fill-log.md"
+LIVE_FILL_LOG_ARCHIVE_PATH = _REPO_ROOT / "docs" / "reports" / "live-fill-log.md"
 _LIVE_BUSINESS_REJECT_STATUSES = frozenset({400, 404, 409, 422})
 _LIVE_BUSINESS_REJECT_TOKENS = (
     "not_found",
