@@ -1200,6 +1200,292 @@ async def test_live_exposure_flag_off_does_not_get_balance(monkeypatch, tmp_path
     )
     assert reason is None and order_id == "ord-1"
     executor._rest._request.assert_not_called()
+    executor._rest.cancel_order.assert_not_called()
+
+
+def _resting(order_id: str, *, filled: int = 0, status: str = "resting"):
+    return SimpleNamespace(
+        error=None,
+        order_id=order_id,
+        status=status,
+        filled=filled,
+        http_status=201,
+    )
+
+
+@pytest.mark.asyncio
+async def test_maker_first_uses_a_new_id_after_cancelling_only_that_order(
+    monkeypatch, tmp_path
+):
+    _band_flags_unset(monkeypatch)
+    monkeypatch.setenv("EVENT_NEWS_MAKER_FIRST", "true")
+    monkeypatch.setattr(_cfg_module.cfg, "min_edge", 0.0)
+    executor = _executor(monkeypatch, tmp_path)
+    analysis = _analysis()
+    analysis.estimated_probability = 0.95
+    analysis.executed_price_cents = 89
+    executor._rest.place_limit_order.side_effect = [
+        _resting("maker-ord"),
+        _resting("taker-ord", filled=8, status="executed"),
+    ]
+    executor._rest.cancel_order.return_value = True
+    executor._rest.get_order_receipt.return_value = {
+        "order_id": "maker-ord",
+        "fill_count_fp": "0.00",
+    }
+    sleep = AsyncMock()
+    journal, fill_log = _quiet_live_side_effects()
+    with (
+        patch("trading.executor.asyncio.sleep", new=sleep),
+        patch(
+            "utils.event_news_grok_veto.event_news_grok_veto_allows_live_post",
+            return_value=True,
+        ),
+        patch(
+            "trading.executor.fetch_kalshi_execution_liquidity",
+            new=AsyncMock(return_value=_liquidity("0.88")),
+        ),
+        journal,
+        fill_log as logged,
+    ):
+        order_id = await executor._execute_live(
+            analysis,
+            execution_plan=FinalExecutionTerms(89, 8, 7.12),
+        )
+    assert order_id == "taker-ord"
+    sleep.assert_awaited_once_with(180)
+    posts = executor._rest.place_limit_order.call_args_list
+    assert len(posts) == 2
+    assert posts[0].kwargs["post_only"] is True
+    assert posts[0].kwargs["limit_price"] == 88
+    assert posts[1].kwargs["limit_price"] == 88
+    assert "post_only" not in posts[1].kwargs
+    assert posts[0].kwargs["client_order_id"] != posts[1].kwargs["client_order_id"]
+    executor._rest.cancel_order.assert_called_once_with("maker-ord")
+    roles = [call.kwargs.get("role") for call in logged.call_args_list]
+    assert roles == ["maker", "taker"]
+
+
+@pytest.mark.asyncio
+async def test_unknown_maker_result_does_not_cancel_or_take(monkeypatch, tmp_path):
+    _band_flags_unset(monkeypatch)
+    monkeypatch.setenv("EVENT_NEWS_MAKER_FIRST", "true")
+    executor = _executor(monkeypatch, tmp_path)
+    analysis = _analysis()
+    executor._rest.place_limit_order.side_effect = RuntimeError("boom")
+    journal, fill_log = _quiet_live_side_effects()
+    with (
+        patch("trading.executor.asyncio.sleep", new=AsyncMock()) as sleep,
+        patch(
+            "utils.event_news_grok_veto.event_news_grok_veto_allows_live_post",
+            return_value=True,
+        ),
+        journal,
+        fill_log,
+    ):
+        order_id = await executor._execute_live(
+            analysis,
+            execution_plan=FinalExecutionTerms(89, 8, 7.12),
+        )
+    assert order_id is None
+    assert executor._rest.place_limit_order.call_count == 1
+    executor._rest.cancel_order.assert_not_called()
+    sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_maker_cancel_failure_does_not_take(monkeypatch, tmp_path):
+    _band_flags_unset(monkeypatch)
+    monkeypatch.setenv("EVENT_NEWS_MAKER_FIRST", "true")
+    executor = _executor(monkeypatch, tmp_path)
+    analysis = _analysis()
+    executor._rest.place_limit_order.return_value = _resting("maker-ord")
+    executor._rest.cancel_order.return_value = False
+    journal, fill_log = _quiet_live_side_effects()
+    with (
+        patch("trading.executor.asyncio.sleep", new=AsyncMock()),
+        patch(
+            "utils.event_news_grok_veto.event_news_grok_veto_allows_live_post",
+            return_value=True,
+        ),
+        journal,
+        fill_log,
+    ):
+        order_id = await executor._execute_live(
+            analysis,
+            execution_plan=FinalExecutionTerms(89, 8, 7.12),
+        )
+    assert order_id == "maker-ord"
+    assert executor._rest.place_limit_order.call_count == 1
+    executor._rest.cancel_order.assert_called_once_with("maker-ord")
+
+
+@pytest.mark.asyncio
+async def test_maker_fill_during_the_wait_shrinks_the_taker(monkeypatch, tmp_path):
+    _band_flags_unset(monkeypatch)
+    monkeypatch.setenv("EVENT_NEWS_MAKER_FIRST", "true")
+    monkeypatch.setattr(_cfg_module.cfg, "min_edge", 0.0)
+    executor = _executor(monkeypatch, tmp_path)
+    analysis = _analysis()
+    analysis.estimated_probability = 0.95
+    analysis.executed_price_cents = 89
+    executor._rest.place_limit_order.side_effect = [
+        _resting("maker-ord"),
+        _resting("taker-ord", filled=5, status="executed"),
+    ]
+    executor._rest.cancel_order.return_value = True
+    executor._rest.get_order_receipt.return_value = {
+        "order_id": "maker-ord",
+        "fill_count_fp": "3.00",
+    }
+    journal, fill_log = _quiet_live_side_effects()
+    with (
+        patch("trading.executor.asyncio.sleep", new=AsyncMock()),
+        patch(
+            "utils.event_news_grok_veto.event_news_grok_veto_allows_live_post",
+            return_value=True,
+        ),
+        patch(
+            "trading.executor.fetch_kalshi_execution_liquidity",
+            new=AsyncMock(return_value=_liquidity("0.88")),
+        ),
+        journal,
+        fill_log,
+    ):
+        order_id = await executor._execute_live(
+            analysis,
+            execution_plan=FinalExecutionTerms(89, 8, 7.12),
+        )
+    assert order_id == "taker-ord"
+    taker = executor._rest.place_limit_order.call_args_list[1].kwargs
+    assert taker["count"] == 5
+    assert "post_only" not in taker
+
+
+@pytest.mark.asyncio
+async def test_maker_full_fill_during_the_wait_does_not_take(monkeypatch, tmp_path):
+    _band_flags_unset(monkeypatch)
+    monkeypatch.setenv("EVENT_NEWS_MAKER_FIRST", "true")
+    executor = _executor(monkeypatch, tmp_path)
+    analysis = _analysis()
+    executor._rest.place_limit_order.return_value = _resting("maker-ord")
+    executor._rest.get_order_receipt.return_value = {
+        "order_id": "maker-ord",
+        "fill_count_fp": "8.00",
+    }
+    journal, fill_log = _quiet_live_side_effects()
+    with (
+        patch("trading.executor.asyncio.sleep", new=AsyncMock()),
+        patch(
+            "utils.event_news_grok_veto.event_news_grok_veto_allows_live_post",
+            return_value=True,
+        ),
+        journal,
+        fill_log,
+    ):
+        order_id = await executor._execute_live(
+            analysis,
+            execution_plan=FinalExecutionTerms(89, 8, 7.12),
+        )
+    assert order_id == "maker-ord"
+    assert executor._rest.place_limit_order.call_count == 1
+    executor._rest.cancel_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_full_maker_fill_does_not_cancel_or_take(monkeypatch, tmp_path):
+    _band_flags_unset(monkeypatch)
+    monkeypatch.setenv("EVENT_NEWS_MAKER_FIRST", "true")
+    executor = _executor(monkeypatch, tmp_path)
+    analysis = _analysis()
+    executor._rest.place_limit_order.return_value = _resting(
+        "maker-ord",
+        filled=8,
+        status="executed",
+    )
+    journal, fill_log = _quiet_live_side_effects()
+    with (
+        patch("trading.executor.asyncio.sleep", new=AsyncMock()) as sleep,
+        patch(
+            "utils.event_news_grok_veto.event_news_grok_veto_allows_live_post",
+            return_value=True,
+        ),
+        journal,
+        fill_log,
+    ):
+        order_id = await executor._execute_live(
+            analysis,
+            execution_plan=FinalExecutionTerms(89, 8, 7.12),
+        )
+    assert order_id == "maker-ord"
+    executor._rest.cancel_order.assert_not_called()
+    assert executor._rest.place_limit_order.call_count == 1
+    sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_maker_price_does_not_cross_the_36c_band(monkeypatch, tmp_path):
+    _band_flags_unset(monkeypatch)
+    monkeypatch.setenv("EVENT_NEWS_MAKER_FIRST", "true")
+    executor = _executor(monkeypatch, tmp_path)
+    analysis = _analysis()
+    analysis.side = "no"
+    analysis.executed_price_cents = 36
+    executor._rest.place_limit_order.return_value = _resting(
+        "taker-ord",
+        filled=8,
+        status="executed",
+    )
+    journal, fill_log = _quiet_live_side_effects()
+    with (
+        patch("trading.executor.asyncio.sleep", new=AsyncMock()) as sleep,
+        patch(
+            "utils.event_news_grok_veto.event_news_grok_veto_allows_live_post",
+            return_value=True,
+        ),
+        journal,
+        fill_log,
+    ):
+        order_id = await executor._execute_live(
+            analysis,
+            execution_plan=FinalExecutionTerms(36, 8, 2.88),
+        )
+    assert order_id == "taker-ord"
+    posted = executor._rest.place_limit_order.call_args.kwargs
+    assert posted["limit_price"] == 36
+    assert "post_only" not in posted
+    executor._rest.cancel_order.assert_not_called()
+    sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_paper_maker_flag_does_not_sleep(monkeypatch, tmp_path, caplog):
+    _band_flags_unset(monkeypatch)
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
+    executor = _executor(monkeypatch, tmp_path, paper=True)
+    _stub_equity(executor)
+    analysis = _analysis()
+    analysis.executed_price_cents = 60
+    executor._paper.record_trade.return_value = "paper-maker"
+    sleep = AsyncMock()
+    with (
+        patch("trading.executor.asyncio.sleep", new=sleep),
+        patch(
+            "trading.executor.final_execution_terms",
+            return_value=FinalExecutionTerms(60, 8, 4.80),
+        ),
+        patch(
+            "trading.executor.fetch_kalshi_execution_liquidity",
+            new=AsyncMock(return_value=_liquidity("0.60")),
+        ),
+        caplog.at_level(logging.INFO),
+    ):
+        plan, reason = await executor._final_execution_plan(analysis)
+        trade_id = await executor._execute_paper(analysis, execution_plan=plan)
+    assert reason is None and trade_id == "paper-maker"
+    sleep.assert_not_awaited()
+    assert "sleep=0" in caplog.text
+    executor._rest.place_limit_order.assert_not_called()
 
 
 @pytest.mark.asyncio
