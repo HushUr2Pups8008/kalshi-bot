@@ -98,6 +98,8 @@ def event_news_flags_boot_line(
     environ: Mapping[str, str] | None = None,
 ) -> str:
     """One boot line. Values come from the same flag functions the executor uses."""
+    from utils.event_news_desk_flags import event_news_desk_flags_boot_suffix
+
     return (
         "[EVENT_NEWS_FLAGS] "
         f"REQUOTE_BAND_CHECK={_event_news_on_off(event_news_requote_band_check_enabled(environ))} "
@@ -107,6 +109,7 @@ def event_news_flags_boot_line(
         f"GROK_WATCH_SKIP_SETTLED={_event_news_on_off(event_news_watch_skip_settled_enabled(environ))} "
         f"FILL_LOG_DETAIL={_event_news_on_off(event_news_fill_log_detail_enabled(environ))} "
         f"band_floor_cents={EVENT_NEWS_BAND_FLOOR_CENTS}"
+        f"{event_news_desk_flags_boot_suffix(environ)}"
     )
 
 

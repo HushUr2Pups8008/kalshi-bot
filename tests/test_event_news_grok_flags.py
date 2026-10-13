@@ -1126,9 +1126,50 @@ async def test_paper_mode_skips_the_same_excluded_asks(monkeypatch, tmp_path, ca
     executor._paper.record_trade.assert_not_called()
     executor._paper.record_trade_result.assert_not_called()
 
+    below = _analysis()
+    below.executed_price_cents = 36
+    with (
+        patch(
+            "trading.executor.final_execution_terms",
+            return_value=FinalExecutionTerms(36, 8, 2.88),
+        ),
+        patch(
+            "trading.executor.fetch_kalshi_execution_liquidity",
+            new=AsyncMock(return_value=_liquidity("0.36")),
+        ),
+        caplog.at_level(logging.INFO),
+    ):
+        plan, reason = await executor._final_execution_plan(below)
+        trade_id = await executor._execute_paper(below, execution_plan=plan)
+    assert reason is None and plan is not None
+    assert trade_id is None
+    executor._paper.record_trade.assert_not_called()
+    assert "yes_below_floor" in caplog.text
+
     allowed = _analysis()
-    allowed.executed_price_cents = 36
+    allowed.executed_price_cents = 60
     executor._paper.record_trade.return_value = "paper-1"
+    with (
+        patch(
+            "trading.executor.final_execution_terms",
+            return_value=FinalExecutionTerms(60, 8, 4.80),
+        ),
+        patch(
+            "trading.executor.fetch_kalshi_execution_liquidity",
+            new=AsyncMock(return_value=_liquidity("0.60")),
+        ),
+    ):
+        plan, reason = await executor._final_execution_plan(allowed)
+        trade_id = await executor._execute_paper(allowed, execution_plan=plan)
+    assert trade_id == "paper-1"
+    executor._paper.record_trade.assert_called_once()
+    executor._rest.place_limit_order.assert_not_called()
+
+    no_side = _analysis()
+    no_side.side = "no"
+    no_side.executed_price_cents = 36
+    executor._paper.record_trade.reset_mock()
+    executor._paper.record_trade.return_value = "paper-no"
     with (
         patch(
             "trading.executor.final_execution_terms",
@@ -1139,11 +1180,10 @@ async def test_paper_mode_skips_the_same_excluded_asks(monkeypatch, tmp_path, ca
             new=AsyncMock(return_value=_liquidity("0.36")),
         ),
     ):
-        plan, reason = await executor._final_execution_plan(allowed)
-        trade_id = await executor._execute_paper(allowed, execution_plan=plan)
-    assert trade_id == "paper-1"
+        plan, reason = await executor._final_execution_plan(no_side)
+        trade_id = await executor._execute_paper(no_side, execution_plan=plan)
+    assert trade_id == "paper-no"
     executor._paper.record_trade.assert_called_once()
-    executor._rest.place_limit_order.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1243,6 +1283,12 @@ def test_boot_line_prints_resolved_flag_values(monkeypatch, tmp_path, caplog):
         "[EVENT_NEWS_FLAGS] REQUOTE_BAND_CHECK=off EXCLUDE_EXACT_35=on "
         "GROK_GROUNDING=on GROK_TRACE=off GROK_WATCH_SKIP_SETTLED=off "
         "FILL_LOG_DETAIL=off band_floor_cents=36"
+        " YES_FLOOR live=off paper=on cents=55"
+        " RISK_CAP live=off paper=on cents=400"
+        " EXPOSURE_PCT live=off paper=on pct=25"
+        " ONE_PER_FAMILY live=off paper=on"
+        " MAKER_FIRST live=off paper=on wait_s=180"
+        " RULES_CHECK live=off paper=on"
     )
     assert "[EVENT_NEWS_FLAGS] FATAL band guard off in LIVE" not in caplog.text
 
@@ -1263,6 +1309,12 @@ def test_boot_line_defaults_band_on_and_the_other_four_off(monkeypatch, tmp_path
         "[EVENT_NEWS_FLAGS] REQUOTE_BAND_CHECK=on EXCLUDE_EXACT_35=on "
         "GROK_GROUNDING=off GROK_TRACE=off GROK_WATCH_SKIP_SETTLED=off "
         "FILL_LOG_DETAIL=off band_floor_cents=36"
+        " YES_FLOOR live=off paper=on cents=55"
+        " RISK_CAP live=off paper=on cents=400"
+        " EXPOSURE_PCT live=off paper=on pct=25"
+        " ONE_PER_FAMILY live=off paper=on"
+        " MAKER_FIRST live=off paper=on wait_s=180"
+        " RULES_CHECK live=off paper=on"
     )
     assert "[EVENT_NEWS_FLAGS] FATAL band guard off in LIVE" not in caplog.text
 
@@ -1338,16 +1390,16 @@ async def test_paper_still_runs_when_band_flags_are_off(
     assert "[EVENT_NEWS_FLAGS] FATAL band guard off in LIVE" not in caplog.text
     assert "REQUOTE_BAND_CHECK=off EXCLUDE_EXACT_35=off" in _boot_line(caplog)
     allowed = _analysis()
-    allowed.executed_price_cents = 36
+    allowed.executed_price_cents = 60
     executor._paper.record_trade.return_value = "paper-flags-off"
     with (
         patch(
             "trading.executor.final_execution_terms",
-            return_value=FinalExecutionTerms(36, 8, 2.88),
+            return_value=FinalExecutionTerms(60, 8, 4.80),
         ),
         patch(
             "trading.executor.fetch_kalshi_execution_liquidity",
-            new=AsyncMock(return_value=_liquidity("0.36")),
+            new=AsyncMock(return_value=_liquidity("0.60")),
         ),
     ):
         plan, reason = await executor._final_execution_plan(allowed)

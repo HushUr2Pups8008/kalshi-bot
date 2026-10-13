@@ -580,6 +580,8 @@ class TradeExecutor:
         execution_plan: FinalExecutionTerms | None = None
         if skip_reason is None:
             execution_plan, skip_reason = await self._final_execution_plan(analysis)
+        if skip_reason is None and execution_plan is not None:
+            skip_reason = self._event_news_plan_skip(analysis, execution_plan)
         if skip_reason is None and self._is_paper:
             assert execution_plan is not None
             skip_reason = self._paper_fee_admission_skip_reason(
@@ -1356,6 +1358,32 @@ class TradeExecutor:
             return "fee_admission_non_positive_net_edge"
         return None
 
+    def _event_news_plan_skip(
+        self,
+        analysis: SignalAnalysis,
+        execution_plan: FinalExecutionTerms,
+    ) -> str | None:
+        """Politics desk skips. Paper defaults on. Live stays off until the env is set."""
+        from utils.event_news_desk_flags import event_news_yes_floor_skip_reason
+        from utils.event_news_research import is_event_news_paper_cohort
+
+        if not is_event_news_paper_cohort():
+            return None
+        reason = event_news_yes_floor_skip_reason(
+            getattr(analysis, "side", ""),
+            execution_plan.price_cents,
+            live=not self._is_paper,
+        )
+        if reason is None:
+            return None
+        log.info(
+            "[EVENT_NEWS_RISK] yes_below_floor ticker=%s side=%s ask=%s",
+            getattr(getattr(analysis, "market", None), "ticker", ""),
+            getattr(analysis, "side", ""),
+            execution_plan.price_cents,
+        )
+        return reason
+
     def _event_news_pre_post_band_skip(
         self,
         analysis: SignalAnalysis,
@@ -1411,6 +1439,11 @@ class TradeExecutor:
             analysis,
             limit_cents=limit_cents,
             client_order_id="",
+        ):
+            return None
+        if execution_plan is not None and self._event_news_plan_skip(
+            analysis,
+            execution_plan,
         ):
             return None
         entry_request_id: str | None = None
@@ -1556,6 +1589,17 @@ class TradeExecutor:
             client_order_id="",
             log_skip=False,
         )
+        # New desk skips return before a client_order_id exists. The 0-35c
+        # band still mints an id only so the existing skip line can name it.
+        if not band_blocked and self._event_news_plan_skip(
+            analysis,
+            FinalExecutionTerms(
+                price_cents=price_cents,
+                contracts=contracts,
+                cost_dollars=cost_dollars,
+            ),
+        ):
+            return None
         if not band_blocked and is_event_news_paper_cohort():
             if not event_news_grok_veto_allows_live_post(
                 analysis,
