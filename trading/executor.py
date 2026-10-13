@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from numbers import Real
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from analysis import SignalAnalysis
 from analysis.kelly import contracts_from_dollars, kelly_bet
@@ -174,14 +174,33 @@ def append_live_fill_log(
     client_order_id: str,
     http_result: str,
     path: Path | None = None,
+    filled_count: int | None = None,
+    avg_fill_cents: int | None = None,
+    fee_cents: int | None = None,
+    order_id: str | None = None,
+    environ: Mapping[str, str] | None = None,
 ) -> None:
-    """Append one Desk Ops line. Never logs keys."""
+    """Append one Desk Ops line. Never logs keys.
+
+    Extra columns are written only when EVENT_NEWS_FILL_LOG_DETAIL=true.
+    The 201 response does not include the exchange fee, so fee_cents stays
+    blank unless the caller has it.
+    """
+    from utils.event_news_grok_flags import event_news_fill_log_detail_enabled
+
     target = path or LIVE_FILL_LOG_PATH
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     line = (
         f"{stamp}, {ticker}, {side}, {price_cents}, {contracts}, "
-        f"{client_order_id}, {http_result}\n"
+        f"{client_order_id}, {http_result}"
     )
+    if event_news_fill_log_detail_enabled(environ):
+        filled_text = "" if filled_count is None else str(filled_count)
+        avg_text = "" if avg_fill_cents is None else str(avg_fill_cents)
+        fee_text = "" if fee_cents is None else str(fee_cents)
+        order_text = "" if not order_id else str(order_id).replace(",", "")
+        line = f"{line}, {filled_text}, {avg_text}, {fee_text}, {order_text}"
+    line = f"{line}\n"
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         with target.open("a", encoding="utf-8") as handle:
@@ -927,6 +946,26 @@ class TradeExecutor:
                 available_contracts,
             )
             return None, "G8_execution_depth_insufficient"
+        from utils.event_news_grok_flags import event_news_requote_band_check_enabled
+        from utils.event_news_research import (
+            event_news_requote_skip_reason,
+            is_event_news_paper_cohort,
+        )
+
+        if event_news_requote_band_check_enabled() and is_event_news_paper_cohort():
+            try:
+                requote_reason = event_news_requote_skip_reason(liquidity.best_price)
+            except (ArithmeticError, TypeError, ValueError):
+                requote_reason = "executed_ask_in_excluded_band"
+            if requote_reason is not None:
+                log.info(
+                    "[EVENT_NEWS_RISK] executed_ask_in_excluded_band ticker=%s "
+                    "side=%s ask=%s source=requote",
+                    analysis.market.ticker,
+                    analysis.side,
+                    liquidity.best_price,
+                )
+                return None, requote_reason
         return plan, None
 
     def _event_news_research_rest_execution_plan(
@@ -1435,14 +1474,28 @@ class TradeExecutor:
             return None
 
         if not result_error or _is_live_business_reject(result):
-            append_live_fill_log(
-                ticker=str(analysis.market.ticker),
-                side=str(analysis.side),
-                price_cents=price_cents,
-                contracts=contracts,
-                client_order_id=client_order_id,
-                http_result=_live_http_result(result),
-            )
+            from utils.event_news_grok_flags import event_news_fill_log_detail_enabled
+
+            if event_news_fill_log_detail_enabled():
+                append_live_fill_log(
+                    ticker=str(analysis.market.ticker),
+                    side=str(analysis.side),
+                    price_cents=price_cents,
+                    contracts=contracts,
+                    client_order_id=client_order_id,
+                    http_result=_live_http_result(result),
+                    filled_count=getattr(result, "filled", None),
+                    order_id=getattr(result, "order_id", None) or None,
+                )
+            else:
+                append_live_fill_log(
+                    ticker=str(analysis.market.ticker),
+                    side=str(analysis.side),
+                    price_cents=price_cents,
+                    contracts=contracts,
+                    client_order_id=client_order_id,
+                    http_result=_live_http_result(result),
+                )
 
         if result_error:
             await record_unknown_and_hold("error_result")

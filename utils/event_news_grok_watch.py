@@ -15,12 +15,20 @@ from typing import Any, Callable, Mapping
 
 import requests
 
+from utils.event_news_grok_flags import (
+    event_news_grok_grounding_enabled,
+    event_news_grok_trace_enabled,
+    event_news_market_status_settled,
+    event_news_watch_skip_settled_enabled,
+)
 from utils.event_news_grok_veto import (
     GROK_MAX_TOKENS,
     GROK_MODEL,
     GROK_TIMEOUT_SECONDS,
     XAI_API_KEY_ENV,
     XAI_CHAT_URL,
+    event_news_grok_grounded_verdict,
+    event_news_grok_trace_log,
 )
 from utils.event_news_research import is_event_news_paper_cohort
 from utils.logger import get_logger
@@ -32,6 +40,11 @@ _WATCH_SYSTEM = (
     "source contradicts this open side. OK means it does not."
 )
 _WATCH_USER = "Does the official source contradict this side?"
+_GROUNDED_WATCH_SYSTEM = (
+    "Reply with one JSON object only. Keys are verdict, confidence, "
+    "quoted_evidence, and url. verdict is CONTRADICT or OK. "
+    "A verdict without quoted_evidence is invalid."
+)
 _LONGSHOT_FILL = 0.35
 
 
@@ -65,18 +78,22 @@ def event_news_grok_watch_decision(
         result = EventNewsGrokWatchResult("timeout", "missing_key", _elapsed_ms(started))
         _log_watch(result, ticker, side)
         return result
+    grounded = event_news_grok_grounding_enabled(env)
+    user_content = (
+        _WATCH_USER
+        + "\n"
+        + json.dumps(dict(packet), separators=(",", ":"), default=str)
+    )
     payload = {
         "model": GROK_MODEL,
         "temperature": 0,
         "max_tokens": GROK_MAX_TOKENS,
         "messages": [
-            {"role": "system", "content": _WATCH_SYSTEM},
             {
-                "role": "user",
-                "content": _WATCH_USER
-                + "\n"
-                + json.dumps(dict(packet), separators=(",", ":"), default=str),
+                "role": "system",
+                "content": _GROUNDED_WATCH_SYSTEM if grounded else _WATCH_SYSTEM,
             },
+            {"role": "user", "content": user_content},
         ],
     }
     headers = {
@@ -104,6 +121,7 @@ def event_news_grok_watch_decision(
         result = EventNewsGrokWatchResult("timeout", f"http_{status}", _elapsed_ms(started))
         _log_watch(result, ticker, side)
         return result
+    body: Any = None
     try:
         body = response.json()
         content = str(body["choices"][0]["message"]["content"])
@@ -111,7 +129,27 @@ def event_news_grok_watch_decision(
         result = EventNewsGrokWatchResult("timeout", "parse_fail", _elapsed_ms(started))
         _log_watch(result, ticker, side)
         return result
-    parsed = _parse_contradict_ok(content)
+    urls = _watch_urls(packet)
+    if event_news_grok_trace_enabled(env):
+        event_news_grok_trace_log("watch", ticker, body, user_content, urls)
+    if grounded:
+        parsed = event_news_grok_grounded_verdict(
+            content,
+            yes_no=False,
+            allowed_urls=urls,
+            contract_parts=tuple(
+                str(packet.get(name) or "")
+                for name in (
+                    "title",
+                    "rules",
+                    "strike",
+                    "close_time",
+                    "source_text",
+                )
+            ),
+        )
+    else:
+        parsed = _parse_contradict_ok(content)
     if parsed is None:
         result = EventNewsGrokWatchResult(
             "timeout",
@@ -192,6 +230,12 @@ def run_event_news_grok_watch_once(
             results.append(EventNewsGrokWatchResult("timeout", "market_lookup", 0))
             _log_watch(results[-1], ticker, side)
             continue
+        if event_news_watch_skip_settled_enabled(environ):
+            if event_news_market_status_settled(getattr(market, "status", "")):
+                result = EventNewsGrokWatchResult("skipped", "settled", 0)
+                _log_watch(result, ticker, side)
+                results.append(result)
+                continue
         urls, terms, lookup_error = _sources_for_packet(market, series_lookup)
         if not urls:
             reason = "series_lookup" if lookup_error else "no_sources"
@@ -207,6 +251,16 @@ def run_event_news_grok_watch_once(
             "settlement_sources": urls,
             "contract_terms_url": terms,
         }
+        if event_news_grok_grounding_enabled(environ):
+            packet["title"] = str(getattr(market, "title", "") or "")
+            packet["rules"] = str(
+                getattr(market, "rules_primary", "")
+                or getattr(market, "rules", "")
+                or ""
+            )
+            packet["strike"] = str(getattr(market, "strike", "") or "")
+            packet["close_time"] = str(getattr(market, "close_time", "") or "")
+            packet["source_text"] = str(getattr(market, "source_text", "") or "")
         result = event_news_grok_watch_decision(packet, environ=environ, post=post)
         results.append(result)
         if result.reason != "missing_key":
@@ -219,6 +273,15 @@ def run_event_news_grok_watch_once(
     if changed:
         _save_state(state_path, state)
     return results
+
+
+def _watch_urls(packet: Mapping[str, Any]) -> list[str]:
+    raw_urls = packet.get("settlement_sources")
+    urls = [str(item) for item in raw_urls] if isinstance(raw_urls, list) else []
+    terms = str(packet.get("contract_terms_url") or "")
+    if terms:
+        urls.append(terms)
+    return urls
 
 
 def _parse_contradict_ok(content: str) -> str | None:

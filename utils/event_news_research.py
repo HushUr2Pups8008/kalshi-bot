@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
+from decimal import Decimal, ROUND_HALF_UP
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Mapping
 
 from analysis.research_gate import ResearchStatus, run_research_gate
 from config import cfg
 from tasks.research_dossier import default_store as default_research_dossier_store
+from utils.event_news_grok_flags import event_news_exclude_exact_35_enabled
 from utils.logger import get_logger
 
 log = get_logger("event_news_research")
@@ -532,6 +534,50 @@ def event_news_in_allowed_ask_band(market: Any, *, config: Any = None) -> bool:
     return side is not None
 
 
+def event_news_cents_in_excluded_band(
+    cents: int | None,
+    *,
+    config: Any = None,
+    environ: Mapping[str, str] | None = None,
+) -> bool:
+    """True when this ask is inside the executed-side longshot band.
+
+    The default band is half-open at 35c. EVENT_NEWS_EXCLUDE_EXACT_35
+    includes 35c only when it is true.
+    """
+    if cents is None:
+        return False
+    price = int(cents) / 100.0
+    active = config if config is not None else cfg
+    excluded = list(getattr(active, "llm_excluded_price_bands", ()) or ())
+    if not excluded:
+        excluded = [(0.00, 0.35)]
+    if any(_price_in_band(price, low, high) for low, high in excluded):
+        return True
+    if int(cents) == 35 and event_news_exclude_exact_35_enabled(environ):
+        return True
+    return False
+
+
+def event_news_requote_skip_reason(
+    best_price: Any,
+    *,
+    config: Any = None,
+    environ: Mapping[str, str] | None = None,
+) -> str | None:
+    """Skip when a fresh book would take an excluded ask."""
+    if best_price is None:
+        return None
+    cents = int(
+        (Decimal(best_price) * Decimal("100")).to_integral_value(
+            rounding=ROUND_HALF_UP
+        )
+    )
+    if event_news_cents_in_excluded_band(cents, config=config, environ=environ):
+        return "executed_ask_in_excluded_band"
+    return None
+
+
 def event_news_executed_side_skip_reason(
     market: Any,
     side: str | None,
@@ -551,23 +597,16 @@ def event_news_executed_side_skip_reason(
         return None
     yes_ask, no_ask = snapshot_ask_cents(market)
     cents = yes_ask if executed == "yes" else no_ask
-    if cents is None:
+    if not event_news_cents_in_excluded_band(cents, config=config):
         return None
-    price = cents / 100.0
-    active = config if config is not None else cfg
-    excluded = list(getattr(active, "llm_excluded_price_bands", ()) or ())
-    if not excluded:
-        excluded = [(0.00, 0.35)]
-    if any(_price_in_band(price, low, high) for low, high in excluded):
-        log.info(
-            "[EVENT_NEWS_RISK] executed_ask_in_excluded_band ticker=%s "
-            "side=%s ask=%s",
-            getattr(market, "ticker", ""),
-            executed,
-            cents,
-        )
-        return "executed_ask_in_excluded_band"
-    return None
+    log.info(
+        "[EVENT_NEWS_RISK] executed_ask_in_excluded_band ticker=%s "
+        "side=%s ask=%s",
+        getattr(market, "ticker", ""),
+        executed,
+        cents,
+    )
+    return "executed_ask_in_excluded_band"
 
 
 def event_news_crossed_asks(market: Any, *, config: Any = None) -> str | None:
