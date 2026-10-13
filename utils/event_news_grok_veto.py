@@ -310,14 +310,27 @@ def event_news_grok_grounded_verdict(
     return None
 
 
+def _trace_source_count(payload: dict[str, Any], usage: dict[str, Any], message: dict[str, Any]) -> object:
+    if "num_sources_used" in usage:
+        return usage.get("num_sources_used")
+    for container in (payload, usage, message):
+        for key in ("citations", "sources"):
+            values = container.get(key)
+            if isinstance(values, list):
+                return len(values)
+    return ""
+
+
 def event_news_grok_trace_log(
     kind: str,
     ticker: str,
     body: Any,
     packet_text: str,
     urls: list[str],
+    *,
+    latency_ms: int | None = None,
 ) -> None:
-    """Log response metadata. Never log the API key."""
+    """Log response metadata and the raw reply. Never log the API key."""
     payload = body if isinstance(body, dict) else {}
     usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
     message: dict[str, Any] = {}
@@ -328,18 +341,34 @@ def event_news_grok_trace_log(
             message = raw_message
     tool_calls = message.get("tool_calls")
     tool_count = len(tool_calls) if isinstance(tool_calls, list) else 0
+    content = message.get("content")
+    raw_reply = content if isinstance(content, str) else ""
+    prompt_tokens = usage.get("prompt_tokens", "")
+    completion_tokens = usage.get("completion_tokens", "")
+    total_tokens = usage.get("total_tokens", "")
+    if (
+        total_tokens == ""
+        and isinstance(prompt_tokens, int)
+        and isinstance(completion_tokens, int)
+    ):
+        total_tokens = prompt_tokens + completion_tokens
     log.info(
         "[EVENT_NEWS_GROK_TRACE] kind=%s ticker=%s model=%s response_id=%s "
-        "prompt_tokens=%s completion_tokens=%s tool_calls=%s packet_hash=%s urls=%s",
+        "num_sources_used=%s prompt_tokens=%s completion_tokens=%s total_tokens=%s "
+        "latency_ms=%s tool_calls=%s packet_hash=%s urls=%s raw_reply=%s",
         kind,
         ticker,
         payload.get("model") or "",
         payload.get("id") or "",
-        usage.get("prompt_tokens", ""),
-        usage.get("completion_tokens", ""),
+        _trace_source_count(payload, usage, message),
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+        "" if latency_ms is None else latency_ms,
         tool_count,
         hashlib.sha256(packet_text.encode("utf-8")).hexdigest()[:16],
         ",".join(urls)[:500],
+        json.dumps(raw_reply, ensure_ascii=True),
     )
 
 
@@ -437,6 +466,7 @@ def event_news_grok_veto_decision(
             body,
             user_content,
             list(packet.evidence_urls),
+            latency_ms=_elapsed_ms(),
         )
     if grounded:
         parsed = event_news_grok_grounded_verdict(
