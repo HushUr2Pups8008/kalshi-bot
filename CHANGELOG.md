@@ -19,6 +19,12 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.91] - 2026-10-13
+
+### Fixed
+
+- **Politics band guard is printed at boot and fail-closed in live.** After `[EXECUTOR_STATE]`, the executor logs one `[EVENT_NEWS_FLAGS]` line with the resolved `REQUOTE_BAND_CHECK`, `EXCLUDE_EXACT_35`, `GROK_GROUNDING`, `GROK_TRACE`, `GROK_WATCH_SKIP_SETTLED`, and `FILL_LOG_DETAIL` values, plus `band_floor_cents=36`. The line uses the same flag functions as the order path. If `LIVE_TRADING_ENABLED` is true and either band flag resolves off, the process logs `[EVENT_NEWS_FLAGS] FATAL band guard off in LIVE` and returns before minting a client_order_id or calling the live POST. It does not exit. Paper still runs with the flags off. The other four flags stay default off.
+
 ## [0.33.90] - 2026-10-13
 
 ### Fixed

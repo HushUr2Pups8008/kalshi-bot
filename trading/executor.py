@@ -324,6 +324,17 @@ class TradeExecutor:
             "paper" if self._is_paper else "live",
             "notional_db" if self._is_paper else "kalshi_api",
         )
+        from utils.event_news_grok_flags import (
+            EVENT_NEWS_FLAGS_FATAL,
+            event_news_flags_boot_line,
+            event_news_live_band_guard_off,
+        )
+
+        # Resolved after env and defaults, from the same functions the band uses.
+        log.info("%s", event_news_flags_boot_line())
+        if event_news_live_band_guard_off(cfg.live_trading_enabled is True):
+            # Stay up. _execute_live refuses the POST; do not sys.exit.
+            log.error("%s", EVENT_NEWS_FLAGS_FATAL)
         self._seed_cooldowns_from_db()
 
     def set_shutdown_callback(self, cb: Callable) -> None:
@@ -1348,6 +1359,17 @@ class TradeExecutor:
                 "This is a bug: _execute_live must only be called from live-mode executors.",
                 analysis.market.ticker,
             )
+            return None
+
+        from utils.event_news_grok_flags import (
+            EVENT_NEWS_FLAGS_FATAL,
+            event_news_live_band_guard_off,
+        )
+
+        # Before any client_order_id is minted and before place_limit_order.
+        # Both band flags on: this is false and the rest of the function is unchanged.
+        if event_news_live_band_guard_off(cfg.live_trading_enabled is True):
+            log.error("%s", EVENT_NEWS_FLAGS_FATAL)
             return None
 
         if not self._live_submission_holds.can_submit(analysis.market.ticker):

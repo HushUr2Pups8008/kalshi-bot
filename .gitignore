@@ -21,6 +21,9 @@ data/*.db-shm
 data/*.db-wal
 data/*.lock
 data/*.pid
+data/paper_cohorts/
+data/legacy_pending_paper_cohorts/
+data/shadow/
 data/event_news_grok_watch.json
 data/event_news_grok_watch.json.tmp
 logs/*.log
@@ -32,8 +35,9 @@ logs/service/
 logs/tests/
 logs/governance/
 logs/edge_replay/
-logs/state/ingest_seen/
-logs/state/live_submission/
+logs/backups/
+logs/state/
+evidence_store.db
 
 # Test temp directories
 tests/_tmp_*/
