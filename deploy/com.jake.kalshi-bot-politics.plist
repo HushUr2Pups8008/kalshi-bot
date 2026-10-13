@@ -31,6 +31,8 @@
         <string>true</string>
         <key>EVENT_NEWS_FILL_LOG_DETAIL</key>
         <string>true</string>
+        <key>EVENT_NEWS_GROK_WATCH_SKIP_SETTLED</key>
+        <string>true</string>
     </dict>
 </dict>
 </plist>

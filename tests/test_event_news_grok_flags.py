@@ -319,6 +319,55 @@ def test_settled_skip_is_off_until_the_flag_is_true(monkeypatch, tmp_path):
     assert not (tmp_path / "watch-settled.json").exists()
 
 
+@pytest.mark.parametrize(
+    ("status", "skipped"),
+    (
+        ("closed", True),
+        ("settled", True),
+        ("finalized", True),
+        ("determined", True),
+        ("active", False),
+    ),
+)
+def test_watch_skip_settled_drops_closed_settled_and_finalized_markets(
+    monkeypatch,
+    tmp_path,
+    status,
+    skipped,
+):
+    """The flag only removes the model call. An active market is still checked."""
+    monkeypatch.setattr(_cfg_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
+    calls = []
+
+    def _post(url, json=None, headers=None, timeout=None):
+        calls.append(status)
+        return _FakeResponse("CONTRADICT")
+
+    market = MagicMock()
+    market.ticker = "KXTRUMPACT-26OCT11-T5"
+    market.status = status
+    market.settlement_sources = ("https://www.whitehouse.gov/presidential-actions/",)
+    market.contract_terms_url = "https://assets.kalshi.com/contract_terms/POLITICALSTAT.pdf"
+    market.series_ticker = "KXTRUMPACT"
+    position = MagicMock()
+    position.ticker = market.ticker
+    position.position_fp = -8
+    position.market_exposure_dollars = 4.80
+
+    run_event_news_grok_watch_once(
+        [position],
+        market_lookup=lambda _ticker: market,
+        state_path=tmp_path / f"watch-{status}.json",
+        now=datetime(2026, 10, 13, tzinfo=timezone.utc),
+        environ={
+            "XAI_API_KEY": "secret-value",
+            EVENT_NEWS_GROK_WATCH_SKIP_SETTLED: "true",
+        },
+        post=_post,
+    )
+    assert (calls == []) is skipped
+
+
 def test_fill_log_columns_stay_off_the_line_until_the_flag_is_true(tmp_path):
     target = tmp_path / "fills.md"
     append_live_fill_log(
