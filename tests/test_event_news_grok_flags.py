@@ -565,6 +565,20 @@ def _analysis():
     return analysis
 
 
+def _stub_equity(executor, *, balance=100000, portfolio_value=0, positions=None):
+    """Readable equity so the paper exposure cap does not fail closed."""
+
+    def _request(method, path, **kwargs):
+        assert method == "GET"
+        if path == "/portfolio/balance":
+            return {"balance": balance, "portfolio_value": portfolio_value}
+        if path == "/portfolio/positions":
+            return {"market_positions": [] if positions is None else positions}
+        raise AssertionError(path)
+
+    executor._rest._request.side_effect = _request
+
+
 def _band_flags_unset(monkeypatch):
     monkeypatch.delenv(EVENT_NEWS_REQUOTE_BAND_CHECK, raising=False)
     monkeypatch.delenv(EVENT_NEWS_EXCLUDE_EXACT_35, raising=False)
@@ -1087,6 +1101,7 @@ async def test_paper_risk_cap_shrinks_an_89c_yes_to_four_contracts(
     _band_flags_unset(monkeypatch)
     monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
     executor = _executor(monkeypatch, tmp_path, paper=True)
+    _stub_equity(executor)
     analysis = _analysis()
     analysis.executed_price_cents = 89
     executor._paper.record_trade.return_value = "paper-risk"
@@ -1114,10 +1129,85 @@ async def test_paper_risk_cap_shrinks_an_89c_yes_to_four_contracts(
 
 
 @pytest.mark.asyncio
+async def test_paper_exposure_and_family_skips_log_and_do_not_record(
+    monkeypatch, tmp_path, caplog
+):
+    _band_flags_unset(monkeypatch)
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
+    executor = _executor(monkeypatch, tmp_path, paper=True)
+    _stub_equity(
+        executor,
+        balance=2920,
+        portfolio_value=1720,
+        positions=[
+            {
+                "ticker": "KXTRUMPACT-26OCT11-T5",
+                "position_fp": "-8.00",
+                "market_exposure_dollars": "4.80",
+            },
+            {
+                "ticker": "KXTRUTHSOCIAL-26OCT17-B129",
+                "position_fp": "-8.00",
+                "market_exposure_dollars": "6.80",
+            },
+            {
+                "ticker": "KXTRUMPSAY-26OCT19-GOLF",
+                "position_fp": "8.00",
+                "market_exposure_dollars": "7.12",
+            },
+        ],
+    )
+    crowded = _analysis()
+    crowded.executed_price_cents = 60
+    with caplog.at_level(logging.INFO):
+        reason = executor._event_news_plan_skip(
+            crowded,
+            FinalExecutionTerms(60, 4, 2.40),
+        )
+    assert reason == "exposure_cap"
+    assert "exposure_cap" in caplog.text
+    executor._paper.record_trade.assert_not_called()
+
+    roomy = _executor(monkeypatch, tmp_path, paper=True)
+    _stub_equity(roomy)
+    roomy._paper.portfolio.open_positions.return_value = [
+        SimpleNamespace(ticker="KXTRUMPSAY-26OCT19-GOLF", side="yes")
+    ]
+    sibling = _analysis()
+    sibling.market.ticker = "KXTRUMPSAY-26OCT20-NEXT"
+    sibling.executed_price_cents = 60
+    with caplog.at_level(logging.INFO):
+        family = roomy._event_news_plan_skip(
+            sibling,
+            FinalExecutionTerms(60, 4, 2.40),
+        )
+    assert family == "one_per_family"
+    assert "one_per_family" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_live_exposure_flag_off_does_not_get_balance(monkeypatch, tmp_path):
+    _band_flags_unset(monkeypatch)
+    executor = _executor(monkeypatch, tmp_path)
+    analysis = _analysis()
+    analysis.executed_price_cents = 36
+    plan, reason, order_id = await _plan_then_live(
+        executor,
+        analysis,
+        FinalExecutionTerms(36, 8, 2.88),
+        _liquidity("0.36"),
+        lambda *args, **kwargs: True,
+    )
+    assert reason is None and order_id == "ord-1"
+    executor._rest._request.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_paper_mode_skips_the_same_excluded_asks(monkeypatch, tmp_path, caplog):
     _band_flags_unset(monkeypatch)
     monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
     executor = _executor(monkeypatch, tmp_path, paper=True)
+    _stub_equity(executor)
     assert executor._is_paper is True
 
     cheap = _analysis()
@@ -1420,6 +1510,7 @@ async def test_paper_still_runs_when_band_flags_are_off(
     monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
     with caplog.at_level(logging.INFO):
         executor = _executor(monkeypatch, tmp_path, paper=True)
+    _stub_equity(executor)
     assert executor._is_paper is True
     assert "[EVENT_NEWS_FLAGS] FATAL band guard off in LIVE" not in caplog.text
     assert "REQUOTE_BAND_CHECK=off EXCLUDE_EXACT_35=off" in _boot_line(caplog)

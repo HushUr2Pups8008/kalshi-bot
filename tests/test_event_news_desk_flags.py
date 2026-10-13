@@ -8,6 +8,7 @@ from utils.event_news_desk_flags import (
     EVENT_NEWS_YES_FLOOR,
     event_news_desk_flag_enabled,
     event_news_desk_flags_boot_suffix,
+    event_news_exposure_skip_reason,
     event_news_family_skip_reason,
     event_news_maker_limit_cents,
     event_news_risk_capped_contracts,
@@ -88,6 +89,17 @@ def test_one_per_family_blocks_a_second_open_row() -> None:
         )
         == "one_per_family"
     )
+
+
+def test_exposure_blocks_when_open_cost_exceeds_a_quarter_of_equity() -> None:
+    """Today's book is 1872 cents against 1160 cents of room on 4640 equity."""
+    assert (
+        event_news_exposure_skip_reason(1872, 100, 4640, live=False, environ={})
+        == "exposure_cap"
+    )
+    assert event_news_exposure_skip_reason(100, 100, 4640, live=False, environ={}) is None
+    assert event_news_exposure_skip_reason(1872, 100, 4640, live=True, environ={}) is None
+    assert event_news_exposure_skip_reason(-1, 100, 4640, live=False, environ={}) == "exposure_cap"
 
 
 def test_maker_price_is_one_cent_better_and_stops_at_the_band() -> None:

@@ -1377,13 +1377,115 @@ class TradeExecutor:
             execution_plan.price_cents,
             live=not self._is_paper,
         )
+        if reason is not None:
+            log.info(
+                "[EVENT_NEWS_RISK] yes_below_floor ticker=%s side=%s ask=%s",
+                getattr(getattr(analysis, "market", None), "ticker", ""),
+                getattr(analysis, "side", ""),
+                execution_plan.price_cents,
+            )
+            return reason
+        family_reason = self._event_news_family_skip(analysis)
+        if family_reason is not None:
+            return family_reason
+        return self._event_news_exposure_skip(analysis, execution_plan)
+
+    def _event_news_family_skip(self, analysis: SignalAnalysis) -> str | None:
+        from utils.event_news_desk_flags import (
+            EVENT_NEWS_ONE_PER_FAMILY,
+            event_news_desk_flag_enabled,
+            event_news_family_skip_reason,
+        )
+
+        live = not self._is_paper
+        if not event_news_desk_flag_enabled(EVENT_NEWS_ONE_PER_FAMILY, live=live):
+            return None
+        ticker = str(getattr(getattr(analysis, "market", None), "ticker", "") or "")
+        reason = event_news_family_skip_reason(
+            ticker,
+            self._event_news_open_exposure_tickers(),
+            live=live,
+        )
         if reason is None:
             return None
         log.info(
-            "[EVENT_NEWS_RISK] yes_below_floor ticker=%s side=%s ask=%s",
-            getattr(getattr(analysis, "market", None), "ticker", ""),
-            getattr(analysis, "side", ""),
-            execution_plan.price_cents,
+            "[EVENT_NEWS_RISK] one_per_family ticker=%s",
+            ticker,
+        )
+        return reason
+
+    def _event_news_equity_and_open_cost_cents(self) -> tuple[int | None, int | None]:
+        """Cash plus portfolio value, and open market exposure, both in cents."""
+        request = getattr(self._rest, "_request", None)
+        if not callable(request):
+            return None, None
+        try:
+            balance = request("GET", "/portfolio/balance")
+            positions = request("GET", "/portfolio/positions")
+        except Exception:
+            log.warning("[EVENT_NEWS_RISK] exposure read failed", exc_info=True)
+            return None, None
+        if not isinstance(balance, dict) or not isinstance(positions, dict):
+            return None, None
+        try:
+            cash = int(balance["balance"])
+            portfolio_value = int(balance.get("portfolio_value") or 0)
+        except (KeyError, TypeError, ValueError):
+            return None, None
+        rows = positions.get("market_positions")
+        if not isinstance(rows, list):
+            return None, None
+        open_cost = 0
+        for row in rows:
+            if not isinstance(row, dict):
+                return None, None
+            size = str(row.get("position_fp") or "").strip()
+            if size in {"", "0", "0.0", "0.00"}:
+                continue
+            try:
+                dollars = float(row.get("market_exposure_dollars"))
+            except (TypeError, ValueError):
+                return None, None
+            open_cost += int(round(dollars * 100))
+        return cash + portfolio_value, open_cost
+
+    def _event_news_exposure_skip(
+        self,
+        analysis: SignalAnalysis,
+        execution_plan: FinalExecutionTerms,
+    ) -> str | None:
+        from utils.event_news_desk_flags import (
+            EVENT_NEWS_MAX_EXPOSURE_PCT,
+            event_news_desk_flag_enabled,
+            event_news_exposure_skip_reason,
+        )
+
+        live = not self._is_paper
+        if not event_news_desk_flag_enabled(EVENT_NEWS_MAX_EXPOSURE_PCT, live=live):
+            return None
+        ticker = str(getattr(getattr(analysis, "market", None), "ticker", "") or "")
+        equity, open_cost = self._event_news_equity_and_open_cost_cents()
+        order_cost = int(execution_plan.contracts) * int(execution_plan.price_cents)
+        if equity is None or open_cost is None:
+            log.info(
+                "[EVENT_NEWS_RISK] exposure_cap ticker=%s reason=unreadable",
+                ticker,
+            )
+            return "exposure_cap"
+        reason = event_news_exposure_skip_reason(
+            open_cost,
+            order_cost,
+            equity,
+            live=live,
+        )
+        if reason is None:
+            return None
+        log.info(
+            "[EVENT_NEWS_RISK] exposure_cap ticker=%s open_cost=%s order_cost=%s equity=%s",
+            ticker,
+            open_cost,
+            order_cost,
+            equity,
         )
         return reason
 
