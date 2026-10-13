@@ -1489,6 +1489,64 @@ async def test_paper_maker_flag_does_not_sleep(monkeypatch, tmp_path, caplog):
 
 
 @pytest.mark.asyncio
+async def test_paper_grounding_no_does_not_record(monkeypatch, tmp_path):
+    _band_flags_unset(monkeypatch)
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
+    executor = _executor(monkeypatch, tmp_path, paper=True)
+    _stub_equity(executor)
+    analysis = _analysis()
+    analysis.executed_price_cents = 60
+    analysis.signal_meta = {"blend_bypass_reason": "official_p"}
+    executor._paper.record_trade.return_value = "paper-ground"
+    with (
+        patch(
+            "utils.event_news_grok_veto.event_news_paper_grounding_skip",
+            return_value=True,
+        ),
+        patch(
+            "trading.executor.final_execution_terms",
+            return_value=FinalExecutionTerms(60, 8, 4.80),
+        ),
+        patch(
+            "trading.executor.fetch_kalshi_execution_liquidity",
+            new=AsyncMock(return_value=_liquidity("0.60")),
+        ),
+    ):
+        plan, reason = await executor._final_execution_plan(analysis)
+        trade_id = await executor._execute_paper(analysis, execution_plan=plan)
+    assert reason is None and trade_id is None
+    executor._paper.record_trade.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_paper_grounding_timeout_still_records(monkeypatch, tmp_path):
+    _band_flags_unset(monkeypatch)
+    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
+    executor = _executor(monkeypatch, tmp_path, paper=True)
+    _stub_equity(executor)
+    analysis = _analysis()
+    analysis.executed_price_cents = 60
+    executor._paper.record_trade.return_value = "paper-ground"
+    with (
+        patch(
+            "utils.event_news_grok_veto.event_news_paper_grounding_skip",
+            return_value=False,
+        ),
+        patch(
+            "trading.executor.final_execution_terms",
+            return_value=FinalExecutionTerms(60, 8, 4.80),
+        ),
+        patch(
+            "trading.executor.fetch_kalshi_execution_liquidity",
+            new=AsyncMock(return_value=_liquidity("0.60")),
+        ),
+    ):
+        plan, _reason = await executor._final_execution_plan(analysis)
+        trade_id = await executor._execute_paper(analysis, execution_plan=plan)
+    assert trade_id == "paper-ground"
+
+
+@pytest.mark.asyncio
 async def test_paper_mode_skips_the_same_excluded_asks(monkeypatch, tmp_path, caplog):
     _band_flags_unset(monkeypatch)
     monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
@@ -1691,7 +1749,8 @@ def test_boot_line_prints_resolved_flag_values(monkeypatch, tmp_path, caplog):
     assert state_at < flags_at
     assert line == (
         "[EVENT_NEWS_FLAGS] REQUOTE_BAND_CHECK=off EXCLUDE_EXACT_35=on "
-        "GROK_GROUNDING=on GROK_TRACE=off GROK_WATCH_SKIP_SETTLED=off "
+        "GROK_GROUNDING=on GROK_GROUNDING_MODE live=on paper=on "
+        "GROK_TRACE=off GROK_WATCH_SKIP_SETTLED=off "
         "FILL_LOG_DETAIL=off band_floor_cents=36"
         " YES_FLOOR live=off paper=on cents=55"
         " RISK_CAP live=off paper=on cents=400"
@@ -1717,7 +1776,8 @@ def test_boot_line_defaults_band_on_and_the_other_four_off(monkeypatch, tmp_path
         _executor(monkeypatch, tmp_path)
     assert _boot_line(caplog) == (
         "[EVENT_NEWS_FLAGS] REQUOTE_BAND_CHECK=on EXCLUDE_EXACT_35=on "
-        "GROK_GROUNDING=off GROK_TRACE=off GROK_WATCH_SKIP_SETTLED=off "
+        "GROK_GROUNDING=off GROK_GROUNDING_MODE live=off paper=on "
+        "GROK_TRACE=off GROK_WATCH_SKIP_SETTLED=off "
         "FILL_LOG_DETAIL=off band_floor_cents=36"
         " YES_FLOOR live=off paper=on cents=55"
         " RISK_CAP live=off paper=on cents=400"

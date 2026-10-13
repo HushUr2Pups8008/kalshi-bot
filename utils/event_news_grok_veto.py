@@ -17,8 +17,14 @@ from typing import Any, Callable, Mapping, Sequence
 
 import requests
 
+from utils.event_news_grounding_log import (
+    append_event_news_grounding_record,
+    response_id,
+    response_sources,
+)
 from utils.event_news_grok_flags import (
     event_news_grok_grounding_enabled,
+    event_news_grok_grounding_for_mode,
     event_news_grok_trace_enabled,
 )
 from utils.event_news_research import (
@@ -378,14 +384,44 @@ def event_news_grok_veto_decision(
     environ: Mapping[str, str] | None = None,
     post: Callable[..., Any] | None = None,
     timeout_seconds: float = GROK_TIMEOUT_SECONDS,
+    grounded: bool | None = None,
 ) -> str:
-    """Return yes, no, or timeout. Never logs the API key."""
+    """Return yes, no, or timeout. Never logs the API key.
+
+    ``grounded is None`` follows the env-exact flag, which is off unless
+    EVENT_NEWS_GROK_GROUNDING=true. Paper passes True explicitly.
+    """
     started = time.monotonic()
 
     def _elapsed_ms() -> int:
         return int(round((time.monotonic() - started) * 1000))
 
     env = os.environ if environ is None else environ
+    use_grounding = (
+        event_news_grok_grounding_enabled(env) if grounded is None else grounded
+    )
+
+    def _remember(verdict: str, body: Any = None) -> None:
+        if not use_grounding:
+            return
+        sources = response_sources(body)
+        if not sources:
+            sources = [url for url in packet.evidence_urls if url]
+        try:
+            append_event_news_grounding_record(
+                kind="veto",
+                ticker=packet.ticker,
+                side=packet.side,
+                verdict=verdict,
+                response_id=response_id(body),
+                sources=sources,
+            )
+        except Exception:
+            log.warning(
+                "[EVENT_NEWS_GROK_GROUNDING] journal_failed ticker=%s",
+                packet.ticker,
+            )
+
     key = str(env.get(XAI_API_KEY_ENV) or "").strip()
     if not key:
         log.info(
@@ -393,9 +429,9 @@ def event_news_grok_veto_decision(
             packet.ticker,
             _elapsed_ms(),
         )
+        _remember("timeout")
         return "timeout"
 
-    grounded = event_news_grok_grounding_enabled(env)
     user_content = json.dumps(
         packet.as_prompt_dict(environ=env),
         separators=(",", ":"),
@@ -407,11 +443,13 @@ def event_news_grok_veto_decision(
         "messages": [
             {
                 "role": "system",
-                "content": _GROUNDED_VETO_SYSTEM if grounded else _YES_NO_SYSTEM,
+                "content": _GROUNDED_VETO_SYSTEM if use_grounding else _YES_NO_SYSTEM,
             },
             {"role": "user", "content": user_content},
         ],
     }
+    if use_grounding:
+        payload["search_parameters"] = {"mode": "on", "return_citations": True}
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
@@ -430,6 +468,7 @@ def event_news_grok_veto_decision(
             packet.ticker,
             _elapsed_ms(),
         )
+        _remember("timeout")
         return "timeout"
     except Exception:
         log.info(
@@ -437,6 +476,7 @@ def event_news_grok_veto_decision(
             packet.ticker,
             _elapsed_ms(),
         )
+        _remember("timeout")
         return "timeout"
 
     status = getattr(response, "status_code", None)
@@ -447,6 +487,7 @@ def event_news_grok_veto_decision(
             _elapsed_ms(),
             status,
         )
+        _remember("timeout")
         return "timeout"
     body: Any = None
     try:
@@ -458,6 +499,7 @@ def event_news_grok_veto_decision(
             packet.ticker,
             _elapsed_ms(),
         )
+        _remember("timeout")
         return "timeout"
     if event_news_grok_trace_enabled(env):
         event_news_grok_trace_log(
@@ -468,7 +510,7 @@ def event_news_grok_veto_decision(
             list(packet.evidence_urls),
             latency_ms=_elapsed_ms(),
         )
-    if grounded:
+    if use_grounding:
         parsed = event_news_grok_grounded_verdict(
             str(content),
             yes_no=True,
@@ -484,14 +526,60 @@ def event_news_grok_veto_decision(
         result = parsed if parsed is not None else "timeout"
     else:
         result = _parse_yes_no(str(content))
-    log.info(
-        "[EVENT_NEWS_GROK_VETO] result=%s ticker=%s contracts=%s elapsed_ms=%s",
-        result,
-        packet.ticker,
-        packet.proposed_contracts,
-        _elapsed_ms(),
-    )
+    if use_grounding:
+        log.info(
+            "[EVENT_NEWS_GROK_VETO] result=%s ticker=%s contracts=%s elapsed_ms=%s "
+            "response_id=%s sources=%s",
+            result,
+            packet.ticker,
+            packet.proposed_contracts,
+            _elapsed_ms(),
+            response_id(body),
+            ",".join(response_sources(body))[:500],
+        )
+    else:
+        log.info(
+            "[EVENT_NEWS_GROK_VETO] result=%s ticker=%s contracts=%s elapsed_ms=%s",
+            result,
+            packet.ticker,
+            packet.proposed_contracts,
+            _elapsed_ms(),
+        )
+    _remember(result, body)
     return result
+
+
+def event_news_paper_grounding_skip(
+    analysis: Any,
+    *,
+    contracts: int,
+    environ: Mapping[str, str] | None = None,
+    post: Callable[..., Any] | None = None,
+) -> bool:
+    """Skip a paper entry only on an explicit grounded NO.
+
+    Timeout and a missing key do not skip. Live does not call this.
+    """
+    if not is_event_news_paper_cohort():
+        return False
+    if not event_news_grok_grounding_for_mode(False, environ):
+        return False
+    meta = _signal_meta(analysis)
+    official_p = str(meta.get("blend_bypass_reason") or "") == "official_p" or str(
+        meta.get("source_lane") or ""
+    ) == "research_official_p"
+    if not official_p:
+        return False
+    packet = event_news_grok_veto_packet(analysis, contracts=contracts)
+    return (
+        event_news_grok_veto_decision(
+            packet,
+            environ=environ,
+            post=post,
+            grounded=True,
+        )
+        == "no"
+    )
 
 
 def event_news_grok_veto_allows_live_post(

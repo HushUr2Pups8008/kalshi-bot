@@ -1608,6 +1608,17 @@ class TradeExecutor:
             if self._event_news_plan_skip(analysis, execution_plan):
                 return None
             self._event_news_log_paper_maker(analysis, execution_plan)
+            from utils.event_news_grok_veto import event_news_paper_grounding_skip
+
+            if event_news_paper_grounding_skip(
+                analysis,
+                contracts=execution_plan.contracts,
+            ):
+                log.info(
+                    "[EVENT_NEWS_GROK_GROUNDING] skip=no ticker=%s",
+                    analysis.market.ticker,
+                )
+                return None
         entry_request_id: str | None = None
         fee_net_accounting = bool(cfg.enable_fee_net_paper_accounting)
         if fee_net_accounting:

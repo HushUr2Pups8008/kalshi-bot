@@ -264,6 +264,38 @@ def test_empty_url_list_does_not_call_grok(politics_cohort, tmp_path, caplog):
     )
 
 
+def test_watch_search_stays_off_until_grounding_is_explicit():
+    captured: dict[str, dict] = {}
+
+    def _post(*_args, **kwargs):
+        captured["json"] = kwargs["json"]
+        return _Response("OK")
+
+    result = event_news_grok_watch_decision(
+        {"ticker": "KXTRUTHSOCIAL-26OCT17-B129", "side": "no", "fill_price": 0.85},
+        environ={"XAI_API_KEY": _SECRET},
+        post=_post,
+    )
+    assert result.result == "ok"
+    assert "search_parameters" not in captured["json"]
+    assert "tools" not in captured["json"]
+
+    def _grounded_post(*_args, **kwargs):
+        captured["grounded"] = kwargs["json"]
+        return _Response("OK")
+
+    event_news_grok_watch_decision(
+        {"ticker": "KXTRUTHSOCIAL-26OCT17-B129", "side": "no", "fill_price": 0.85},
+        environ={"XAI_API_KEY": _SECRET, "EVENT_NEWS_GROK_GROUNDING": "true"},
+        post=_grounded_post,
+    )
+    assert captured["grounded"]["search_parameters"] == {
+        "mode": "on",
+        "return_citations": True,
+    }
+    assert "tools" not in captured["grounded"]
+
+
 def test_series_url_included_when_market_field_empty(politics_cohort, tmp_path):
     calls = []
     looked_up = []

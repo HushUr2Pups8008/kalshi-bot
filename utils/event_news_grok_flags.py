@@ -61,6 +61,24 @@ def event_news_grok_grounding_enabled(
     return event_news_flag_enabled(EVENT_NEWS_GROK_GROUNDING, environ)
 
 
+def event_news_grok_grounding_for_mode(
+    live: bool | None,
+    environ: Mapping[str, str] | None = None,
+) -> bool:
+    """Paper defaults on. Live defaults off. An explicit true or false wins.
+
+    ``live is None`` keeps the historical env-exact reading: unset is off.
+    """
+    env = os.environ if environ is None else environ
+    if EVENT_NEWS_GROK_GROUNDING in env:
+        raw = str(env.get(EVENT_NEWS_GROK_GROUNDING) or "").strip().lower()
+        if raw:
+            return raw == "true"
+    if live is None or live is True:
+        return False
+    return True
+
+
 def event_news_watch_skip_settled_enabled(
     environ: Mapping[str, str] | None = None,
 ) -> bool:
@@ -105,6 +123,9 @@ def event_news_flags_boot_line(
         f"REQUOTE_BAND_CHECK={_event_news_on_off(event_news_requote_band_check_enabled(environ))} "
         f"EXCLUDE_EXACT_35={_event_news_on_off(event_news_exclude_exact_35_enabled(environ))} "
         f"GROK_GROUNDING={_event_news_on_off(event_news_grok_grounding_enabled(environ))} "
+        "GROK_GROUNDING_MODE "
+        f"live={_event_news_on_off(event_news_grok_grounding_for_mode(True, environ))} "
+        f"paper={_event_news_on_off(event_news_grok_grounding_for_mode(False, environ))} "
         f"GROK_TRACE={_event_news_on_off(event_news_grok_trace_enabled(environ))} "
         f"GROK_WATCH_SKIP_SETTLED={_event_news_on_off(event_news_watch_skip_settled_enabled(environ))} "
         f"FILL_LOG_DETAIL={_event_news_on_off(event_news_fill_log_detail_enabled(environ))} "

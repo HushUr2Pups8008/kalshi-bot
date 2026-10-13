@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from unittest.mock import MagicMock, patch
@@ -19,7 +20,9 @@ from utils.event_news_grok_veto import (
     event_news_grok_veto_allows_live_post,
     event_news_grok_veto_decision,
     event_news_grok_veto_packet,
+    event_news_paper_grounding_skip,
 )
+from utils import event_news_grounding_log as grounding_log
 from utils.event_news_research import EVENT_NEWS_COHORT_ID
 
 
@@ -131,6 +134,8 @@ def test_yes_parse(politics_cohort):
     assert result == "yes"
     assert captured["json"]["model"] == GROK_MODEL
     assert captured["json"]["max_tokens"] == GROK_MAX_TOKENS
+    assert "search_parameters" not in captured["json"]
+    assert "tools" not in captured["json"]
     assert GROK_MODEL == "grok-4.20-0309-non-reasoning"
     assert GROK_TIMEOUT_SECONDS == 45.0
     assert GROK_MAX_TOKENS == 256
@@ -373,3 +378,71 @@ async def test_execute_live_slow_yes_still_places(
     assert elapsed >= 0.25
     assert order_id == "ord-1"
     rest.place_limit_order.assert_called_once()
+
+
+def test_paper_grounding_skips_only_an_explicit_no(politics_cohort, tmp_path, monkeypatch):
+    monkeypatch.setattr(grounding_log, "GROUNDING_LOG_PATH", tmp_path / "grounding.jsonl")
+    url = "https://truthsocial.com/@realDonaldTrump"
+    content = json.dumps(
+        {
+            "verdict": "NO",
+            "quoted_evidence": "The source page shows a count of 12 posts.",
+            "url": url,
+        }
+    )
+
+    def _post(*_args, **kwargs):
+        assert kwargs["json"]["search_parameters"] == {
+            "mode": "on",
+            "return_citations": True,
+        }
+        assert "tools" not in kwargs["json"]
+        return _FakeResponse(
+            200,
+            {
+                "id": "resp-paper-1",
+                "citations": [url],
+                "choices": [{"message": {"content": content}}],
+            },
+        )
+
+    assert event_news_paper_grounding_skip(
+        _analysis(),
+        contracts=8,
+        environ={"XAI_API_KEY": "secret-key"},
+        post=_post,
+    ) is True
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "grounding.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert rows[-1]["verdict"] == "no"
+    assert rows[-1]["response_id"] == "resp-paper-1"
+    assert url in rows[-1]["sources"]
+    assert rows[-1]["outcome"] is None
+    assert "secret" not in (tmp_path / "grounding.jsonl").read_text(encoding="utf-8")
+
+
+def test_paper_grounding_timeout_and_missing_key_do_not_skip(
+    politics_cohort, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(grounding_log, "GROUNDING_LOG_PATH", tmp_path / "grounding.jsonl")
+    def _post(*_args, **_kwargs):
+        raise requests.Timeout("slow")
+
+    assert event_news_paper_grounding_skip(
+        _analysis(),
+        contracts=8,
+        environ={"XAI_API_KEY": "secret-key"},
+        post=_post,
+    ) is False
+
+    def _unused(*_args, **_kwargs):
+        raise AssertionError("missing key must not call xAI")
+
+    assert event_news_paper_grounding_skip(
+        _analysis(),
+        contracts=8,
+        environ={},
+        post=_unused,
+    ) is False
