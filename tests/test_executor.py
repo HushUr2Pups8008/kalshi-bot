@@ -333,6 +333,97 @@ class TestLiveSubmissionNoRetry:
         assert LIVE_FILL_LOG_PATH != log_path
 
     @pytest.mark.asyncio
+    async def test_fill_log_detail_comes_from_get_not_the_201_body(
+        self, monkeypatch, tmp_path, caplog
+    ):
+        """A mocked GET supplies the detail columns. No live POST is made."""
+        monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", False)
+        monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+        monkeypatch.setenv("EVENT_NEWS_FILL_LOG_DETAIL", "true")
+        log_path = tmp_path / "desk-live-fill-log.md"
+        monkeypatch.setattr("trading.executor.LIVE_FILL_LOG_PATH", log_path)
+        rest = MagicMock()
+        ok = MagicMock()
+        ok.error = None
+        ok.order_id = "from-201"
+        ok.status = "resting"
+        ok.filled = 1
+        ok.http_status = 201
+        rest.place_limit_order.return_value = ok
+        rest.get_order_receipt.return_value = {
+            "order_id": "from-get",
+            "fill_count_fp": "3.00",
+            "yes_price_dollars": "0.5000",
+            "no_price_dollars": "0.5000",
+            "taker_fees_dollars": "0.1000",
+            "maker_fees_dollars": "0.0000",
+        }
+        rest.get_fills_page.return_value = (
+            [
+                {
+                    "order_id": "from-fills",
+                    "count_fp": "8.00",
+                    "yes_price_dollars": "0.3600",
+                    "no_price_dollars": "0.6400",
+                    "fee_cost": "0.054900",
+                }
+            ],
+            None,
+        )
+        ex = TradeExecutor(
+            rest,
+            MagicMock(),
+            live_submission_hold_path=tmp_path / "holds.json",
+        )
+        with patch("trading.executor.trade_log"):
+            returned = await ex._execute_live(_make_analysis())
+        assert returned == "from-201"
+        assert rest.place_limit_order.call_count == 1
+        rest.get_order_receipt.assert_called_once_with("from-201")
+        rest.get_fills_page.assert_called_once_with(order_id="from-201")
+        detail = log_path.read_text(encoding="utf-8").splitlines()[-1].split(", ")
+        assert detail[6:] == ["201", "8", "36", "5.49", "from-get"]
+        assert "from-201" not in detail
+        assert "from-fills" not in detail
+
+        rest.get_order_receipt.reset_mock()
+        rest.get_fills_page.reset_mock()
+        rest.get_order_receipt.side_effect = RuntimeError("order down")
+        rest.get_fills_page.side_effect = RuntimeError("fills down")
+        failed = MagicMock()
+        failed.error = None
+        failed.order_id = "from-201"
+        failed.filled = 99
+        failed.http_status = 201
+        rest.place_limit_order.return_value = failed
+        caplog.set_level("WARNING", logger="trading.executor")
+        with patch("trading.executor.trade_log"):
+            returned = await ex._execute_live(_make_analysis(ticker="KXFAIL-GET"))
+        assert returned == "from-201"
+        failed_detail = log_path.read_text(encoding="utf-8").splitlines()[-1].split(", ")
+        assert failed_detail[1] == "KXFAIL-GET"
+        assert failed_detail[6:] == ["201", "", "", "", ""]
+        assert "99" not in failed_detail[6:]
+        assert "detail GET failed" in caplog.text
+
+        rest.get_order_receipt.reset_mock()
+        rest.get_fills_page.reset_mock()
+        reject = MagicMock()
+        reject.error = "404 not found"
+        reject.order_id = "do-not-get"
+        reject.filled = 4
+        reject.http_status = 404
+        rest.place_limit_order.return_value = reject
+        with patch("trading.executor.trade_log"):
+            rejected = await ex._execute_live(_make_analysis(ticker="KXNOGET-404"))
+        assert rejected is None
+        rest.get_order_receipt.assert_not_called()
+        rest.get_fills_page.assert_not_called()
+        reject_line = log_path.read_text(encoding="utf-8").splitlines()[-1]
+        assert "KXNOGET-404" in reject_line
+        assert "do-not-get" not in reject_line
+
+    @pytest.mark.asyncio
     async def test_live_intent_typeerror_is_logged_with_exc_info(
         self, monkeypatch, tmp_path, caplog
     ):
@@ -2026,7 +2117,7 @@ class TestPaperExecutionAsync:
 # (cooldown seeding, input-validation branches, live-mode error paths, status)
 # ---------------------------------------------------------------------------
 
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 
 class TestCooldownSeeding:
