@@ -61,6 +61,11 @@ def test_fixture_is_diverse_and_outside_discovery(tmp_path: Path) -> None:
     diverse, in_period, _notes = _discover_all_diverse_corpora(corpus_dir)
     assert diverse == []
     assert in_period == []
+    from scripts.simulations.politics_desk_replay import format_politics_replay
+
+    table = format_politics_replay()
+    assert "failure_reason=insufficient corpus" in table
+    assert "desk_history" in table
 
 
 def test_exporter_writes_keyless_rows_and_drops_headlines(tmp_path: Path) -> None:

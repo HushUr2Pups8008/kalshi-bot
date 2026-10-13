@@ -124,6 +124,17 @@ def main(argv: list[str] | None = None) -> int:
         for n in verdict.notes:
             print(f"    - {n}")
 
+    try:
+        from scripts.simulations.politics_desk_replay import format_politics_replay
+
+        print()
+        print(format_politics_replay())
+    except Exception as exc:
+        print(
+            "replay-ci-entry: politics replay table unavailable: "
+            f"{type(exc).__name__}"
+        )
+
     override = os.environ.get("REPLAY_GATE_OVERRIDE")
     if override == "1":
         print()
