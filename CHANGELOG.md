@@ -19,6 +19,12 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.90] - 2026-10-13
+
+### Fixed
+
+- **Politics 0c-35c band is hard before the order.** `EVENT_NEWS_REQUOTE_BAND_CHECK` and `EVENT_NEWS_EXCLUDE_EXACT_35` default on for the event-news cohort in paper and live. After the fresh book, `TradeExecutor._event_news_pre_post_band_skip` reads the final executed ask and skips when that ask is 0c through 35c inclusive. A 36c snapshot with a 34c requote skips, and an ask of exactly 35c skips. The log line is `executed_ask_in_excluded_band` with ticker, side, ask, and client_order_id. The order is not sent. Only the exact value `false` turns either flag off. The size cap of 8, the family lock, Kelly, and the other four Grok flags stay as they were.
+
 ## [0.33.89] - 2026-10-11
 
 ### Fixed

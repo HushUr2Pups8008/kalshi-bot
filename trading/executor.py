@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from numbers import Real
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from analysis import SignalAnalysis
 from analysis.kelly import contracts_from_dollars, kelly_bet
@@ -174,14 +174,33 @@ def append_live_fill_log(
     client_order_id: str,
     http_result: str,
     path: Path | None = None,
+    filled_count: int | None = None,
+    avg_fill_cents: int | None = None,
+    fee_cents: int | None = None,
+    order_id: str | None = None,
+    environ: Mapping[str, str] | None = None,
 ) -> None:
-    """Append one Desk Ops line. Never logs keys."""
+    """Append one Desk Ops line. Never logs keys.
+
+    Extra columns are written only when EVENT_NEWS_FILL_LOG_DETAIL=true.
+    The 201 response does not include the exchange fee, so fee_cents stays
+    blank unless the caller has it.
+    """
+    from utils.event_news_grok_flags import event_news_fill_log_detail_enabled
+
     target = path or LIVE_FILL_LOG_PATH
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     line = (
         f"{stamp}, {ticker}, {side}, {price_cents}, {contracts}, "
-        f"{client_order_id}, {http_result}\n"
+        f"{client_order_id}, {http_result}"
     )
+    if event_news_fill_log_detail_enabled(environ):
+        filled_text = "" if filled_count is None else str(filled_count)
+        avg_text = "" if avg_fill_cents is None else str(avg_fill_cents)
+        fee_text = "" if fee_cents is None else str(fee_cents)
+        order_text = "" if not order_id else str(order_id).replace(",", "")
+        line = f"{line}, {filled_text}, {avg_text}, {fee_text}, {order_text}"
+    line = f"{line}\n"
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         with target.open("a", encoding="utf-8") as handle:
@@ -927,6 +946,18 @@ class TradeExecutor:
                 available_contracts,
             )
             return None, "G8_execution_depth_insufficient"
+        from utils.event_news_grok_flags import event_news_requote_band_check_enabled
+        from utils.event_news_research import (
+            event_news_fresh_ask_cents,
+            is_event_news_paper_cohort,
+        )
+
+        # Keep the fresh ask for the pre-POST guard. Do not skip here:
+        # the client_order_id does not exist until _execute_live.
+        if event_news_requote_band_check_enabled() and is_event_news_paper_cohort():
+            fresh_cents, fresh_invalid = event_news_fresh_ask_cents(liquidity.best_price)
+            analysis._event_news_final_ask_cents = fresh_cents
+            analysis._event_news_final_ask_invalid = fresh_invalid
         return plan, None
 
     def _event_news_research_rest_execution_plan(
@@ -1188,12 +1219,63 @@ class TradeExecutor:
             return "fee_admission_non_positive_net_edge"
         return None
 
+    def _event_news_pre_post_band_skip(
+        self,
+        analysis: SignalAnalysis,
+        *,
+        limit_cents: int | None,
+        client_order_id: str,
+        log_skip: bool = True,
+    ) -> bool:
+        """Skip a politics order whose final executed ask is 0c through 35c.
+
+        ``limit_cents`` is the price that would be posted. The fresh book
+        ask, when one was stored, is checked too. Call this only after
+        that price is final.
+        """
+        from utils.event_news_research import event_news_blocked_final_ask
+
+        # MagicMock analyses invent missing attributes. Only an explicit
+        # store from the fresh book may fail this gate closed.
+        raw_invalid = getattr(analysis, "_event_news_final_ask_invalid", False)
+        raw_cents = getattr(analysis, "_event_news_final_ask_cents", None)
+        fresh_invalid = raw_invalid is True
+        fresh_cents = raw_cents if type(raw_cents) is int else None
+        blocked = event_news_blocked_final_ask(
+            limit_cents=limit_cents,
+            fresh_ask_cents=fresh_cents,
+            fresh_ask_invalid=fresh_invalid,
+        )
+        if blocked is None:
+            return False
+        if log_skip:
+            log.info(
+                "[EVENT_NEWS_RISK] executed_ask_in_excluded_band ticker=%s "
+                "side=%s ask=%s client_order_id=%s",
+                analysis.market.ticker,
+                analysis.side,
+                blocked,
+                client_order_id,
+            )
+        return True
+
     async def _execute_paper(
         self,
         analysis: SignalAnalysis,
         *,
         execution_plan: FinalExecutionTerms | None = None,
     ) -> Optional[str]:
+        limit_cents = (
+            execution_plan.price_cents
+            if execution_plan is not None
+            else getattr(analysis, "executed_price_cents", None)
+        )
+        if self._event_news_pre_post_band_skip(
+            analysis,
+            limit_cents=limit_cents,
+            client_order_id="",
+        ):
+            return None
         entry_request_id: str | None = None
         fee_net_accounting = bool(cfg.enable_fee_net_paper_accounting)
         if fee_net_accounting:
@@ -1319,7 +1401,14 @@ class TradeExecutor:
         from utils.event_news_research import is_event_news_paper_cohort
         from utils.event_news_grok_veto import event_news_grok_veto_allows_live_post
 
-        if is_event_news_paper_cohort():
+        # price_cents is final. A band skip must not call Grok or POST.
+        band_blocked = self._event_news_pre_post_band_skip(
+            analysis,
+            limit_cents=price_cents,
+            client_order_id="",
+            log_skip=False,
+        )
+        if not band_blocked and is_event_news_paper_cohort():
             if not event_news_grok_veto_allows_live_post(
                 analysis,
                 contracts=contracts,
@@ -1331,6 +1420,14 @@ class TradeExecutor:
                 return None
 
         client_order_id = uuid.uuid4().hex
+        # Last price check before the submission intent, reserve, and POST.
+        # Nothing below assigns price_cents.
+        if self._event_news_pre_post_band_skip(
+            analysis,
+            limit_cents=price_cents,
+            client_order_id=client_order_id,
+        ):
+            return None
         submission_summary = {
             "submission_id": uuid.uuid4().hex,
             "ticker": analysis.market.ticker,
@@ -1435,14 +1532,28 @@ class TradeExecutor:
             return None
 
         if not result_error or _is_live_business_reject(result):
-            append_live_fill_log(
-                ticker=str(analysis.market.ticker),
-                side=str(analysis.side),
-                price_cents=price_cents,
-                contracts=contracts,
-                client_order_id=client_order_id,
-                http_result=_live_http_result(result),
-            )
+            from utils.event_news_grok_flags import event_news_fill_log_detail_enabled
+
+            if event_news_fill_log_detail_enabled():
+                append_live_fill_log(
+                    ticker=str(analysis.market.ticker),
+                    side=str(analysis.side),
+                    price_cents=price_cents,
+                    contracts=contracts,
+                    client_order_id=client_order_id,
+                    http_result=_live_http_result(result),
+                    filled_count=getattr(result, "filled", None),
+                    order_id=getattr(result, "order_id", None) or None,
+                )
+            else:
+                append_live_fill_log(
+                    ticker=str(analysis.market.ticker),
+                    side=str(analysis.side),
+                    price_cents=price_cents,
+                    contracts=contracts,
+                    client_order_id=client_order_id,
+                    http_result=_live_http_result(result),
+                )
 
         if result_error:
             await record_unknown_and_hold("error_result")

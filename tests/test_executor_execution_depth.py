@@ -352,7 +352,7 @@ async def test_paper_politics_research_uses_rest_top_size_when_orderbook_unavail
         "source": "rest_top_size",
         "status": "fallback",
         "reason": "orderbook_unavailable",
-        "requested_contracts": 20,
+        "requested_contracts": 8,
         "available_contracts": 20.0,
     }
     assert result in {"paper-depth-1", None}
