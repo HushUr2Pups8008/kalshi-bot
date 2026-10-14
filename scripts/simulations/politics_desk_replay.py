@@ -29,6 +29,7 @@ from trading.fees import (
     quote_fee,
 )
 from utils.event_news_desk_flags import (
+    EVENT_NEWS_MAX_RISK,
     event_news_risk_capped_contracts,
     event_news_series_family,
     event_news_yes_floor_skip_reason,
@@ -151,6 +152,40 @@ def capped_contracts(row: HistoryRow) -> int:
         live=False,
         environ={},
     )
+
+
+def risk_cap_at(
+    cap_cents: int,
+    rows: tuple[HistoryRow, ...] = REALIZED_ROWS,
+) -> dict[str, str]:
+    """Fee-net if the paper risk cap had been this many cents. Live is unchanged."""
+    base = baseline_fee_net(rows)
+    environ = {EVENT_NEWS_MAX_RISK: str(cap_cents)}
+    total = D("0")
+    positive = D("0")
+    for row in rows:
+        sized = event_news_risk_capped_contracts(
+            row.contracts,
+            row.price_cents,
+            live=False,
+            environ=environ,
+        )
+        scaled = _scale(row, sized)
+        total += scaled
+        positive += _positive_removed(row.fee_net or D("0"), scaled)
+    return {
+        "cap_cents": str(cap_cents),
+        "n": str(len(rows)),
+        "fee_net": _money(total),
+        "delta": _money(total - base),
+        "positive_fee_net_removed": _money(positive),
+    }
+
+
+def risk_cap_sweep(
+    caps: tuple[int, ...] = (400, 500, 600, 800),
+) -> list[dict[str, str]]:
+    return [risk_cap_at(cap) for cap in caps]
 
 
 def yes_floor_drops(row: HistoryRow) -> bool:

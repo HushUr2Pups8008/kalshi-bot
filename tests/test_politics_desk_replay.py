@@ -13,6 +13,7 @@ from scripts.simulations.politics_desk_replay import (
     corpus_mismatch,
     format_politics_replay,
     replay_modes,
+    risk_cap_sweep,
     yes_floor_drops,
 )
 
@@ -103,6 +104,29 @@ def test_fixture_mismatch_does_not_weaken_the_gate() -> None:
         assert banned not in Path("scripts/simulations/politics_desk_replay.py").read_text(
             encoding="utf-8"
         )
+
+
+def test_risk_cap_sweep_matches_the_400_cent_replay() -> None:
+    rows = {row["cap_cents"]: row for row in risk_cap_sweep()}
+    assert list(rows) == ["400", "500", "600", "800"]
+    risk = _mode("risk_cap")
+    assert rows["400"]["n"] == "9"
+    assert rows["400"]["fee_net"] == risk["fee_net"]
+    assert rows["400"]["delta"] == risk["delta"]
+    assert rows["400"]["positive_fee_net_removed"] == risk["positive_fee_net_removed"]
+    assert Decimal(rows["800"]["positive_fee_net_removed"]) <= Decimal(
+        rows["400"]["positive_fee_net_removed"]
+    )
+
+
+def test_oos_registry_has_no_registration() -> None:
+    import json
+
+    document = json.loads(
+        Path("docs/governance/oos-corpus-registry.json").read_text(encoding="utf-8")
+    )
+    assert document["registrations"] == []
+    assert corpus_mismatch()["evidence_class"] == ["desk_history"]
 
 
 def test_ci_entry_prints_the_table_and_still_fails(monkeypatch, capsys) -> None:
