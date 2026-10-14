@@ -124,7 +124,8 @@ def test_window_fee_net_and_the_risk_cap_removes_the_most_good_trades() -> None:
     assert entries["family_fee_net"] == "not_measured"
     assert entries["exposure_fee_net"] == "not_measured"
     mode, removed = largest_positive_removal(replay_modes())
-    assert mode == "risk_cap"
-    assert removed == "4.3998"
+    # The 600-cent paper default removes less positive fee-net than one-per-family.
+    assert mode == "one_per_family"
+    assert removed == "1.9722"
     text = format_funnel(report)
-    assert "The filter that removes the most positive fee-net is risk_cap (4.3998)." in text
+    assert "The filter that removes the most positive fee-net is one_per_family (1.9722)." in text
