@@ -40,6 +40,7 @@ from trading.fees import (
 )
 from trading.live_submission_hold import LIVE_SUBMISSION_HOLD_PATH, LiveSubmissionHoldStore
 from trading.paper_trader import PaperTrader
+from trading.portfolio import PAPER_SHADOW_SIGNAL_TYPE
 from trading.venue import Venue
 from utils.logger import get_logger, trade_log, write_trade_log_async
 
@@ -447,6 +448,10 @@ class TradeExecutor:
         self._session_start_balance: Optional[float] = None
         self._live_halted: bool = False
         self._shutdown_callback: Optional[Callable] = None
+        # Paper rows are written after the live decision. The lock keeps
+        # those rows ordered. The live consumer does not wait on Grok.
+        self._paper_shadow_tasks: set[asyncio.Task[None]] = set()
+        self._paper_shadow_lock = asyncio.Lock()
         log.info(
             "[EXECUTOR_STATE] pid=%s mode=%s bankroll_source=%s",
             __import__("os").getpid(),
@@ -499,8 +504,15 @@ class TradeExecutor:
         now_wall = datetime.now(timezone.utc)
         now_mono = time.monotonic()
         for ticker in self._paper.portfolio.tickers():
-            latest = self._paper.portfolio.latest_ts(ticker)
-            if latest is None:
+            positions = self._paper.portfolio.open_positions(ticker)
+            if isinstance(positions, list):
+                visible = self._positions_for_live_gates(positions)
+                if not visible:
+                    continue
+                latest = max(str(getattr(pos, "ts", "") or "") for pos in visible)
+            else:
+                latest = self._paper.portfolio.latest_ts(ticker)
+            if not latest:
                 continue
             trade_ts = datetime.fromisoformat(latest)
             if trade_ts.tzinfo is None:
@@ -572,6 +584,7 @@ class TradeExecutor:
                 venue=self._venue_value(analysis.market),
                 signal_meta=signal_meta,
             )
+            self._schedule_paper_shadow(analysis)
             return None
         if self._is_paper and _requires_decision_grade_research_paper_admission(
             analysis,
@@ -633,6 +646,7 @@ class TradeExecutor:
             if execution_signal_meta:
                 skipped_kwargs["signal_meta"] = execution_signal_meta
             await write_trade_log_async(trade_log.log_skipped, **skipped_kwargs)
+            self._schedule_paper_shadow(analysis)
             return None
         assert execution_plan is not None
 
@@ -661,6 +675,315 @@ class TradeExecutor:
                 analysis.side.upper(),
             )
 
+        self._schedule_paper_shadow(analysis)
+        return trade_id
+
+    def _schedule_paper_shadow(self, analysis: SignalAnalysis) -> None:
+        """Queue one paper row. The live order, if any, is already decided."""
+        if self._is_paper:
+            return
+        from utils.event_news_research import is_event_news_paper_cohort
+
+        if not is_event_news_paper_cohort():
+            return
+        try:
+            snapshot = copy.copy(analysis)
+            meta = getattr(analysis, "signal_meta", None)
+            if isinstance(meta, dict):
+                snapshot.signal_meta = dict(meta)
+            task = asyncio.create_task(self._shadow_live_candidate_locked(snapshot))
+            self._paper_shadow_tasks.add(task)
+            task.add_done_callback(self._paper_shadow_tasks.discard)
+        except Exception:
+            log.warning(
+                "[EVENT_NEWS_PAPER_SHADOW] schedule failed ticker=%s",
+                getattr(getattr(analysis, "market", None), "ticker", ""),
+                exc_info=True,
+            )
+
+    async def _shadow_live_candidate_locked(self, analysis: SignalAnalysis) -> None:
+        """Serialize paper-book checks. Live validation does not take this lock."""
+        async with self._paper_shadow_lock:
+            await self._shadow_live_candidate(analysis)
+
+    async def _shadow_live_candidate(self, analysis: SignalAnalysis) -> None:
+        """Record the paper book for a live candidate. Never places an order."""
+        if self._is_paper:
+            return
+        try:
+            await self._record_event_news_paper_shadow(analysis)
+        except Exception:
+            log.warning(
+                "[EVENT_NEWS_PAPER_SHADOW] record failed ticker=%s",
+                getattr(getattr(analysis, "market", None), "ticker", ""),
+                exc_info=True,
+            )
+
+    def _paper_shadow_book_cents(self) -> tuple[int, int] | None:
+        """Paper bankroll and open paper cost, in cents. Live positions are not included."""
+        try:
+            bankroll = float(self._paper.get_notional_bankroll())
+        except (TypeError, ValueError):
+            return None
+        if isinstance(bankroll, bool) or bankroll <= 0:
+            return None
+        cash = int(round(bankroll * 100))
+        if cash <= 0:
+            return None
+        try:
+            positions = self._paper.portfolio.open_positions()
+        except Exception:
+            log.warning("[EVENT_NEWS_PAPER_SHADOW] paper open book unreadable", exc_info=True)
+            return None
+        if not isinstance(positions, list):
+            return None
+        open_cost = 0
+        for position in positions:
+            try:
+                open_cost += int(round(float(position.cost_dollars) * 100))
+            except (TypeError, ValueError):
+                return None
+        # Notional is cash after open debits. Add the open cost back so the
+        # paper 25% cap uses cohort equity.
+        return cash + open_cost, open_cost
+
+    def _paper_shadow_terms(
+        self,
+        analysis: SignalAnalysis,
+    ) -> FinalExecutionTerms | None:
+        """Kelly terms resized by the paper risk cap. None means do not record."""
+        from trading.execution_terms import final_execution_terms
+        from utils.event_news_desk_flags import event_news_risk_capped_contracts
+        from utils.event_news_research import event_news_clamp_execution_terms
+
+        price = getattr(analysis, "executed_price_cents", None)
+        if isinstance(price, bool) or not isinstance(price, int) or not 0 < price < 100:
+            return None
+        try:
+            plan = final_execution_terms(
+                capped_dollars=float(analysis.capped_dollars),
+                executed_price_cents=price,
+            )
+        except (TypeError, ValueError):
+            return None
+        ticker = str(getattr(getattr(analysis, "market", None), "ticker", "") or "")
+        plan = event_news_clamp_execution_terms(plan, ticker=ticker)
+        capped = event_news_risk_capped_contracts(
+            plan.contracts,
+            plan.price_cents,
+            live=False,
+        )
+        if capped <= 0:
+            log.info(
+                "[EVENT_NEWS_RISK_CAP] ticker=%s ask=%s contracts=0",
+                ticker,
+                plan.price_cents,
+            )
+            return None
+        if capped < plan.contracts:
+            log.info(
+                "[EVENT_NEWS_RISK_CAP] ticker=%s ask=%s contracts=%s capped=%s",
+                ticker,
+                plan.price_cents,
+                plan.contracts,
+                capped,
+            )
+            return FinalExecutionTerms(
+                price_cents=plan.price_cents,
+                contracts=capped,
+                cost_dollars=capped * plan.price_cents / 100.0,
+            )
+        return plan
+
+    def _paper_shadow_capped_dollars(self, plan: FinalExecutionTerms) -> float | None:
+        """Dollar budget whose derived contract count equals the paper plan."""
+        from trading.execution_terms import final_execution_terms
+        from utils.event_news_research import event_news_clamp_execution_terms
+
+        cost = float(plan.cost_dollars)
+        for extra in (0.0, 0.001, 0.01, 0.02):
+            candidate = cost + extra
+            try:
+                derived = final_execution_terms(
+                    capped_dollars=candidate,
+                    executed_price_cents=plan.price_cents,
+                )
+            except ValueError:
+                continue
+            derived = event_news_clamp_execution_terms(derived, ticker="")
+            if derived == plan:
+                return candidate
+        return None
+
+    def _bind_paper_shadow_lifecycle(self, analysis: SignalAnalysis) -> Callable[[], None]:
+        """Give fee-net a stable lc- id when the candidate does not have one.
+
+        Production accounting skips a row with no ``lc-`` plus 32 hex id.
+        The live order is already decided. The original signal meta is
+        restored after the paper write.
+        """
+        if not bool(cfg.enable_fee_net_paper_accounting):
+            return lambda: None
+        if _fee_net_paper_entry_request_id(analysis) is not None:
+            return lambda: None
+        previous = getattr(analysis, "signal_meta", None)
+        meta = dict(previous) if isinstance(previous, dict) else {}
+        news = getattr(analysis, "news_item", None)
+        market = getattr(analysis, "market", None)
+        from utils.lifecycle import build_lifecycle_id
+
+        meta["lifecycle_id"] = build_lifecycle_id(
+            venue=getattr(market, "venue", None) or "kalshi",
+            ticker=getattr(market, "ticker", None),
+            source=getattr(news, "source", None) or getattr(analysis, "source", None),
+            url=getattr(news, "url", None),
+            headline=getattr(news, "headline", None) or getattr(analysis, "headline", None),
+            published=getattr(news, "published", None),
+        )
+        analysis.signal_meta = meta
+
+        def restore() -> None:
+            analysis.signal_meta = previous
+
+        return restore
+
+    async def _record_event_news_paper_shadow(
+        self,
+        analysis: SignalAnalysis,
+    ) -> str | None:
+        """Write one paper row using paper desk flags. Does not post or cancel."""
+        from utils.event_news_desk_flags import (
+            event_news_exposure_skip_reason,
+            event_news_family_skip_reason,
+            event_news_yes_floor_skip_reason,
+        )
+        from utils.event_news_research import (
+            event_news_blocked_final_ask,
+            event_news_exposure_prefix,
+            event_news_min_edge,
+            event_news_open_prefix_cap,
+            is_event_news_paper_cohort,
+        )
+
+        if self._is_paper or not is_event_news_paper_cohort():
+            return None
+        price = getattr(analysis, "executed_price_cents", None)
+        if isinstance(price, bool) or not isinstance(price, int):
+            return None
+        raw_invalid = getattr(analysis, "_event_news_final_ask_invalid", False)
+        raw_cents = getattr(analysis, "_event_news_final_ask_cents", None)
+        blocked = event_news_blocked_final_ask(
+            limit_cents=price,
+            fresh_ask_cents=raw_cents if type(raw_cents) is int else None,
+            fresh_ask_invalid=raw_invalid is True,
+        )
+        ticker = str(getattr(getattr(analysis, "market", None), "ticker", "") or "")
+        if blocked is not None:
+            log.info(
+                "[EVENT_NEWS_RISK] executed_ask_in_excluded_band ticker=%s side=%s ask=%s",
+                ticker,
+                getattr(analysis, "side", ""),
+                blocked,
+            )
+            return None
+        try:
+            edge_value = float(analysis.edge)
+        except (TypeError, ValueError):
+            return None
+        min_edge = event_news_min_edge(PAPER_MIN_EDGE, analysis.market)
+        if abs(edge_value) < min_edge:
+            return None
+        plan = self._paper_shadow_terms(analysis)
+        if plan is None:
+            return None
+        floor_reason = event_news_yes_floor_skip_reason(
+            getattr(analysis, "side", ""),
+            plan.price_cents,
+            live=False,
+        )
+        if floor_reason is not None:
+            log.info(
+                "[EVENT_NEWS_RISK] yes_below_floor ticker=%s side=%s ask=%s",
+                ticker,
+                getattr(analysis, "side", ""),
+                plan.price_cents,
+            )
+            return None
+        book = self._paper_shadow_book_cents()
+        if book is None:
+            log.info("[EVENT_NEWS_RISK] exposure_cap ticker=%s reason=unreadable", ticker)
+            return None
+        _equity, _open_cost = book
+        positions = self._paper.portfolio.open_positions()
+        open_tickers = [
+            str(getattr(position, "ticker", "") or "").strip()
+            for position in positions
+            if str(getattr(position, "ticker", "") or "").strip()
+        ]
+        if event_news_family_skip_reason(ticker, open_tickers, live=False):
+            log.info("[EVENT_NEWS_RISK] one_per_family ticker=%s", ticker)
+            return None
+        same_ticker = self._paper.portfolio.open_positions(ticker)
+        if isinstance(same_ticker, list) and same_ticker:
+            log.info("[EVENT_NEWS_PAPER_SHADOW] skip=open_ticker ticker=%s", ticker)
+            return None
+        prefix_cap = event_news_open_prefix_cap(cfg.max_open_positions_per_prefix)
+        if prefix_cap > 0:
+            prefix = event_news_exposure_prefix(
+                analysis.market,
+                _correlated_exposure_prefix(analysis.market),
+            )
+            if prefix:
+                open_in_prefix = self._paper.portfolio.open_positions_by_prefix(prefix)
+                if isinstance(open_in_prefix, list) and len(open_in_prefix) >= prefix_cap:
+                    log.info(
+                        "[EVENT_NEWS_PAPER_SHADOW] skip=prefix_cap ticker=%s prefix=%s",
+                        ticker,
+                        prefix,
+                    )
+                    return None
+        order_cost = int(plan.contracts) * int(plan.price_cents)
+        exposure_reason = event_news_exposure_skip_reason(
+            _open_cost,
+            order_cost,
+            _equity,
+            live=False,
+        )
+        if exposure_reason is not None:
+            log.info(
+                "[EVENT_NEWS_RISK] exposure_cap ticker=%s open_cost=%s order_cost=%s equity=%s",
+                ticker,
+                _open_cost,
+                order_cost,
+                _equity,
+            )
+            return None
+        aligned = self._paper_shadow_capped_dollars(plan)
+        if aligned is None:
+            log.info("[EVENT_NEWS_PAPER_SHADOW] skip=terms ticker=%s", ticker)
+            return None
+        self._event_news_log_paper_maker(analysis, plan, paper_shadow=True)
+        fee_reason = self._paper_fee_admission_skip_reason(analysis, plan)
+        if fee_reason is not None:
+            log.info(
+                "[EVENT_NEWS_PAPER_SHADOW] skip=%s ticker=%s",
+                fee_reason,
+                ticker,
+            )
+            return None
+        restore_lifecycle = self._bind_paper_shadow_lifecycle(analysis)
+        previous_capped = analysis.capped_dollars
+        previous_signal_type = getattr(analysis, "signal_type", None)
+        analysis.capped_dollars = aligned
+        analysis.signal_type = PAPER_SHADOW_SIGNAL_TYPE
+        try:
+            trade_id = await self._execute_paper(analysis, execution_plan=plan)
+        finally:
+            analysis.capped_dollars = previous_capped
+            analysis.signal_type = previous_signal_type
+            restore_lifecycle()
+        if trade_id:
+            log.info("[EVENT_NEWS_PAPER_SHADOW] recorded ticker=%s", ticker)
         return trade_id
 
     def _ensure_sized(self, analysis: SignalAnalysis) -> None:
@@ -703,12 +1026,36 @@ class TradeExecutor:
         analysis.capped_dollars = capped_dollars
 
     def _sizing_bankroll(self) -> float:
+        if not self._is_paper:
+            starting = self._configured_starting_bankroll()
+            if starting is not None:
+                return starting
+        return self._paper_effective_bankroll()
+
+    def _configured_starting_bankroll(self) -> float | None:
+        """Configured cohort bankroll. Shadow debits do not move it."""
+        starting = getattr(self._paper, "_starting_bankroll", None)
+        if isinstance(starting, bool) or not isinstance(starting, (int, float)):
+            return None
+        if starting <= 0:
+            return None
+        return float(starting)
+
+    def _paper_effective_bankroll(self) -> float:
         getter = getattr(self._paper, "get_effective_sizing_bankroll", None)
         if callable(getter):
             value = getter()
             if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
                 return float(value)
         return float(self._paper.get_notional_bankroll())
+
+    def _positions_for_live_gates(self, positions: object) -> list:
+        """Paper rows the live order may see. Shadow rows stay on the paper book."""
+        if not isinstance(positions, list):
+            return []
+        if self._is_paper:
+            return positions
+        return [pos for pos in positions if getattr(pos, "paper_shadow", False) is not True]
 
     def _event_news_open_exposure_tickers(self) -> list[str]:
         """Paper plus live open tickers for politics family/prefix gates."""
@@ -718,6 +1065,11 @@ class TradeExecutor:
             open_positions = getattr(self._paper.portfolio, "open_positions", None)
             positions = open_positions() if callable(open_positions) else []
             for position in positions or []:
+                if (
+                    not self._is_paper
+                    and getattr(position, "paper_shadow", False) is True
+                ):
+                    continue
                 ticker = str(getattr(position, "ticker", "") or "").strip()
                 if ticker and ticker not in seen:
                     seen.add(ticker)
@@ -850,7 +1202,9 @@ class TradeExecutor:
                 _correlated_exposure_prefix(analysis.market),
             )
             if prefix:
-                open_in_prefix = self._paper.portfolio.open_positions_by_prefix(prefix)
+                open_in_prefix = self._positions_for_live_gates(
+                    self._paper.portfolio.open_positions_by_prefix(prefix)
+                )
                 if len(open_in_prefix) >= prefix_cap:
                     open_tickers = sorted({p.ticker for p in open_in_prefix})
                     return (
@@ -885,7 +1239,9 @@ class TradeExecutor:
         # Multi-position guard: block opposing trades (no hedges) and duplicate
         # signals (same side, same probability estimate, same market price).
         # Reads from the in-memory Portfolio — no DB query at decision time.
-        for pos in self._paper.portfolio.open_positions(analysis.market.ticker):
+        for pos in self._positions_for_live_gates(
+            self._paper.portfolio.open_positions(analysis.market.ticker)
+        ):
             if pos.side != analysis.side:
                 return (
                     f"opposing position exists: open {pos.side.upper()} at est={pos.estimated_prob:.3f} -- no hedging"
@@ -916,10 +1272,9 @@ class TradeExecutor:
         # Concentration risk: cap exposure per ticker at max_ticker_exposure_pct
         # of the notional bankroll. Prevents a flood of signals on one ticker
         # from deploying an outsized fraction of capital on a single outcome.
-        notional = (
-            self._paper.get_effective_sizing_bankroll()
-            if isinstance(self._paper, PaperTrader)
-            else self._paper.get_notional_bankroll()
+        notional = self._sizing_bankroll()
+        gate_positions = self._positions_for_live_gates(
+            self._paper.portfolio.open_positions(analysis.market.ticker)
         )
         # F-08 (Site 2): executed_price_cents must be non-None here — Site 1's
         # fail-closed gate returns early when it is None. The assert encodes that
@@ -958,13 +1313,20 @@ class TradeExecutor:
             trade_cost = analysis.capped_dollars
         if self._is_paper and trade_cost > notional:
             return f"paper contract cost ${trade_cost:.2f} exceeds notional bankroll ${notional:.2f}"
+        open_cost = 0.0
+        for pos in gate_positions:
+            try:
+                open_cost += float(pos.cost_dollars)
+            except (TypeError, ValueError):
+                open_cost += 0.0
         if not self._paper.portfolio.is_concentration_ok(
             ticker=analysis.market.ticker,
             additional_dollars=trade_cost,
             max_ticker_pct=cfg.max_ticker_exposure_pct,
             bankroll=notional,
+            open_cost=open_cost,
         ):
-            current_exposure = self._paper.portfolio.exposure(analysis.market.ticker)
+            current_exposure = open_cost
             cap = cfg.max_ticker_exposure_pct * notional
             return (
                 f"concentration limit: {analysis.market.ticker} exposure "
@@ -1610,7 +1972,8 @@ class TradeExecutor:
             self._event_news_log_paper_maker(analysis, execution_plan)
             from utils.event_news_grok_veto import event_news_paper_grounding_skip
 
-            if event_news_paper_grounding_skip(
+            if await asyncio.to_thread(
+                event_news_paper_grounding_skip,
                 analysis,
                 contracts=execution_plan.contracts,
             ):
@@ -1621,7 +1984,11 @@ class TradeExecutor:
                 return None
             from utils.event_news_rules_check import event_news_rules_check_skip
 
-            if event_news_rules_check_skip(analysis, live=False):
+            if await asyncio.to_thread(
+                event_news_rules_check_skip,
+                analysis,
+                live=False,
+            ):
                 log.info(
                     "[EVENT_NEWS_RULES] skip=mismatch ticker=%s",
                     analysis.market.ticker,
@@ -2060,6 +2427,8 @@ class TradeExecutor:
         self,
         analysis: SignalAnalysis,
         execution_plan: FinalExecutionTerms,
+        *,
+        paper_shadow: bool = False,
     ) -> None:
         """Paper records the maker price it would post. It does not sleep."""
         from utils.event_news_desk_flags import (
@@ -2072,7 +2441,10 @@ class TradeExecutor:
         from utils.event_news_grok_flags import EVENT_NEWS_BAND_FLOOR_CENTS
         from utils.event_news_research import is_event_news_paper_cohort
 
-        if not self._is_paper or not is_event_news_paper_cohort():
+        if paper_shadow:
+            if not is_event_news_paper_cohort():
+                return
+        elif not self._is_paper or not is_event_news_paper_cohort():
             return
         if not event_news_desk_flag_enabled(EVENT_NEWS_MAKER_FIRST, live=False):
             return

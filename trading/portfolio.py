@@ -12,10 +12,14 @@ Key guarantees:
 """
 
 import sqlite3
+import threading
 from dataclasses import dataclass
 from typing import Optional, overload
 
 from trading.venue import MarketRef, normalize_venue
+
+# Live event-news rows recorded for the paper book. Live gates must ignore them.
+PAPER_SHADOW_SIGNAL_TYPE = "event_news_paper_shadow"
 
 
 @dataclass
@@ -49,6 +53,7 @@ class Position:
     price_source:     str = "unavailable"
     price_method:     str = "none"
     venue_market_id:  str | None = None
+    paper_shadow:     bool = False
 
 
 class Portfolio:
@@ -62,6 +67,10 @@ class Portfolio:
     def __init__(self) -> None:
         # ticker -> list of open Position objects (insertion order preserved)
         self._positions: dict[str, list[Position]] = {}
+        # Paper shadow writes run on a worker thread. Live gates read this
+        # book on the event loop. The lock keeps a new ticker from changing
+        # the dict while a gate is iterating it.
+        self._lock = threading.RLock()
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -84,12 +93,13 @@ class Portfolio:
             "venue_market_id" if "venue_market_id" in cols else "NULL AS venue_market_id"
         )
         entry_price_col = "entry_price_cents" if "entry_price_cents" in cols else "market_yes_price"
+        signal_expr = "signal_type" if "signal_type" in cols else "NULL AS signal_type"
         if has_provenance:
             select_sql = (
                 "SELECT trade_id, ticker, "
                 f"       {venue_market_id_expr}, side, contracts, cost_dollars, price_cents, "
                 f"       estimated_prob, {entry_price_col} AS entry_price_cents, ts, "
-                f"       {venue_expr}, price_source, price_method "
+                f"       {venue_expr}, price_source, price_method, {signal_expr} "
                 "FROM paper_trades WHERE resolved = 0 ORDER BY ts ASC"
             )
         else:
@@ -97,42 +107,45 @@ class Portfolio:
                 "SELECT trade_id, ticker, "
                 f"       {venue_market_id_expr}, side, contracts, cost_dollars, price_cents, "
                 f"       estimated_prob, {entry_price_col} AS entry_price_cents, ts, "
-                f"       {venue_expr} "
+                f"       {venue_expr}, {signal_expr} "
                 "FROM paper_trades WHERE resolved = 0 ORDER BY ts ASC"
             )
         rows = conn.execute(select_sql).fetchall()
-        self._positions.clear()
-        for row in rows:
-            keys = row.keys() if hasattr(row, "keys") else None
+        with self._lock:
+            self._positions.clear()
+            for row in rows:
+                keys = row.keys() if hasattr(row, "keys") else None
 
-            def _get(name: str, default):
-                if keys is not None and name in keys:
-                    value = row[name]
-                    return value if value is not None else default
-                return default
+                def _get(name: str, default):
+                    if keys is not None and name in keys:
+                        value = row[name]
+                        return value if value is not None else default
+                    return default
 
-            pos = Position(
-                trade_id=row["trade_id"],
-                ticker=row["ticker"],
-                side=row["side"],
-                contracts=row["contracts"],
-                cost_dollars=row["cost_dollars"],
-                price_cents=row["price_cents"],
-                estimated_prob=row["estimated_prob"],
-                entry_price_cents=row["entry_price_cents"],
-                ts=row["ts"],
-                venue=_get("venue", "kalshi"),
-                price_source=_get("price_source", "unavailable"),
-                price_method=_get("price_method", "none"),
-                venue_market_id=_get("venue_market_id", None),
-            )
-            self._positions.setdefault(pos.ticker, []).append(pos)
+                pos = Position(
+                    trade_id=row["trade_id"],
+                    ticker=row["ticker"],
+                    side=row["side"],
+                    contracts=row["contracts"],
+                    cost_dollars=row["cost_dollars"],
+                    price_cents=row["price_cents"],
+                    estimated_prob=row["estimated_prob"],
+                    entry_price_cents=row["entry_price_cents"],
+                    ts=row["ts"],
+                    venue=_get("venue", "kalshi"),
+                    price_source=_get("price_source", "unavailable"),
+                    price_method=_get("price_method", "none"),
+                    venue_market_id=_get("venue_market_id", None),
+                    paper_shadow=str(_get("signal_type", "") or "") == PAPER_SHADOW_SIGNAL_TYPE,
+                )
+                self._positions.setdefault(pos.ticker, []).append(pos)
 
     # ── Mutations (called by PaperTrader only) ────────────────────────────────
 
     def add(self, pos: Position) -> None:
         """Record a newly opened position."""
-        self._positions.setdefault(pos.ticker, []).append(pos)
+        with self._lock:
+            self._positions.setdefault(pos.ticker, []).append(pos)
 
     @overload
     def resolve(self, market_ref: MarketRef) -> list[Position]: ...
@@ -142,31 +155,32 @@ class Portfolio:
 
     def resolve(self, market_ref: MarketRef | str) -> list[Position] | None:
         """Remove positions by exact market identity or legacy ticker."""
-        if isinstance(market_ref, str):
-            self._positions.pop(market_ref, None)
-            return None
+        with self._lock:
+            if isinstance(market_ref, str):
+                self._positions.pop(market_ref, None)
+                return None
 
-        venue = normalize_venue(market_ref.venue)
-        closed: list[Position] = []
-        for ticker in list(self._positions):
-            remaining = []
-            for pos in self._positions[ticker]:
-                try:
-                    position_venue = normalize_venue(pos.venue)
-                except ValueError:
-                    matches = False
+            venue = normalize_venue(market_ref.venue)
+            closed: list[Position] = []
+            for ticker in list(self._positions):
+                remaining = []
+                for pos in self._positions[ticker]:
+                    try:
+                        position_venue = normalize_venue(pos.venue)
+                    except ValueError:
+                        matches = False
+                    else:
+                        matches = (
+                            position_venue == venue
+                            and pos.venue_market_id == market_ref.venue_market_id
+                        )
+                    (closed if matches else remaining).append(pos)
+
+                if remaining:
+                    self._positions[ticker] = remaining
                 else:
-                    matches = (
-                        position_venue == venue
-                        and pos.venue_market_id == market_ref.venue_market_id
-                    )
-                (closed if matches else remaining).append(pos)
-
-            if remaining:
-                self._positions[ticker] = remaining
-            else:
-                self._positions.pop(ticker, None)
-        return closed
+                    self._positions.pop(ticker, None)
+            return closed
 
     # ── Queries ───────────────────────────────────────────────────────────────
 
@@ -175,13 +189,15 @@ class Portfolio:
         All open positions, optionally filtered to a single ticker.
         Returns a copy — callers cannot mutate internal state.
         """
-        if ticker is not None:
-            return list(self._positions.get(ticker, []))
-        return [pos for bucket in self._positions.values() for pos in bucket]
+        with self._lock:
+            if ticker is not None:
+                return list(self._positions.get(ticker, []))
+            return [pos for bucket in self._positions.values() for pos in bucket]
 
     def tickers(self) -> set[str]:
         """All tickers with at least one open position."""
-        return set(self._positions.keys())
+        with self._lock:
+            return set(self._positions.keys())
 
     def open_positions_by_prefix(self, market_prefix: str) -> list[Position]:
         """PROFIT-ALIGN-004 (2026-05-25): all open positions whose ticker
@@ -196,28 +212,32 @@ class Portfolio:
         if not market_prefix:
             return []
         # Match `<prefix>` exact OR `<prefix>-...` (avoid KXFOO matching KXFOOBAR)
-        return [
-            pos
-            for ticker, bucket in self._positions.items()
-            if ticker == market_prefix or ticker.startswith(f"{market_prefix}-")
-            for pos in bucket
-        ]
+        with self._lock:
+            return [
+                pos
+                for ticker, bucket in self._positions.items()
+                if ticker == market_prefix or ticker.startswith(f"{market_prefix}-")
+                for pos in bucket
+            ]
 
     def exposure(self, ticker: str) -> float:
         """Total dollars deployed across all open positions for a ticker."""
-        return sum(p.cost_dollars for p in self._positions.get(ticker, []))
+        with self._lock:
+            return sum(p.cost_dollars for p in self._positions.get(ticker, []))
 
     def total_deployed(self) -> float:
         """Total dollars deployed across all open positions."""
-        return sum(
-            p.cost_dollars
-            for bucket in self._positions.values()
-            for p in bucket
-        )
+        with self._lock:
+            return sum(
+                p.cost_dollars
+                for bucket in self._positions.values()
+                for p in bucket
+            )
 
     def position_count(self) -> int:
         """Total number of open positions across all tickers."""
-        return sum(len(v) for v in self._positions.values())
+        with self._lock:
+            return sum(len(v) for v in self._positions.values())
 
     def latest_ts(self, ticker: str) -> Optional[str]:
         """
@@ -225,10 +245,11 @@ class Portfolio:
         Used by TradeExecutor to seed per-ticker cooldowns from portfolio on restart
         instead of re-querying the DB.
         """
-        positions = self._positions.get(ticker, [])
-        if not positions:
-            return None
-        return max(p.ts for p in positions)
+        with self._lock:
+            positions = self._positions.get(ticker, [])
+            if not positions:
+                return None
+            return max(p.ts for p in positions)
 
     def is_concentration_ok(
         self,
@@ -236,6 +257,7 @@ class Portfolio:
         additional_dollars: float,
         max_ticker_pct: float,
         bankroll: float,
+        open_cost: float | None = None,
     ) -> bool:
         """
         Return True if adding `additional_dollars` to `ticker` stays within the
@@ -246,7 +268,8 @@ class Portfolio:
         if bankroll <= 0 or max_ticker_pct <= 0:
             return True
         cap = max_ticker_pct * bankroll
-        new_exposure = self.exposure(ticker) + additional_dollars
+        current = self.exposure(ticker) if open_cost is None else open_cost
+        new_exposure = current + additional_dollars
         return new_exposure <= cap
 
     # ── Reporting ─────────────────────────────────────────────────────────────
@@ -256,16 +279,17 @@ class Portfolio:
         Snapshot dict suitable for logging or status endpoints.
         Shows open tickers, total deployed, and per-ticker breakdown.
         """
-        return {
-            "open_tickers":   sorted(self.tickers()),
-            "position_count": self.position_count(),
-            "total_deployed": round(self.total_deployed(), 2),
-            "by_ticker": {
-                ticker: {
-                    "count":    len(positions),
-                    "exposure": round(sum(p.cost_dollars for p in positions), 2),
-                    "sides":    sorted({p.side for p in positions}),
-                }
-                for ticker, positions in self._positions.items()
-            },
-        }
+        with self._lock:
+            return {
+                "open_tickers":   sorted(self.tickers()),
+                "position_count": self.position_count(),
+                "total_deployed": round(self.total_deployed(), 2),
+                "by_ticker": {
+                    ticker: {
+                        "count":    len(positions),
+                        "exposure": round(sum(p.cost_dollars for p in positions), 2),
+                        "sides":    sorted({p.side for p in positions}),
+                    }
+                    for ticker, positions in self._positions.items()
+                },
+            }
