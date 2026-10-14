@@ -21,7 +21,7 @@
 
 ## Politics OOS registration (2026-10-14)
 
-Regime `politics_event_news_oos` opens at 2026-10-16T00:00:00Z and closes at 2027-01-14T00:00:00Z. The registration id is `politics-oos`. The capture path is `logs/edge_replay/corpus_politics_oos.jsonl`. Paper-shadow rows append `prospective_capture` lines from the deploy forward. Nothing before 2026-10-16 is in the window. The replay gate still trusts `origin/main`, still requires `registered_oos`, 30 settled trades, coverage 0.95, and an EV CI above 0. A capture line is not that evidence. The earliest materialization instant is the window end, 2027-01-14T00:00:00Z.
+Regime `politics_event_news_oos` opens at 2026-10-16T00:00:00Z and closes at 2027-01-14T00:00:00Z. The registration id is `politics-oos`. The capture path is `logs/edge_replay/corpus_politics_oos.jsonl`. Paper-shadow rows append `prospective_capture` lines from the deploy forward. Nothing before 2026-10-16 is in the window. The replay gate still trusts `origin/main`, still requires `registered_oos`, 30 settled trades, coverage 0.95, and an EV CI above 0. A capture line is not that evidence. The earliest materialization instant is the window end, 2027-01-14T00:00:00Z. Main is the trunk at the live desk. `repair/politics-favorite-band-paper` stays read-only through 2026-10-28 and is deleted after that. New work uses a short feature branch into main.
 
 ## Header / Metadata
 

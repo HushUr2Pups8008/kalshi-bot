@@ -6,6 +6,9 @@ docs/reports/live-fill-log.md is the only path that may be staged. The
 commit message is "ops: live fill log YYYY-MM-DD" using the UTC date.
 The push is tried twice. A second failure is written to
 logs/state/fill-log-push.err and the process still exits 0.
+When FILL_LOG_PUSH_REF names a branch, the report commit is pushed there
+from a temporary worktree. The checkout that launchd is using stays put.
+That is how the 06:05 job publishes while main rejects a direct push.
 
 Credentials stay outside the repo. FILL_LOG_GIT_SSH_KEY, or
 ~/.ssh/kalshi-fill-log when that file exists, is used for SSH.
@@ -19,8 +22,10 @@ from __future__ import annotations
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -118,6 +123,93 @@ def _run_git(args: list[str], repo: Path, env: dict[str, str]) -> subprocess.Com
 
 def _names(result: subprocess.CompletedProcess[str]) -> list[str]:
     return [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+
+
+def push_ref_from_env() -> str | None:
+    """Return the side branch name, or None when the job should push upstream.
+
+    An empty variable keeps the historical upstream push. A value that is not
+    a single branch name is rejected by the caller.
+    """
+    raw = os.environ.get("FILL_LOG_PUSH_REF", "")
+    if raw.strip() == "":
+        return None
+    ref = raw.strip()
+    if (
+        len(ref) > 100
+        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", ref)
+        or ref.startswith("/")
+        or ref.endswith("/")
+        or ".." in ref.split("/")
+        or "@" in ref
+    ):
+        raise ValueError("FILL_LOG_PUSH_REF is not a branch name")
+    return ref
+
+
+def _push_side_ref(git, repo: Path, ref: str, stamp: str) -> bool:
+    """Commit the copied report in a detached worktree and push that branch.
+
+    The live checkout's HEAD is not moved. The first publish starts at the
+    current HEAD. Later publishes start at the side branch tip so the push
+    fast-forwards.
+    """
+    head = git("rev-parse", "--verify", "HEAD")
+    if head.returncode != 0 or not (head.stdout or "").strip():
+        _write_err(repo, "fill log could not read HEAD")
+        return False
+    base = head.stdout.strip()
+    fetched = git(
+        "fetch",
+        "origin",
+        f"refs/heads/{ref}:refs/remotes/origin/{ref}",
+    )
+    if fetched.returncode == 0:
+        remote_tip = git("rev-parse", "--verify", f"refs/remotes/origin/{ref}")
+        if remote_tip.returncode == 0 and (remote_tip.stdout or "").strip():
+            base = remote_tip.stdout.strip()
+    parent = Path(tempfile.mkdtemp(prefix="kalshi-fill-log-"))
+    worktree = parent / "wt"
+    added = git("worktree", "add", "--detach", str(worktree), base)
+    if added.returncode != 0:
+        shutil.rmtree(parent, ignore_errors=True)
+        detail = _redact((added.stderr or added.stdout or "").strip())
+        _write_err(repo, f"fill log worktree failed: {detail}")
+        return False
+
+    def worktree_git(*args: str) -> subprocess.CompletedProcess[str]:
+        return git("-C", str(worktree), *args)
+
+    try:
+        report = worktree / REPORT_RELATIVE
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_bytes((repo / REPORT_RELATIVE).read_bytes())
+        staged = worktree_git("add", "--", REPORT_RELATIVE)
+        if staged.returncode != 0:
+            _write_err(repo, "fill log side add failed: " + _redact(staged.stderr or ""))
+            return False
+        names = worktree_git("diff", "--cached", "--name-only")
+        if _names(names) != [REPORT_RELATIVE]:
+            _write_err(
+                repo,
+                "refusing to commit the side branch because the index is not only the fill log",
+            )
+            return False
+        committed = worktree_git("commit", "-m", f"ops: live fill log {stamp}")
+        if committed.returncode != 0:
+            detail = _redact((committed.stderr or committed.stdout or "").strip())
+            _write_err(repo, f"fill log side commit failed: {detail}")
+            return False
+        for tag in ("first", "retry"):
+            pushed = worktree_git("push", "origin", f"HEAD:refs/heads/{ref}")
+            if pushed.returncode == 0:
+                return True
+            detail = _redact((pushed.stderr or pushed.stdout or "").strip())
+            _write_err(repo, f"{tag} fill log side push failed: {detail}")
+        return False
+    finally:
+        git("worktree", "remove", "--force", str(worktree))
+        shutil.rmtree(parent, ignore_errors=True)
 
 
 def _payload_differs(source: Path, dest: Path) -> bool:
@@ -232,6 +324,22 @@ def publish_live_fill_report(
         if _names(staged_after) != [REPORT_RELATIVE]:
             git("restore", "--staged", "--", REPORT_RELATIVE)
             _write_err(repo, "refusing to commit because the index is not only the fill log")
+            return 0
+        try:
+            side_ref = push_ref_from_env()
+        except ValueError as exc:
+            git("restore", "--staged", "--", REPORT_RELATIVE)
+            _write_err(repo, str(exc))
+            return 0
+        if side_ref is not None:
+            git("restore", "--staged", "--", REPORT_RELATIVE)
+            if _push_side_ref(git, repo, side_ref, stamp):
+                restored = git("restore", "--source=HEAD", "--worktree", "--", REPORT_RELATIVE)
+                if restored.returncode != 0:
+                    _write_err(repo, "fill log side push landed, but the checkout report was not restored")
+                else:
+                    _clear_err(repo)
+                    print("pushed")
             return 0
         message = f"ops: live fill log {stamp}"
         committed = git("commit", "-m", message)

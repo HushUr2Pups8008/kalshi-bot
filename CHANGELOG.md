@@ -19,6 +19,12 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.96] - 2026-10-14
+
+### Changed
+
+- **The 06:05 fill-log job can publish without pushing main.** `FILL_LOG_PUSH_REF=ops/live-fill-log` commits the report in a temporary worktree and pushes that branch. The politics checkout stays on its current commit. An empty variable still pushes the checkout's upstream. A rejected name is recorded and does not move main.
+
 ## [0.33.95] - 2026-10-13
 
 ### Fixed

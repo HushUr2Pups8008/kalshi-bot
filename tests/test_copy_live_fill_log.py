@@ -262,6 +262,68 @@ def test_rebase_runs_when_origin_is_ahead_and_aborts_on_conflict(tmp_path):
     assert _git(repo, "log", "-1", "--format=%s").stdout.strip() == "ops: live fill log 2026-10-13"
 
 
+def test_push_ref_publishes_a_side_branch_and_leaves_main(tmp_path, monkeypatch, capsys):
+    """Main is protected. The daily report must land somewhere else."""
+    repo, remote = _init_repo(tmp_path)
+    monkeypatch.setenv("FILL_LOG_PUSH_REF", "ops/live-fill-log")
+    source = repo / "logs" / "state" / "live-fill-log.md"
+    source.parent.mkdir(parents=True)
+    source.write_text("2026-10-14T00:00:00Z, KXTEST, yes, 40, 1, abc, 201\n", encoding="utf-8")
+    before = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    remote_main = _git(remote, "rev-parse", "main").stdout.strip()
+
+    rc = publish_live_fill_report(
+        repo,
+        dry_run=False,
+        source=source,
+        dest=repo / REPORT_RELATIVE,
+        now=datetime(2026, 10, 14, tzinfo=timezone.utc),
+    )
+    assert rc == 0
+    assert "pushed" in capsys.readouterr().out
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == before
+    assert _git(remote, "rev-parse", "main").stdout.strip() == remote_main
+    assert _git(repo, "status", "--porcelain").stdout == ""
+    assert (
+        _git(remote, "log", "-1", "--format=%s", "ops/live-fill-log").stdout.strip()
+        == "ops: live fill log 2026-10-14"
+    )
+
+    source.write_text("day two\n", encoding="utf-8")
+    rc = publish_live_fill_report(
+        repo,
+        dry_run=False,
+        source=source,
+        dest=repo / REPORT_RELATIVE,
+        now=datetime(2026, 10, 15, tzinfo=timezone.utc),
+    )
+    assert rc == 0
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == before
+    subjects = _git(remote, "log", "--format=%s", "ops/live-fill-log").stdout
+    assert "ops: live fill log 2026-10-15" in subjects
+    assert "ops: live fill log 2026-10-14" in subjects
+    assert not (repo / "logs" / "state" / "fill-log-push.err").exists()
+
+
+def test_invalid_push_ref_does_not_move_main(tmp_path, monkeypatch):
+    repo, remote = _init_repo(tmp_path)
+    monkeypatch.setenv("FILL_LOG_PUSH_REF", "../main")
+    source = repo / "logs" / "state" / "live-fill-log.md"
+    source.parent.mkdir(parents=True)
+    source.write_text("new fill\n", encoding="utf-8")
+    before = _git(remote, "rev-parse", "main").stdout.strip()
+    rc = publish_live_fill_report(
+        repo,
+        dry_run=False,
+        source=source,
+        dest=repo / REPORT_RELATIVE,
+    )
+    assert rc == 0
+    assert _git(remote, "rev-parse", "main").stdout.strip() == before
+    err = (repo / "logs" / "state" / "fill-log-push.err").read_text(encoding="utf-8")
+    assert "FILL_LOG_PUSH_REF is not a branch name" in err
+
+
 def test_in_repo_credentials_are_ignored(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()

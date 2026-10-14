@@ -12,6 +12,11 @@
     </array>
     <key>WorkingDirectory</key>
     <string>/Users/jacobparenti/vscode/kalshi-bot</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>FILL_LOG_PUSH_REF</key>
+        <string>ops/live-fill-log</string>
+    </dict>
     <key>RunAtLoad</key>
     <false/>
     <key>StartCalendarInterval</key>
