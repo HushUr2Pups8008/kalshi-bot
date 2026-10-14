@@ -1380,6 +1380,8 @@ class TradingBot:
             open_positions = getattr(portfolio, "open_positions", None)
             if callable(open_positions):
                 for position in open_positions() or []:
+                    if getattr(position, "paper_shadow", False) is True:
+                        continue
                     if str(getattr(position, "ticker", "") or "").strip() == wanted:
                         return True
             queue = getattr(self, "_trading_queue", None)
@@ -1411,6 +1413,8 @@ class TradingBot:
             open_positions = getattr(portfolio, "open_positions", None)
             if callable(open_positions):
                 for position in open_positions() or []:
+                    if getattr(position, "paper_shadow", False) is True:
+                        continue
                     ticker = str(getattr(position, "ticker", "") or "").strip()
                     if ticker and ticker not in seen:
                         seen.add(ticker)
@@ -3464,7 +3468,12 @@ class TradingBot:
 
         # Dynamic max bet is capped until all historical resolved paper outcomes
         # have canonical delivery completion; raw legacy wins cannot expand size.
-        notional = _paper_effective_sizing_bankroll(self.paper)
+        # A paper-shadow debit must not shrink the next live stake. Paper
+        # mode still sizes from the residual notional.
+        if not cfg.is_paper_trading and isinstance(self.paper, PaperTrader):
+            notional = _paper_starting_bankroll(self.paper)
+        else:
+            notional = _paper_effective_sizing_bankroll(self.paper)
         max_bet    = cfg.dynamic_max_bet(notional)
         min_edge   = PAPER_MIN_EDGE if cfg.is_paper_trading else cfg.min_edge
 

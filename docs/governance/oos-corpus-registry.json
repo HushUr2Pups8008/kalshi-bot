@@ -1,4 +1,21 @@
 {
   "schema_version": 1,
-  "registrations": []
+  "registrations": [
+    {
+      "id": "politics-oos",
+      "declared_at_utc": "2026-10-14T01:30:00Z",
+      "window": {
+        "start_utc": "2026-10-16T00:00:00Z",
+        "end_utc": "2027-01-14T00:00:00Z"
+      },
+      "regime_label": "politics_event_news_oos",
+      "universe_policy": {
+        "type": "market_families",
+        "market_families": ["KXTRUMPACT", "KXTRUMPSAY", "KXTRUTHSOCIAL"]
+      },
+      "exclude_contamination": true,
+      "registration_hash": "eace1247e239b858eb87fc44ad5f3755d79d1f6ca4de40423631114332e03147"
+    }
+  ]
 }
+

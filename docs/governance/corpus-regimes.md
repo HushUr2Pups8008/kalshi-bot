@@ -25,6 +25,7 @@ old label become un-rebuild-able.
 | `pre_p0` | Bot runs before the P0 price-fix sentinel (`bot_state.p0_price_fix_deployed_ts`). Decision-time prices were sourced through the pre-fix path; replay must treat these rows as a different population from post-fix decisions. | 2026-05-23 |
 | `post_p0_hotfix` | Bot runs after the v0.30.1 hotfix landed (`2026-05-13T00:02:37Z`). Covers the post-fix-but-pre-v0.30.2 lineage on `main` (hotfix `!14` restored `?status=open`; tag `v0.30.0` remains published-broken and immobile). | 2026-05-23 |
 | `post_v030_2_oos_seed` | Bot runs after v0.30.2 release commit landed (`2026-05-23T21:22:16Z`) — matches the OOS corpus seed window emitted by `scripts/edge_replay/oos_corpus_seed.py`. This regime is the canonical OOS holdout the framework's I-4 gate will draw from. | 2026-05-23 |
+| `politics_event_news_oos` | Politics event-news paper-shadow decisions from 2026-10-16T00:00:00Z until 2027-01-14T00:00:00Z. The registration lives on `repair/politics-favorite-band-paper` and the capture file is `logs/edge_replay/corpus_politics_oos.jsonl`. Rows before the window, and the desk-history fixture, are outside this regime. | 2026-10-14 |
 
 ## How to read this file when extending it
 

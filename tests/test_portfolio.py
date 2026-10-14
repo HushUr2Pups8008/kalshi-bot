@@ -5,6 +5,8 @@ Covers: position queries, exposure math, concentration checks, and resolution.
 """
 
 import sqlite3
+import threading
+import time
 
 import pytest
 
@@ -320,3 +322,39 @@ class TestOpenPositionsByPrefix:
         p.add(_pos("t1", "KXONE-A"))
         p.add(_pos("t2", "KXONE-B"))
         assert p.open_positions_by_prefix("KXTWO") == []
+
+
+def test_shadow_write_does_not_break_a_live_prefix_scan() -> None:
+    """A new ticker inserted off the event loop must not raise during a scan."""
+    portfolio = Portfolio()
+    stop = threading.Event()
+    errors: list[BaseException] = []
+
+    def writer() -> None:
+        index = 0
+        while not stop.is_set():
+            portfolio.add(_pos(f"t{index}", f"KXNEW-{index}", cost=1.0))
+            index += 1
+
+    def reader() -> None:
+        try:
+            while not stop.is_set():
+                portfolio.open_positions_by_prefix("KXNEW")
+                portfolio.open_positions()
+                portfolio.tickers()
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=writer),
+        threading.Thread(target=reader),
+        threading.Thread(target=reader),
+    ]
+    for thread in threads:
+        thread.start()
+    time.sleep(0.25)
+    stop.set()
+    for thread in threads:
+        thread.join(2)
+    assert errors == []
+    assert portfolio.position_count() > 0

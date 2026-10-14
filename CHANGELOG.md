@@ -19,6 +19,22 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.95] - 2026-10-13
+
+### Fixed
+
+- **A live event-news candidate now records a paper row.** The politics process is live, so `execute()` only called `_execute_live` and the paper cohort wrote nothing after 2026-09-11. The paper row is queued after that live decision, with the paper flags and the paper book, and it does not place an order. The next live decision does not wait on the paper Grok check. Paper rows stay ordered with each other. The row is marked `event_news_paper_shadow`. Live prefix, same-signal, family, concentration, admission, and news sizing ignore it. Live stakes keep the configured starting bankroll. The paper exposure cap adds open cost back onto residual cash. Fee-net accounting uses the candidate's `lc-` id, or a stable one when that id is missing. A paper failure does not change the live order.
+
+### Added
+
+- **The politics replay can sweep `EVENT_NEWS_MAX_RISK_CENTS` at 400, 500, 600, and 800.** Live sizing is unchanged. The replay's risk-cap row uses the paper default.
+- **A prospective politics OOS registration names `logs/edge_replay/corpus_politics_oos.jsonl`.** The window is 2026-10-16T00:00:00Z through 2027-01-14T00:00:00Z. A new paper-shadow row appends a `prospective_capture` line to that gitignored file. Those lines are not `registered_oos`, and the gate thresholds are unchanged.
+
+### Changed
+
+- **The politics plist sets `EVENT_NEWS_YES_FLOOR_CENTS` to 55.** That turns the YES floor on for live and for paper. The other new desk flags stay unset, so they stay on in paper and off in live.
+- **`EVENT_NEWS_MAX_RISK_CENTS` defaults to 600 for paper.** Live stays off while the plist leaves that name unset. An 89c ask is 6 contracts. The 8-contract cap still applies.
+
 ## [0.33.94] - 2026-10-13
 
 ### Added

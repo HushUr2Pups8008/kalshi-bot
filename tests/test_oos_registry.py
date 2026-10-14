@@ -91,10 +91,15 @@ def _init_repo(path: Path) -> Path:
     return path
 
 
-def test_shipped_registry_has_schema_v1_and_no_registrations() -> None:
+def test_shipped_registry_is_the_prospective_politics_window() -> None:
     registry = oos_registry.load_oos_registry(oos_registry.DEFAULT_REGISTRY_PATH)
 
-    assert registry == {}
+    assert list(registry) == ["politics-oos"]
+    registration = registry["politics-oos"]
+    assert registration.declared_at_utc < registration.window_start_utc
+    assert registration.window_start_utc == "2026-10-16T00:00:00Z"
+    assert registration.window_end_utc == "2027-01-14T00:00:00Z"
+    assert registration.exclude_contamination is True
 
 
 def test_load_valid_registration_and_verify_canonical_hash(tmp_path: Path) -> None:

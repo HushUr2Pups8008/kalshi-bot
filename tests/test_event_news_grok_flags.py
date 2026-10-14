@@ -1094,10 +1094,10 @@ async def test_ask_89c_keeps_size_cap_and_family_lock(monkeypatch, tmp_path, cap
 
 
 @pytest.mark.asyncio
-async def test_paper_risk_cap_shrinks_an_89c_yes_to_four_contracts(
+async def test_paper_risk_cap_shrinks_an_89c_yes_to_six_contracts(
     monkeypatch, tmp_path, caplog
 ):
-    """400 cents at 89c is 4 contracts. The hard maximum stays 8."""
+    """600 cents at 89c is 6 contracts. The hard maximum stays 8."""
     _band_flags_unset(monkeypatch)
     monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
     executor = _executor(monkeypatch, tmp_path, paper=True)
@@ -1120,12 +1120,12 @@ async def test_paper_risk_cap_shrinks_an_89c_yes_to_four_contracts(
         trade_id = await executor._execute_paper(analysis, execution_plan=plan)
     assert reason is None
     assert plan is not None
-    assert plan.contracts == 4
+    assert plan.contracts == 6
     assert plan.price_cents == 89
     assert trade_id == "paper-risk"
     assert "EVENT_NEWS_RISK_CAP" in caplog.text
     recorded = executor._paper.record_trade.call_args.kwargs["execution_terms"]
-    assert recorded.contracts == 4
+    assert recorded.contracts == 6
 
 
 @pytest.mark.asyncio
@@ -1753,7 +1753,7 @@ def test_boot_line_prints_resolved_flag_values(monkeypatch, tmp_path, caplog):
         "GROK_TRACE=off GROK_WATCH_SKIP_SETTLED=off "
         "FILL_LOG_DETAIL=off band_floor_cents=36"
         " YES_FLOOR live=off paper=on cents=55"
-        " RISK_CAP live=off paper=on cents=400"
+        " RISK_CAP live=off paper=on cents=600"
         " EXPOSURE_PCT live=off paper=on pct=25"
         " ONE_PER_FAMILY live=off paper=on"
         " MAKER_FIRST live=off paper=on wait_s=180"
@@ -1780,7 +1780,7 @@ def test_boot_line_defaults_band_on_and_the_other_four_off(monkeypatch, tmp_path
         "GROK_TRACE=off GROK_WATCH_SKIP_SETTLED=off "
         "FILL_LOG_DETAIL=off band_floor_cents=36"
         " YES_FLOOR live=off paper=on cents=55"
-        " RISK_CAP live=off paper=on cents=400"
+        " RISK_CAP live=off paper=on cents=600"
         " EXPOSURE_PCT live=off paper=on pct=25"
         " ONE_PER_FAMILY live=off paper=on"
         " MAKER_FIRST live=off paper=on wait_s=180"

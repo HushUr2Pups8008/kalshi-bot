@@ -69,7 +69,7 @@ from trading.paper_accounting import (
     require_paper_accounting_admission,
     sqlite_paper_accounting_handlers,
 )
-from trading.portfolio import Portfolio, Position
+from trading.portfolio import PAPER_SHADOW_SIGNAL_TYPE, Portfolio, Position
 from trading.profit_evidence import independent_realized_profit_evidence_available
 from trading.sizing_guard import effective_sizing_bankroll
 from trading.settlement import (
@@ -2217,6 +2217,8 @@ class PaperTrader:
             ts=trade_ts,
             price_source=provenance_source,
             price_method=provenance_method,
+            paper_shadow=str(getattr(analysis, "signal_type", "") or "")
+            == PAPER_SHADOW_SIGNAL_TYPE,
         ))
 
         paper_trade_kwargs = {
