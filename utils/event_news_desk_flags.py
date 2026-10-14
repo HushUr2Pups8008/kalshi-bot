@@ -5,8 +5,9 @@ An explicit ``true`` or ``false`` wins in both modes. A positive integer
 turns that flag on and replaces its numeric default. Any other text
 leaves the behavior off.
 
-The live plist does not set these names. Live orders therefore keep
-the 36c band, the 8-contract cap, and the existing family lock.
+The live plist sets EVENT_NEWS_YES_FLOOR_CENTS. The other names stay
+unset, so those live paths stay off. The 36c band, the 8-contract cap,
+and the existing family lock stay in force.
 """
 
 from __future__ import annotations

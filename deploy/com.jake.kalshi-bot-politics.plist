@@ -35,6 +35,8 @@
         <string>true</string>
         <key>EVENT_NEWS_GROK_TRACE</key>
         <string>true</string>
+        <key>EVENT_NEWS_YES_FLOOR_CENTS</key>
+        <string>55</string>
     </dict>
 </dict>
 </plist>
