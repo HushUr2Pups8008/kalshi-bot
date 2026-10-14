@@ -984,6 +984,22 @@ class TradeExecutor:
             restore_lifecycle()
         if trade_id:
             log.info("[EVENT_NEWS_PAPER_SHADOW] recorded ticker=%s", ticker)
+            try:
+                from utils.event_news_oos_capture import append_politics_oos_capture
+
+                append_politics_oos_capture(
+                    trade_id=str(trade_id),
+                    ticker=ticker,
+                    side=str(getattr(analysis, "side", "") or ""),
+                    price_cents=int(plan.price_cents),
+                    contracts=int(plan.contracts),
+                )
+            except Exception:
+                log.warning(
+                    "[EVENT_NEWS_PAPER_SHADOW] capture failed ticker=%s",
+                    ticker,
+                    exc_info=True,
+                )
         return trade_id
 
     def _ensure_sized(self, analysis: SignalAnalysis) -> None:

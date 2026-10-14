@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
+import tempfile
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -17,6 +20,11 @@ from utils.event_news_research import EVENT_NEWS_COHORT_ID
 
 
 def _executor(monkeypatch: pytest.MonkeyPatch) -> tuple[TradeExecutor, MagicMock, MagicMock]:
+    capture_path = Path(tempfile.mkdtemp(prefix="politics-oos-")) / "corpus_politics_oos.jsonl"
+    monkeypatch.setattr(
+        "utils.event_news_oos_capture.politics_oos_corpus_path",
+        lambda root=None: capture_path,
+    )
     monkeypatch.setattr(config_module.cfg, "is_paper_trading", False)
     monkeypatch.setattr(config_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
     monkeypatch.setattr(config_module.cfg, "enable_fee_net_paper_accounting", False)
@@ -75,11 +83,44 @@ async def test_risk_cap_shrinks_the_paper_row_and_restores_the_live_budget(monke
     trade_id = await executor._record_event_news_paper_shadow(analysis)
     assert trade_id == "paper-shadow-1"
     terms = paper.record_trade.call_args.kwargs["execution_terms"]
-    assert terms.contracts == 4
+    assert terms.contracts == 7
     assert terms.price_cents == 85
     assert analysis.capped_dollars == 10.0
     rest.place_limit_order.assert_not_called()
     rest._request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_recorded_shadow_appends_a_prospective_capture(monkeypatch) -> None:
+    executor, rest, paper = _executor(monkeypatch)
+    from utils.event_news_oos_capture import politics_oos_corpus_path
+
+    trade_id = await executor._record_event_news_paper_shadow(_analysis("no", 60))
+    assert trade_id == "paper-shadow-1"
+    path = politics_oos_corpus_path()
+    rows = [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(rows) == 1
+    assert rows[0]["evidence_class"] == "prospective_capture"
+    assert rows[0]["evidence_class"] != "registered_oos"
+    assert rows[0]["oos_registration_id"] == "politics-oos"
+    assert rows[0]["trade_id"] == "paper-shadow-1"
+    assert rows[0]["ticker"] == "KXTRUMPSAY-26OCT20-TEST"
+    assert "client_order_id" not in rows[0]
+    rest.place_limit_order.assert_not_called()
+    rest._request.assert_not_called()
+    again = await executor._record_event_news_paper_shadow(_analysis("no", 60))
+    assert again == "paper-shadow-1"
+    written = [
+        line
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(written) == 1
+    paper.record_trade.assert_called()
 
 
 @pytest.mark.asyncio

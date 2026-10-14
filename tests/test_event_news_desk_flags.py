@@ -42,13 +42,14 @@ def test_yes_floor_drops_yes_below_55_and_keeps_no_at_36() -> None:
 def test_boot_suffix_prints_live_off_and_paper_on() -> None:
     line = event_news_desk_flags_boot_suffix({})
     assert "YES_FLOOR live=off paper=on cents=55" in line
-    assert "RISK_CAP live=off paper=on cents=400" in line
+    assert "RISK_CAP live=off paper=on cents=600" in line
     assert "MAKER_FIRST live=off paper=on wait_s=180" in line
     assert "RULES_CHECK live=off paper=on" in line
 
 
-def test_risk_cap_example_89c_is_four_contracts() -> None:
-    assert event_news_risk_capped_contracts(8, 89, live=False, environ={}) == 4
+def test_risk_cap_example_89c_uses_the_600_cent_paper_default() -> None:
+    # 600 // 89 is 6. Live stays uncapped by this flag when the env is unset.
+    assert event_news_risk_capped_contracts(8, 89, live=False, environ={}) == 6
     assert event_news_risk_capped_contracts(22, 33, live=False, environ={}) == 8
     assert event_news_risk_capped_contracts(8, 89, live=True, environ={}) == 8
     assert event_news_risk_capped_contracts(8, 0, live=False, environ={}) == 0

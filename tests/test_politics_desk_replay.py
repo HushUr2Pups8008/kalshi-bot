@@ -48,8 +48,9 @@ def test_risk_cap_uses_the_same_contract_formula_as_the_desk() -> None:
     assert by_ticker["KXTRUTHSOCIAL-26OCT03-B129"] == 8
     assert by_ticker["KXTRUMPACT-26SEP06-T4"] == 8
     assert by_ticker["KXTRUMPACT-26OCT04-T6"] == 8
-    assert by_ticker["KXTRUTHSOCIAL-26AUG29-T240"] == 4
-    assert by_ticker["KXTRUMPSAY-26SEP14-UKRA"] == 6
+    # 85c under the 600-cent paper default is 7. 60c is still the 8-lot cap.
+    assert by_ticker["KXTRUTHSOCIAL-26AUG29-T240"] == 7
+    assert by_ticker["KXTRUMPSAY-26SEP14-UKRA"] == 8
     mode = _mode("risk_cap")
     assert mode["n"] == "9"
     assert Decimal(mode["fee_net"]) != Decimal("-0.2784")
@@ -82,9 +83,11 @@ def test_all_modes_apply_together_without_the_exposure_guess() -> None:
     yes_floor = _mode("yes_floor")
     assert mode["n"] == "7"
     assert Decimal(mode["delta"]) == Decimal(mode["fee_net"]) - Decimal("-0.2784")
-    # Family drops a winner and the risk cap shrinks the rest, so the stack
-    # is below the YES-floor result. Exposure is not guessed into this number.
-    assert Decimal(mode["fee_net"]) < Decimal(yes_floor["fee_net"])
+    # The 600-cent cap still shrinks 85c from 8 to 7, and maker savings are
+    # added. That stack is no longer below the YES-floor-only result.
+    # Exposure is not guessed into this number.
+    assert Decimal(mode["fee_net"]) == Decimal("9.3677")
+    assert Decimal(mode["fee_net"]) != Decimal(yes_floor["fee_net"])
     assert "exposure stays not_measured" in mode["note"]
 
 
@@ -110,23 +113,49 @@ def test_risk_cap_sweep_matches_the_400_cent_replay() -> None:
     rows = {row["cap_cents"]: row for row in risk_cap_sweep()}
     assert list(rows) == ["400", "500", "600", "800"]
     risk = _mode("risk_cap")
-    assert rows["400"]["n"] == "9"
-    assert rows["400"]["fee_net"] == risk["fee_net"]
-    assert rows["400"]["delta"] == risk["delta"]
-    assert rows["400"]["positive_fee_net_removed"] == risk["positive_fee_net_removed"]
+    assert rows["600"]["n"] == "9"
+    assert rows["600"]["fee_net"] == risk["fee_net"]
+    assert rows["600"]["delta"] == risk["delta"]
+    assert rows["600"]["positive_fee_net_removed"] == risk["positive_fee_net_removed"]
     assert Decimal(rows["800"]["positive_fee_net_removed"]) <= Decimal(
         rows["400"]["positive_fee_net_removed"]
     )
 
 
-def test_oos_registry_has_no_registration() -> None:
+def test_politics_oos_registration_starts_after_declaration() -> None:
     import json
+
+    from scripts.edge_replay.oos_registry import (
+        canonical_registration_hash,
+        load_oos_registry,
+    )
+    from utils.event_news_oos_capture import (
+        POLITICS_OOS_CORPUS_NAME,
+        POLITICS_OOS_REGISTRATION_ID,
+    )
 
     document = json.loads(
         Path("docs/governance/oos-corpus-registry.json").read_text(encoding="utf-8")
     )
-    assert document["registrations"] == []
+    assert [row["id"] for row in document["registrations"]] == [
+        POLITICS_OOS_REGISTRATION_ID
+    ]
+    stored = document["registrations"][0]
+    hashed = dict(stored)
+    hashed.pop("registration_hash")
+    assert stored["registration_hash"] == canonical_registration_hash(hashed)
+    registration = load_oos_registry(Path("docs/governance/oos-corpus-registry.json"))[
+        POLITICS_OOS_REGISTRATION_ID
+    ]
+    assert registration.window_start_utc == "2026-10-16T00:00:00Z"
+    assert registration.window_end_utc == "2027-01-14T00:00:00Z"
+    assert registration.declared_at_utc < registration.window_start_utc
+    assert registration.regime_label == "politics_event_news_oos"
+    assert POLITICS_OOS_CORPUS_NAME == "corpus_politics_oos.jsonl"
     assert corpus_mismatch()["evidence_class"] == ["desk_history"]
+    assert "registered_oos" not in Path(
+        "tests/fixtures/edge_replay/corpus_politics_desk_history.jsonl"
+    ).read_text(encoding="utf-8")
 
 
 def test_ci_entry_prints_the_table_and_still_fails(monkeypatch, capsys) -> None:

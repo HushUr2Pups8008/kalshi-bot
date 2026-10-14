@@ -331,7 +331,7 @@ def replay_modes() -> list[dict[str, str]]:
             "fee_net": _money(risk_total),
             "delta": _money(risk_total - base),
             "positive_fee_net_removed": _money(risk_positive),
-            "note": "fee-net scaled by new_contracts/old_contracts; rounding means fees are not perfectly linear",
+            "note": "paper default cap is 600 cents; fees are not perfectly linear after scaling",
         },
         {
             "mode": "one_per_family",

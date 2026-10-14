@@ -6,8 +6,9 @@ turns that flag on and replaces its numeric default. Any other text
 leaves the behavior off.
 
 The live plist sets EVENT_NEWS_YES_FLOOR_CENTS. The other names stay
-unset, so those live paths stay off. The 36c band, the 8-contract cap,
-and the existing family lock stay in force.
+unset, so those live paths stay off. The paper risk cap defaults to
+600 cents. The plist does not set EVENT_NEWS_MAX_RISK_CENTS. The 36c
+band, the 8-contract cap, and the existing family lock stay in force.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ EVENT_NEWS_MAKER_WAIT_S = "EVENT_NEWS_MAKER_WAIT_S"
 EVENT_NEWS_GROK_RULES_CHECK = "EVENT_NEWS_GROK_RULES_CHECK"
 
 DEFAULT_YES_FLOOR_CENTS = 55
-DEFAULT_MAX_RISK_CENTS = 400
+DEFAULT_MAX_RISK_CENTS = 600
 DEFAULT_MAX_EXPOSURE_PCT = 25
 DEFAULT_MAKER_WAIT_S = 180
 HARD_MAX_CONTRACTS = 8
