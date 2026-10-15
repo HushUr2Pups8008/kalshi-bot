@@ -93,6 +93,7 @@ async def test_risk_cap_shrinks_the_paper_row_and_restores_the_live_budget(monke
 @pytest.mark.asyncio
 async def test_recorded_shadow_appends_a_prospective_capture(monkeypatch) -> None:
     executor, rest, paper = _executor(monkeypatch)
+    monkeypatch.setattr(config_module.cfg, "paper_ticker_cooldown", 0)
     from utils.event_news_oos_capture import politics_oos_corpus_path
 
     trade_id = await executor._record_event_news_paper_shadow(_analysis("no", 60))
@@ -187,6 +188,7 @@ async def test_fee_net_records_with_existing_lifecycle_and_does_not_post(monkeyp
 @pytest.mark.asyncio
 async def test_fee_net_mints_a_stable_lifecycle_when_missing(monkeypatch) -> None:
     executor, rest, paper = _executor(monkeypatch)
+    monkeypatch.setattr(config_module.cfg, "paper_ticker_cooldown", 0)
     _fee_net_on(monkeypatch, paper)
     seen: list[str] = []
 
@@ -403,6 +405,7 @@ async def test_rules_check_does_not_hold_the_live_caller(monkeypatch) -> None:
 async def test_queued_shadows_see_the_earlier_paper_row(monkeypatch) -> None:
     """A second paper row waits until the first row is on the paper book."""
     executor, rest, paper = _executor(monkeypatch)
+    monkeypatch.setattr(config_module.cfg, "paper_ticker_cooldown", 14400)
     release, entered = _hold_rules(monkeypatch)
 
     def _record(analysis: SimpleNamespace, execution_terms: object = None) -> str:
@@ -426,6 +429,90 @@ async def test_queued_shadows_see_the_earlier_paper_row(monkeypatch) -> None:
     await asyncio.wait(set(executor._paper_shadow_tasks))
     assert entered == ["rules"]
     assert paper.record_trade.call_count == 1
+    rest.place_limit_order.assert_not_called()
+    rest._request.assert_not_called()
+    rest.cancel_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_entry_window_allows_one_paper_row_per_ticker(monkeypatch) -> None:
+    """The paper cooldown is the entry window. A second row waits it out."""
+    executor, rest, paper = _executor(monkeypatch)
+    monkeypatch.setattr(config_module.cfg, "paper_ticker_cooldown", 14400)
+    analysis = _analysis("no", 60)
+    analysis._event_news_paper_shadow_source = "prefix_cap"
+    assert await executor._record_event_news_paper_shadow(analysis) == "paper-shadow-1"
+    again = await executor._record_event_news_paper_shadow(analysis)
+    assert again is None
+    assert paper.record_trade.call_count == 1
+    rest.place_limit_order.assert_not_called()
+    rest._request.assert_not_called()
+    rest.cancel_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_paper_book_blocks_a_sibling_and_live_occupancy_does_not(monkeypatch) -> None:
+    """Paper prefix and family use the paper book. A live open row is not in it."""
+    executor, rest, paper = _executor(monkeypatch)
+    monkeypatch.setattr(config_module.cfg, "paper_ticker_cooldown", 0)
+    portfolio = Portfolio()
+    paper.portfolio = portfolio
+    portfolio.add(
+        Position(
+            trade_id="paper-shadow-open",
+            ticker="KXTRUMPACT-26AUG30-T8",
+            side="no",
+            contracts=4,
+            cost_dollars=2.4,
+            price_cents=60,
+            estimated_prob=0.7,
+            entry_price_cents=60.0,
+            ts="2026-10-13T00:00:00+00:00",
+            paper_shadow=True,
+        )
+    )
+    blocked = _analysis("no", 60)
+    blocked.market.ticker = "KXTRUMPACT-26AUG30-T6"
+    blocked.market.series_ticker = "KXTRUMPACT"
+    blocked.market.event_ticker = "KXTRUMPACT-26AUG30"
+    blocked._event_news_paper_shadow_source = "prefix_cap"
+    assert await executor._record_event_news_paper_shadow(blocked) is None
+    assert paper.record_trade.call_count == 0
+    portfolio._positions.clear()
+    assert await executor._record_event_news_paper_shadow(blocked) == "paper-shadow-1"
+    assert paper.record_trade.call_count == 1
+    rest.place_limit_order.assert_not_called()
+    rest._request.assert_not_called()
+    rest.cancel_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_excluded_band_decision_does_not_schedule_shadow(monkeypatch) -> None:
+    executor, rest, paper = _executor(monkeypatch)
+    analysis = _analysis("yes", 35)
+    # execute() logs the book before _validate. The fixture market is a
+    # namespace, so the price guard has to exist or the skip is never reached.
+    analysis.market.price_available = True
+    analysis.market.yes_price = 35
+
+    async def _from_candidate(_candidate: object) -> SimpleNamespace:
+        return analysis
+
+    async def _noop(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(executor, "_analysis_from_candidate", _from_candidate)
+    monkeypatch.setattr(executor, "_validate", lambda _analysis: "executed_ask_in_excluded_band")
+    monkeypatch.setattr("trading.executor.write_trade_log_async", _noop)
+    scheduled: list[str] = []
+    monkeypatch.setattr(
+        executor,
+        "_schedule_paper_shadow",
+        lambda *_args, **kwargs: scheduled.append(str(kwargs.get("source", "missing"))),
+    )
+    assert await executor.execute(object()) is None
+    assert scheduled == []
+    paper.record_trade.assert_not_called()
     rest.place_limit_order.assert_not_called()
     rest._request.assert_not_called()
     rest.cancel_order.assert_not_called()

@@ -448,10 +448,12 @@ class TradeExecutor:
         self._session_start_balance: Optional[float] = None
         self._live_halted: bool = False
         self._shutdown_callback: Optional[Callable] = None
-        # Paper rows are written after the live decision. The lock keeps
-        # those rows ordered. The live consumer does not wait on Grok.
+        # Paper rows are queued from the admit gate and from a live
+        # decision. The lock keeps those rows ordered. The live consumer
+        # does not wait on the paper Grok check.
         self._paper_shadow_tasks: set[asyncio.Task[None]] = set()
         self._paper_shadow_lock = asyncio.Lock()
+        self._paper_shadow_entry_mono: dict[str, float] = {}
         log.info(
             "[EXECUTOR_STATE] pid=%s mode=%s bankroll_source=%s",
             __import__("os").getpid(),
@@ -646,7 +648,8 @@ class TradeExecutor:
             if execution_signal_meta:
                 skipped_kwargs["signal_meta"] = execution_signal_meta
             await write_trade_log_async(trade_log.log_skipped, **skipped_kwargs)
-            self._schedule_paper_shadow(analysis)
+            if skip_reason != "executed_ask_in_excluded_band":
+                self._schedule_paper_shadow(analysis, source="decision")
             return None
         assert execution_plan is not None
 
@@ -675,29 +678,45 @@ class TradeExecutor:
                 analysis.side.upper(),
             )
 
-        self._schedule_paper_shadow(analysis)
+        self._schedule_paper_shadow(analysis, source="decision")
         return trade_id
 
-    def _schedule_paper_shadow(self, analysis: SignalAnalysis) -> None:
-        """Queue one paper row. The live order, if any, is already decided."""
+    def _paper_shadow_source(self, analysis: object) -> str:
+        source = str(getattr(analysis, "_event_news_paper_shadow_source", "") or "")
+        if source not in {"prefix_cap", "decision"}:
+            return "decision"
+        return source
+
+    def _schedule_paper_shadow(
+        self,
+        analysis: SignalAnalysis,
+        *,
+        source: str = "decision",
+    ) -> None:
+        """Queue one paper row. Does not place or cancel a live order."""
+        if source not in {"prefix_cap", "decision"}:
+            source = "decision"
         if self._is_paper:
             return
         from utils.event_news_research import is_event_news_paper_cohort
 
         if not is_event_news_paper_cohort():
             return
+        ticker = getattr(getattr(analysis, "market", None), "ticker", "")
         try:
             snapshot = copy.copy(analysis)
             meta = getattr(analysis, "signal_meta", None)
             if isinstance(meta, dict):
                 snapshot.signal_meta = dict(meta)
+            snapshot._event_news_paper_shadow_source = source
             task = asyncio.create_task(self._shadow_live_candidate_locked(snapshot))
             self._paper_shadow_tasks.add(task)
             task.add_done_callback(self._paper_shadow_tasks.discard)
         except Exception:
             log.warning(
-                "[EVENT_NEWS_PAPER_SHADOW] schedule failed ticker=%s",
-                getattr(getattr(analysis, "market", None), "ticker", ""),
+                "[EVENT_NEWS_PAPER_SHADOW] schedule failed source=%s ticker=%s",
+                source,
+                ticker,
                 exc_info=True,
             )
 
@@ -714,7 +733,8 @@ class TradeExecutor:
             await self._record_event_news_paper_shadow(analysis)
         except Exception:
             log.warning(
-                "[EVENT_NEWS_PAPER_SHADOW] record failed ticker=%s",
+                "[EVENT_NEWS_PAPER_SHADOW] record failed source=%s ticker=%s",
+                self._paper_shadow_source(analysis),
                 getattr(getattr(analysis, "market", None), "ticker", ""),
                 exc_info=True,
             )
@@ -867,6 +887,8 @@ class TradeExecutor:
 
         if self._is_paper or not is_event_news_paper_cohort():
             return None
+        source = self._paper_shadow_source(analysis)
+        self._ensure_sized(analysis)
         price = getattr(analysis, "executed_price_cents", None)
         if isinstance(price, bool) or not isinstance(price, int):
             return None
@@ -886,6 +908,16 @@ class TradeExecutor:
                 blocked,
             )
             return None
+        window = int(getattr(cfg, "paper_ticker_cooldown", 0) or 0)
+        if window > 0 and ticker:
+            last_entry = self._paper_shadow_entry_mono.get(ticker)
+            if last_entry is not None and (time.monotonic() - last_entry) < window:
+                log.info(
+                    "[EVENT_NEWS_PAPER_SHADOW] skip=entry_window source=%s ticker=%s",
+                    source,
+                    ticker,
+                )
+                return None
         try:
             edge_value = float(analysis.edge)
         except (TypeError, ValueError):
@@ -925,7 +957,11 @@ class TradeExecutor:
             return None
         same_ticker = self._paper.portfolio.open_positions(ticker)
         if isinstance(same_ticker, list) and same_ticker:
-            log.info("[EVENT_NEWS_PAPER_SHADOW] skip=open_ticker ticker=%s", ticker)
+            log.info(
+                "[EVENT_NEWS_PAPER_SHADOW] skip=open_ticker source=%s ticker=%s",
+                source,
+                ticker,
+            )
             return None
         prefix_cap = event_news_open_prefix_cap(cfg.max_open_positions_per_prefix)
         if prefix_cap > 0:
@@ -937,7 +973,8 @@ class TradeExecutor:
                 open_in_prefix = self._paper.portfolio.open_positions_by_prefix(prefix)
                 if isinstance(open_in_prefix, list) and len(open_in_prefix) >= prefix_cap:
                     log.info(
-                        "[EVENT_NEWS_PAPER_SHADOW] skip=prefix_cap ticker=%s prefix=%s",
+                        "[EVENT_NEWS_PAPER_SHADOW] skip=prefix_cap source=%s ticker=%s prefix=%s",
+                        source,
                         ticker,
                         prefix,
                     )
@@ -960,14 +997,19 @@ class TradeExecutor:
             return None
         aligned = self._paper_shadow_capped_dollars(plan)
         if aligned is None:
-            log.info("[EVENT_NEWS_PAPER_SHADOW] skip=terms ticker=%s", ticker)
+            log.info(
+                "[EVENT_NEWS_PAPER_SHADOW] skip=terms source=%s ticker=%s",
+                source,
+                ticker,
+            )
             return None
         self._event_news_log_paper_maker(analysis, plan, paper_shadow=True)
         fee_reason = self._paper_fee_admission_skip_reason(analysis, plan)
         if fee_reason is not None:
             log.info(
-                "[EVENT_NEWS_PAPER_SHADOW] skip=%s ticker=%s",
+                "[EVENT_NEWS_PAPER_SHADOW] skip=%s source=%s ticker=%s",
                 fee_reason,
+                source,
                 ticker,
             )
             return None
@@ -983,7 +1025,13 @@ class TradeExecutor:
             analysis.signal_type = previous_signal_type
             restore_lifecycle()
         if trade_id:
-            log.info("[EVENT_NEWS_PAPER_SHADOW] recorded ticker=%s", ticker)
+            if ticker:
+                self._paper_shadow_entry_mono[ticker] = time.monotonic()
+            log.info(
+                "[EVENT_NEWS_PAPER_SHADOW] recorded source=%s ticker=%s",
+                source,
+                ticker,
+            )
             try:
                 from utils.event_news_oos_capture import append_politics_oos_capture
 
@@ -996,7 +1044,8 @@ class TradeExecutor:
                 )
             except Exception:
                 log.warning(
-                    "[EVENT_NEWS_PAPER_SHADOW] capture failed ticker=%s",
+                    "[EVENT_NEWS_PAPER_SHADOW] capture failed source=%s ticker=%s",
+                    source,
                     ticker,
                     exc_info=True,
                 )

@@ -374,6 +374,7 @@ class ResearchPaperAdmissionBridge:
         route_analysis: (Callable[[SignalAnalysis, ResearchBackedBlendStore], Awaitable[Any]] | None) = None,
         paper_exposure_checker: Callable[[str], bool] | None = None,
         open_paper_tickers: Callable[[], list[str]] | None = None,
+        paper_shadow: Callable[[SignalAnalysis, str], None] | None = None,
     ) -> None:
         self.provider = signal_provider or ResearchPaperSignalProvider(
             research_store,
@@ -385,6 +386,29 @@ class ResearchPaperAdmissionBridge:
         self._route_analysis = route_analysis
         self._paper_exposure_checker = paper_exposure_checker
         self._open_paper_tickers = open_paper_tickers
+        self._paper_shadow = paper_shadow
+
+    def _queue_paper_shadow(self, analysis: SignalAnalysis, source: str) -> None:
+        """Queue a paper row for a prefix-cap block or a live admit.
+
+        Excluded-band blocks never reach this helper. A failure here does
+        not change the admission result and does not place an order.
+        """
+        if source not in {"prefix_cap", "decision"}:
+            return
+        callback = self._paper_shadow
+        if not callable(callback):
+            return
+        ticker = str(getattr(getattr(analysis, "market", None), "ticker", "") or "")
+        try:
+            callback(analysis, source)
+        except Exception:
+            _event_news_log.warning(
+                "[EVENT_NEWS_PAPER_SHADOW] schedule failed source=%s ticker=%s",
+                source,
+                ticker,
+                exc_info=True,
+            )
 
     async def admit_prewarm_result(
         self,
@@ -514,6 +538,7 @@ class ResearchPaperAdmissionBridge:
                     occupied,
                     ticker,
                 )
+                self._queue_paper_shadow(analysis, "prefix_cap")
                 return ResearchPaperAdmissionResult(
                     market_ticker=ticker,
                     admitted=False,
@@ -570,6 +595,7 @@ class ResearchPaperAdmissionBridge:
             if bypass_blend:
                 candidate = _official_p_trade_candidate(analysis, current_signal)
                 await self.trading_queue.put(candidate)
+                self._queue_paper_shadow(analysis, "decision")
                 _event_news_log.info(
                     "[EVENT_NEWS_ADMIT] blend_bypassed reason=official_p "
                     "ticker=%s side=%s p=%.3f edge=%.4f",
@@ -626,6 +652,8 @@ class ResearchPaperAdmissionBridge:
             enqueued=bool(blend_result.enqueued),
             outcome_reason=blend_result.trade_blocked_reason,
         )
+        if blend_result.enqueued:
+            self._queue_paper_shadow(analysis, "decision")
         return ResearchPaperAdmissionResult(
             market_ticker=ticker,
             admitted=blend_result.ready,

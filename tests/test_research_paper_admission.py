@@ -689,6 +689,11 @@ async def test_politics_official_p_bypasses_blend_task(monkeypatch) -> None:
         routed.append(analysis)
         raise AssertionError("BlendTask must not run for official p")
 
+    shadowed: list[tuple[str, str]] = []
+
+    def _shadow(analysis, source: str) -> None:
+        shadowed.append((str(analysis.market.ticker), source))
+
     bridge = ResearchPaperAdmissionBridge(
         research_store=FakeResearchStore(
             snapshot=replace(
@@ -708,6 +713,7 @@ async def test_politics_official_p_bypasses_blend_task(monkeypatch) -> None:
         now=lambda: datetime(2026, 7, 2, 16, 5, tzinfo=UTC),
         route_analysis=route_analysis,
         paper_exposure_checker=lambda _ticker: False,
+        paper_shadow=_shadow,
     )
     result = await bridge.admit_prewarm_result(
         ResearchPrewarmResult(
@@ -728,6 +734,7 @@ async def test_politics_official_p_bypasses_blend_task(monkeypatch) -> None:
     assert candidate.fast_lane_analysis.signal_type == "research_decision_grade"
     assert candidate.signal_meta["blend_bypassed"] is True
     assert candidate.signal_meta["blend_bypass_reason"] == "official_p"
+    assert shadowed == [(ticker, "decision")]
 
 
 @pytest.mark.asyncio
@@ -764,6 +771,7 @@ async def test_politics_official_p_blocks_sibling_when_event_already_open(
         evidence=_official_range_evidence(ticker=ticker),
         has_counter_query=False,
     )
+    shadowed: list[tuple[str, str]] = []
     bridge = ResearchPaperAdmissionBridge(
         research_store=store,
         trading_queue=queue,
@@ -771,6 +779,9 @@ async def test_politics_official_p_blocks_sibling_when_event_already_open(
         now=lambda: datetime(2026, 7, 2, 16, 5, tzinfo=UTC),
         paper_exposure_checker=lambda _ticker: False,
         open_paper_tickers=lambda: ["KXTRUMPACT-26AUG30-T8"],
+        paper_shadow=lambda analysis, source: shadowed.append(
+            (str(analysis.market.ticker), source)
+        ),
     )
     with caplog.at_level(logging.INFO, logger="event_news_research"):
         result = await bridge.admit_prewarm_result(
@@ -795,6 +806,65 @@ async def test_politics_official_p_blocks_sibling_when_event_already_open(
         and "blocked=KXTRUMPACT-26AUG30-T6" in record.message
         for record in caplog.records
     )
+    assert shadowed == [("KXTRUMPACT-26AUG30-T6", "prefix_cap")]
+    assert queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_politics_excluded_band_does_not_queue_a_paper_shadow(monkeypatch) -> None:
+    """A longshot executed ask is not a paper row. Prefix-cap blocks are."""
+    import config as config_module
+    from utils.event_news_research import EVENT_NEWS_COHORT_ID
+
+    monkeypatch.setattr(config_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
+    monkeypatch.setattr("utils.event_news_research.cfg", config_module.cfg)
+    monkeypatch.setattr(
+        "tasks.research_paper_admission.is_event_news_paper_cohort",
+        lambda _config=None: True,
+    )
+    ticker = "KXTRUTHSOCIAL-26AUG29-T240"
+    queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
+    shadowed: list[str] = []
+    market = _politics_in_band_market()
+    bridge = ResearchPaperAdmissionBridge(
+        research_store=FakeResearchStore(
+            snapshot=replace(
+                _snapshot(
+                    side="yes",
+                    estimated_probability=0.70,
+                    market_price=0.18,
+                    # side_p - ask - 0.01. 0.52 fails the 0.005 recompute check
+                    # and never reaches the excluded-band gate.
+                    estimated_edge=0.51,
+                ),
+                market_ticker=ticker,
+            ),
+            evidence=_official_range_evidence(ticker=ticker),
+            has_counter_query=False,
+        ),
+        trading_queue=queue,
+        logger=SpyLogger(),
+        now=lambda: datetime(2026, 7, 2, 16, 5, tzinfo=UTC),
+        paper_exposure_checker=lambda _ticker: False,
+        open_paper_tickers=lambda: [],
+        paper_shadow=lambda _analysis, source: shadowed.append(source),
+    )
+    result = await bridge.admit_prewarm_result(
+        ResearchPrewarmResult(
+            market_ticker=ticker,
+            status="skipped_terminal",
+            attempted=False,
+            skip_reason="decision_grade_candidate",
+            research_run_id="rr-decision",
+            research_contract_fingerprint="contract-v1",
+        ),
+        market,
+    )
+    assert result.admitted is False
+    assert result.enqueued is False
+    assert result.reason == "executed_ask_in_excluded_band"
+    assert queue.empty()
+    assert shadowed == []
 
 
 @pytest.mark.asyncio
@@ -831,6 +901,7 @@ async def test_politics_official_p_family_lock_second_truth_social_week(
         evidence=_official_range_evidence(ticker=ticker),
         has_counter_query=False,
     )
+    shadowed: list[str] = []
     bridge = ResearchPaperAdmissionBridge(
         research_store=store,
         trading_queue=queue,
@@ -838,6 +909,7 @@ async def test_politics_official_p_family_lock_second_truth_social_week(
         now=lambda: datetime(2026, 7, 2, 16, 5, tzinfo=UTC),
         paper_exposure_checker=lambda _ticker: False,
         open_paper_tickers=lambda: ["KXTRUTHSOCIAL-26OCT03-B169"],
+        paper_shadow=lambda _analysis, source: shadowed.append(source),
     )
     with caplog.at_level(logging.INFO, logger="event_news_research"):
         result = await bridge.admit_prewarm_result(
@@ -862,6 +934,7 @@ async def test_politics_official_p_family_lock_second_truth_social_week(
         and "blocked=KXTRUTHSOCIAL-26OCT10-B200" in record.message
         for record in caplog.records
     )
+    assert shadowed == []
 
 
 @pytest.mark.asyncio
