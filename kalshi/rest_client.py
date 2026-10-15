@@ -955,15 +955,19 @@ class KalshiRestClient:
 
     # ── Account data ──────────────────────────────────────────────────────────
 
-    def get_balance(self) -> float:
-        """Returns available balance in dollars."""
+    def get_balance(self) -> float | None:
+        """Return available cash in dollars, or None when the read fails.
+
+        A failure is not a zero balance. Callers must not seed a session
+        baseline from None, and must not treat it as a loss.
+        """
         try:
             data = self._request("GET", "/portfolio/balance")
             cents = data.get("balance", 0) or 0
             return float(cents) / 100.0
         except Exception as exc:
             log.warning("get_balance failed: %s", exc)
-            return 0.0
+            return None
 
     def get_open_positions(self, *, strict: bool = False) -> list[dict]:
         """Return list of current open positions.

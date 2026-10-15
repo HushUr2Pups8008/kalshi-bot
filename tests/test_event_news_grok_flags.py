@@ -1739,6 +1739,7 @@ def test_boot_line_prints_resolved_flag_values(monkeypatch, tmp_path, caplog):
     monkeypatch.setenv(EVENT_NEWS_GROK_GROUNDING, "true")
     monkeypatch.setenv(EVENT_NEWS_GROK_TRACE, "false")
     monkeypatch.delenv(EVENT_NEWS_GROK_WATCH_SKIP_SETTLED, raising=False)
+    monkeypatch.delenv("EVENT_NEWS_SESSION_HALT", raising=False)
     monkeypatch.setenv(EVENT_NEWS_FILL_LOG_DETAIL, "yes")
     monkeypatch.setattr(_cfg_module.cfg, "live_trading_enabled", False)
     with caplog.at_level(logging.INFO):
@@ -1758,6 +1759,7 @@ def test_boot_line_prints_resolved_flag_values(monkeypatch, tmp_path, caplog):
         " ONE_PER_FAMILY live=off paper=on"
         " MAKER_FIRST live=off paper=on wait_s=180"
         " RULES_CHECK live=off paper=on"
+        " SESSION_HALT live=off paper=on"
     )
     assert "[EVENT_NEWS_FLAGS] FATAL band guard off in LIVE" not in caplog.text
 
@@ -1769,6 +1771,7 @@ def test_boot_line_defaults_band_on_and_the_other_four_off(monkeypatch, tmp_path
         EVENT_NEWS_GROK_TRACE,
         EVENT_NEWS_GROK_WATCH_SKIP_SETTLED,
         EVENT_NEWS_FILL_LOG_DETAIL,
+        "EVENT_NEWS_SESSION_HALT",
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(_cfg_module.cfg, "live_trading_enabled", True)
@@ -1785,6 +1788,7 @@ def test_boot_line_defaults_band_on_and_the_other_four_off(monkeypatch, tmp_path
         " ONE_PER_FAMILY live=off paper=on"
         " MAKER_FIRST live=off paper=on wait_s=180"
         " RULES_CHECK live=off paper=on"
+        " SESSION_HALT live=off paper=on"
     )
     assert "[EVENT_NEWS_FLAGS] FATAL band guard off in LIVE" not in caplog.text
 
