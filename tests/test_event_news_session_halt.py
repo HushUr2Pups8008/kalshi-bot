@@ -159,6 +159,32 @@ def test_positions_get_failure_does_not_seed(monkeypatch, tmp_path):
     assert not (tmp_path / "halt.json").exists()
 
 
+def test_nan_open_cost_does_not_seed(monkeypatch, tmp_path):
+    _enable(monkeypatch, tmp_path)
+    ex, rest, _ = _make_executor(monkeypatch, bankroll=500.0, loss_limit_pct=0.10)
+    rest.get_balance.side_effect = [29.20, 29.20]
+    rest.get_open_positions.side_effect = [
+        [{
+            "ticker": "KXTRUMPSAY-26OCT19-GOLF",
+            "position_fp": "8.00",
+            "market_exposure_dollars": "nan",
+        }],
+        [],
+    ]
+    callback = MagicMock()
+    ex.set_shutdown_callback(callback)
+    analysis = _make_analysis(capped_dollars=2.0)
+
+    reason = ex._validate(analysis)
+
+    assert reason == "live equity unreadable"
+    assert ex._session_start_balance is None
+    assert ex._live_halted is False
+    callback.assert_not_called()
+    assert ex._validate(analysis) is None
+    assert ex._session_start_balance == pytest.approx(29.20)
+
+
 def test_latch_blocks_a_new_executor_without_a_new_baseline(monkeypatch, tmp_path):
     _enable(monkeypatch, tmp_path)
     ex, rest, _ = _make_executor(monkeypatch, bankroll=500.0, loss_limit_pct=0.10)

@@ -566,7 +566,8 @@ class TradeExecutor:
                 dollars = float(row["market_exposure_dollars"])
             except (KeyError, TypeError, ValueError):
                 return None
-            if dollars < 0:
+            # NaN and +inf would seed a baseline that never trips.
+            if dollars != dollars or dollars < 0 or dollars == float("inf"):
                 return None
             total += dollars
         return total
