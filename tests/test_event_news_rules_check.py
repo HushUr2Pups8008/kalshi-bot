@@ -325,8 +325,12 @@ def test_series_rubric_does_not_send_truth_social_logic_to_act_or_say(
     assert act == ACT_COUNT_LOGIC
     assert "The model counts Truth Social posts" not in say
     assert "The model counts Truth Social posts" not in act
-    assert "presidential actions" not in say
-    assert "phrase hits" not in act
+    assert "The model counts presidential actions" not in say
+    assert "The model counts phrase hits" not in act
+    assert "does not count presidential actions" in say
+    assert "does not count phrase hits" in act
+    assert "does not count Truth Social posts" in say
+    assert "does not count Truth Social posts" in act
 
 
 def test_unknown_series_does_not_call_the_model(monkeypatch, tmp_path) -> None:

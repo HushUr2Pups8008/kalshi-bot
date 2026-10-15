@@ -393,11 +393,23 @@ if isinstance(data, dict):
             delta = start - last
             drop = str(delta)
             cash = "drop" if delta > 500 else "ok"
-print("\t".join([log_state, log_age, halt, alert, cash, drop]))
+
+def _cell(value: str) -> str:
+    # A tab is IFS whitespace, so an empty age would shift the halt field.
+    text = value.replace("|", "/")
+    return text if text else "-"
+
+print("|".join([_cell(log_state), _cell(log_age), _cell(halt), _cell(alert), _cell(cash), _cell(drop)]))
 PY
 )" || true
     if [[ -n "${_politics_status}" ]]; then
-        IFS=$'\t' read -r POLITICS_LOG POLITICS_LOG_AGE POLITICS_HALT POLITICS_ALERT POLITICS_CASH POLITICS_CASH_DROP <<<"$_politics_status"
+        IFS='|' read -r POLITICS_LOG POLITICS_LOG_AGE POLITICS_HALT POLITICS_ALERT POLITICS_CASH POLITICS_CASH_DROP <<<"$_politics_status"
+        if [[ "$POLITICS_LOG_AGE" == "-" ]]; then
+            POLITICS_LOG_AGE=""
+        fi
+        if [[ "$POLITICS_CASH_DROP" == "-" ]]; then
+            POLITICS_CASH_DROP=""
+        fi
     fi
 fi
 if [[ "$POLITICS_HALT" == "latched" ]]; then
