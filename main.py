@@ -1290,6 +1290,7 @@ class TradingBot:
             route_analysis=self._route_research_analysis_through_blend,
             paper_exposure_checker=self._event_news_has_paper_exposure,
             open_paper_tickers=self._event_news_open_paper_tickers,
+            paper_shadow=self._queue_event_news_paper_shadow,
         )
         self._accumulation_task = AccumulationTask()
         self._structural_task = StructuralTask()
@@ -1403,6 +1404,12 @@ class TradingBot:
             )
             return True
         return False
+
+    def _queue_event_news_paper_shadow(self, analysis: object, source: str) -> None:
+        """Hand an admit-gate candidate to the paper book. No live order."""
+        schedule = getattr(self.executor, "_schedule_paper_shadow", None)
+        if callable(schedule):
+            schedule(analysis, source=source)
 
     def _event_news_open_paper_tickers(self) -> list[str]:
         """Open paper and live tickers for politics family/prefix admission caps."""

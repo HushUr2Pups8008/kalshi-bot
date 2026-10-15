@@ -374,6 +374,7 @@ class ResearchPaperAdmissionBridge:
         route_analysis: (Callable[[SignalAnalysis, ResearchBackedBlendStore], Awaitable[Any]] | None) = None,
         paper_exposure_checker: Callable[[str], bool] | None = None,
         open_paper_tickers: Callable[[], list[str]] | None = None,
+        paper_shadow: Callable[[SignalAnalysis, str], None] | None = None,
     ) -> None:
         self.provider = signal_provider or ResearchPaperSignalProvider(
             research_store,
@@ -385,6 +386,31 @@ class ResearchPaperAdmissionBridge:
         self._route_analysis = route_analysis
         self._paper_exposure_checker = paper_exposure_checker
         self._open_paper_tickers = open_paper_tickers
+        self._paper_shadow = paper_shadow
+
+    def _queue_paper_shadow(self, analysis: SignalAnalysis, source: str) -> None:
+        """Queue a paper row for a live prefix-cap block.
+
+        A live admit is queued by execute() after the fresh book is
+        checked. The admit snapshot can still be inside the band when
+        that book is not, so this helper does not queue source=decision.
+        A failure here does not change the admission result.
+        """
+        if source != "prefix_cap":
+            return
+        callback = self._paper_shadow
+        if not callable(callback):
+            return
+        ticker = str(getattr(getattr(analysis, "market", None), "ticker", "") or "")
+        try:
+            callback(analysis, source)
+        except Exception:
+            _event_news_log.warning(
+                "[EVENT_NEWS_PAPER_SHADOW] schedule failed source=%s ticker=%s",
+                source,
+                ticker,
+                exc_info=True,
+            )
 
     async def admit_prewarm_result(
         self,
@@ -514,6 +540,7 @@ class ResearchPaperAdmissionBridge:
                     occupied,
                     ticker,
                 )
+                self._queue_paper_shadow(analysis, "prefix_cap")
                 return ResearchPaperAdmissionResult(
                     market_ticker=ticker,
                     admitted=False,
