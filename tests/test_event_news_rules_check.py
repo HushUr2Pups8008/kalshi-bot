@@ -13,7 +13,12 @@ import config as cfg_module
 from scripts.event_news_rules_report import format_rules_report, rules_report
 from utils.event_news_grok_veto import GROK_MODEL, XAI_CHAT_URL
 from utils.event_news_research import EVENT_NEWS_COHORT_ID
-from utils.event_news_rules_check import event_news_rules_check_skip
+from utils.event_news_rules_check import (
+    ACT_COUNT_LOGIC,
+    MODEL_COUNT_LOGIC,
+    SAY_COUNT_LOGIC,
+    event_news_rules_check_skip,
+)
 
 
 def _cohort(monkeypatch, cohort: str = EVENT_NEWS_COHORT_ID) -> None:
@@ -193,7 +198,12 @@ def test_timeout_and_missing_text_and_missing_key_do_not_skip(
         log_path=path,
     )
     assert skipped is False
-    assert not path.exists()
+    # A timeout is not a mismatch. The attempt is still journaled.
+    timeout_row = json.loads(path.read_text(encoding="utf-8"))
+    assert timeout_row["mismatch"] is False
+    assert timeout_row["cost"] is None
+    assert isinstance(timeout_row["elapsed_ms"], int)
+    assert timeout_row["raw_reply"] == ""
 
     post = MagicMock(side_effect=AssertionError("post"))
     blank = event_news_rules_check_skip(
@@ -208,17 +218,18 @@ def test_timeout_and_missing_text_and_missing_key_do_not_skip(
     post.assert_not_called()
 
     post2 = MagicMock(side_effect=AssertionError("post"))
+    missing_path = tmp_path / "missing-key.jsonl"
     missing_key = event_news_rules_check_skip(
         _analysis(_market()),
         live=False,
         environ={},
         post=post2,
         fetch=lambda url: "source page",
-        log_path=path,
+        log_path=missing_path,
     )
     assert missing_key is False
     post2.assert_not_called()
-    assert not path.exists()
+    assert not missing_path.exists()
 
 
 def test_live_unset_and_other_cohort_do_not_call(monkeypatch, tmp_path) -> None:
@@ -274,6 +285,120 @@ def test_fetch_error_does_not_skip_when_rules_exist(monkeypatch, tmp_path) -> No
     assert user["source_text"] == ""
     assert user["rules"].startswith("Count Truth Social")
     assert json.loads(path.read_text(encoding="utf-8"))["mismatch"] is False
+
+
+def _posted_logic(ticker: str, monkeypatch, tmp_path) -> str:
+    _cohort(monkeypatch)
+    seen: dict[str, object] = {}
+
+    def post(url, json=None, headers=None, timeout=None):
+        seen["payload"] = json
+        body = {
+            "id": "resp-series",
+            "choices": [{"message": {"content": _answer(mismatch=False)}}],
+            "usage": {"prompt_tokens": 11, "completion_tokens": 4},
+        }
+        return SimpleNamespace(json=lambda: body)
+
+    event_news_rules_check_skip(
+        _analysis(_market(ticker=ticker)),
+        live=False,
+        environ={"XAI_API_KEY": "secret-key"},
+        post=post,
+        fetch=lambda url: "source page",
+        log_path=tmp_path / "rules.jsonl",
+    )
+    payload = seen["payload"]
+    assert isinstance(payload, dict)
+    user = json.loads(payload["messages"][1]["content"])
+    return str(user["model_count_logic"])
+
+
+def test_series_rubric_does_not_send_truth_social_logic_to_act_or_say(
+    monkeypatch, tmp_path
+) -> None:
+    truth = _posted_logic("KXTRUTHSOCIAL-26OCT24-B200", monkeypatch, tmp_path)
+    say = _posted_logic("KXTRUMPSAY-26OCT19-GOLF", monkeypatch, tmp_path)
+    act = _posted_logic("KXTRUMPACT-26OCT11-T4", monkeypatch, tmp_path)
+    assert truth == MODEL_COUNT_LOGIC
+    assert say == SAY_COUNT_LOGIC
+    assert act == ACT_COUNT_LOGIC
+    assert "The model counts Truth Social posts" not in say
+    assert "The model counts Truth Social posts" not in act
+    assert "presidential actions" not in say
+    assert "phrase hits" not in act
+
+
+def test_unknown_series_does_not_call_the_model(monkeypatch, tmp_path) -> None:
+    _cohort(monkeypatch)
+    post = MagicMock(side_effect=AssertionError("post"))
+    skipped = event_news_rules_check_skip(
+        _analysis(_market(ticker="KXCPI-26OCT-T1")),
+        live=False,
+        environ={"XAI_API_KEY": "secret-key"},
+        post=post,
+        fetch=lambda url: "source page",
+        log_path=tmp_path / "rules.jsonl",
+    )
+    assert skipped is False
+    post.assert_not_called()
+    assert not (tmp_path / "rules.jsonl").exists()
+
+
+def test_journal_stores_raw_reply_latency_and_null_cost(monkeypatch, tmp_path) -> None:
+    _cohort(monkeypatch)
+    path = tmp_path / "rules.jsonl"
+    reply = _answer(mismatch=False, what_counts="posts")
+
+    def post(url, json=None, headers=None, timeout=None):
+        return _response(reply, response_id="resp-cost")
+
+    skipped = event_news_rules_check_skip(
+        _analysis(_market()),
+        live=False,
+        environ={"XAI_API_KEY": "secret-key"},
+        post=post,
+        fetch=lambda url: "source page",
+        log_path=path,
+    )
+    assert skipped is False
+    row = json.loads(path.read_text(encoding="utf-8"))
+    assert row["raw_reply"] == reply
+    assert isinstance(row["elapsed_ms"], int)
+    assert row["elapsed_ms"] >= 0
+    assert "cost" in row
+    assert row["cost"] is None
+    assert "secret-key" not in path.read_text(encoding="utf-8")
+
+
+def test_journal_stores_numeric_usage_cost(monkeypatch, tmp_path) -> None:
+    _cohort(monkeypatch)
+    path = tmp_path / "rules.jsonl"
+
+    def post(url, json=None, headers=None, timeout=None):
+        body = {
+            "id": "resp-usage",
+            "choices": [{"message": {"content": _answer(mismatch=False)}}],
+            "usage": {
+                "cost_usd": 0.012,
+                "prompt_tokens": 20,
+                "completion_tokens": 6,
+            },
+        }
+        return SimpleNamespace(json=lambda: body)
+
+    event_news_rules_check_skip(
+        _analysis(_market()),
+        live=False,
+        environ={"XAI_API_KEY": "secret-key"},
+        post=post,
+        fetch=lambda url: "source page",
+        log_path=path,
+    )
+    row = json.loads(path.read_text(encoding="utf-8"))
+    assert row["cost"] == pytest.approx(0.012)
+    assert row["prompt_tokens"] == 20
+    assert row["completion_tokens"] == 6
 
 
 def test_empty_rules_report_does_not_recommend_live(tmp_path) -> None:

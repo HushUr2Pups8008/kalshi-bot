@@ -9,6 +9,7 @@ gitignored and does not contain an API key or a headline.
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timezone
 from json import JSONDecoder
 from pathlib import Path
@@ -37,6 +38,17 @@ MODEL_COUNT_LOGIC = (
     "Factbase feed. Deleted posts stay out of the live count. The week "
     "uses America/New_York. A phrase market counts phrase hits, not posts."
 )
+SAY_COUNT_LOGIC = (
+    "The model counts phrase hits in the contract week from the Factbase "
+    "feed. It does not count Truth Social posts and it does not count "
+    "presidential actions. The week uses America/New_York."
+)
+ACT_COUNT_LOGIC = (
+    "The model counts presidential actions on whitehouse.gov in the "
+    "contract window. It does not count Truth Social posts and it does "
+    "not count phrase hits."
+)
+_RAW_REPLY_LIMIT = 8000
 _SYSTEM = (
     "Reply with one JSON object only. Keys are what_counts, source, "
     "cutoff_time, trap, and mismatch. mismatch is true only when the "
@@ -105,6 +117,60 @@ def _last_object(text: str) -> dict[str, Any] | None:
     return found
 
 
+def _count_logic(ticker: str) -> str | None:
+    """Series rubric. Unknown series must not receive the Truth Social text."""
+    series = str(ticker or "").split("-", 1)[0].upper()
+    if series == "KXTRUTHSOCIAL":
+        return MODEL_COUNT_LOGIC
+    if series == "KXTRUMPSAY":
+        return SAY_COUNT_LOGIC
+    if series == "KXTRUMPACT":
+        return ACT_COUNT_LOGIC
+    return None
+
+
+def _number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _usage_cost(body: object) -> tuple[float | None, int | None, int | None]:
+    usage = body.get("usage") if isinstance(body, dict) else None
+    if not isinstance(usage, dict):
+        return None, None, None
+    cost = None
+    for name in ("cost", "cost_usd", "total_cost"):
+        cost = _number(usage.get(name))
+        if cost is not None:
+            break
+    prompt = usage.get("prompt_tokens")
+    completion = usage.get("completion_tokens")
+    prompt_tokens = prompt if type(prompt) is int else None
+    completion_tokens = completion if type(completion) is int else None
+    return cost, prompt_tokens, completion_tokens
+
+
+def _journal_fields(
+    *,
+    raw_reply: str,
+    elapsed_ms: int,
+    cost: float | None,
+    prompt_tokens: int | None,
+    completion_tokens: int | None,
+) -> dict[str, object]:
+    fields: dict[str, object] = {
+        "raw_reply": raw_reply[:_RAW_REPLY_LIMIT],
+        "elapsed_ms": elapsed_ms,
+        "cost": cost,
+    }
+    if prompt_tokens is not None:
+        fields["prompt_tokens"] = prompt_tokens
+    if completion_tokens is not None:
+        fields["completion_tokens"] = completion_tokens
+    return fields
+
+
 def _store(record: dict[str, object], path: Path | None) -> None:
     target = path or RULES_LOG_PATH
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -131,6 +197,10 @@ def event_news_rules_check_skip(
     ):
         return False
     market = getattr(analysis, "market", None)
+    ticker = str(getattr(market, "ticker", "") or "")
+    count_logic = _count_logic(ticker)
+    if count_logic is None:
+        return False
     rules = _rules_text(market)
     url = _source_url(market)
     source_text = ""
@@ -148,7 +218,6 @@ def event_news_rules_check_skip(
 
     env = os.environ if environ is None else environ
     key = str(env.get(XAI_API_KEY_ENV) or "").strip()
-    ticker = str(getattr(market, "ticker", "") or "")
     side = str(getattr(analysis, "side", "") or "")
     if not key:
         log.info("[EVENT_NEWS_RULES] result=timeout ticker=%s reason=missing_key", ticker)
@@ -156,7 +225,7 @@ def event_news_rules_check_skip(
     user = json.dumps(
         {
             "ticker": ticker,
-            "model_count_logic": MODEL_COUNT_LOGIC,
+            "model_count_logic": count_logic,
             "rules": rules[:4000],
             "source_url": url or "",
             "source_text": source_text[:4000],
@@ -172,6 +241,7 @@ def event_news_rules_check_skip(
         ],
     }
     sender = post if post is not None else requests.post
+    started = time.monotonic()
     try:
         response = sender(
             XAI_CHAT_URL,
@@ -182,9 +252,37 @@ def event_news_rules_check_skip(
         body = response.json()
         content = str(body["choices"][0]["message"]["content"])
         response_id = body.get("id") if isinstance(body.get("id"), str) else ""
+        cost, prompt_tokens, completion_tokens = _usage_cost(body)
     except Exception:
+        elapsed_ms = int((time.monotonic() - started) * 1000)
         log.info("[EVENT_NEWS_RULES] result=timeout ticker=%s", ticker)
+        try:
+            _store(
+                {
+                    "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "ticker": ticker,
+                    "side": side,
+                    "response_id": "",
+                    "mismatch": False,
+                    "what_counts": "",
+                    "source": "",
+                    "cutoff_time": "",
+                    "trap": "",
+                    "outcome": None,
+                    **_journal_fields(
+                        raw_reply="",
+                        elapsed_ms=elapsed_ms,
+                        cost=None,
+                        prompt_tokens=None,
+                        completion_tokens=None,
+                    ),
+                },
+                log_path,
+            )
+        except Exception:
+            log.warning("[EVENT_NEWS_RULES] journal_failed ticker=%s", ticker)
         return False
+    elapsed_ms = int((time.monotonic() - started) * 1000)
     answer = _last_object(content)
     mismatch = bool(answer and answer.get("mismatch") is True)
     record = {
@@ -198,6 +296,13 @@ def event_news_rules_check_skip(
         "cutoff_time": "" if not answer else str(answer.get("cutoff_time") or ""),
         "trap": "" if not answer else str(answer.get("trap") or ""),
         "outcome": None,
+        **_journal_fields(
+            raw_reply=content,
+            elapsed_ms=elapsed_ms,
+            cost=cost,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        ),
     }
     try:
         _store(record, log_path)
