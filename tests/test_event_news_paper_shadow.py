@@ -516,3 +516,34 @@ async def test_excluded_band_decision_does_not_schedule_shadow(monkeypatch) -> N
     rest.place_limit_order.assert_not_called()
     rest._request.assert_not_called()
     rest.cancel_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_non_band_skip_schedules_decision_shadow(monkeypatch) -> None:
+    """A live admit that skips for another reason still gets one paper row."""
+    executor, rest, paper = _executor(monkeypatch)
+    analysis = _analysis("no", 60)
+    analysis.market.price_available = True
+    analysis.market.yes_price = 40
+
+    async def _from_candidate(_candidate: object) -> SimpleNamespace:
+        return analysis
+
+    async def _noop(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(executor, "_analysis_from_candidate", _from_candidate)
+    monkeypatch.setattr(executor, "_validate", lambda _analysis: "edge below min_edge")
+    monkeypatch.setattr("trading.executor.write_trade_log_async", _noop)
+    scheduled: list[str] = []
+    monkeypatch.setattr(
+        executor,
+        "_schedule_paper_shadow",
+        lambda *_args, **kwargs: scheduled.append(str(kwargs.get("source", "missing"))),
+    )
+    assert await executor.execute(object()) is None
+    assert scheduled == ["decision"]
+    rest.place_limit_order.assert_not_called()
+    rest._request.assert_not_called()
+    rest.cancel_order.assert_not_called()
+    paper.record_trade.assert_not_called()

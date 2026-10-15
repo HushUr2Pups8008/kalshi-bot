@@ -586,7 +586,15 @@ class TradeExecutor:
                 venue=self._venue_value(analysis.market),
                 signal_meta=signal_meta,
             )
-            self._schedule_paper_shadow(analysis)
+            from utils.event_news_research import event_news_executed_side_skip_reason
+
+            # The fresh book is already on this analysis. A longshot ask
+            # is not a paper row, including this early research-review skip.
+            if (
+                event_news_executed_side_skip_reason(analysis.market, analysis.side)
+                != "executed_ask_in_excluded_band"
+            ):
+                self._schedule_paper_shadow(analysis)
             return None
         if self._is_paper and _requires_decision_grade_research_paper_admission(
             analysis,

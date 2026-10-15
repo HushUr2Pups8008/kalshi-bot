@@ -389,12 +389,14 @@ class ResearchPaperAdmissionBridge:
         self._paper_shadow = paper_shadow
 
     def _queue_paper_shadow(self, analysis: SignalAnalysis, source: str) -> None:
-        """Queue a paper row for a prefix-cap block or a live admit.
+        """Queue a paper row for a live prefix-cap block.
 
-        Excluded-band blocks never reach this helper. A failure here does
-        not change the admission result and does not place an order.
+        A live admit is queued by execute() after the fresh book is
+        checked. The admit snapshot can still be inside the band when
+        that book is not, so this helper does not queue source=decision.
+        A failure here does not change the admission result.
         """
-        if source not in {"prefix_cap", "decision"}:
+        if source != "prefix_cap":
             return
         callback = self._paper_shadow
         if not callable(callback):
@@ -595,7 +597,6 @@ class ResearchPaperAdmissionBridge:
             if bypass_blend:
                 candidate = _official_p_trade_candidate(analysis, current_signal)
                 await self.trading_queue.put(candidate)
-                self._queue_paper_shadow(analysis, "decision")
                 _event_news_log.info(
                     "[EVENT_NEWS_ADMIT] blend_bypassed reason=official_p "
                     "ticker=%s side=%s p=%.3f edge=%.4f",
@@ -652,8 +653,6 @@ class ResearchPaperAdmissionBridge:
             enqueued=bool(blend_result.enqueued),
             outcome_reason=blend_result.trade_blocked_reason,
         )
-        if blend_result.enqueued:
-            self._queue_paper_shadow(analysis, "decision")
         return ResearchPaperAdmissionResult(
             market_ticker=ticker,
             admitted=blend_result.ready,

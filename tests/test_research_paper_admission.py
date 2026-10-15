@@ -734,7 +734,9 @@ async def test_politics_official_p_bypasses_blend_task(monkeypatch) -> None:
     assert candidate.fast_lane_analysis.signal_type == "research_decision_grade"
     assert candidate.signal_meta["blend_bypassed"] is True
     assert candidate.signal_meta["blend_bypass_reason"] == "official_p"
-    assert shadowed == [(ticker, "decision")]
+    # execute() refetches the book. It queues source=decision only after
+    # that book survives the excluded-band check.
+    assert shadowed == []
 
 
 @pytest.mark.asyncio

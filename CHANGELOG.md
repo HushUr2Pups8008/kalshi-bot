@@ -23,7 +23,7 @@ request-vs-response status contract that the P-7 author misread.
 
 ### Changed
 
-- **A paper shadow is queued at the admit gate.** A live `event_open_prefix_cap` block queues one paper row with source `prefix_cap`. A live admit queues one with source `decision`. An excluded-band block does not. The paper row uses the paper prefix, family, and risk flags. The paper ticker cooldown is the entry window, so a ticker gets one paper row per window. The log line is `[EVENT_NEWS_PAPER_SHADOW] recorded source=prefix_cap|decision`.
+- **A paper shadow is queued at the admit gate.** A live `event_open_prefix_cap` block queues one paper row with source `prefix_cap`. A live admit queues one from the executor, after the fresh book is checked, with source `decision`. An excluded-band block does not, including a fresh ask that falls into the band after admission. The paper row uses the paper prefix, family, and risk flags. The paper ticker cooldown is the entry window, so a ticker gets one paper row per window. The log line is `[EVENT_NEWS_PAPER_SHADOW] recorded source=prefix_cap|decision`.
 
 ## [0.33.96] - 2026-10-14
 
