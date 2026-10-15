@@ -428,6 +428,7 @@ printf 'politics_process=%s\n' "$POLITICS_PROCESS" >>"$REPORT"
 printf 'politics_log=%s age_s=%s\n' "$POLITICS_LOG" "${POLITICS_LOG_AGE:-}" >>"$REPORT"
 printf 'politics_halt=%s\n' "$POLITICS_HALT" >>"$REPORT"
 printf 'politics_operator_alert=%s counts=%s\n' "$POLITICS_ALERT" "$POLITICS_ALERT_COUNTS" >>"$REPORT"
+printf 'politics_alert_counts=%s\n' "$POLITICS_ALERT_COUNTS" >>"$REPORT"
 printf 'politics_cash=%s drop_cents=%s\n' "$POLITICS_CASH" "${POLITICS_CASH_DROP:-}" >>"$REPORT"
 codeblock_end
 
@@ -883,4 +884,5 @@ echo "politics_process=${POLITICS_PROCESS}"
 echo "politics_log=${POLITICS_LOG} age_s=${POLITICS_LOG_AGE:-}"
 echo "politics_halt=${POLITICS_HALT}"
 echo "politics_operator_alert=${POLITICS_ALERT} counts=${POLITICS_ALERT_COUNTS}"
+echo "politics_alert_counts=${POLITICS_ALERT_COUNTS}"
 echo "politics_cash=${POLITICS_CASH} drop_cents=${POLITICS_CASH_DROP:-}"
