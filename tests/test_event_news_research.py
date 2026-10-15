@@ -8,6 +8,7 @@ import pytest
 from analysis.research_gate import ResearchStatus, ResearchVerdict
 from utils.event_news_research import (
     EVENT_NEWS_COHORT_ID,
+    EVENT_NEWS_LIVE_OCCUPANCY_UNKNOWN,
     apply_event_news_live_research,
     event_news_crossed_asks,
     event_news_exposure_prefix,
@@ -393,6 +394,29 @@ def test_event_news_family_lock_second_truth_social_week():
     assert event_news_family_lock_ticker(week_b, [], config=politics) is None
     assert event_news_family_lock_ticker(trump, open_week_a, config=politics) is None
     assert event_news_family_lock_ticker(week_b, open_week_a, config=freeze) is None
+
+
+def test_positions_sentinel_blocks_trump_say_and_act_like_truth_social():
+    politics = SimpleNamespace(paper_cohort_id=EVENT_NEWS_COHORT_ID)
+    say = SimpleNamespace(
+        ticker="KXTRUMPSAY-26OCT19-OTHER",
+        series_ticker="KXTRUMPSAY",
+    )
+    act = SimpleNamespace(
+        ticker="KXTRUMPACT-26OCT11-T4",
+        series_ticker="KXTRUMPACT",
+    )
+    other = SimpleNamespace(ticker="KXCPI-26OCT-T1", series_ticker="KXCPI")
+    unknown = [EVENT_NEWS_LIVE_OCCUPANCY_UNKNOWN]
+    assert (
+        event_news_family_lock_ticker(say, unknown, config=politics)
+        == EVENT_NEWS_LIVE_OCCUPANCY_UNKNOWN
+    )
+    assert (
+        event_news_family_lock_ticker(act, unknown, config=politics)
+        == EVENT_NEWS_LIVE_OCCUPANCY_UNKNOWN
+    )
+    assert event_news_family_lock_ticker(other, unknown, config=politics) is None
 
 
 def test_event_news_clamp_22_lots_becomes_8(caplog):

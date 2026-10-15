@@ -1390,6 +1390,7 @@ class TradeExecutor:
         from utils.event_news_research import (
             event_news_exposure_prefix,
             event_news_open_prefix_cap,
+            is_event_news_paper_cohort,
         )
 
         prefix_cap = event_news_open_prefix_cap(cfg.max_open_positions_per_prefix)
@@ -1399,16 +1400,32 @@ class TradeExecutor:
                 _correlated_exposure_prefix(analysis.market),
             )
             if prefix:
-                open_in_prefix = self._positions_for_live_gates(
-                    self._paper.portfolio.open_positions_by_prefix(prefix)
-                )
-                if len(open_in_prefix) >= prefix_cap:
-                    open_tickers = sorted({p.ticker for p in open_in_prefix})
-                    return (
-                        f"per-prefix cap: {len(open_in_prefix)} open in {prefix} "
-                        f"(cap={prefix_cap}, "
-                        f"open={open_tickers})"
+                # Live politics uses the same open list as the admit gate.
+                # Paper keeps the paper book so live rows do not block a shadow.
+                if not self._is_paper and is_event_news_paper_cohort():
+                    from utils.event_news_research import event_news_blocking_open_ticker
+
+                    blocked = event_news_blocking_open_ticker(
+                        analysis.market,
+                        self._event_news_open_exposure_tickers(),
                     )
+                    if blocked:
+                        return (
+                            f"per-prefix cap: 1 open in {prefix} "
+                            f"(cap={prefix_cap}, "
+                            f"open=[{blocked}])"
+                        )
+                else:
+                    open_in_prefix = self._positions_for_live_gates(
+                        self._paper.portfolio.open_positions_by_prefix(prefix)
+                    )
+                    if len(open_in_prefix) >= prefix_cap:
+                        open_tickers = sorted({p.ticker for p in open_in_prefix})
+                        return (
+                            f"per-prefix cap: {len(open_in_prefix)} open in {prefix} "
+                            f"(cap={prefix_cap}, "
+                            f"open={open_tickers})"
+                        )
 
         from utils.event_news_research import (
             event_news_family_lock_ticker,
@@ -1424,13 +1441,17 @@ class TradeExecutor:
             else None
         )
         if family_occupied:
+            from utils.event_news_research import event_news_series_prefix
+
+            series = event_news_series_prefix(str(analysis.market.ticker))
             log.info(
-                "[EVENT_NEWS_FAMILY_LOCK] open=%s blocked=%s series=KXTRUTHSOCIAL",
+                "[EVENT_NEWS_FAMILY_LOCK] open=%s blocked=%s series=%s",
                 family_occupied,
                 analysis.market.ticker,
+                series,
             )
             return (
-                f"event_news_family_lock: open {family_occupied} occupies KXTRUTHSOCIAL"
+                f"event_news_family_lock: open {family_occupied} occupies {series}"
             )
 
         # Multi-position guard: block opposing trades (no hedges) and duplicate
