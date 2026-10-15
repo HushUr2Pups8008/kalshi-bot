@@ -5184,7 +5184,10 @@ class TradingBot:
 
         try:
             balance = self.rest.get_balance()
-            log.info("Kalshi account balance: $%.2f", balance)
+            if balance is None:
+                log.warning("Could not fetch Kalshi balance")
+            else:
+                log.info("Kalshi account balance: $%.2f", balance)
         except Exception as exc:
             log.warning("Could not fetch Kalshi balance: %s", exc)
         if polymarket_disabled is None:
@@ -6090,8 +6093,19 @@ def _handle_go_live(paper: PaperTrader) -> None:
         print("Cancelled -- still in paper trading mode.")
 
 
+def _record_politics_handled_stop() -> None:
+    """A SIGTERM stop stays down on purpose. Health reads this alert."""
+    from utils.event_news_research import is_event_news_paper_cohort
+    from utils.event_news_session_halt import write_operator_alert
+
+    if not is_event_news_paper_cohort():
+        return
+    write_operator_alert("handled_stop")
+
+
 async def _shutdown(bot: TradingBot) -> None:
     log.info("Shutdown signal received")
+    _record_politics_handled_stop()
     bot.stop()
     await bot.cancel_targeted_research_prewarm_tasks()
     try:

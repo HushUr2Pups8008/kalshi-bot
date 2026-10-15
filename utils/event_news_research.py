@@ -63,6 +63,8 @@ _MIN_EDGE_FEE_BUFFER = 0.005
 EVENT_NEWS_MAX_CONTRACTS = 8
 # One open Truth Social week: event_ticker cap still allows two KXTRUTHSOCIAL weeks.
 _TRUTH_SOCIAL_FAMILY = "KXTRUTHSOCIAL"
+# A failed live positions GET blocks every desk family, not only Truth Social.
+_DESK_OCCUPANCY_SERIES = ("KXTRUMPACT", "KXTRUMPSAY", "KXTRUTHSOCIAL")
 # Fail-closed occupancy marker when live GET /portfolio/positions fails.
 EVENT_NEWS_LIVE_OCCUPANCY_UNKNOWN = "KXTRUTHSOCIAL-LIVE-UNKNOWN"
 # Commodity / macro / weather ladders that steal favorite-band prewarm.
@@ -342,10 +344,11 @@ def event_news_family_lock_ticker(
     *,
     config: Any = None,
 ) -> str | None:
-    """Occupying KXTRUTHSOCIAL ticker if another week is already open, else None.
+    """Occupying ticker when this order must not join an open desk family.
 
-    Politics allows one open Truth Social week across paper and live rows.
-    Sibling strikes of the same event still use event_open_prefix_cap.
+    A failed live positions read occupies KXTRUMPACT, KXTRUMPSAY, and
+    KXTRUTHSOCIAL. An open Truth Social week still blocks only that family.
+    Sibling strikes of the same event use event_open_prefix_cap.
     Does not cancel an existing open row.
     """
     if not is_event_news_paper_cohort(config):
@@ -354,6 +357,12 @@ def event_news_family_lock_ticker(
     series = str(getattr(market, "series_ticker", "") or "").strip().upper()
     if not series:
         series = event_news_series_prefix(ticker)
+    open_rows = [str(raw or "").strip() for raw in open_tickers or () if str(raw or "").strip()]
+    if (
+        series in _DESK_OCCUPANCY_SERIES
+        and EVENT_NEWS_LIVE_OCCUPANCY_UNKNOWN in open_rows
+    ):
+        return EVENT_NEWS_LIVE_OCCUPANCY_UNKNOWN
     if series != _TRUTH_SOCIAL_FAMILY:
         return None
     for raw in open_tickers or ():

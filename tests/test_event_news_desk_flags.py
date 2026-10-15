@@ -45,6 +45,7 @@ def test_boot_suffix_prints_live_off_and_paper_on() -> None:
     assert "RISK_CAP live=off paper=on cents=600" in line
     assert "MAKER_FIRST live=off paper=on wait_s=180" in line
     assert "RULES_CHECK live=off paper=on" in line
+    assert "SESSION_HALT live=off paper=on" in line
 
 
 def test_risk_cap_example_89c_uses_the_600_cent_paper_default() -> None:

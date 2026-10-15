@@ -134,6 +134,19 @@ def _position_market_ticker(position: Any) -> str:
     return str(getattr(position, "ticker", "") or "").strip()
 
 
+_LIVE_POSITIONS_UNSET = object()
+
+
+def _positive_dollars(value: Any) -> float | None:
+    """A usable cash read. None, bool, and <= 0 do not seed a baseline."""
+    if isinstance(value, bool) or not isinstance(value, Real):
+        return None
+    number = float(value)
+    if number != number or number <= 0:
+        return None
+    return number
+
+
 def _position_is_open(position: Any) -> bool:
     if isinstance(position, dict):
         for key in ("position", "exposure", "yes_count", "no_count", "contracts"):
@@ -472,29 +485,151 @@ class TradeExecutor:
             # Stay up. _execute_live refuses the POST; do not sys.exit.
             log.error("%s", EVENT_NEWS_FLAGS_FATAL)
         self._seed_cooldowns_from_db()
+        self._arm_persisted_session_halt()
 
     def set_shutdown_callback(self, cb: Callable) -> None:
         """Register a callback that is invoked when the live loss limit is breached."""
         self._shutdown_callback = cb
+
+    def _session_halt_enabled(self) -> bool:
+        """Politics live only. Unset stays off. Paper keeps the old no-op."""
+        if self._is_paper:
+            return False
+        from utils.event_news_desk_flags import (
+            EVENT_NEWS_SESSION_HALT,
+            event_news_desk_flag_enabled,
+        )
+        from utils.event_news_research import is_event_news_paper_cohort
+
+        if not is_event_news_paper_cohort():
+            return False
+        return event_news_desk_flag_enabled(EVENT_NEWS_SESSION_HALT, live=True)
+
+    def _arm_persisted_session_halt(self) -> None:
+        if not self._session_halt_enabled():
+            return
+        from utils.event_news_session_halt import halt_latch_present
+
+        if halt_latch_present():
+            self._live_halted = True
+            log.critical(
+                "[SESSION_HALT] latch present -- no new orders until the latch is cleared"
+            )
+
+    def _maybe_record_cash_cents(self, cash: float) -> None:
+        from utils.event_news_research import is_event_news_paper_cohort
+
+        if self._is_paper or not is_event_news_paper_cohort():
+            return
+        from utils.event_news_session_halt import record_cash_cents
+
+        record_cash_cents(cash)
+
+    def _read_live_position_rows(self) -> tuple[str, list | None]:
+        """One positions GET per _validate. ``fail`` is not an empty book."""
+        cached = getattr(self, "_live_position_cache", _LIVE_POSITIONS_UNSET)
+        if cached is not _LIVE_POSITIONS_UNSET:
+            return cached
+        getter = getattr(self._rest, "get_open_positions", None)
+        if not callable(getter):
+            result: tuple[str, list | None] = ("absent", None)
+        else:
+            try:
+                try:
+                    rows = getter(strict=True)
+                except TypeError:
+                    rows = getter()
+            except Exception:
+                log.warning(
+                    "[EVENT_NEWS_FAMILY_LOCK] live open ticker lookup failed",
+                    exc_info=True,
+                )
+                result = ("fail", None)
+            else:
+                result = ("ok", rows) if isinstance(rows, list) else ("absent", None)
+        self._live_position_cache = result
+        return result
+
+    def _session_open_cost_dollars(self) -> float | None:
+        """Sum open market_exposure_dollars. A failed read is not zero."""
+        status, rows = self._read_live_position_rows()
+        if status != "ok" or rows is None:
+            return None
+        total = 0.0
+        for row in rows:
+            if not isinstance(row, dict):
+                return None
+            size = str(row.get("position_fp") or "").strip()
+            if size in {"", "0", "0.0", "0.00"}:
+                continue
+            try:
+                dollars = float(row["market_exposure_dollars"])
+            except (KeyError, TypeError, ValueError):
+                return None
+            # NaN and +inf would seed a baseline that never trips.
+            if dollars != dollars or dollars < 0 or dollars == float("inf"):
+                return None
+            total += dollars
+        return total
+
+    def _check_session_equity_halt(self, equity: float) -> bool:
+        """Seed on the first successful equity. Halt at min(pct * seed, $10)."""
+        from utils.event_news_session_halt import session_halt_loss_line
+
+        if self._session_start_balance is None:
+            self._session_start_balance = equity
+            line = session_halt_loss_line(equity, cfg.live_loss_limit_pct)
+            log.info(
+                "[SESSION_HALT] seed equity $%.2f line $%.2f",
+                equity,
+                line,
+            )
+            return False
+        loss = self._session_start_balance - equity
+        line = session_halt_loss_line(self._session_start_balance, cfg.live_loss_limit_pct)
+        return loss >= line
+
+    def _trip_session_halt(self, equity: float) -> str:
+        """Hold the process. Do not call shutdown: exit 0 leaves launchd down."""
+        from utils.event_news_session_halt import (
+            session_halt_loss_line,
+            write_halt_latch,
+        )
+
+        seed = float(self._session_start_balance if self._session_start_balance is not None else equity)
+        loss = seed - equity
+        line = session_halt_loss_line(seed, cfg.live_loss_limit_pct)
+        self._live_halted = True
+        write_halt_latch(seed_equity=seed, loss=loss, line=line)
+        log.critical(
+            "[SESSION_HALT] tripped loss $%.2f >= line $%.2f -- no new orders",
+            loss,
+            line,
+        )
+        return "LIVE HALTED: session loss limit reached -- all trading suspended"
 
     def _check_live_loss_limit(self, balance: float) -> bool:
         """
         Track session-start Kalshi balance and return True if the loss limit is breached.
         First call seeds the baseline; subsequent calls compare against it.
         Paper-mode executors: always returns False (no live balance to track).
+        None, bool, and <= 0 do not seed. The politics flag uses equity instead.
         """
         if self._is_paper:
             return False
+        usable = _positive_dollars(balance)
+        if usable is None:
+            return False
         if self._session_start_balance is None:
-            self._session_start_balance = balance
+            self._session_start_balance = usable
             log.info(
                 "[LOSS_LIMIT] Session start balance recorded: $%.2f (halt at $%.2f loss, limit=%.0f%%)",
-                balance,
+                usable,
                 cfg.bankroll * cfg.live_loss_limit_pct,
                 cfg.live_loss_limit_pct * 100,
             )
             return False
-        loss = self._session_start_balance - balance
+        loss = self._session_start_balance - usable
         limit = cfg.bankroll * cfg.live_loss_limit_pct
         return loss >= limit
 
@@ -1152,37 +1287,27 @@ class TradeExecutor:
                 "[EVENT_NEWS_FAMILY_LOCK] paper open ticker lookup failed",
                 exc_info=True,
             )
-        getter = getattr(self._rest, "get_open_positions", None)
-        if callable(getter):
-            live_positions: Any = None
-            try:
-                try:
-                    live_positions = getter(strict=True)
-                except TypeError:
-                    live_positions = getter()
-            except Exception:
-                log.warning(
-                    "[EVENT_NEWS_FAMILY_LOCK] live open ticker lookup failed",
-                    exc_info=True,
-                )
-                from utils.event_news_research import EVENT_NEWS_LIVE_OCCUPANCY_UNKNOWN
+        status, live_positions = self._read_live_position_rows()
+        if status == "fail":
+            from utils.event_news_research import EVENT_NEWS_LIVE_OCCUPANCY_UNKNOWN
 
-                tickers.append(EVENT_NEWS_LIVE_OCCUPANCY_UNKNOWN)
-                return tickers
-            if isinstance(live_positions, list):
-                for position in live_positions:
-                    ticker = _position_market_ticker(position)
-                    if (
-                        ticker
-                        and ticker not in seen
-                        and _position_is_open(position)
-                    ):
-                        seen.add(ticker)
-                        tickers.append(ticker)
+            tickers.append(EVENT_NEWS_LIVE_OCCUPANCY_UNKNOWN)
+            return tickers
+        if status == "ok" and live_positions is not None:
+            for position in live_positions:
+                ticker = _position_market_ticker(position)
+                if (
+                    ticker
+                    and ticker not in seen
+                    and _position_is_open(position)
+                ):
+                    seen.add(ticker)
+                    tickers.append(ticker)
         return tickers
 
     def _validate(self, analysis: SignalAnalysis) -> Optional[str]:
         """Return skip reason, or None if the trade should proceed."""
+        self._live_position_cache = _LIVE_POSITIONS_UNSET
         # Use relaxed edge threshold during paper trading
         effective_min_edge = self._min_edge_threshold(analysis)
 
@@ -1266,6 +1391,7 @@ class TradeExecutor:
         from utils.event_news_research import (
             event_news_exposure_prefix,
             event_news_open_prefix_cap,
+            is_event_news_paper_cohort,
         )
 
         prefix_cap = event_news_open_prefix_cap(cfg.max_open_positions_per_prefix)
@@ -1275,16 +1401,32 @@ class TradeExecutor:
                 _correlated_exposure_prefix(analysis.market),
             )
             if prefix:
-                open_in_prefix = self._positions_for_live_gates(
-                    self._paper.portfolio.open_positions_by_prefix(prefix)
-                )
-                if len(open_in_prefix) >= prefix_cap:
-                    open_tickers = sorted({p.ticker for p in open_in_prefix})
-                    return (
-                        f"per-prefix cap: {len(open_in_prefix)} open in {prefix} "
-                        f"(cap={prefix_cap}, "
-                        f"open={open_tickers})"
+                # Live politics uses the same open list as the admit gate.
+                # Paper keeps the paper book so live rows do not block a shadow.
+                if not self._is_paper and is_event_news_paper_cohort():
+                    from utils.event_news_research import event_news_blocking_open_ticker
+
+                    blocked = event_news_blocking_open_ticker(
+                        analysis.market,
+                        self._event_news_open_exposure_tickers(),
                     )
+                    if blocked:
+                        return (
+                            f"per-prefix cap: 1 open in {prefix} "
+                            f"(cap={prefix_cap}, "
+                            f"open=[{blocked}])"
+                        )
+                else:
+                    open_in_prefix = self._positions_for_live_gates(
+                        self._paper.portfolio.open_positions_by_prefix(prefix)
+                    )
+                    if len(open_in_prefix) >= prefix_cap:
+                        open_tickers = sorted({p.ticker for p in open_in_prefix})
+                        return (
+                            f"per-prefix cap: {len(open_in_prefix)} open in {prefix} "
+                            f"(cap={prefix_cap}, "
+                            f"open={open_tickers})"
+                        )
 
         from utils.event_news_research import (
             event_news_family_lock_ticker,
@@ -1300,13 +1442,17 @@ class TradeExecutor:
             else None
         )
         if family_occupied:
+            from utils.event_news_research import event_news_series_prefix
+
+            series = event_news_series_prefix(str(analysis.market.ticker))
             log.info(
-                "[EVENT_NEWS_FAMILY_LOCK] open=%s blocked=%s series=KXTRUTHSOCIAL",
+                "[EVENT_NEWS_FAMILY_LOCK] open=%s blocked=%s series=%s",
                 family_occupied,
                 analysis.market.ticker,
+                series,
             )
             return (
-                f"event_news_family_lock: open {family_occupied} occupies KXTRUTHSOCIAL"
+                f"event_news_family_lock: open {family_occupied} occupies {series}"
             )
 
         # Multi-position guard: block opposing trades (no hedges) and duplicate
@@ -1419,9 +1565,28 @@ class TradeExecutor:
                 return f"cooldown: last trade {elapsed:.0f}s ago (cooldown={cfg.live_ticker_cooldown}s)"
             # Live balance check + session loss limit (single API call covers both)
             balance = self._rest.get_balance()
-            if self._check_live_loss_limit(balance):
+            usable = _positive_dollars(balance)
+            if usable is None:
+                log.warning(
+                    "[SESSION_HALT] balance unreadable; skip and do not seed"
+                )
+                return "live balance unreadable"
+            self._maybe_record_cash_cents(usable)
+            if self._session_halt_enabled():
+                equity = None
+                open_cost_dollars = self._session_open_cost_dollars()
+                if open_cost_dollars is not None:
+                    equity = usable + open_cost_dollars
+                if equity is None:
+                    log.warning(
+                        "[SESSION_HALT] equity unreadable; skip and do not seed"
+                    )
+                    return "live equity unreadable"
+                if self._check_session_equity_halt(equity):
+                    return self._trip_session_halt(equity)
+            elif self._check_live_loss_limit(usable):
                 self._live_halted = True
-                loss = self._session_start_balance - balance
+                loss = self._session_start_balance - usable
                 log.critical(
                     "LIVE LOSS LIMIT BREACHED -- halting all trading. "
                     "Session loss $%.2f >= limit $%.2f (%.0f%% of $%.2f bankroll). "
@@ -1434,8 +1599,8 @@ class TradeExecutor:
                 if self._shutdown_callback:
                     self._shutdown_callback()
                 return "LIVE HALTED: session loss limit reached -- all trading suspended"
-            if analysis.capped_dollars > balance * 0.9:
-                return f"insufficient live balance (${balance:.2f})"
+            if analysis.capped_dollars > usable * 0.9:
+                return f"insufficient live balance (${usable:.2f})"
 
         return None
 

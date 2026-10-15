@@ -26,6 +26,7 @@ set -uo pipefail
 
 POST_DEPLOY=0
 RUN_DAILY_REVIEW=0
+DRY_RUN=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -37,8 +38,12 @@ while [[ $# -gt 0 ]]; do
             RUN_DAILY_REVIEW=1
             shift
             ;;
+        --dry-run)
+            DRY_RUN=1
+            shift
+            ;;
         -h|--help)
-            echo "usage: bash scripts/bothealth.sh [--post-deploy] [--daily-review]"
+            echo "usage: bash scripts/bothealth.sh [--post-deploy] [--daily-review] [--dry-run]"
             exit 0
             ;;
         *)
@@ -70,13 +75,21 @@ BOT_RUNTIME_LOCK="$REPO_ROOT/data/bot_runtime.lock"
 READINESS_SCRIPT="$REPO_ROOT/scripts/edge_replay/post_fix_new_readiness_status.py"
 GOV_LOG_DIR="$OUTPUT_ROOT/governance"
 DEBT_LOG="$REPO_ROOT/docs/profit_path_debt_log.md"
-LAUNCHD_LABEL="com.jake.kalshi-bot"
+LAUNCHD_LABEL="com.jake.kalshi-bot-politics"
 
 DATE_ONLY="$(date -u +%Y-%m-%d)"
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
-REPORT="$HEALTH_REPORT_DIR/bothealth_${DATE_ONLY}.md"
+# A dry run must not overwrite the dated operator report.
+if [[ "$DRY_RUN" == "1" ]]; then
+    REPORT="$(mktemp "${TMPDIR:-/tmp}/bothealth-dry-run.XXXXXX")"
+else
+    REPORT="$HEALTH_REPORT_DIR/bothealth_${DATE_ONLY}.md"
+fi
 
-mkdir -p "$LOG_DIR" "$HEALTH_REPORT_DIR" "$DAILY_REVIEW_DIR" "$PERFORMANCE_REPORT_DIR"
+mkdir -p "$LOG_DIR" "$DAILY_REVIEW_DIR" "$PERFORMANCE_REPORT_DIR"
+if [[ "$DRY_RUN" != "1" ]]; then
+    mkdir -p "$HEALTH_REPORT_DIR"
+fi
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 section()  { printf '\n## %s\n\n' "$1" >>"$REPORT"; }
@@ -303,6 +316,120 @@ else
     UPTIME="(not running)"
     BOT_ALIVE=0
 fi
+codeblock_end
+
+# ── 1b. Politics desk ─────────────────────────────────────────────────────────
+# Halt alerts even when the process is up. A handled stop or restart cap
+# alerts only while the process is down. A missing cash file is not a drop.
+POLITICS_PROCESS="down"
+if (( BOT_ALIVE == 1 )); then
+    POLITICS_PROCESS="up"
+fi
+POLITICS_LOG="not_measured"
+POLITICS_LOG_AGE=""
+POLITICS_HALT="clear"
+POLITICS_ALERT="none"
+POLITICS_ALERT_COUNTS="no"
+POLITICS_CASH="not_measured"
+POLITICS_CASH_DROP=""
+POLITICS_STATE_DIR="$REPO_ROOT/logs/state"
+_politics_py="$(python_bin || true)"
+if [[ -n "${_politics_py}" ]]; then
+    _politics_status="$("$_politics_py" - "$LOG_DIR" "$POLITICS_STATE_DIR" <<'PY'
+import json
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+log_dir = Path(sys.argv[1])
+state_dir = Path(sys.argv[2])
+now = time.time()
+ages = []
+for name in ("bot.log", "politics.launchd.stdout.log", "politics.launchd.stderr.log"):
+    path = log_dir / name
+    if path.is_file():
+        ages.append(now - path.stat().st_mtime)
+if not ages:
+    log_state = "not_measured"
+    log_age = ""
+else:
+    age = min(ages)
+    log_age = str(int(age))
+    log_state = "stale" if age >= 1800 else "fresh"
+halt = "clear"
+try:
+    data = json.loads((state_dir / "politics_session_halt.json").read_text(encoding="utf-8"))
+    if isinstance(data, dict) and data.get("halted") is True:
+        halt = "latched"
+except (OSError, UnicodeError, json.JSONDecodeError):
+    halt = "clear"
+alert = "none"
+try:
+    data = json.loads((state_dir / "politics_operator_alert.json").read_text(encoding="utf-8"))
+    if isinstance(data, dict):
+        reason = str(data.get("reason") or "").strip()
+        if reason:
+            alert = reason
+except (OSError, UnicodeError, json.JSONDecodeError):
+    alert = "none"
+cash = "not_measured"
+drop = ""
+try:
+    data = json.loads((state_dir / "politics_cash_cents.json").read_text(encoding="utf-8"))
+except (OSError, UnicodeError, json.JSONDecodeError):
+    data = None
+if isinstance(data, dict):
+    today = datetime.now(timezone.utc).date().isoformat()
+    if data.get("date") != today:
+        cash = "not_today"
+    else:
+        try:
+            start = int(data["start_cents"])
+            last = int(data["last_cents"])
+        except (KeyError, TypeError, ValueError):
+            cash = "not_measured"
+        else:
+            delta = start - last
+            drop = str(delta)
+            cash = "drop" if delta > 500 else "ok"
+
+def _cell(value: str) -> str:
+    # A tab is IFS whitespace, so an empty age would shift the halt field.
+    text = value.replace("|", "/")
+    return text if text else "-"
+
+print("|".join([_cell(log_state), _cell(log_age), _cell(halt), _cell(alert), _cell(cash), _cell(drop)]))
+PY
+)" || true
+    if [[ -n "${_politics_status}" ]]; then
+        IFS='|' read -r POLITICS_LOG POLITICS_LOG_AGE POLITICS_HALT POLITICS_ALERT POLITICS_CASH POLITICS_CASH_DROP <<<"$_politics_status"
+        if [[ "$POLITICS_LOG_AGE" == "-" ]]; then
+            POLITICS_LOG_AGE=""
+        fi
+        if [[ "$POLITICS_CASH_DROP" == "-" ]]; then
+            POLITICS_CASH_DROP=""
+        fi
+    fi
+fi
+if [[ "$POLITICS_HALT" == "latched" ]]; then
+    POLITICS_ALERT_COUNTS="yes"
+fi
+if [[ "$POLITICS_PROCESS" == "down" && "$POLITICS_ALERT" == "handled_stop" ]]; then
+    POLITICS_ALERT_COUNTS="yes"
+fi
+if [[ "$POLITICS_PROCESS" == "down" && "$POLITICS_ALERT" == "restart_cap" ]]; then
+    POLITICS_ALERT_COUNTS="yes"
+fi
+section "1b. Politics desk"
+codeblock_start
+printf 'politics_label=%s\n' "$LAUNCHD_LABEL" >>"$REPORT"
+printf 'politics_process=%s\n' "$POLITICS_PROCESS" >>"$REPORT"
+printf 'politics_log=%s age_s=%s\n' "$POLITICS_LOG" "${POLITICS_LOG_AGE:-}" >>"$REPORT"
+printf 'politics_halt=%s\n' "$POLITICS_HALT" >>"$REPORT"
+printf 'politics_operator_alert=%s counts=%s\n' "$POLITICS_ALERT" "$POLITICS_ALERT_COUNTS" >>"$REPORT"
+printf 'politics_alert_counts=%s\n' "$POLITICS_ALERT_COUNTS" >>"$REPORT"
+printf 'politics_cash=%s drop_cents=%s\n' "$POLITICS_CASH" "${POLITICS_CASH_DROP:-}" >>"$REPORT"
 codeblock_end
 
 # ── 1a. Runtime cohort provenance ───────────────────────────────────────────
@@ -708,6 +835,12 @@ section "Verdict"
         VERDICT="**RED** — DRIFT HALT — kalshi contract drift; bot fail-closed (${KALSHI_DRIFT_STATUS})"
     elif (( BOT_ALIVE == 0 )); then
         VERDICT="**RED** — bot not running"
+    elif [[ "$POLITICS_HALT" == "latched" ]]; then
+        VERDICT="**RED** — session halt latched"
+    elif [[ "$POLITICS_LOG" == "stale" ]]; then
+        VERDICT="**RED** — no log lines for 30 min"
+    elif [[ "$POLITICS_CASH" == "drop" ]]; then
+        VERDICT="**RED** — cash integer dropped more than \$5 today"
     elif (( APPLIED > 0 || KS > 0 || VE > 0 || BATCH_ABORTED > 0 )); then
         VERDICT="**RED** — governance shadow-mode invariant violated (applied=$APPLIED, KILL_SWITCH=$KS, VALIDATION_ERROR=$VE, batch_aborted=$BATCH_ABORTED)"
     elif [[ "$MATCHER_WEIGHTS_STATUS" == matcher_weights=unverified* ]]; then
@@ -732,10 +865,24 @@ section "Verdict"
     printf '%s\n' "$VERDICT"
 } >>"$REPORT"
 
-# Notify operator (best-effort, won't fail the script if osascript missing)
-NOTIFY_BODY="bothealth: ${VERDICT//\*/}; ${KALSHI_DRIFT_STATUS}; ${P0_COHORT_STATUS}; ${POST_FIX_NEW_STATUS}; ${MATCHER_WEIGHTS_STATUS}; daily_review=${DAILY_REVIEW_STATUS}"
-NOTIFY_BODY_ESCAPED="$(osascript_escape "$NOTIFY_BODY")"
-osascript -e "display notification \"$NOTIFY_BODY_ESCAPED\" with title \"kalshi-bot\"" 2>/dev/null || true
+# Notify operator (best-effort, won't fail the script if osascript missing).
+# The real alert is one display notification plus this markdown report.
+# There is no webhook, email, or Telegram path.
+NOTIFY_BODY="bothealth: ${VERDICT//\*/}; ${KALSHI_DRIFT_STATUS}; ${P0_COHORT_STATUS}; ${POST_FIX_NEW_STATUS}; ${MATCHER_WEIGHTS_STATUS}; daily_review=${DAILY_REVIEW_STATUS}; politics_process=${POLITICS_PROCESS}; politics_log=${POLITICS_LOG}; politics_halt=${POLITICS_HALT}; politics_operator_alert=${POLITICS_ALERT}; politics_alert_counts=${POLITICS_ALERT_COUNTS}; politics_cash=${POLITICS_CASH}"
+if [[ "$DRY_RUN" == "1" ]]; then
+    echo "dry-run: notification skipped"
+    echo "alert_channel: osascript display notification titled kalshi-bot, plus the markdown report. No webhook, email, or Telegram."
+else
+    NOTIFY_BODY_ESCAPED="$(osascript_escape "$NOTIFY_BODY")"
+    osascript -e "display notification \"$NOTIFY_BODY_ESCAPED\" with title \"kalshi-bot\"" 2>/dev/null || true
+fi
 
 echo "Report: $REPORT"
 echo "Verdict: $VERDICT"
+echo "politics_label=${LAUNCHD_LABEL}"
+echo "politics_process=${POLITICS_PROCESS}"
+echo "politics_log=${POLITICS_LOG} age_s=${POLITICS_LOG_AGE:-}"
+echo "politics_halt=${POLITICS_HALT}"
+echo "politics_operator_alert=${POLITICS_ALERT} counts=${POLITICS_ALERT_COUNTS}"
+echo "politics_alert_counts=${POLITICS_ALERT_COUNTS}"
+echo "politics_cash=${POLITICS_CASH} drop_cents=${POLITICS_CASH_DROP:-}"

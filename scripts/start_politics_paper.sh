@@ -81,4 +81,23 @@ export ENABLE_PRE_LLM_MATCH_GATE=false
 curl -sS http://localhost:11434/api/generate \
   -d '{"model":"qwen2.5:7b","prompt":"ok","keep_alive":-1,"stream":false,"options":{"num_predict":1}}' \
   >/tmp/ollama-politics-warmup.json || true
+
+# A crash loop backs off and stops after POLITICS_RESTART_CAP starts in
+# an hour. Exit 75 means the cap wrote an alert; exit 0 here so launchd
+# SuccessfulExit=false leaves the job down. Any other guard failure
+# still restarts. Do not set EVENT_NEWS_SESSION_HALT in this script.
+set +e
+sleep_secs="$(PYTHONPATH="$ROOT" "$ROOT/.venv/bin/python" "$ROOT/scripts/politics_restart_guard.py")"
+guard_status=$?
+set -e
+if [[ "$guard_status" -eq 75 ]]; then
+  exit 0
+fi
+if [[ "$guard_status" -ne 0 ]]; then
+  echo "politics restart guard failed status=${guard_status}" >&2
+  exit "$guard_status"
+fi
+if [[ "$sleep_secs" =~ ^[0-9]+$ ]] && [[ "$sleep_secs" != "0" ]]; then
+  sleep "$sleep_secs"
+fi
 exec /usr/bin/caffeinate -dimsu "$ROOT/.venv/bin/python" main.py
