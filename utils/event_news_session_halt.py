@@ -1,8 +1,12 @@
 """Politics session-halt state.
 
 The latch keeps a tripped halt across a restart so a new process cannot
-seed a fresh baseline and trade. The cash file is integer cents for the
-health check. Tests monkeypatch the path constants.
+seed a fresh baseline and trade. The only reset is deleting the latch
+file. A new process does not clear it. A new UTC date resets the cash
+file's start cents and does not clear the latch.
+
+The cash file is integer cents for the health check. Tests monkeypatch
+the path constants.
 """
 
 from __future__ import annotations

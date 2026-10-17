@@ -287,3 +287,156 @@ def test_start_script_runs_the_guard_before_exec_and_stays_down_on_cap() -> None
     assert 'guard_status" -eq 75' in text
     assert "exit 0" in text
     assert "export EVENT_NEWS_SESSION_HALT" not in text
+
+
+def _paper_executor(monkeypatch, bankrolls):
+    """Paper event-news executor. The halt flag stays unset, so live is off."""
+    from trading.executor import TradeExecutor
+
+    monkeypatch.setattr(cfg_module.cfg, "is_paper_trading", True)
+    monkeypatch.setattr(cfg_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
+    monkeypatch.setattr(cfg_module.cfg, "bankroll", 500.0)
+    monkeypatch.setattr(cfg_module.cfg, "live_loss_limit_pct", 0.10)
+    monkeypatch.setattr(cfg_module.cfg, "live_ticker_cooldown", 0)
+    monkeypatch.setattr(cfg_module.cfg, "paper_ticker_cooldown", 0)
+    monkeypatch.setattr(cfg_module.cfg, "min_edge", 0.04)
+    monkeypatch.setattr(cfg_module.cfg, "max_ticker_exposure_pct", 1.0)
+    monkeypatch.delenv("EVENT_NEWS_SESSION_HALT", raising=False)
+    rest = MagicMock()
+    rest.get_market.return_value = None
+    paper = MagicMock()
+    paper.get_effective_sizing_bankroll.return_value = 500.0
+    paper.get_notional_bankroll.side_effect = list(bankrolls)
+    paper.portfolio.open_positions.return_value = []
+    paper.portfolio.open_positions_by_prefix.return_value = []
+    paper.portfolio.is_concentration_ok.return_value = True
+    paper.portfolio.exposure.return_value = 0.0
+    paper.portfolio.tickers.return_value = []
+    executor = TradeExecutor(rest, paper)
+    return executor, rest, paper
+
+
+def test_unset_session_halt_is_paper_on_and_live_off(monkeypatch, tmp_path):
+    from utils.event_news_desk_flags import (
+        EVENT_NEWS_SESSION_HALT,
+        event_news_desk_flag_enabled,
+    )
+
+    _enable(monkeypatch, tmp_path)
+    monkeypatch.delenv("EVENT_NEWS_SESSION_HALT", raising=False)
+    paper, _rest, _paper_book = _paper_executor(monkeypatch, [50.0])
+    live, _live_rest, _live_paper = _make_executor(monkeypatch, bankroll=500.0, loss_limit_pct=0.10)
+    monkeypatch.setattr(cfg_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
+
+    assert event_news_desk_flag_enabled(EVENT_NEWS_SESSION_HALT, live=False) is True
+    assert event_news_desk_flag_enabled(EVENT_NEWS_SESSION_HALT, live=True) is False
+    assert paper._session_halt_enabled() is True
+    assert live._session_halt_enabled() is False
+
+
+def _paper_analysis():
+    """Ask and last agree. An unset MagicMock last price floats to 1.0 on 3.14."""
+    analysis = _make_analysis(capped_dollars=2.0)
+    ask = analysis.market.yes_ask_cents
+    analysis.market.last_price_cents = ask
+    analysis.market.last_price = ask
+    return analysis
+
+
+def test_paper_bankroll_drop_trips_at_the_equity_line(monkeypatch, tmp_path):
+    # 10% of a $50 paper book is $5. The $10 cap is not the binding line here.
+    _enable(monkeypatch, tmp_path)
+    monkeypatch.delenv("EVENT_NEWS_SESSION_HALT", raising=False)
+    executor, rest, paper = _paper_executor(monkeypatch, [50.0, 46.0, 50.0, 45.0])
+    callback = MagicMock()
+    executor.set_shutdown_callback(callback)
+    analysis = _paper_analysis()
+
+    assert executor._validate(analysis) is None
+    assert executor._session_start_balance == pytest.approx(50.0)
+    assert executor._validate(analysis) is None
+    assert executor._live_halted is False
+
+    fresh, fresh_rest, _fresh_paper = _paper_executor(monkeypatch, [50.0, 45.0])
+    fresh.set_shutdown_callback(callback)
+    assert fresh._validate(analysis) is None
+    reason = fresh._validate(analysis)
+
+    assert reason == "PAPER HALTED: session loss limit reached -- all trading suspended"
+    assert fresh._live_halted is True
+    assert session_halt_loss_line(50.0, 0.10) == pytest.approx(5.0)
+    assert session_halt_loss_line(200.0, 0.10) == pytest.approx(10.0)
+    callback.assert_not_called()
+    rest.place_limit_order.assert_not_called()
+    fresh_rest.place_limit_order.assert_not_called()
+    rest.get_balance.assert_not_called()
+    fresh_rest.get_balance.assert_not_called()
+    paper.get_notional_bankroll.assert_called()
+    latch = json.loads((tmp_path / "halt.json").read_text(encoding="utf-8"))
+    assert latch["halted"] is True
+    assert latch["line"] == pytest.approx(5.0)
+    assert latch["seed_equity"] == pytest.approx(50.0)
+
+
+def test_paper_bankroll_read_failure_admits_nothing(monkeypatch, tmp_path):
+    _enable(monkeypatch, tmp_path)
+    monkeypatch.delenv("EVENT_NEWS_SESSION_HALT", raising=False)
+    executor, rest, _paper = _paper_executor(
+        monkeypatch,
+        [RuntimeError("bankroll down"), None, 0.0, 50.0],
+    )
+    callback = MagicMock()
+    executor.set_shutdown_callback(callback)
+    analysis = _paper_analysis()
+
+    assert executor._validate(analysis) == "paper bankroll unreadable"
+    assert executor._validate(analysis) == "paper bankroll unreadable"
+    assert executor._validate(analysis) == "paper bankroll unreadable"
+    assert executor._session_start_balance is None
+    assert executor._live_halted is False
+    assert not (tmp_path / "halt.json").exists()
+    callback.assert_not_called()
+    rest.place_limit_order.assert_not_called()
+    rest.get_balance.assert_not_called()
+
+    assert executor._validate(analysis) is None
+    assert executor._session_start_balance == pytest.approx(50.0)
+
+
+def test_paper_halt_clears_only_when_the_latch_file_is_removed(monkeypatch, tmp_path):
+    from datetime import datetime, timezone
+
+    _enable(monkeypatch, tmp_path)
+    monkeypatch.delenv("EVENT_NEWS_SESSION_HALT", raising=False)
+    executor, _rest, _paper = _paper_executor(monkeypatch, [50.0, 40.0])
+    analysis = _paper_analysis()
+    assert executor._validate(analysis) is None
+    assert "HALTED" in (executor._validate(analysis) or "")
+
+    restarted, restarted_rest, restarted_paper = _paper_executor(monkeypatch, [80.0])
+    assert restarted._live_halted is True
+    reason = restarted._validate(analysis)
+    assert reason == "PAPER HALTED: session loss limit reached -- all trading suspended"
+    restarted_paper.get_notional_bankroll.assert_not_called()
+    restarted_rest.get_balance.assert_not_called()
+    restarted_rest.place_limit_order.assert_not_called()
+
+    halt.record_cash_cents(
+        40.0,
+        tmp_path / "cash.json",
+        now=datetime(2026, 10, 18, 0, 5, tzinfo=timezone.utc),
+    )
+    still_latched, _still_rest, still_paper = _paper_executor(monkeypatch, [80.0])
+    assert still_latched._live_halted is True
+    assert "HALTED" in (still_latched._validate(analysis) or "")
+    still_paper.get_notional_bankroll.assert_not_called()
+    assert json.loads((tmp_path / "halt.json").read_text(encoding="utf-8"))["halted"] is True
+
+    (tmp_path / "halt.json").unlink()
+    cleared, cleared_rest, _cleared_paper = _paper_executor(monkeypatch, [50.0])
+    assert cleared._live_halted is False
+    assert cleared._validate(analysis) is None
+    assert cleared._session_start_balance == pytest.approx(50.0)
+    assert cleared._live_halted is False
+    cleared_rest.place_limit_order.assert_not_called()
+    assert not (tmp_path / "halt.json").exists()
