@@ -138,11 +138,11 @@ _LIVE_POSITIONS_UNSET = object()
 
 
 def _positive_dollars(value: Any) -> float | None:
-    """A usable cash read. None, bool, and <= 0 do not seed a baseline."""
+    """A usable cash read. None, bool, non-finite, and <= 0 do not seed."""
     if isinstance(value, bool) or not isinstance(value, Real):
         return None
     number = float(value)
-    if number != number or number <= 0:
+    if number != number or number == float("inf") or number <= 0:
         return None
     return number
 

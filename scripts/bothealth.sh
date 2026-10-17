@@ -94,6 +94,10 @@ send_offbox_alert() {
 }
 
 if [[ "$TEST_ALERT" == "1" ]]; then
+    if [[ "$DRY_RUN" == "1" ]]; then
+        echo "dry-run: notification skipped"
+        exit 0
+    fi
     send_offbox_alert "kalshi-bot" "bothealth test alert"
     exit 0
 fi
@@ -994,14 +998,16 @@ for line in text.splitlines():
     if line.startswith("20"):
         lines.append(line)
 seen = state.get("fill_lines")
+pending_fill = None
 if isinstance(seen, bool) or not isinstance(seen, int):
     state["fill_lines"] = len(lines)
 elif len(lines) > seen:
     reasons.append("new_fill")
-    state["fill_lines"] = len(lines)
+    pending_fill = len(lines)
 else:
     state["fill_lines"] = len(lines)
 
+pending_yellow = False
 if "**YELLOW**" in verdict:
     since = state.get("yellow_since")
     if isinstance(since, bool) or not isinstance(since, int):
@@ -1009,7 +1015,7 @@ if "**YELLOW**" in verdict:
         state["yellow_alerted"] = False
     elif state.get("yellow_alerted") is not True and now - since >= 1800:
         reasons.append("yellow_30m")
-        state["yellow_alerted"] = True
+        pending_yellow = True
 else:
     state.pop("yellow_since", None)
     state.pop("yellow_alerted", None)
@@ -1019,24 +1025,59 @@ if not dry:
     state_path.write_text(json.dumps(state, sort_keys=True) + "\n", encoding="utf-8")
 print("send=" + ("yes" if reasons else "no"))
 print("reasons=" + ",".join(reasons))
+if pending_fill is not None:
+    print("pending_fill_lines=" + str(pending_fill))
+if pending_yellow:
+    print("pending_yellow_alerted=1")
 PY
 }
 NOTIFY_BODY="bothealth: ${VERDICT//\*/}; ${KALSHI_DRIFT_STATUS}; ${P0_COHORT_STATUS}; ${POST_FIX_NEW_STATUS}; ${MATCHER_WEIGHTS_STATUS}; daily_review=${DAILY_REVIEW_STATUS}; politics_process=${POLITICS_PROCESS}; politics_log=${POLITICS_LOG}; politics_halt=${POLITICS_HALT}; politics_operator_alert=${POLITICS_ALERT}; politics_alert_counts=${POLITICS_ALERT_COUNTS}; politics_cash=${POLITICS_CASH}"
 ALERT_DECISION="$(alert_reasons || true)"
 ALERT_SEND="no"
 ALERT_REASONS=""
+ALERT_PENDING_FILL=""
+ALERT_PENDING_YELLOW=""
 while IFS= read -r _alert_line; do
     case "$_alert_line" in
         send=*) ALERT_SEND="${_alert_line#send=}" ;;
         reasons=*) ALERT_REASONS="${_alert_line#reasons=}" ;;
+        pending_fill_lines=*) ALERT_PENDING_FILL="${_alert_line#pending_fill_lines=}" ;;
+        pending_yellow_alerted=*) ALERT_PENDING_YELLOW="${_alert_line#pending_yellow_alerted=}" ;;
     esac
 done <<<"$ALERT_DECISION"
+commit_alert_watermark() {
+    [[ -n "$ALERT_PENDING_FILL" || "$ALERT_PENDING_YELLOW" == "1" ]] || return 0
+    ALERT_STATE_PATH="$ALERT_STATE_PATH" \
+    ALERT_PENDING_FILL="$ALERT_PENDING_FILL" \
+    ALERT_PENDING_YELLOW="$ALERT_PENDING_YELLOW" \
+    "$(python_bin)" - <<'PY'
+import json
+import os
+from pathlib import Path
+
+path = Path(os.environ["ALERT_STATE_PATH"])
+try:
+    loaded = json.loads(path.read_text(encoding="utf-8"))
+except (OSError, UnicodeError, json.JSONDecodeError):
+    loaded = None
+state = loaded if isinstance(loaded, dict) else {}
+pending_fill = os.environ.get("ALERT_PENDING_FILL", "").strip()
+if pending_fill:
+    state["fill_lines"] = int(pending_fill)
+if os.environ.get("ALERT_PENDING_YELLOW", "") == "1":
+    state["yellow_alerted"] = True
+path.parent.mkdir(parents=True, exist_ok=True)
+path.write_text(json.dumps(state, sort_keys=True) + "\n", encoding="utf-8")
+PY
+}
 if [[ "$DRY_RUN" == "1" ]]; then
     echo "dry-run: notification skipped"
     echo "alert_channel: osascript display notification titled kalshi-bot, plus the markdown report. No webhook, email, or Telegram."
 else
     if [[ "$ALERT_SEND" == "yes" ]]; then
-        send_offbox_alert "kalshi-bot" "bothealth alert: ${ALERT_REASONS}; ${NOTIFY_BODY}" || true
+        if send_offbox_alert "kalshi-bot" "bothealth alert: ${ALERT_REASONS}; ${NOTIFY_BODY}"; then
+            commit_alert_watermark || true
+        fi
     fi
     NOTIFY_BODY_ESCAPED="$(osascript_escape "$NOTIFY_BODY")"
     osascript -e "display notification \"$NOTIFY_BODY_ESCAPED\" with title \"kalshi-bot\"" 2>/dev/null || true

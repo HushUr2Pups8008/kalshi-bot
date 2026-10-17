@@ -661,6 +661,7 @@ out="$(
 )"
 assert_contains "$out" "Verdict: **YELLOW**"
 assert_contains "$(cat "$fixture/curl.args")" "yellow_30m"
+grep -q '"yellow_alerted": true' "$fixture/logs/state/bothealth_alert_state.json" || fail "successful send did not mark yellow alerted"
 
 fixture="$TMP_ROOT/alert-new-fill"
 make_fixture "$fixture"
@@ -678,6 +679,43 @@ out="$(
 assert_contains "$out" "Verdict: **YELLOW**"
 assert_contains "$(cat "$fixture/curl.args")" "new_fill"
 assert_not_contains "$(cat "$fixture/curl.args")" "yellow_30m"
+grep -q '"fill_lines": 1' "$fixture/logs/state/bothealth_alert_state.json" || fail "successful send did not advance fill watermark"
+
+fixture="$TMP_ROOT/test-alert-dry-run"
+make_fixture "$fixture"
+install_curl_capture "$fixture"
+out="$(
+    ALERT_NTFY_TOPIC=desk-test \
+    BOTHEALTH_CURL_CAPTURE="$fixture/curl.args" \
+    run_bothealth "$fixture" --dry-run --test-alert
+)"
+assert_contains "$out" "dry-run: notification skipped"
+[[ ! -e "$fixture/curl.args" ]] || fail "dry-run test-alert must not send"
+[[ ! -e "$fixture/osascript.args" ]] || fail "dry-run test-alert must not use osascript"
+
+fixture="$TMP_ROOT/alert-send-failed-keeps-watermark"
+make_fixture "$fixture"
+make_db "$fixture/data/paper_trades.db" "2026-05-12T23:50:04+00:00" "2026-05-13T01:00:00+00:00"
+mkdir -p "$fixture/logs/state" "$fixture/bin"
+printf '%s\n' '{"fill_lines":0,"yellow_alerted":false,"yellow_since":1000}' >"$fixture/logs/state/bothealth_alert_state.json"
+printf '%s\n' '2026-10-17T03:09:47Z, KXTRUMPSAY-26OCT19-ZACH, yes, 64, 8, fixture, 201' >"$fixture/logs/state/live-fill-log.md"
+cat >"$fixture/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${BOTHEALTH_CURL_CAPTURE:?}"
+exit 1
+EOF
+chmod +x "$fixture/bin/curl"
+out="$(
+    ALERT_NTFY_TOPIC=desk-test \
+    BOTHEALTH_NOW_EPOCH=2801 \
+    BOTHEALTH_CURL_CAPTURE="$fixture/curl.args" \
+    run_bothealth "$fixture"
+)"
+assert_contains "$out" "alert send failed provider=ntfy"
+assert_contains "$(cat "$fixture/curl.args")" "new_fill"
+assert_contains "$(cat "$fixture/curl.args")" "yellow_30m"
+grep -q '"fill_lines": 0' "$fixture/logs/state/bothealth_alert_state.json" || fail "failed send advanced fill watermark"
+grep -q '"yellow_alerted": false' "$fixture/logs/state/bothealth_alert_state.json" || fail "failed send marked yellow alerted"
 
 fixture="$TMP_ROOT/politics-event-news-lock"
 cohort_id="kalshi-event-news-20260820"

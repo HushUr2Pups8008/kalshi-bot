@@ -12,6 +12,7 @@ the path constants.
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -40,7 +41,12 @@ def _read_json(path: Path) -> dict[str, Any] | None:
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps(payload, sort_keys=True) + "\n"
-    path.write_text(text, encoding="utf-8")
+    temporary = path.with_name(path.name + ".tmp")
+    with temporary.open("w", encoding="utf-8") as handle:
+        handle.write(text)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
 
 
 def halt_latch_present(path: Path | None = None) -> bool:

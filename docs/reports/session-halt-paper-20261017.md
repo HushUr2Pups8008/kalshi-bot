@@ -14,15 +14,16 @@ Paper equity is `get_notional_bankroll()` plus open `cost_dollars`. The check do
 
 ## Three cases
 
-Run: `tests/test_event_news_session_halt.py` with `CI=true` from the worktree. 22 passed, including these three.
+Run: `tests/test_event_news_session_halt.py` with `CI=true` from the worktree. 22 passed, including the paper cases below.
 
 | case | test | result |
 |---|---|---|
 | Bankroll read OK, halt trips at the line | `test_paper_bankroll_drop_trips_at_the_equity_line` | pass |
 | Bankroll read fails, admit nothing, do not seed | `test_paper_bankroll_read_failure_admits_nothing` | pass |
+| `+inf` and NaN do not seed | `test_paper_infinite_bankroll_does_not_seed` | pass |
 | Latch clears only when the file is removed | `test_paper_halt_clears_only_when_the_latch_file_is_removed` | pass |
 
-Failure reads covered: exception, `None`, and `0.0`. Each returns `paper bankroll unreadable`, leaves no latch, and does not call `place_limit_order`. A later readable $50 seeds.
+Failure reads covered: exception, `None`, `0.0`, `+inf`, and NaN. Each returns `paper bankroll unreadable`, leaves no latch, and does not call `place_limit_order`. A later readable $50 seeds. `+inf` is not a usable cash read, so it cannot seed a line that never trips.
 
 Reset: delete `logs/state/politics_session_halt.json`. A new process does not clear the latch. `record_cash_cents` on a new UTC date resets the cash file's start cents and does not clear the latch. There is no clear function.
 

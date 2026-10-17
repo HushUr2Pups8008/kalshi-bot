@@ -378,6 +378,21 @@ def test_paper_bankroll_drop_trips_at_the_equity_line(monkeypatch, tmp_path):
     assert latch["seed_equity"] == pytest.approx(50.0)
 
 
+def test_paper_infinite_bankroll_does_not_seed(monkeypatch, tmp_path):
+    _enable(monkeypatch, tmp_path)
+    monkeypatch.delenv("EVENT_NEWS_SESSION_HALT", raising=False)
+    executor, rest, _paper = _paper_executor(monkeypatch, [float("inf"), float("nan")])
+    analysis = _paper_analysis()
+
+    assert executor._validate(analysis) == "paper bankroll unreadable"
+    assert executor._validate(analysis) == "paper bankroll unreadable"
+    assert executor._session_start_balance is None
+    assert executor._live_halted is False
+    assert not (tmp_path / "halt.json").exists()
+    rest.place_limit_order.assert_not_called()
+    rest.get_balance.assert_not_called()
+
+
 def test_paper_bankroll_read_failure_admits_nothing(monkeypatch, tmp_path):
     _enable(monkeypatch, tmp_path)
     monkeypatch.delenv("EVENT_NEWS_SESSION_HALT", raising=False)
