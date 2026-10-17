@@ -17,7 +17,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import config as _cfg_module
 import trading.live_submission_hold as hold_module
-from trading.executor import TradeExecutor, classify_skip_category
+from trading.executor import (
+    TradeExecutor,
+    classify_skip_category,
+    fill_log_detail_from_receipts,
+)
 from trading.execution_terms import FinalExecutionTerms
 from trading.fees import FeeUnscorableError
 from trading.venue import Venue
@@ -26,6 +30,35 @@ from trading.venue import Venue
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def test_mela_fill_detail_fee_cents_are_not_the_premium():
+    """KXTRUMPSAY-26OCT19-MELA YES 8 at 64c. 12.91 is the fee in cents.
+
+    The exchange fee_cost is 0.129100 dollars, which is 12.91 cents.
+    The premium is 8 * 0.64 = 5.12. The detail columns must keep them apart.
+    """
+    detail = fill_log_detail_from_receipts(
+        side="yes",
+        order={"order_id": "01a141dc-cd80-7da2-b82e-b76274da15e7"},
+        fills=[
+            {
+                "count_fp": "8.00",
+                "yes_price_dollars": "0.6400",
+                "no_price_dollars": "0.3600",
+                "fee_cost": "0.129100",
+            }
+        ],
+    )
+    assert detail == {
+        "filled_count": "8",
+        "avg_fill_cents": "64",
+        "fee_cents": "12.91",
+        "order_id": "01a141dc-cd80-7da2-b82e-b76274da15e7",
+    }
+    premium = Decimal(detail["filled_count"]) * Decimal(detail["avg_fill_cents"]) / Decimal("100")
+    assert premium == Decimal("5.12")
+    assert Decimal(detail["fee_cents"]) / Decimal("100") == Decimal("0.1291")
 
 
 def test_classify_skip_category_groups_controllable_executor_reasons():
