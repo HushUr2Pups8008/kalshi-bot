@@ -27,6 +27,7 @@ set -uo pipefail
 POST_DEPLOY=0
 RUN_DAILY_REVIEW=0
 DRY_RUN=0
+TEST_ALERT=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -42,8 +43,12 @@ while [[ $# -gt 0 ]]; do
             DRY_RUN=1
             shift
             ;;
+        --test-alert)
+            TEST_ALERT=1
+            shift
+            ;;
         -h|--help)
-            echo "usage: bash scripts/bothealth.sh [--post-deploy] [--daily-review] [--dry-run]"
+            echo "usage: bash scripts/bothealth.sh [--post-deploy] [--daily-review] [--dry-run] [--test-alert]"
             exit 0
             ;;
         *)
@@ -52,6 +57,50 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Off-box alerts. Secrets stay in the environment and are never printed.
+# ntfy wins when ALERT_NTFY_TOPIC is set. Otherwise both Pushover values
+# are required. osascript remains the local fallback for the daily report.
+send_offbox_alert() {
+    local title="$1"
+    local body="$2"
+    if [[ -n "${ALERT_NTFY_TOPIC:-}" ]]; then
+        if curl -fsS --max-time 10 \
+            -H "Title: ${title}" \
+            -H "Content-Type: text/plain" \
+            --data-binary "$body" \
+            "https://ntfy.sh/${ALERT_NTFY_TOPIC}" >/dev/null 2>&1; then
+            echo "alert_channel=ntfy"
+            return 0
+        fi
+        echo "alert send failed provider=ntfy"
+        return 1
+    fi
+    if [[ -n "${PUSHOVER_TOKEN:-}" && -n "${PUSHOVER_USER:-}" ]]; then
+        if curl -fsS --max-time 10 \
+            --form-string "token=${PUSHOVER_TOKEN}" \
+            --form-string "user=${PUSHOVER_USER}" \
+            --form-string "title=${title}" \
+            --form-string "message=${body}" \
+            https://api.pushover.net/1/messages.json >/dev/null 2>&1; then
+            echo "alert_channel=pushover"
+            return 0
+        fi
+        echo "alert send failed provider=pushover"
+        return 1
+    fi
+    echo "alert channel not configured"
+    return 0
+}
+
+if [[ "$TEST_ALERT" == "1" ]]; then
+    if [[ "$DRY_RUN" == "1" ]]; then
+        echo "dry-run: notification skipped"
+        exit 0
+    fi
+    send_offbox_alert "kalshi-bot" "bothealth test alert"
+    exit 0
+fi
 
 # ── Resolve paths ─────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -71,7 +120,32 @@ PAPER_DB="$REPO_ROOT/data/paper_trades.db"
 EVIDENCE_DB="$REPO_ROOT/data/evidence_store.db"
 RUNTIME_DIR="$REPO_ROOT/data/runtime"
 DRIFT_HALT_SENTINEL="$RUNTIME_DIR/kalshi_drift_halt.json"
-BOT_RUNTIME_LOCK="$REPO_ROOT/data/bot_runtime.lock"
+# Politics exports BOT_RUNTIME_LOCK_NAME in scripts/start_politics_paper.sh.
+# The default data/bot_runtime.lock is the old unheld freeze-era file.
+# A fixture without that start script keeps the default name.
+politics_runtime_lock_name() {
+    local raw="" name script
+    script="$REPO_ROOT/scripts/start_politics_paper.sh"
+    if [[ -f "$script" ]]; then
+        raw="$(sed -n 's/^export BOT_RUNTIME_LOCK_NAME=//p' "$script" | head -n 1)"
+        raw="${raw%\"}"
+        raw="${raw#\"}"
+        raw="${raw%\'}"
+        raw="${raw#\'}"
+        raw="${raw%%$'\r'}"
+    fi
+    name="${raw##*/}"
+    if [[ -z "$name" || "$name" == "." || "$name" == ".." || "$name" == *"/"* ]]; then
+        name="bot_runtime.lock"
+    fi
+    case "$name" in
+        *[!A-Za-z0-9._-]*) name="bot_runtime.lock" ;;
+    esac
+    printf '%s\n' "$name"
+}
+BOT_RUNTIME_LOCK="$REPO_ROOT/data/$(politics_runtime_lock_name)"
+ALERT_STATE_PATH="$REPO_ROOT/logs/state/bothealth_alert_state.json"
+LIVE_FILL_LOG="$REPO_ROOT/logs/state/live-fill-log.md"
 READINESS_SCRIPT="$REPO_ROOT/scripts/edge_replay/post_fix_new_readiness_status.py"
 GOV_LOG_DIR="$OUTPUT_ROOT/governance"
 DEBT_LOG="$REPO_ROOT/docs/profit_path_debt_log.md"
@@ -865,14 +939,146 @@ section "Verdict"
     printf '%s\n' "$VERDICT"
 } >>"$REPORT"
 
-# Notify operator (best-effort, won't fail the script if osascript missing).
-# The real alert is one display notification plus this markdown report.
-# There is no webhook, email, or Telegram path.
+# Notify operator. osascript is the local toast. ntfy or Pushover is the
+# off-box channel and is used only for RED, a YELLOW that has lasted 30
+# minutes, a down process, a latched halt, or a new live fill line.
+# The first sighting of the fill log records a watermark and does not page.
+# A missing off-box channel logs "alert channel not configured" and still
+# exits 0. --dry-run does not send and does not move that watermark.
+alert_reasons() {
+    local py
+    py="$(python_bin)" || true
+    if [[ -z "$py" ]]; then
+        printf 'send=no\nreasons=\n'
+        return 0
+    fi
+    VERDICT="$VERDICT" \
+    POLITICS_PROCESS="$POLITICS_PROCESS" \
+    POLITICS_HALT="$POLITICS_HALT" \
+    ALERT_STATE_PATH="$ALERT_STATE_PATH" \
+    LIVE_FILL_LOG="$LIVE_FILL_LOG" \
+    DRY_RUN="$DRY_RUN" \
+    "$py" - <<'PY'
+import json
+import os
+import time
+from pathlib import Path
+
+verdict = os.environ.get("VERDICT", "")
+process = os.environ.get("POLITICS_PROCESS", "")
+halt = os.environ.get("POLITICS_HALT", "")
+dry = os.environ.get("DRY_RUN", "0") == "1"
+state_path = Path(os.environ["ALERT_STATE_PATH"])
+fill_path = Path(os.environ["LIVE_FILL_LOG"])
+raw_now = os.environ.get("BOTHEALTH_NOW_EPOCH", "").strip()
+now = int(raw_now) if raw_now else int(time.time())
+
+state = {}
+try:
+    loaded = json.loads(state_path.read_text(encoding="utf-8"))
+except (OSError, UnicodeError, json.JSONDecodeError):
+    loaded = None
+if isinstance(loaded, dict):
+    state = loaded
+
+reasons = []
+if "**RED**" in verdict:
+    reasons.append("red")
+if process == "down":
+    reasons.append("process_down")
+if halt == "latched":
+    reasons.append("halt")
+
+lines = []
+try:
+    text = fill_path.read_text(encoding="utf-8")
+except (OSError, UnicodeError):
+    text = ""
+for line in text.splitlines():
+    if line.startswith("20"):
+        lines.append(line)
+seen = state.get("fill_lines")
+pending_fill = None
+if isinstance(seen, bool) or not isinstance(seen, int):
+    state["fill_lines"] = len(lines)
+elif len(lines) > seen:
+    reasons.append("new_fill")
+    pending_fill = len(lines)
+else:
+    state["fill_lines"] = len(lines)
+
+pending_yellow = False
+if "**YELLOW**" in verdict:
+    since = state.get("yellow_since")
+    if isinstance(since, bool) or not isinstance(since, int):
+        state["yellow_since"] = now
+        state["yellow_alerted"] = False
+    elif state.get("yellow_alerted") is not True and now - since >= 1800:
+        reasons.append("yellow_30m")
+        pending_yellow = True
+else:
+    state.pop("yellow_since", None)
+    state.pop("yellow_alerted", None)
+
+if not dry:
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps(state, sort_keys=True) + "\n", encoding="utf-8")
+print("send=" + ("yes" if reasons else "no"))
+print("reasons=" + ",".join(reasons))
+if pending_fill is not None:
+    print("pending_fill_lines=" + str(pending_fill))
+if pending_yellow:
+    print("pending_yellow_alerted=1")
+PY
+}
 NOTIFY_BODY="bothealth: ${VERDICT//\*/}; ${KALSHI_DRIFT_STATUS}; ${P0_COHORT_STATUS}; ${POST_FIX_NEW_STATUS}; ${MATCHER_WEIGHTS_STATUS}; daily_review=${DAILY_REVIEW_STATUS}; politics_process=${POLITICS_PROCESS}; politics_log=${POLITICS_LOG}; politics_halt=${POLITICS_HALT}; politics_operator_alert=${POLITICS_ALERT}; politics_alert_counts=${POLITICS_ALERT_COUNTS}; politics_cash=${POLITICS_CASH}"
+ALERT_DECISION="$(alert_reasons || true)"
+ALERT_SEND="no"
+ALERT_REASONS=""
+ALERT_PENDING_FILL=""
+ALERT_PENDING_YELLOW=""
+while IFS= read -r _alert_line; do
+    case "$_alert_line" in
+        send=*) ALERT_SEND="${_alert_line#send=}" ;;
+        reasons=*) ALERT_REASONS="${_alert_line#reasons=}" ;;
+        pending_fill_lines=*) ALERT_PENDING_FILL="${_alert_line#pending_fill_lines=}" ;;
+        pending_yellow_alerted=*) ALERT_PENDING_YELLOW="${_alert_line#pending_yellow_alerted=}" ;;
+    esac
+done <<<"$ALERT_DECISION"
+commit_alert_watermark() {
+    [[ -n "$ALERT_PENDING_FILL" || "$ALERT_PENDING_YELLOW" == "1" ]] || return 0
+    ALERT_STATE_PATH="$ALERT_STATE_PATH" \
+    ALERT_PENDING_FILL="$ALERT_PENDING_FILL" \
+    ALERT_PENDING_YELLOW="$ALERT_PENDING_YELLOW" \
+    "$(python_bin)" - <<'PY'
+import json
+import os
+from pathlib import Path
+
+path = Path(os.environ["ALERT_STATE_PATH"])
+try:
+    loaded = json.loads(path.read_text(encoding="utf-8"))
+except (OSError, UnicodeError, json.JSONDecodeError):
+    loaded = None
+state = loaded if isinstance(loaded, dict) else {}
+pending_fill = os.environ.get("ALERT_PENDING_FILL", "").strip()
+if pending_fill:
+    state["fill_lines"] = int(pending_fill)
+if os.environ.get("ALERT_PENDING_YELLOW", "") == "1":
+    state["yellow_alerted"] = True
+path.parent.mkdir(parents=True, exist_ok=True)
+path.write_text(json.dumps(state, sort_keys=True) + "\n", encoding="utf-8")
+PY
+}
 if [[ "$DRY_RUN" == "1" ]]; then
     echo "dry-run: notification skipped"
     echo "alert_channel: osascript display notification titled kalshi-bot, plus the markdown report. No webhook, email, or Telegram."
 else
+    if [[ "$ALERT_SEND" == "yes" ]]; then
+        if send_offbox_alert "kalshi-bot" "bothealth alert: ${ALERT_REASONS}; ${NOTIFY_BODY}"; then
+            commit_alert_watermark || true
+        fi
+    fi
     NOTIFY_BODY_ESCAPED="$(osascript_escape "$NOTIFY_BODY")"
     osascript -e "display notification \"$NOTIFY_BODY_ESCAPED\" with title \"kalshi-bot\"" 2>/dev/null || true
 fi

@@ -138,11 +138,11 @@ _LIVE_POSITIONS_UNSET = object()
 
 
 def _positive_dollars(value: Any) -> float | None:
-    """A usable cash read. None, bool, and <= 0 do not seed a baseline."""
+    """A usable cash read. None, bool, non-finite, and <= 0 do not seed."""
     if isinstance(value, bool) or not isinstance(value, Real):
         return None
     number = float(value)
-    if number != number or number <= 0:
+    if number != number or number == float("inf") or number <= 0:
         return None
     return number
 
@@ -492,9 +492,7 @@ class TradeExecutor:
         self._shutdown_callback = cb
 
     def _session_halt_enabled(self) -> bool:
-        """Politics live only. Unset stays off. Paper keeps the old no-op."""
-        if self._is_paper:
-            return False
+        """Event-news cohort. Unset is on for paper and off for live."""
         from utils.event_news_desk_flags import (
             EVENT_NEWS_SESSION_HALT,
             event_news_desk_flag_enabled,
@@ -503,7 +501,10 @@ class TradeExecutor:
 
         if not is_event_news_paper_cohort():
             return False
-        return event_news_desk_flag_enabled(EVENT_NEWS_SESSION_HALT, live=True)
+        return event_news_desk_flag_enabled(
+            EVENT_NEWS_SESSION_HALT,
+            live=not self._is_paper,
+        )
 
     def _arm_persisted_session_halt(self) -> None:
         if not self._session_halt_enabled():
@@ -589,7 +590,54 @@ class TradeExecutor:
         line = session_halt_loss_line(self._session_start_balance, cfg.live_loss_limit_pct)
         return loss >= line
 
-    def _trip_session_halt(self, equity: float) -> str:
+    def _paper_session_equity_dollars(self) -> float | None:
+        """Notional cash plus open cost. A failed read is not zero."""
+        getter = getattr(self._paper, "get_notional_bankroll", None)
+        if not callable(getter):
+            return None
+        try:
+            bankroll = getter()
+        except Exception:
+            log.warning("[SESSION_HALT] paper bankroll unreadable", exc_info=True)
+            return None
+        usable = _positive_dollars(bankroll)
+        if usable is None:
+            return None
+        try:
+            positions = self._paper.portfolio.open_positions()
+        except Exception:
+            log.warning("[SESSION_HALT] paper open cost unreadable", exc_info=True)
+            return None
+        if not isinstance(positions, list):
+            return None
+        total = usable
+        for position in positions:
+            try:
+                dollars = float(position.cost_dollars)
+            except (AttributeError, TypeError, ValueError):
+                return None
+            if dollars != dollars or dollars < 0 or dollars == float("inf"):
+                return None
+            total += dollars
+        return total
+
+    def _paper_session_halt_reason(self) -> str | None:
+        """Paper admit gate. Unreadable bankroll does not seed and does not admit."""
+        if not self._session_halt_enabled():
+            return None
+        if self._live_halted:
+            return "PAPER HALTED: session loss limit reached -- all trading suspended"
+        equity = self._paper_session_equity_dollars()
+        if equity is None:
+            log.warning(
+                "[SESSION_HALT] paper bankroll unreadable; skip and do not seed"
+            )
+            return "paper bankroll unreadable"
+        if self._check_session_equity_halt(equity):
+            return self._trip_session_halt(equity, mode="PAPER")
+        return None
+
+    def _trip_session_halt(self, equity: float, *, mode: str = "LIVE") -> str:
         """Hold the process. Do not call shutdown: exit 0 leaves launchd down."""
         from utils.event_news_session_halt import (
             session_halt_loss_line,
@@ -606,7 +654,7 @@ class TradeExecutor:
             loss,
             line,
         )
-        return "LIVE HALTED: session loss limit reached -- all trading suspended"
+        return f"{mode} HALTED: session loss limit reached -- all trading suspended"
 
     def _check_live_loss_limit(self, balance: float) -> bool:
         """
@@ -1601,6 +1649,11 @@ class TradeExecutor:
                 return "LIVE HALTED: session loss limit reached -- all trading suspended"
             if analysis.capped_dollars > usable * 0.9:
                 return f"insufficient live balance (${usable:.2f})"
+
+        if self._is_paper:
+            paper_halt = self._paper_session_halt_reason()
+            if paper_halt is not None:
+                return paper_halt
 
         return None
 

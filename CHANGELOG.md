@@ -19,6 +19,14 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.33.99] - 2026-10-17
+
+### Fixed
+
+- **The MELA fill-log `12.91` is the fee in cents.** `KXTRUMPSAY-26OCT19-MELA` bought YES 8 at 64c, premium `$5.12`, fee `$0.1291`. The position later settled YES. The detail writer already multiplies fee dollars by 100. A pin test keeps that split.
+- **The paper session halt fail-closes.** Event-news paper admission seeds from notional cash plus open cost and trips at the minimum of `LIVE_LOSS_LIMIT_PERCENT` times that equity and `$10`. An unreadable bankroll, including `+inf` and NaN, admits nothing and does not seed. The latch clears only when `logs/state/politics_session_halt.json` is deleted. A new process and a new UTC date do not clear it. The latch file is replaced atomically. `EVENT_NEWS_SESSION_HALT` stays unset: paper=on, live=off.
+- **Health can page off-box and reads the politics lock.** `scripts/bothealth.sh` sends on RED, a down process, a latched halt, a new live fill, and YELLOW older than 30 minutes. `ALERT_NTFY_TOPIC` selects ntfy. Otherwise both `PUSHOVER_TOKEN` and `PUSHOVER_USER` select Pushover. An unset channel logs `alert channel not configured` and exits 0. osascript stays the local fallback. A failed off-box send does not advance the fill or yellow watermark. `--test-alert` sends one message and does not write the health report. `--dry-run --test-alert` does not send. The lock path follows `BOT_RUNTIME_LOCK_NAME` from `scripts/start_politics_paper.sh` instead of the unheld freeze-era `data/bot_runtime.lock`.
+
 ## [0.33.98] - 2026-10-15
 
 ### Fixed

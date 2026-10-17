@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+unset ALERT_NTFY_TOPIC PUSHOVER_TOKEN PUSHOVER_USER || true
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 BOTHEALTH="$REPO_ROOT/scripts/bothealth.sh"
 TMP_ROOT="$(mktemp -d)"
@@ -83,7 +84,8 @@ start_runtime_lock_holder() {
     local root="$1"
     local cohort_id="$2"
     local cohort_kind="$3"
-    local lock_path="$root/data/bot_runtime.lock"
+    local lock_name="${4:-bot_runtime.lock}"
+    local lock_path="$root/data/$lock_name"
     local ready_path="$root/runtime_lock_holder.ready"
     local attempts=0
 
@@ -565,5 +567,169 @@ assert_contains "$out" "alert_channel: osascript display notification titled kal
 [[ ! -e "$fixture/osascript.args" ]] || fail "dry-run must not call osascript"
 report="$(find "$fixture/logs/reports/health" -name 'bothealth_*.md' -print -quit || true)"
 [[ -z "$report" ]] || fail "dry-run must not write the dated health report"
+[[ ! -e "$fixture/logs/state/bothealth_alert_state.json" ]] || fail "dry-run must not move alert state"
+
+install_curl_capture() {
+    local root="$1"
+    cat >"$root/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${BOTHEALTH_CURL_CAPTURE:?}"
+exit 0
+EOF
+    chmod +x "$root/bin/curl"
+}
+
+fixture="$TMP_ROOT/test-alert-unconfigured"
+make_fixture "$fixture"
+out="$(run_bothealth "$fixture" --test-alert)"
+assert_contains "$out" "alert channel not configured"
+[[ ! -e "$fixture/osascript.args" ]] || fail "test-alert must not use osascript"
+report="$(find "$fixture/logs/reports/health" -name 'bothealth_*.md' -print -quit || true)"
+[[ -z "$report" ]] || fail "test-alert must not write the health report"
+
+fixture="$TMP_ROOT/test-alert-pushover"
+make_fixture "$fixture"
+install_curl_capture "$fixture"
+out="$(
+    PUSHOVER_TOKEN=test-token \
+    PUSHOVER_USER=test-user \
+    BOTHEALTH_CURL_CAPTURE="$fixture/curl.args" \
+    run_bothealth "$fixture" --test-alert
+)"
+assert_contains "$out" "alert_channel=pushover"
+assert_not_contains "$out" "test-token"
+assert_not_contains "$out" "test-user"
+assert_contains "$(cat "$fixture/curl.args")" "https://api.pushover.net/1/messages.json"
+
+fixture="$TMP_ROOT/alert-process-down"
+make_fixture "$fixture"
+mark_bot_down "$fixture"
+make_db "$fixture/data/paper_trades.db" "2026-05-12T23:50:04+00:00" "2026-05-13T01:00:00+00:00"
+install_curl_capture "$fixture"
+out="$(
+    ALERT_NTFY_TOPIC=desk-test \
+    BOTHEALTH_CURL_CAPTURE="$fixture/curl.args" \
+    run_bothealth "$fixture"
+)"
+assert_contains "$out" "Verdict: **RED** — bot not running"
+assert_contains "$out" "alert_channel=ntfy"
+assert_not_contains "$out" "desk-test"
+assert_contains "$(cat "$fixture/curl.args")" "bothealth alert: red,process_down"
+assert_contains "$(cat "$fixture/curl.args")" "https://ntfy.sh/desk-test"
+
+fixture="$TMP_ROOT/alert-halt"
+make_fixture "$fixture"
+make_db "$fixture/data/paper_trades.db" "2026-05-12T23:50:04+00:00" "2026-05-13T01:00:00+00:00"
+mkdir -p "$fixture/logs/state"
+printf '%s\n' '{"halted": true, "line": 5.0, "loss": 6.0, "seed_equity": 50.0, "ts": "2026-10-17T00:00:00Z"}' >"$fixture/logs/state/politics_session_halt.json"
+install_curl_capture "$fixture"
+out="$(
+    ALERT_NTFY_TOPIC=desk-test \
+    BOTHEALTH_CURL_CAPTURE="$fixture/curl.args" \
+    run_bothealth "$fixture"
+)"
+assert_contains "$out" "Verdict: **RED** — session halt latched"
+assert_contains "$(cat "$fixture/curl.args")" "bothealth alert: red,halt"
+
+fixture="$TMP_ROOT/alert-yellow-under-30"
+make_fixture "$fixture"
+make_db "$fixture/data/paper_trades.db" "2026-05-12T23:50:04+00:00" "2026-05-13T01:00:00+00:00"
+mkdir -p "$fixture/logs/state"
+printf '%s\n' '{"fill_lines":0,"yellow_alerted":false,"yellow_since":1000}' >"$fixture/logs/state/bothealth_alert_state.json"
+install_curl_capture "$fixture"
+out="$(
+    ALERT_NTFY_TOPIC=desk-test \
+    BOTHEALTH_NOW_EPOCH=1000 \
+    BOTHEALTH_CURL_CAPTURE="$fixture/curl.args" \
+    run_bothealth "$fixture"
+)"
+assert_contains "$out" "Verdict: **YELLOW**"
+[[ ! -e "$fixture/curl.args" ]] || fail "yellow under 30 min must not send"
+assert_not_contains "$out" "alert_channel=ntfy"
+
+fixture="$TMP_ROOT/alert-yellow-over-30"
+make_fixture "$fixture"
+make_db "$fixture/data/paper_trades.db" "2026-05-12T23:50:04+00:00" "2026-05-13T01:00:00+00:00"
+mkdir -p "$fixture/logs/state"
+printf '%s\n' '{"fill_lines":0,"yellow_alerted":false,"yellow_since":1000}' >"$fixture/logs/state/bothealth_alert_state.json"
+install_curl_capture "$fixture"
+out="$(
+    ALERT_NTFY_TOPIC=desk-test \
+    BOTHEALTH_NOW_EPOCH=2801 \
+    BOTHEALTH_CURL_CAPTURE="$fixture/curl.args" \
+    run_bothealth "$fixture"
+)"
+assert_contains "$out" "Verdict: **YELLOW**"
+assert_contains "$(cat "$fixture/curl.args")" "yellow_30m"
+grep -q '"yellow_alerted": true' "$fixture/logs/state/bothealth_alert_state.json" || fail "successful send did not mark yellow alerted"
+
+fixture="$TMP_ROOT/alert-new-fill"
+make_fixture "$fixture"
+make_db "$fixture/data/paper_trades.db" "2026-05-12T23:50:04+00:00" "2026-05-13T01:00:00+00:00"
+mkdir -p "$fixture/logs/state"
+printf '%s\n' '{"fill_lines":0,"yellow_alerted":false,"yellow_since":1000}' >"$fixture/logs/state/bothealth_alert_state.json"
+printf '%s\n' '2026-10-17T03:09:47Z, KXTRUMPSAY-26OCT19-ZACH, yes, 64, 8, fixture, 201' >"$fixture/logs/state/live-fill-log.md"
+install_curl_capture "$fixture"
+out="$(
+    ALERT_NTFY_TOPIC=desk-test \
+    BOTHEALTH_NOW_EPOCH=1000 \
+    BOTHEALTH_CURL_CAPTURE="$fixture/curl.args" \
+    run_bothealth "$fixture"
+)"
+assert_contains "$out" "Verdict: **YELLOW**"
+assert_contains "$(cat "$fixture/curl.args")" "new_fill"
+assert_not_contains "$(cat "$fixture/curl.args")" "yellow_30m"
+grep -q '"fill_lines": 1' "$fixture/logs/state/bothealth_alert_state.json" || fail "successful send did not advance fill watermark"
+
+fixture="$TMP_ROOT/test-alert-dry-run"
+make_fixture "$fixture"
+install_curl_capture "$fixture"
+out="$(
+    ALERT_NTFY_TOPIC=desk-test \
+    BOTHEALTH_CURL_CAPTURE="$fixture/curl.args" \
+    run_bothealth "$fixture" --dry-run --test-alert
+)"
+assert_contains "$out" "dry-run: notification skipped"
+[[ ! -e "$fixture/curl.args" ]] || fail "dry-run test-alert must not send"
+[[ ! -e "$fixture/osascript.args" ]] || fail "dry-run test-alert must not use osascript"
+
+fixture="$TMP_ROOT/alert-send-failed-keeps-watermark"
+make_fixture "$fixture"
+make_db "$fixture/data/paper_trades.db" "2026-05-12T23:50:04+00:00" "2026-05-13T01:00:00+00:00"
+mkdir -p "$fixture/logs/state" "$fixture/bin"
+printf '%s\n' '{"fill_lines":0,"yellow_alerted":false,"yellow_since":1000}' >"$fixture/logs/state/bothealth_alert_state.json"
+printf '%s\n' '2026-10-17T03:09:47Z, KXTRUMPSAY-26OCT19-ZACH, yes, 64, 8, fixture, 201' >"$fixture/logs/state/live-fill-log.md"
+cat >"$fixture/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${BOTHEALTH_CURL_CAPTURE:?}"
+exit 1
+EOF
+chmod +x "$fixture/bin/curl"
+out="$(
+    ALERT_NTFY_TOPIC=desk-test \
+    BOTHEALTH_NOW_EPOCH=2801 \
+    BOTHEALTH_CURL_CAPTURE="$fixture/curl.args" \
+    run_bothealth "$fixture"
+)"
+assert_contains "$out" "alert send failed provider=ntfy"
+assert_contains "$(cat "$fixture/curl.args")" "new_fill"
+assert_contains "$(cat "$fixture/curl.args")" "yellow_30m"
+grep -q '"fill_lines": 0' "$fixture/logs/state/bothealth_alert_state.json" || fail "failed send advanced fill watermark"
+grep -q '"yellow_alerted": false' "$fixture/logs/state/bothealth_alert_state.json" || fail "failed send marked yellow alerted"
+
+fixture="$TMP_ROOT/politics-event-news-lock"
+cohort_id="kalshi-event-news-20260820"
+cohort_kind="active"
+cohort_db="$fixture/data/paper_cohorts/$cohort_id/paper_trades.db"
+make_fixture "$fixture"
+make_db "$fixture/data/paper_trades.db"
+mkdir -p "$(dirname "$cohort_db")" "$fixture/scripts"
+make_db "$cohort_db" "2026-05-12T23:50:04+00:00" "2026-05-13T01:00:00+00:00"
+printf '%s\n' 'export BOT_RUNTIME_LOCK_NAME=bot_runtime.kalshi-event-news-20260820.lock' >"$fixture/scripts/start_politics_paper.sh"
+printf '%s\n' '{"pid":3318,"cwd":"/old","started_utc":"2026-08-30T13:17:32+00:00","argv":["main.py"]}' >"$fixture/data/bot_runtime.lock"
+start_runtime_lock_holder "$fixture" "$cohort_id" "$cohort_kind" "bot_runtime.kalshi-event-news-20260820.lock"
+out="$(run_bothealth "$fixture")"
+assert_contains "$out" "Verdict: **GREEN**"
+assert_not_contains "$out" "runtime_lock_unheld"
 
 echo "test_bothealth_verdict.sh: PASS"

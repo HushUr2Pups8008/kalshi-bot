@@ -1,13 +1,18 @@
 """Politics session-halt state.
 
 The latch keeps a tripped halt across a restart so a new process cannot
-seed a fresh baseline and trade. The cash file is integer cents for the
-health check. Tests monkeypatch the path constants.
+seed a fresh baseline and trade. The only reset is deleting the latch
+file. A new process does not clear it. A new UTC date resets the cash
+file's start cents and does not clear the latch.
+
+The cash file is integer cents for the health check. Tests monkeypatch
+the path constants.
 """
 
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -36,7 +41,12 @@ def _read_json(path: Path) -> dict[str, Any] | None:
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps(payload, sort_keys=True) + "\n"
-    path.write_text(text, encoding="utf-8")
+    temporary = path.with_name(path.name + ".tmp")
+    with temporary.open("w", encoding="utf-8") as handle:
+        handle.write(text)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
 
 
 def halt_latch_present(path: Path | None = None) -> bool:
