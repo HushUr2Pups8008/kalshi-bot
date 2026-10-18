@@ -19,6 +19,16 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.35.2] - 2026-10-18
+
+### Fixed
+
+- **The Grok sidecar scans politics markets and keeps a provider cost.** The scan list is KXTRUMPSAY, KXTRUMPACT, KXTRUTHSOCIAL, the rest of the politics series, and any open-position series. KXDJI and the other non-politics prefixes are not requested. A market is ranked only when the response status is active, it closes within 72 hours, and an ask is from 36c to 94c, with higher liquidity first. Open positions are scored before that scan. The Responses request uses a JSON schema for prob, confidence, sources, and rationale. A blank output_text no longer hides the message text. A malformed reply is written under logs/state/grok_raw/ with secrets redacted, retried once, and then skipped. usage.cost_in_usd_ticks is the call cost, at 10000000000 ticks per USD. The reserve is the recent measured p90 times 1.5, with a $0.05 floor. After each call the sidecar ledger is reconciled to that cost. A missing cost keeps the reserve. The order block, the 8c edge gate, the 36c band, the 55c YES floor, and the grounded http source gate are unchanged.
+
+### Not enabled
+
+- **Live=on stays off.** The sidecar is paper-only. The 0.35.0 evidence bar is unchanged. None of the sidecar flags is set in scripts/start_politics_paper.sh or the politics plist.
+
 ## [0.35.1] - 2026-10-18
 
 ### Added
