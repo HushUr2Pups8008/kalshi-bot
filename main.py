@@ -2104,6 +2104,117 @@ class TradingBot:
             state_path=DATA_DIR / "event_news_grok_watch.json",
         )
 
+    def _grok_edge_paper_allowed(self) -> bool:
+        """The politics process is live. These loops stay off there."""
+        from utils.event_news_research import is_event_news_paper_cohort
+
+        if not is_event_news_paper_cohort():
+            return False
+        if bool(getattr(cfg, "live_trading_enabled", False)):
+            return False
+        if not bool(getattr(cfg, "is_paper_trading", False)):
+            return False
+        return True
+
+    def _create_event_news_grok_edge_task(self) -> asyncio.Task | None:
+        """Paper scan. It lists markets and writes a candidate log. It does not order."""
+        from utils.event_news_desk_flags import (
+            EVENT_NEWS_GROK_EDGE_SCAN,
+            event_news_desk_flag_enabled,
+        )
+
+        if not self._grok_edge_paper_allowed():
+            return None
+        if not event_news_desk_flag_enabled(EVENT_NEWS_GROK_EDGE_SCAN, live=False):
+            return None
+        return asyncio.create_task(
+            self._event_news_grok_edge_loop(),
+            name="event_news_grok_edge",
+        )
+
+    async def _event_news_grok_edge_loop(self) -> None:
+        from utils.event_news_grok_edge import edge_scan_interval_seconds
+
+        await asyncio.sleep(30)
+        while True:
+            try:
+                await asyncio.to_thread(self._run_event_news_grok_edge_once)
+            except Exception as exc:
+                log.warning(
+                    "[GROK_EDGE] cycle failed error_type=%s",
+                    type(exc).__name__,
+                )
+            await asyncio.sleep(edge_scan_interval_seconds())
+
+    def _run_event_news_grok_edge_once(self) -> None:
+        from utils.event_news_desk_flags import (
+            EVENT_NEWS_GROK_EDGE_SCAN,
+            event_news_desk_flag_enabled,
+        )
+        from utils.event_news_grok_edge import run_paper_edge_scan
+        from utils.event_news_research import event_news_matcher_reserve_series
+
+        if not self._grok_edge_paper_allowed():
+            return
+        if not event_news_desk_flag_enabled(EVENT_NEWS_GROK_EDGE_SCAN, live=False):
+            return
+        series_list = event_news_matcher_reserve_series()
+        markets: list[Any] = []
+        for series in series_list:
+            page, _cursor = self.rest.get_markets(
+                status="open",
+                series_ticker=series,
+                limit=20,
+            )
+            markets.extend(page)
+        run_paper_edge_scan(markets, live=False, allowlist=series_list)
+
+    def _create_event_news_grok_exit_task(self) -> asyncio.Task | None:
+        """Paper exit log. It reads positions and writes a file. It does not sell."""
+        from utils.event_news_desk_flags import (
+            EVENT_NEWS_GROK_EXIT_WATCH,
+            event_news_desk_flag_enabled,
+        )
+
+        if not self._grok_edge_paper_allowed():
+            return None
+        if not event_news_desk_flag_enabled(EVENT_NEWS_GROK_EXIT_WATCH, live=False):
+            return None
+        return asyncio.create_task(
+            self._event_news_grok_exit_loop(),
+            name="event_news_grok_exit",
+        )
+
+    async def _event_news_grok_exit_loop(self) -> None:
+        await asyncio.sleep(60)
+        while True:
+            try:
+                await asyncio.to_thread(self._run_event_news_grok_exit_once)
+            except Exception as exc:
+                log.warning(
+                    "[GROK_EDGE] exit cycle failed error_type=%s",
+                    type(exc).__name__,
+                )
+            await asyncio.sleep(3600)
+
+    def _run_event_news_grok_exit_once(self) -> None:
+        from utils.event_news_desk_flags import (
+            EVENT_NEWS_GROK_EXIT_WATCH,
+            event_news_desk_flag_enabled,
+        )
+        from utils.event_news_grok_edge import paper_position_rows, run_paper_exit_watch
+
+        if not self._grok_edge_paper_allowed():
+            return
+        if not event_news_desk_flag_enabled(EVENT_NEWS_GROK_EXIT_WATCH, live=False):
+            return
+        positions = self.rest.get_open_positions(strict=True)
+        run_paper_exit_watch(
+            paper_position_rows(positions),
+            live=False,
+            market_lookup=self.rest.get_market,
+        )
+
     def _create_weather_shadow_runtime_task(self) -> asyncio.Task | None:
         if not bool(getattr(cfg, "enable_weather_shadow_capture", False)):
             return None
@@ -5311,6 +5422,12 @@ class TradingBot:
         grok_watch_task = self._create_event_news_grok_watch_task()
         if grok_watch_task is not None:
             tasks.append(grok_watch_task)
+        grok_edge_task = self._create_event_news_grok_edge_task()
+        if grok_edge_task is not None:
+            tasks.append(grok_edge_task)
+        grok_exit_task = self._create_event_news_grok_exit_task()
+        if grok_exit_task is not None:
+            tasks.append(grok_exit_task)
         weather_shadow_task = (
             None if omit_idle else self._create_weather_shadow_runtime_task()
         )

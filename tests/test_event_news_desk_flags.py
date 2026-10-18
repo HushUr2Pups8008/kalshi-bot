@@ -45,6 +45,8 @@ def test_boot_suffix_prints_live_off_and_paper_on() -> None:
     assert "RISK_CAP live=off paper=on cents=600" in line
     assert "MAKER_FIRST live=off paper=on wait_s=180" in line
     assert "RULES_CHECK live=off paper=on" in line
+    assert "EDGE_SCAN live=off paper=on" in line
+    assert "EXIT_WATCH live=off paper=on" in line
     assert "SESSION_HALT live=off paper=on" in line
 
 
