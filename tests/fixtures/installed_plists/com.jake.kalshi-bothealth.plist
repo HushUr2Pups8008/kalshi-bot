@@ -9,18 +9,17 @@
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>@REPO_ROOT@/scripts/bothealth.sh</string>
+        <string>@REPO_ROOT@/scripts/bothealth_launchd.sh</string>
         <string>--daily-review</string>
     </array>
 
     <key>WorkingDirectory</key>
     <string>@REPO_ROOT@</string>
 
-    <!-- Daily 05:00 America/Denver. Runs bothealth plus the full daily review
-         from one launchd trigger so the operator has one morning reporting
-         surface and no duplicate daily-review job. Unlike soak-check / midsoak
-         this plist does NOT self-clean — it is meant to keep firing forever
-         until the operator removes it. -->
+    <!-- Daily 05:00 America/Denver. The wrapper reads an untracked alerts
+         env file outside the repo, then runs bothealth plus the daily review.
+         The topic value is not stored in this plist. Unlike soak-check /
+         midsoak this plist does NOT self-clean. -->
     <key>StartCalendarInterval</key>
     <dict>
         <key>Hour</key>

@@ -45,12 +45,36 @@ def render_template(label: str, paths: Paths) -> str:
     )
 
 
+def _repo_roots(repo_root: Path) -> list[Path]:
+    """This checkout plus its main worktree, longest path first.
+
+    A linked worktree renders @REPO_ROOT@ as its own directory. The
+    installed plists point at the main checkout. Replacing the shorter
+    main path first would rewrite the worktree path.
+    """
+    roots = [repo_root.resolve()]
+    git_path = repo_root / ".git"
+    if git_path.is_file():
+        gitdir = None
+        for line in git_path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("gitdir:"):
+                gitdir = Path(line.split(":", 1)[1].strip())
+                break
+        commondir = gitdir / "commondir" if gitdir is not None else None
+        if commondir is not None and commondir.is_file():
+            common = (gitdir / commondir.read_text(encoding="utf-8").strip()).resolve()
+            main = common.parent
+            if main not in roots:
+                roots.append(main)
+    roots.sort(key=lambda path: len(str(path)), reverse=True)
+    return roots
+
+
 def normalize(text: str, paths: Paths) -> str:
-    return (
-        text.replace(str(paths.venv_python), "@VENV_PYTHON@")
-        .replace(str(paths.repo_root), "@REPO_ROOT@")
-        .replace(paths.governance_model, "@GOVERNANCE_LLM_MODEL@")
-    )
+    for root in _repo_roots(paths.repo_root):
+        venv_python = root / ".venv" / "bin" / "python"
+        text = text.replace(str(venv_python), "@VENV_PYTHON@").replace(str(root), "@REPO_ROOT@")
+    return text.replace(paths.governance_model, "@GOVERNANCE_LLM_MODEL@")
 
 
 def unified_diff(expected: str, actual: str, expected_name: str, actual_name: str) -> str:

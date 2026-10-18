@@ -5185,11 +5185,17 @@ class TradingBot:
         try:
             balance = self.rest.get_balance()
             if balance is None:
-                log.warning("Could not fetch Kalshi balance")
+                log.warning("Could not fetch Kalshi balance; cash=not_measured")
             else:
                 log.info("Kalshi account balance: $%.2f", balance)
+                if not cfg.is_paper_trading:
+                    from utils.event_news_research import is_event_news_paper_cohort
+                    from utils.event_news_session_halt import record_cash_cents
+
+                    if is_event_news_paper_cohort():
+                        record_cash_cents(balance)
         except Exception as exc:
-            log.warning("Could not fetch Kalshi balance: %s", exc)
+            log.warning("Could not fetch Kalshi balance: %s; cash=not_measured", exc)
         if polymarket_disabled is None:
             await asyncio.to_thread(_log_polymarket_account_summary)
 
