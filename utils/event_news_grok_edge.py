@@ -63,6 +63,23 @@ MAX_MARKETS_PER_CYCLE = 1
 SCAN_TOP_N = 3
 SCAN_CLOSE_WINDOW = timedelta(hours=72)
 SCAN_ASK_MAX_CENTS = 94
+SCREEN_EDGE_CENTS = 5
+ASK_MOVE_CENTS = 5
+GROUNDED_CACHE_TTL = timedelta(hours=3)
+GROK_MAX_SEARCH_RESULTS = "GROK_MAX_SEARCH_RESULTS"
+DEFAULT_MAX_SEARCH_RESULTS = 8
+MAX_SEARCH_RESULTS_CAP = 20
+# Responses API x_search handles, without the @. Truth Social itself is not
+# an X handle; the Factbase fingerprint is the Truth Social change trigger.
+TRUMP_X_HANDLES = ("realDonaldTrump", "POTUS", "WhiteHouse")
+_TRUMP_X_SERIES_PREFIXES = (
+    "KXTRUTHSOCIAL",
+    "KXTRUMP",
+    "KXMOCTRUMP",
+    "KXAPRPOTUS",
+    "KXPOLLPOTUS",
+    "KXVOTESAVEAMERICA",
+)
 _SCAN_TOOLS = ("web_search", "x_search")
 # Desk families plus the pinned politics matcher reserve. The research
 # prewarm fallback (KXDJI and the other macro series) is not part of this list.
@@ -90,7 +107,10 @@ POSITION_SCORE_LOG_PATH = Path("logs/state/grok_edge_position_scores.jsonl")
 SPEND_PATH = Path("logs/state/grok_edge_spend.json")
 PAPER_DB_PATH = Path("logs/state/grok_paper.db")
 RAW_DIR = Path("logs/state/grok_raw")
+CACHE_PATH = Path("logs/state/grok_edge_cache.json")
+SCREEN_LOG_PATH = Path("logs/state/grok_edge_screen.jsonl")
 DAILY_REPORT_PATH = Path("docs/reports/grok-edge-daily.md")
+_CACHE_LOCK = threading.Lock()
 _SETTLED_STATUSES = frozenset({"finalized", "settled", "determined"})
 _DB_LOCK = threading.Lock()
 
@@ -135,6 +155,30 @@ _EXIT_SCHEMA: dict[str, Any] = {
     },
     "required": ["contrary", "prob", "confidence", "sources", "rationale"],
 }
+_SERIES_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "latest_post_id": {"type": "string"},
+        "summary": {"type": "string"},
+        "sources": {"type": "array", "items": {"type": "string"}},
+        "markets": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "ticker": {"type": "string"},
+                    "prob": {"type": "number", "minimum": 0, "maximum": 1},
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                    "rationale": {"type": "string"},
+                },
+                "required": ["ticker", "prob", "confidence", "rationale"],
+            },
+        },
+    },
+    "required": ["latest_post_id", "summary", "sources", "markets"],
+}
 _SECRET_KEY = re.compile(
     r"(authorization|api[_-]?key|token|secret|signature|password)",
     re.IGNORECASE,
@@ -154,6 +198,7 @@ class GrokEdgeCall:
     latency_ms: int
     cost_usd: Decimal
     skip_reason: str | None
+    detail: str = ""
 
 
 def taker_fee_cents(ask_cents: int, contracts: int) -> int | None:
@@ -558,6 +603,296 @@ def exit_versus_hold(
     }
 
 
+def grok_max_search_results(environ: Mapping[str, str] | None = None) -> int:
+    """Search budget for one grounded call. Blank or invalid env keeps the default."""
+    env = os.environ if environ is None else environ
+    raw = str(env.get(GROK_MAX_SEARCH_RESULTS) or "").strip()
+    if not raw.isdigit():
+        return DEFAULT_MAX_SEARCH_RESULTS
+    value = int(raw)
+    if value < 1:
+        return DEFAULT_MAX_SEARCH_RESULTS
+    return min(value, MAX_SEARCH_RESULTS_CAP)
+
+
+def _search_turns(limit: int) -> int:
+    """One tool round at 8 results. A 16-result budget gets one extra round."""
+    return 2 if limit <= 8 else 3
+
+
+def _trump_x_series(series: str) -> bool:
+    token = str(series or "").upper()
+    return any(token.startswith(prefix) for prefix in _TRUMP_X_SERIES_PREFIXES)
+
+
+def _grounded_tool_payload(
+    series: str,
+    now: datetime | None,
+    limit: int,
+) -> tuple[list[dict[str, Any]], int]:
+    """Web plus X search. The current Responses tools have no max_search_results.
+
+    Live Search's max_search_results is not on web_search or x_search. The
+    documented controls are max_turns, allowed_x_handles, and from_date /
+    to_date. The prompt tells the model to set num_results and limit to
+    ``limit``. to_date is exclusive, so the window runs through the UTC day.
+    """
+    moment = now or datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    moment = moment.astimezone(timezone.utc)
+    start = (moment - SCAN_CLOSE_WINDOW).date().isoformat()
+    end = (moment.date() + timedelta(days=1)).isoformat()
+    x_tool: dict[str, Any] = {"type": "x_search", "from_date": start, "to_date": end}
+    if _trump_x_series(series):
+        x_tool["allowed_x_handles"] = list(TRUMP_X_HANDLES)
+    return [{"type": "web_search"}, x_tool], _search_turns(limit)
+
+
+def _search_limit_sentence(limit: int) -> str:
+    return (
+        f" Use at most {limit} sources. "
+        f"Set web_search num_results and x_keyword_search limit to {limit} or less. "
+        "Do not fetch threads or user profiles. Do not search twice."
+    )
+
+
+def latest_truth_social_fingerprint(timeout: float = 8.0) -> str | None:
+    """Newest Factbase Truth Social post in the last 72h, or None when unseen.
+
+    A failure returns None so the caller keeps the 3h cache. ``none`` means
+    the feed answered and the newest row is older than 72h.
+    """
+    try:
+        import urllib.parse
+
+        from analysis.truth_social_forecast import _ENDPOINT, _fetch_json
+
+        params = urllib.parse.urlencode(
+            {
+                "platform": "truth social",
+                "sort": "date",
+                "sort_order": "desc",
+                "page": 1,
+                "format": "json",
+            }
+        )
+        payload = _fetch_json(f"{_ENDPOINT}?{params}", timeout=timeout)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    rows = payload.get("data")
+    if not isinstance(rows, list) or not rows or not isinstance(rows[0], dict):
+        return None
+    record = rows[0]
+    observed = _parse_utc(record.get("date"))
+    if observed is None:
+        return None
+    if datetime.now(timezone.utc) - observed > SCAN_CLOSE_WINDOW:
+        return "none"
+    url = str(record.get("post_url") or record.get("url") or "").strip()
+    stamp = str(record.get("date") or "").strip()
+    return url or stamp or None
+
+
+def _read_cache(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {"tickers": {}}
+    if not isinstance(data, dict):
+        return {"tickers": {}}
+    if not isinstance(data.get("tickers"), dict):
+        data["tickers"] = {}
+    return data
+
+
+def _cache_get(path: Path, ticker: str) -> dict[str, Any] | None:
+    row = _read_cache(path)["tickers"].get(ticker)
+    return row if isinstance(row, dict) else None
+
+
+def _cache_put(path: Path, ticker: str, row: Mapping[str, Any]) -> None:
+    with _CACHE_LOCK:
+        data = _read_cache(path)
+        data["tickers"][ticker] = dict(row)
+        try:
+            _write_json(path, data)
+        except OSError:
+            return
+
+
+def _ask_moved(old: Any, new: Any) -> bool:
+    if isinstance(old, bool) or isinstance(new, bool):
+        return False
+    if not isinstance(old, int) or not isinstance(new, int):
+        return False
+    return abs(old - new) >= ASK_MOVE_CENTS
+
+
+def _cache_fresh(
+    row: Mapping[str, Any] | None,
+    view: Mapping[str, Any],
+    fingerprint: str | None,
+    now: datetime,
+) -> bool:
+    if not row:
+        return False
+    cached_at = _parse_utc(row.get("ts"))
+    if cached_at is None or now - cached_at >= GROUNDED_CACHE_TTL:
+        return False
+    sources = row.get("sources")
+    if not isinstance(sources, list) or not sources:
+        return False
+    if fingerprint is not None and str(row.get("post_id") or "") != fingerprint:
+        return False
+    if _ask_moved(row.get("yes_ask"), view.get("yes_ask")):
+        return False
+    if _ask_moved(row.get("no_ask"), view.get("no_ask")):
+        return False
+    return _decimal(row.get("prob")) is not None
+
+
+def _screen_edges(
+    probability: Decimal,
+    yes_ask: int | None,
+    no_ask: int | None,
+) -> tuple[int | None, int | None]:
+    yes_edge = (
+        fee_net_edge_cents(probability, yes_ask, PAPER_QUEUE_CONTRACTS)
+        if isinstance(yes_ask, int)
+        else None
+    )
+    no_edge = (
+        fee_net_edge_cents(Decimal(1) - probability, no_ask, PAPER_QUEUE_CONTRACTS)
+        if isinstance(no_ask, int)
+        else None
+    )
+    return yes_edge, no_edge
+
+
+def _screen_passes(yes_edge: int | None, no_edge: int | None) -> bool:
+    return (yes_edge is not None and yes_edge >= SCREEN_EDGE_CENTS) or (
+        no_edge is not None and no_edge >= SCREEN_EDGE_CENTS
+    )
+
+
+def _log_screen(path: Path, record: Mapping[str, Any]) -> None:
+    _append_jsonl(path, record)
+
+
+def _series_prompt(views: Sequence[Mapping[str, Any]], limit: int) -> str:
+    lines = [
+        "These Kalshi markets share one series. Search once for the posts and news they share. "
+        f"Use at most {limit} sources. "
+        "latest_post_id is the newest Truth Social or X post id, or an empty string. "
+        "summary is the shared fact. Include the Truth Social post count when these are count buckets. "
+        "markets has one object per ticker. prob is that ticker's YES probability from 0 to 1."
+    ]
+    for view in views:
+        lines.append(_market_prompt(view))
+    return "\n".join(lines)
+
+
+def _cached_call(view: Mapping[str, Any], row: Mapping[str, Any]) -> GrokEdgeCall | None:
+    probability = _decimal(row.get("prob"))
+    sources = row.get("sources")
+    if probability is None or not isinstance(sources, list) or not sources:
+        return None
+    http_sources = tuple(
+        str(item) for item in sources if str(item).startswith(("http://", "https://"))
+    )
+    if not http_sources:
+        return None
+    return GrokEdgeCall(
+        ticker=str(view["ticker"]),
+        grounded=True,
+        probability=probability,
+        confidence=_decimal(row.get("confidence")),
+        verdict="YES" if probability >= Decimal("0.5") else "NO",
+        sources=http_sources,
+        tools=_SCAN_TOOLS,
+        prompt_hash="cache",
+        latency_ms=0,
+        cost_usd=Decimal("0"),
+        skip_reason=None,
+        detail="cache",
+    )
+
+
+def _remember_grounded(
+    path: Path,
+    view: Mapping[str, Any],
+    probability: Decimal,
+    confidence: Decimal | None,
+    sources: Sequence[str],
+    fingerprint: str | None,
+    summary: str,
+    now: datetime | None,
+) -> None:
+    _cache_put(
+        path,
+        str(view["ticker"]),
+        {
+            "ts": _stamp(now),
+            "prob": format(probability, "f"),
+            "confidence": None if confidence is None else format(confidence, "f"),
+            "sources": list(sources),
+            "yes_ask": view.get("yes_ask"),
+            "no_ask": view.get("no_ask"),
+            "post_id": fingerprint or "",
+            "series": view.get("series") or "",
+            "summary": summary[:500],
+        },
+    )
+
+
+def _ground_series(
+    views: Sequence[Mapping[str, Any]],
+    *,
+    environ: Mapping[str, str] | None,
+    post: Callable[..., Any] | None,
+    call_log_path: Path,
+    spend_path: Path,
+    raw_dir: Path,
+    now: datetime | None,
+) -> dict[str, Any] | None:
+    """One grounded call for every ticker in this series. None queues nothing."""
+    if not views:
+        return None
+    limit = grok_max_search_results(environ)
+    series = str(views[0].get("series") or "")
+    result = _call_grok(
+        ticker=series or str(views[0].get("ticker") or ""),
+        prompt=_series_prompt(views, limit),
+        system=_GROUNDED_SYSTEM,
+        grounded=True,
+        environ=environ,
+        post=post,
+        call_log_path=call_log_path,
+        spend_path=spend_path,
+        raw_dir=raw_dir,
+        now=now,
+        kind="series",
+        series=series,
+        expected_tickers=tuple(str(view.get("ticker") or "") for view in views),
+    )
+    if result is None or result.skip_reason or not result.detail:
+        return None
+    try:
+        parsed = json.loads(result.detail)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    sources = parsed.get("sources")
+    markets = parsed.get("markets")
+    if not isinstance(sources, list) or not sources or not isinstance(markets, list):
+        return None
+    return parsed
+
+
 def run_paper_edge_scan(
     markets: Sequence[Any],
     *,
@@ -573,90 +908,212 @@ def run_paper_edge_scan(
     raw_dir: Path = RAW_DIR,
     max_markets: int = MAX_MARKETS_PER_CYCLE,
     now: datetime | None = None,
+    open_tickers: Sequence[str] = (),
+    cache_path: Path = CACHE_PATH,
+    screen_log_path: Path = SCREEN_LOG_PATH,
+    post_lookup: Callable[[], str | None] | None = None,
 ) -> dict[str, int]:
     """Queue at most ``max_markets`` paper candidates. Live and a failed Grok call queue none.
 
-    The grounded call runs first. A cap that can pay one grounded reserve
-    still records the call that can queue. The ungrounded call runs only
-    when the cap still has room. A comparison is written only when both
-    calls return a probability.
+    The cheap ungrounded call runs first. A grounded series call runs only
+    when that edge is at least 5c on either side, or the ticker is open.
+    One grounded call covers every ticker in the series that still needs it.
+    A fresh 3h cache is reused unless the ask moved by 5c or a new Truth
+    Social post was seen. Ungrounded probabilities never queue.
     """
-    counts = {"examined": 0, "queued": 0, "skipped": 0}
+    counts = {
+        "examined": 0,
+        "queued": 0,
+        "skipped": 0,
+        "screen_skipped": 0,
+        "cache_hits": 0,
+        "grounded_calls": 0,
+    }
     if live or not event_news_desk_flag_enabled(
         EVENT_NEWS_GROK_EDGE_SCAN,
         live=False,
         environ=environ,
     ):
-        return counts
+        return {"examined": 0, "queued": 0, "skipped": 0}
     allowed = {str(series).strip().upper() for series in allowlist if str(series).strip()}
     floor = event_news_yes_floor_cents(environ)
     edge_min = _edge_min(environ)
+    moment = now or datetime.now(timezone.utc)
+    fingerprint = latest_truth_social_fingerprint() if post_lookup is None else post_lookup()
+    open_set = {str(ticker).strip() for ticker in open_tickers if str(ticker).strip()}
+    pending: list[dict[str, Any]] = []
     for market in markets:
         view = _market_view(market)
         if view is None or view["series"] not in allowed or view["status"] != "active":
             continue
         counts["examined"] += 1
-        prompt = _market_prompt(view)
-        grounded = _call_grok(
-            ticker=view["ticker"],
-            prompt=prompt,
-            system=_GROUNDED_SYSTEM,
-            grounded=True,
-            environ=environ,
-            post=post,
-            call_log_path=call_log_path,
-            spend_path=spend_path,
-            raw_dir=raw_dir,
-            now=now,
-        )
-        ungrounded = _call_grok(
-            ticker=view["ticker"],
-            prompt=prompt,
-            system=_UNGROUNDED_SYSTEM,
-            grounded=False,
-            environ=environ,
-            post=post,
-            call_log_path=call_log_path,
-            spend_path=spend_path,
-            raw_dir=raw_dir,
-            now=now,
-        )
-        if grounded is None or grounded.probability is None or grounded.skip_reason:
-            counts["skipped"] += 1
-            if counts["examined"] >= max_markets:
-                break
-            continue
-        if (
-            ungrounded is not None
-            and ungrounded.probability is not None
-            and ungrounded.skip_reason is None
-        ):
-            _append_jsonl(
-                comparison_log_path,
+        cached = _cache_get(cache_path, view["ticker"])
+        if _cache_fresh(cached, view, fingerprint, moment):
+            counts["cache_hits"] += 1
+            _log_screen(
+                screen_log_path,
                 {
-                    "ts": _stamp(now),
+                    "ts": _stamp(moment),
                     "ticker": view["ticker"],
-                    "grounded_probability": str(grounded.probability),
-                    "ungrounded_probability": str(ungrounded.probability),
-                    "agree": verdicts_agree(grounded.probability, ungrounded.probability),
-                    "outcome": None,
+                    "series": view["series"],
+                    "decision": "cache_hit",
+                    "reason": "cache_fresh",
+                    "yes_ask": view.get("yes_ask"),
+                    "no_ask": view.get("no_ask"),
+                    "cached_prob": None if cached is None else cached.get("prob"),
+                    "post_id": fingerprint,
                 },
             )
-        queued = _queue_best_side(
-            view,
-            grounded,
-            edge_min=edge_min,
-            yes_floor=floor,
-            candidate_log_path=candidate_log_path,
-            db_path=db_path,
-            now=now,
-        )
-        if queued:
-            counts["queued"] += 1
+            reused = _cached_call(view, cached or {})
+            if reused is not None and _queue_best_side(
+                view,
+                reused,
+                edge_min=edge_min,
+                yes_floor=floor,
+                candidate_log_path=candidate_log_path,
+                db_path=db_path,
+                now=moment,
+            ):
+                counts["queued"] += 1
+            else:
+                counts["skipped"] += 1
         else:
-            counts["skipped"] += 1
+            ungrounded = _call_grok(
+                ticker=view["ticker"],
+                prompt=_market_prompt(view),
+                system=_UNGROUNDED_SYSTEM,
+                grounded=False,
+                environ=environ,
+                post=post,
+                call_log_path=call_log_path,
+                spend_path=spend_path,
+                raw_dir=raw_dir,
+                now=moment,
+            )
+            held = view["ticker"] in open_set
+            yes_edge = no_edge = None
+            probability = None
+            if (
+                ungrounded is not None
+                and ungrounded.skip_reason is None
+                and ungrounded.probability is not None
+            ):
+                probability = ungrounded.probability
+                yes_edge, no_edge = _screen_edges(probability, view["yes_ask"], view["no_ask"])
+            passed = held or (probability is not None and _screen_passes(yes_edge, no_edge))
+            reason = "open_position" if held else ("edge" if passed else "below_screen")
+            if probability is None and not held:
+                reason = "ungrounded_failed"
+            _log_screen(
+                screen_log_path,
+                {
+                    "ts": _stamp(moment),
+                    "ticker": view["ticker"],
+                    "series": view["series"],
+                    "decision": "ground" if passed else "skip",
+                    "reason": reason,
+                    "ungrounded_probability": None if probability is None else str(probability),
+                    "yes_edge_cents": yes_edge,
+                    "no_edge_cents": no_edge,
+                    "yes_ask": view.get("yes_ask"),
+                    "no_ask": view.get("no_ask"),
+                    "post_id": fingerprint,
+                },
+            )
+            if passed:
+                pending.append({"view": view, "ungrounded": ungrounded})
+            else:
+                counts["skipped"] += 1
+                counts["screen_skipped"] += 1
         if counts["examined"] >= max_markets:
             break
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    series_order: list[str] = []
+    for item in pending:
+        series = str(item["view"]["series"])
+        if series not in grouped:
+            series_order.append(series)
+            grouped[series] = []
+        grouped[series].append(item)
+    for series in series_order:
+        items = grouped[series]
+        parsed = _ground_series(
+            [item["view"] for item in items],
+            environ=environ,
+            post=post,
+            call_log_path=call_log_path,
+            spend_path=spend_path,
+            raw_dir=raw_dir,
+            now=moment,
+        )
+        counts["grounded_calls"] += 1
+        by_ticker = {} if parsed is None else {
+            str(row.get("ticker") or ""): row
+            for row in parsed.get("markets") or []
+            if isinstance(row, dict)
+        }
+        sources = () if parsed is None else tuple(parsed.get("sources") or ())
+        summary = "" if parsed is None else str(parsed.get("summary") or "")
+        for item in items:
+            view = item["view"]
+            row = by_ticker.get(view["ticker"])
+            probability = None if row is None else _decimal(row.get("prob"))
+            ungrounded = item["ungrounded"]
+            if probability is None or not sources:
+                counts["skipped"] += 1
+                continue
+            confidence = None if row is None else _decimal(row.get("confidence"))
+            grounded = GrokEdgeCall(
+                ticker=view["ticker"],
+                grounded=True,
+                probability=probability,
+                confidence=confidence,
+                verdict="YES" if probability >= Decimal("0.5") else "NO",
+                sources=sources,
+                tools=_SCAN_TOOLS,
+                prompt_hash="series",
+                latency_ms=0,
+                cost_usd=Decimal("0"),
+                skip_reason=None,
+            )
+            if (
+                ungrounded is not None
+                and ungrounded.probability is not None
+                and ungrounded.skip_reason is None
+            ):
+                _append_jsonl(
+                    comparison_log_path,
+                    {
+                        "ts": _stamp(moment),
+                        "ticker": view["ticker"],
+                        "grounded_probability": str(probability),
+                        "ungrounded_probability": str(ungrounded.probability),
+                        "agree": verdicts_agree(probability, ungrounded.probability),
+                        "outcome": None,
+                    },
+                )
+            _remember_grounded(
+                cache_path,
+                view,
+                probability,
+                confidence,
+                sources,
+                fingerprint,
+                summary,
+                moment,
+            )
+            if _queue_best_side(
+                view,
+                grounded,
+                edge_min=edge_min,
+                yes_floor=floor,
+                candidate_log_path=candidate_log_path,
+                db_path=db_path,
+                now=moment,
+            ):
+                counts["queued"] += 1
+            else:
+                counts["skipped"] += 1
     return counts
 
 
@@ -767,6 +1224,71 @@ def run_paper_exit_watch(
     return logged
 
 
+def _position_view(ticker: str, market: Any) -> dict[str, Any]:
+    view = _market_view(market) if market is not None else None
+    if view is not None and view.get("ticker"):
+        if not view.get("series"):
+            view["series"] = ticker.split("-", 1)[0]
+        return view
+    return {
+        "ticker": ticker,
+        "series": ticker.split("-", 1)[0],
+        "status": "active",
+        "yes_ask": None,
+        "no_ask": None,
+        "title": ticker,
+        "rules": "",
+        "close_time": "",
+    }
+
+
+def _score_record(
+    *,
+    ticker: str,
+    side: str,
+    ask: int | None,
+    probability: Decimal | None,
+    sources: Sequence[str],
+    skip_reason: str | None,
+    edge_min: int,
+    floor: int,
+    now: datetime | None,
+) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "ts": _stamp(now),
+        "ticker": ticker,
+        "side": side,
+        "ask_cents": ask,
+        "decision": "not_scored",
+        "skip_reason": skip_reason or "no_call",
+        "grok_probability": None,
+        "edge_cents": None,
+        "sources": [],
+        "paper_only": True,
+    }
+    if probability is None or not sources:
+        return record
+    sided = probability if side == "yes" else Decimal(1) - probability
+    reason, edge = paper_queue_decision(
+        probability=sided,
+        ask_cents=ask,
+        side=side,
+        contracts=PAPER_QUEUE_CONTRACTS,
+        edge_min_cents=edge_min,
+        yes_floor_cents=floor,
+    )
+    record.update(
+        {
+            "decision": "take" if reason == "queue" else "veto",
+            "skip_reason": None if reason == "queue" else reason,
+            "grok_probability": str(probability),
+            "edge_cents": edge,
+            "sources": list(sources),
+        }
+    )
+    return record
+
+
 def score_open_positions(
     positions: Sequence[Any] | None,
     *,
@@ -780,22 +1302,30 @@ def score_open_positions(
     db_path: Path | None = None,
     raw_dir: Path = RAW_DIR,
     now: datetime | None = None,
+    cache_path: Path = CACHE_PATH,
+    screen_log_path: Path = SCREEN_LOG_PATH,
+    post_lookup: Callable[[], str | None] | None = None,
 ) -> dict[str, int]:
-    """Score open positions with one grounded call each. Does not order.
+    """Score open positions. Does not order.
 
+    Each position gets the cheap ungrounded call first. Open positions then
+    share one grounded series call, unless a 3h cache is still fresh.
     ``take`` means the grounded probability would queue that side. ``veto``
     means the call returned and the side would not queue. A skipped call
     is ``not_scored`` and is not treated as a veto.
     """
-    counts = {"scored": 0, "skipped": 0}
+    counts = {"scored": 0, "skipped": 0, "cache_hits": 0, "grounded_calls": 0}
     if live or not event_news_desk_flag_enabled(
         EVENT_NEWS_GROK_EDGE_SCAN,
         live=False,
         environ=environ,
     ):
-        return counts
+        return {"scored": 0, "skipped": 0}
     floor = event_news_yes_floor_cents(environ)
     edge_min = _edge_min(environ)
+    moment = now or datetime.now(timezone.utc)
+    fingerprint = latest_truth_social_fingerprint() if post_lookup is None else post_lookup()
+    pending: list[dict[str, Any]] = []
     for position in paper_position_rows(positions):
         ticker = position["ticker"]
         side = position["side"]
@@ -803,68 +1333,130 @@ def score_open_positions(
             market = market_lookup(ticker)
         except Exception:
             market = None
-        view = _market_view(market) if market is not None else None
-        ask = None if view is None else view["yes_ask" if side == "yes" else "no_ask"]
-        prompt = (
-            _market_prompt(view)
-            if view is not None
-            else f"Estimate the probability this Kalshi market resolves YES. ticker={ticker}"
-        )
-        grounded = _call_grok(
+        view = _position_view(ticker, market)
+        ask = view["yes_ask" if side == "yes" else "no_ask"]
+        cached = _cache_get(cache_path, ticker)
+        if _cache_fresh(cached, view, fingerprint, moment):
+            counts["cache_hits"] += 1
+            reused = _cached_call(view, cached or {})
+            probability = None if reused is None else reused.probability
+            sources = () if reused is None else reused.sources
+            record = _score_record(
+                ticker=ticker,
+                side=side,
+                ask=ask,
+                probability=probability,
+                sources=sources,
+                skip_reason=None if probability is not None else "cache_empty",
+                edge_min=edge_min,
+                floor=floor,
+                now=moment,
+            )
+            _log_screen(
+                screen_log_path,
+                {
+                    "ts": _stamp(moment),
+                    "ticker": ticker,
+                    "series": view["series"],
+                    "decision": "cache_hit",
+                    "reason": "open_position_cache",
+                    "cached_prob": None if cached is None else cached.get("prob"),
+                    "post_id": fingerprint,
+                },
+            )
+            if record["decision"] == "not_scored":
+                counts["skipped"] += 1
+            else:
+                counts["scored"] += 1
+            _append_jsonl(score_log_path, record)
+            _insert_paper_row(db_path, "position_scores", record)
+            continue
+        _call_grok(
             ticker=ticker,
-            prompt=prompt,
-            system=_GROUNDED_SYSTEM,
-            grounded=True,
+            prompt=_market_prompt(view),
+            system=_UNGROUNDED_SYSTEM,
+            grounded=False,
             environ=environ,
             post=post,
             call_log_path=call_log_path,
             spend_path=spend_path,
             raw_dir=raw_dir,
-            now=now,
-            kind="position_score",
+            now=moment,
         )
-        record: dict[str, Any] = {
-            "ts": _stamp(now),
-            "ticker": ticker,
-            "side": side,
-            "ask_cents": ask,
-            "decision": "not_scored",
-            "skip_reason": "no_call",
-            "grok_probability": None,
-            "edge_cents": None,
-            "sources": [],
-            "paper_only": True,
+        _log_screen(
+            screen_log_path,
+            {
+                "ts": _stamp(moment),
+                "ticker": ticker,
+                "series": view["series"],
+                "decision": "ground",
+                "reason": "open_position",
+                "yes_ask": view.get("yes_ask"),
+                "no_ask": view.get("no_ask"),
+                "post_id": fingerprint,
+            },
+        )
+        pending.append({"view": view, "side": side, "ask": ask, "ticker": ticker})
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    series_order: list[str] = []
+    for item in pending:
+        series = str(item["view"]["series"])
+        if series not in grouped:
+            series_order.append(series)
+            grouped[series] = []
+        grouped[series].append(item)
+    for series in series_order:
+        items = grouped[series]
+        parsed = _ground_series(
+            [item["view"] for item in items],
+            environ=environ,
+            post=post,
+            call_log_path=call_log_path,
+            spend_path=spend_path,
+            raw_dir=raw_dir,
+            now=moment,
+        )
+        counts["grounded_calls"] += 1
+        by_ticker = {} if parsed is None else {
+            str(row.get("ticker") or ""): row
+            for row in parsed.get("markets") or []
+            if isinstance(row, dict)
         }
-        if (
-            grounded is None
-            or grounded.skip_reason
-            or grounded.probability is None
-        ):
-            if grounded is not None and grounded.skip_reason:
-                record["skip_reason"] = grounded.skip_reason
-            counts["skipped"] += 1
-        else:
-            probability = grounded.probability if side == "yes" else Decimal(1) - grounded.probability
-            reason, edge = paper_queue_decision(
+        sources = () if parsed is None else tuple(
+            str(item) for item in parsed.get("sources") or ()
+        )
+        summary = "" if parsed is None else str(parsed.get("summary") or "")
+        for item in items:
+            row = by_ticker.get(item["ticker"])
+            probability = None if row is None else _decimal(row.get("prob"))
+            confidence = None if row is None else _decimal(row.get("confidence"))
+            record = _score_record(
+                ticker=item["ticker"],
+                side=item["side"],
+                ask=item["ask"],
                 probability=probability,
-                ask_cents=ask,
-                side=side,
-                contracts=PAPER_QUEUE_CONTRACTS,
-                edge_min_cents=edge_min,
-                yes_floor_cents=floor,
+                sources=sources,
+                skip_reason=None if probability is not None and sources else "malformed",
+                edge_min=edge_min,
+                floor=floor,
+                now=moment,
             )
-            record.update(
-                {
-                    "decision": "take" if reason == "queue" else "veto",
-                    "skip_reason": None if reason == "queue" else reason,
-                    "grok_probability": str(grounded.probability),
-                    "edge_cents": edge,
-                    "sources": list(grounded.sources),
-                }
-            )
-            counts["scored"] += 1
-        _append_jsonl(score_log_path, record)
-        _insert_paper_row(db_path, "position_scores", record)
+            if probability is not None and sources:
+                _remember_grounded(
+                    cache_path,
+                    item["view"],
+                    probability,
+                    confidence,
+                    sources,
+                    fingerprint,
+                    summary,
+                    moment,
+                )
+                counts["scored"] += 1
+            else:
+                counts["skipped"] += 1
+            _append_jsonl(score_log_path, record)
+            _insert_paper_row(db_path, "position_scores", record)
     return counts
 
 
@@ -960,6 +1552,13 @@ def _schema_format(kind: str) -> dict[str, Any]:
             "strict": True,
             "schema": _EXIT_SCHEMA,
         }
+    if kind == "series":
+        return {
+            "type": "json_schema",
+            "name": "grok_series_context",
+            "strict": True,
+            "schema": _SERIES_SCHEMA,
+        }
     return {
         "type": "json_schema",
         "name": "grok_edge_prob",
@@ -1023,6 +1622,12 @@ def _provider_usage(body: Any) -> tuple[Decimal | None, dict[str, Any]]:
         raw = usage.get(key)
         if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0:
             meta[key] = raw
+    details = usage.get("server_side_tool_usage_details")
+    if isinstance(details, dict):
+        for key in ("web_search_calls", "x_search_calls", "x_posts_fetched", "x_users_fetched"):
+            raw = details.get(key)
+            if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0:
+                meta[key] = raw
     ticks = usage.get("cost_in_usd_ticks")
     if isinstance(ticks, int) and not isinstance(ticks, bool) and ticks >= 0:
         meta["cost_in_usd_ticks"] = ticks
@@ -1073,6 +1678,59 @@ def _save_raw_reply(
         return
 
 
+def _parse_series_body(body: Any, expected: Sequence[str]) -> dict[str, Any] | None:
+    """Shared grounded context. One ticker may still use the flat prob schema."""
+    if not isinstance(body, dict):
+        return None
+    obj = _select_json_object(_response_text(body), kind="series")
+    if obj is None:
+        return None
+    sources = list(_http_sources(body, obj))
+    if not sources:
+        return None
+    markets: list[dict[str, Any]] = []
+    raw_markets = obj.get("markets")
+    if isinstance(raw_markets, list):
+        for item in raw_markets:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("ticker") or "").strip()
+            probability = _unit_decimal(item.get("prob", item.get("probability")))
+            if not name or probability is None:
+                continue
+            confidence = _unit_decimal(item.get("confidence"))
+            markets.append(
+                {
+                    "ticker": name,
+                    "prob": format(probability, "f"),
+                    "confidence": None if confidence is None else format(confidence, "f"),
+                    "rationale": str(item.get("rationale") or "")[:500],
+                }
+            )
+    names = tuple(name for name in expected if name)
+    if not markets and len(names) == 1:
+        probability = _unit_decimal(obj.get("prob", obj.get("probability")))
+        if probability is None:
+            return None
+        confidence = _unit_decimal(obj.get("confidence"))
+        markets.append(
+            {
+                "ticker": names[0],
+                "prob": format(probability, "f"),
+                "confidence": None if confidence is None else format(confidence, "f"),
+                "rationale": str(obj.get("rationale") or "")[:500],
+            }
+        )
+    if not markets:
+        return None
+    return {
+        "latest_post_id": str(obj.get("latest_post_id") or "")[:120],
+        "summary": str(obj.get("summary") or obj.get("rationale") or "")[:500],
+        "sources": sources,
+        "markets": markets,
+    }
+
+
 def _call_grok(
     *,
     ticker: str,
@@ -1086,9 +1744,17 @@ def _call_grok(
     now: datetime | None,
     kind: str = "scan",
     raw_dir: Path = RAW_DIR,
+    series: str = "",
+    expected_tickers: Sequence[str] = (),
 ) -> GrokEdgeCall | None:
     env = os.environ if environ is None else environ
     tools = _SCAN_TOOLS if grounded else ()
+    search_limit = grok_max_search_results(env) if grounded else 0
+    tool_series = series or (ticker.split("-", 1)[0] if ticker else "")
+    tool_payload, turns = (
+        _grounded_tool_payload(tool_series, now, search_limit) if grounded else ([], 0)
+    )
+    system_text = system + (_search_limit_sentence(search_limit) if grounded else "")
     prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
     cap = _daily_cap(env)
 
@@ -1101,23 +1767,44 @@ def _call_grok(
         usage: Mapping[str, Any],
         attempt: int,
     ) -> GrokEdgeCall:
-        parsed = _parse_edge_body(body, grounded=grounded, kind=kind) if skip is None else None
-        if skip is None and parsed is None:
-            skip = "malformed"
-            _save_raw_reply(raw_dir, ticker=ticker, kind=kind, attempt=attempt, body=body)
-        rationale = "" if parsed is None or len(parsed) < 5 else parsed[4]
+        detail = ""
+        if kind == "series":
+            parsed_series = (
+                _parse_series_body(body, expected_tickers) if skip is None else None
+            )
+            if skip is None and parsed_series is None:
+                skip = "malformed"
+                _save_raw_reply(raw_dir, ticker=ticker, kind=kind, attempt=attempt, body=body)
+            rationale = "" if parsed_series is None else str(parsed_series.get("summary") or "")
+            sources = () if parsed_series is None else tuple(parsed_series["sources"])
+            detail = "" if parsed_series is None else json.dumps(parsed_series, sort_keys=True)
+            probability = None
+            confidence = None
+            verdict = ""
+        else:
+            parsed = _parse_edge_body(body, grounded=grounded, kind=kind) if skip is None else None
+            if skip is None and parsed is None:
+                skip = "malformed"
+                _save_raw_reply(raw_dir, ticker=ticker, kind=kind, attempt=attempt, body=body)
+            rationale = "" if parsed is None or len(parsed) < 5 else parsed[4]
+            probability = None if parsed is None else parsed[0]
+            confidence = None if parsed is None else parsed[1]
+            verdict = "" if parsed is None else parsed[2]
+            sources = () if parsed is None else parsed[3]
+            detail = rationale
         call = GrokEdgeCall(
             ticker=ticker,
             grounded=grounded,
-            probability=None if parsed is None else parsed[0],
-            confidence=None if parsed is None else parsed[1],
-            verdict="" if parsed is None else parsed[2],
-            sources=() if parsed is None else parsed[3],
+            probability=probability,
+            confidence=confidence,
+            verdict=verdict,
+            sources=sources,
             tools=tools,
             prompt_hash=prompt_hash,
             latency_ms=0,
             cost_usd=cost,
             skip_reason=skip,
+            detail=detail,
         )
         record = {
             "ts": _stamp(now),
@@ -1136,7 +1823,19 @@ def _call_grok(
             "cost_source": cost_source,
             "skip_reason": skip,
         }
-        for key in ("input_tokens", "output_tokens", "total_tokens", "cost_in_usd_ticks"):
+        if search_limit:
+            record["max_search_results"] = search_limit
+            record["max_turns"] = turns
+        for key in (
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            "cost_in_usd_ticks",
+            "web_search_calls",
+            "x_search_calls",
+            "x_posts_fetched",
+            "x_users_fetched",
+        ):
             if key in usage:
                 record[key] = usage[key]
         _append_jsonl(call_log_path, record)
@@ -1166,13 +1865,14 @@ def _call_grok(
             "model": GROK_MODEL,
             "temperature": 0,
             "input": [
-                {"role": "system", "content": system},
+                {"role": "system", "content": system_text},
                 {"role": "user", "content": user_prompt},
             ],
             "text": {"format": _schema_format(kind)},
         }
         if grounded:
-            payload["tools"] = [{"type": name} for name in _SCAN_TOOLS]
+            payload["tools"] = tool_payload
+            payload["max_turns"] = turns
         headers = {
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
@@ -1378,10 +2078,21 @@ def _http_sources(body: Mapping[str, Any], obj: Mapping[str, Any]) -> tuple[str,
 
 
 def _select_json_object(content: str, *, kind: str) -> dict[str, Any] | None:
-    """Use the last object that has the schema fields. Ignore a trailing tool payload."""
-    wanted = ("contrary",) if kind == "exit" else ("prob", "probability")
+    """Use the last object that has the schema fields. Ignore a trailing tool payload.
+
+    A series reply nests one object per ticker, and those rows also contain
+    prob. The envelope is the last object whose markets value is a list.
+    A one-ticker flat body has no markets list, so it stays on the prob object.
+    """
+    if kind == "exit":
+        wanted = ("contrary",)
+    elif kind == "series":
+        wanted = ("markets", "prob", "probability")
+    else:
+        wanted = ("prob", "probability")
     decoder = json.JSONDecoder()
     chosen: dict[str, Any] | None = None
+    envelope: dict[str, Any] | None = None
     for index, char in enumerate(content):
         if char != "{":
             continue
@@ -1389,8 +2100,14 @@ def _select_json_object(content: str, *, kind: str) -> dict[str, Any] | None:
             obj, _end = decoder.raw_decode(content[index:])
         except json.JSONDecodeError:
             continue
-        if isinstance(obj, dict) and any(key in obj for key in wanted):
+        if not isinstance(obj, dict):
+            continue
+        if any(key in obj for key in wanted):
             chosen = obj
+        if kind == "series" and isinstance(obj.get("markets"), list):
+            envelope = obj
+    if kind == "series" and envelope is not None:
+        return envelope
     return chosen
 
 

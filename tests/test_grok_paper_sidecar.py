@@ -127,22 +127,19 @@ def test_arm_keeps_an_explicit_dry_run_cap(monkeypatch) -> None:
     assert os.environ["LIVE_TRADING_ENABLED"] == "false"
 
 
-def test_reserve_floor_cap_keeps_the_grounded_call(tmp_path: Path) -> None:
-    """The $0.05 floor pays the grounded call and skips the ungrounded one."""
+def test_reserve_floor_screen_spends_the_only_nickel(tmp_path: Path) -> None:
+    """A $0.05 cap pays the ungrounded screen. The grounded reserve does not fit.
+
+    The poster reports no usage, so the nickel stays spent. Fail closed:
+    an ungrounded probability does not queue.
+    """
     from utils.event_news_grok_edge import run_paper_edge_scan
 
     calls: list[dict] = []
 
     def post(url, json, headers, timeout):  # noqa: A002
         calls.append(json)
-        body = {
-            "output_text": json_mod_dumps(),
-            "citations": ["https://example.test/source"],
-        }
-        return _Response(body)
-
-    def json_mod_dumps() -> str:
-        return json.dumps(
+        text = __import__("json").dumps(
             {
                 "probability": "0.70",
                 "confidence": "0.80",
@@ -150,6 +147,7 @@ def test_reserve_floor_cap_keeps_the_grounded_call(tmp_path: Path) -> None:
                 "sources": ["https://example.test/source"],
             }
         )
+        return _Response({"output_text": text, "citations": ["https://example.test/source"]})
 
     counts = run_paper_edge_scan(
         [_market()],
@@ -158,17 +156,26 @@ def test_reserve_floor_cap_keeps_the_grounded_call(tmp_path: Path) -> None:
         environ={XAI_API_KEY_ENV: "test-key", "GROK_DAILY_USD_CAP": "0.05"},
         post=post,
         now=NOW,
+        post_lookup=lambda: "post-1",
         call_log_path=tmp_path / "calls.jsonl",
         candidate_log_path=tmp_path / "candidates.jsonl",
         comparison_log_path=tmp_path / "comparisons.jsonl",
         spend_path=tmp_path / "spend.json",
+        cache_path=tmp_path / "cache.json",
+        screen_log_path=tmp_path / "screen.jsonl",
         db_path=tmp_path / "grok_paper.db",
     )
     assert len(calls) == 1
-    assert calls[0]["tools"] == [{"type": "web_search"}, {"type": "x_search"}]
-    assert counts["queued"] == 1
+    assert "tools" not in calls[0]
+    assert counts["queued"] == 0
+    assert counts["grounded_calls"] == 1
+    logged = [
+        json.loads(line)
+        for line in (tmp_path / "calls.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert logged[-1]["grounded"] is True
+    assert logged[-1]["skip_reason"] == "spend_cap"
     assert not (tmp_path / "comparisons.jsonl").exists()
-    assert (tmp_path / "grok_paper.db").is_file()
 
 
 def test_sidecar_source_does_not_use_the_prewarm_fallback() -> None:
@@ -194,6 +201,7 @@ def test_cycle_scores_open_positions_before_the_politics_scan(monkeypatch) -> No
         seen["scan"] = [row["ticker"] for row in markets]
         seen["max_markets"] = kwargs["max_markets"]
         seen["allow"] = set(kwargs["allowlist"])
+        seen["open_tickers"] = kwargs["open_tickers"]
         return {"examined": len(markets), "queued": 0, "skipped": 0}
 
     monkeypatch.setattr("utils.event_news_grok_edge.score_open_positions", score)
@@ -257,6 +265,11 @@ def test_cycle_scores_open_positions_before_the_politics_scan(monkeypatch) -> No
     assert "KXDJI" not in seen["allow"]
     assert "KXNEWPOL" in seen["allow"]
     assert seen["max_markets"] == SCAN_TOP_N == 3
+    assert seen["open_tickers"] == (
+        "KXTRUMPSAY-26OCT19-ZACH",
+        "KXNEWPOL-26OCT18-A",
+        "KXDJI-26OCT19-51550",
+    )
     assert seen["scan"][0] == "KXTRUMPSAY-26OCT18-A"
     assert seen["scan"][1] == "KXNEWPOL-26OCT18-A"
     assert all(not ticker.startswith("KXDJI") for ticker in seen["scan"])
@@ -300,17 +313,38 @@ def test_position_score_records_take_and_veto_without_ordering(tmp_path: Path) -
     calls: list[dict] = []
 
     def post(url, json, headers, timeout):  # noqa: A002
-        content = json["input"][1]["content"]
-        calls.append(content)
-        probability = "0.90" if "TAKE" in content else "0.40"
-        text = __import__("json").dumps(
-            {
-                "probability": probability,
-                "confidence": "0.80",
-                "verdict": "YES",
-                "sources": ["https://example.test/source"],
-            }
-        )
+        calls.append(json["input"][1]["content"])
+        if "tools" in json:
+            text = __import__("json").dumps(
+                {
+                    "latest_post_id": "",
+                    "summary": "shared",
+                    "sources": ["https://example.test/source"],
+                    "markets": [
+                        {
+                            "ticker": "KXTRUMPSAY-TAKE",
+                            "prob": "0.90",
+                            "confidence": "0.80",
+                            "rationale": "yes",
+                        },
+                        {
+                            "ticker": "KXTRUMPSAY-VETO",
+                            "prob": "0.40",
+                            "confidence": "0.80",
+                            "rationale": "no",
+                        },
+                    ],
+                }
+            )
+        else:
+            text = __import__("json").dumps(
+                {
+                    "probability": "0.50",
+                    "confidence": "0.50",
+                    "verdict": "YES",
+                    "sources": [],
+                }
+            )
         return _Response({"output_text": text, "citations": ["https://example.test/source"]})
 
     counts = score_open_positions(
@@ -333,16 +367,29 @@ def test_position_score_records_take_and_veto_without_ordering(tmp_path: Path) -
         call_log_path=tmp_path / "calls.jsonl",
         score_log_path=tmp_path / "scores.jsonl",
         spend_path=tmp_path / "spend.json",
+        cache_path=tmp_path / "cache.json",
+        screen_log_path=tmp_path / "screen.jsonl",
         db_path=tmp_path / "grok_paper.db",
+        post_lookup=lambda: "post-1",
     )
-    assert counts == {"scored": 2, "skipped": 0}
+    assert counts["scored"] == 2
+    assert counts["skipped"] == 0
+    assert counts["cache_hits"] == 0
+    assert counts["grounded_calls"] == 1
     rows = [
         json.loads(line)
         for line in (tmp_path / "scores.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     decisions = {row["ticker"]: row["decision"] for row in rows}
     assert decisions == {"KXTRUMPSAY-TAKE": "take", "KXTRUMPSAY-VETO": "veto"}
-    assert all(call_has_tools(json.loads(line)) for line in (tmp_path / "calls.jsonl").read_text(encoding="utf-8").splitlines())
+    call_rows = [
+        json.loads(line)
+        for line in (tmp_path / "calls.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    grounded_rows = [row for row in call_rows if row["grounded"]]
+    assert len(grounded_rows) == 1
+    assert all(call_has_tools(row) for row in grounded_rows)
+    assert any(row["grounded"] is False for row in call_rows)
 
 
 def call_has_tools(row: dict) -> bool:
