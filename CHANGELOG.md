@@ -19,6 +19,17 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.34.0] - 2026-10-17
+
+### Fixed
+
+- **A valid politics cash GET rewrites the cash file, up or down.** `logs/state/politics_cash_cents.json` stores the first valid cents of the UTC day, the previous valid cents, the latest cents, and a UTC timestamp. None, 0, NaN, inf, and a failed read do not overwrite the file and log `cash=not_measured`. Health alerts when that drop exceeds $5 or the timestamp is older than 2 hours. New-fill and halt alerts call the same `send_offbox_alert` sender.
+
+### Added
+
+- **The health job reads `ALERT_NTFY_TOPIC` from `~/.kalshi-alerts.env`.** `scripts/bothealth_launchd.sh` is the launchd entry. The topic is not in the repo. `scripts/setup_alerts.md` is the setup. The channel stays off until that file exists and the health job is reloaded.
+- **`EVENT_NEWS_SESSION_HALT` live=on is a patch, not a merged plist.** `deploy/politics-session-halt-live.patch` adds the flag to the installed politics plist. The repo plist and `scripts/start_politics_paper.sh` stay unarmed. `scripts/session_halt_live_staging.md` has the backup, apply, restart, verify, and rollback commands.
+
 ## [0.33.99] - 2026-10-17
 
 ### Fixed
