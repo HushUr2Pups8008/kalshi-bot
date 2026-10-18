@@ -1,4 +1,4 @@
-"""Rules check skips only an explicit JSON mismatch. Live stays off."""
+"""Rules check skips an explicit mismatch, a timeout, or a missing key."""
 
 from __future__ import annotations
 
@@ -180,7 +180,7 @@ def test_last_object_wins_and_a_string_true_does_not_skip(
     assert row["trap"] == "last"
 
 
-def test_timeout_and_missing_text_and_missing_key_do_not_skip(
+def test_timeout_and_missing_key_skip_and_missing_text_does_not(
     monkeypatch, tmp_path
 ) -> None:
     _cohort(monkeypatch)
@@ -197,8 +197,8 @@ def test_timeout_and_missing_text_and_missing_key_do_not_skip(
         fetch=lambda url: "source page",
         log_path=path,
     )
-    assert skipped is False
-    # A timeout is not a mismatch. The attempt is still journaled.
+    assert skipped is True
+    # A timeout is not a mismatch. The order still does not proceed.
     timeout_row = json.loads(path.read_text(encoding="utf-8"))
     assert timeout_row["mismatch"] is False
     assert timeout_row["cost"] is None
@@ -227,7 +227,7 @@ def test_timeout_and_missing_text_and_missing_key_do_not_skip(
         fetch=lambda url: "source page",
         log_path=missing_path,
     )
-    assert missing_key is False
+    assert missing_key is True
     post2.assert_not_called()
     assert not missing_path.exists()
 
