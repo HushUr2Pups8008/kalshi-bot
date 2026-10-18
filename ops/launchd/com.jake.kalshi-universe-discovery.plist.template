@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jake.kalshi-universe-discovery</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>@VENV_PYTHON@</string>
+        <string>@REPO_ROOT@/scripts/universe_discovery.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>@REPO_ROOT@</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+        <key>PYTHONPATH</key>
+        <string>@REPO_ROOT@</string>
+        <key>LIVE_TRADING_ENABLED</key>
+        <string>false</string>
+        <key>PAPER_COHORT_ID</key>
+        <string>kalshi-event-news-20260820</string>
+        <key>EVENT_NEWS_YES_FLOOR_CENTS</key>
+        <string>55</string>
+        <key>EVENT_NEWS_EXCLUDE_EXACT_35</key>
+        <string>true</string>
+        <key>EVENT_NEWS_GROK_GROUNDING</key>
+        <string>true</string>
+    </dict>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>6</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>@REPO_ROOT@/logs/app/universe_discovery.launchd.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>@REPO_ROOT@/logs/app/universe_discovery.launchd.stderr.log</string>
+</dict>
+</plist>

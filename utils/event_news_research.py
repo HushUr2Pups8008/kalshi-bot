@@ -20,6 +20,14 @@ from utils.event_news_grok_flags import (
     event_news_requote_band_check_enabled,
 )
 from utils.logger import get_logger
+from utils.series_universe import (
+    live_series_tickers,
+    market_transcript_skip,
+    match_market,
+    paper_score_entries,
+    series_ticker_matches,
+    universe_failed,
+)
 
 log = get_logger("event_news_research")
 
@@ -39,18 +47,11 @@ _MIN_OPEN_INTEREST = 10.0
 _MIN_VOLUME_24H = 5.0
 # Early-close contracts get a compressed Kelly horizon (days).
 _EARLY_CLOSE_HORIZON_DAYS = 2.0
-# Fallback favorite band when config bands are missing.
+# Fallback favorite band when config bands are missing and the series has
+# no universe row. Universe rows carry their own bands and do not stack
+# the 0-35c executed-ask exclusion on top.
 _FAVORITE_ASK_LOW = 0.55
 _FAVORITE_ASK_HIGH = 0.99
-# Truth Social weekly count books are tight (often 1c round-trip). A 38c YES
-# is not a 12c lottery; blocking it forces the desk onto the 63c NO while
-# Factbase run-rate says the cheap side is the value.
-_TRUTH_SOCIAL_COUNT_ASK_LOW = 0.36
-_TRUTH_SOCIAL_COUNT_ASK_HIGH = 0.90
-# White House action counts (T7 YES at 14c, p≈0.73) are official-p cheap
-# YES, not 1c lotteries. Keep 12c as the floor so 1-11c noise stays out.
-_OFFICIAL_ACTION_COUNT_ASK_LOW = 0.12
-_OFFICIAL_ACTION_COUNT_ASK_HIGH = 0.90
 # Near-certain asks (98¢ NO "won't leave Congress") have ~2¢ max payoff after
 # fees and currently burn every research cycle. Do not treat them as the
 # money path; keep 0.55-0.90 as the tradeable favorite band.
@@ -499,13 +500,12 @@ def event_news_favorite_side(
         return None, None
     yes_ask, no_ask = snapshot_ask_cents(market)
     active = config if config is not None else cfg
-    series = event_news_series_ticker(market)
-    if series.startswith("KXTRUTHSOCIAL"):
-        allowed = [(_TRUTH_SOCIAL_COUNT_ASK_LOW, _TRUTH_SOCIAL_COUNT_ASK_HIGH)]
+    entry = None if universe_failed() else match_market(market)
+    if entry is not None:
+        # The yaml band is the only favorite band. Excluded stays empty so
+        # a 12c or 36c research band is not newly cut by the 0-35c take band.
+        allowed = [entry.favorite_band]
         excluded: list[tuple[float, float]] = []
-    elif series.startswith("KXTRUMPACT"):
-        allowed = [(_OFFICIAL_ACTION_COUNT_ASK_LOW, _OFFICIAL_ACTION_COUNT_ASK_HIGH)]
-        excluded = []
     else:
         allowed = list(getattr(active, "llm_allowed_price_bands", ()) or ())
         if not allowed:
@@ -808,12 +808,15 @@ def event_news_prewarm_skip_reason(market: Any, *, config: Any = None) -> str | 
     denied = event_news_non_politics_series(market, config=config)
     if denied:
         return denied
+    if universe_failed():
+        return "universe_unavailable"
     if not event_news_is_reserve_series(market, config=config):
         return "not_reserve_series"
-    series = event_news_series_ticker(market)
-    if series.startswith("KXTRUMPMENTION"):
+    if market_transcript_skip(market):
         # Fox/speech mention books have no Factbase official p. Google
         # fan-out burns the 18s gate and ends as research_provider_error.
+        # The series flag lives in the universe file. Paper scoring does
+        # not use this live skip.
         return "mention_requires_transcript"
     missing = event_news_missing_snapshot_ask(market, config=config)
     if missing:
@@ -837,6 +840,142 @@ def event_news_prewarm_skip_reason(market: Any, *, config: Any = None) -> str | 
         if favorite_cents is not None and favorite_cents >= _FAVORITE_ASK_CERTAIN_CENTS:
             return "near_certain_ask"
         return "ask_outside_favorite_band"
+    return None
+
+
+def event_news_paper_score_decision(
+    market: Any,
+    *,
+    probability: float | None = None,
+    config: Any = None,
+    environ: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Run one paper-score book through the live filters. Never POST or call Grok.
+
+    A missing probability records edge_not_evaluated and veto_not_called.
+    """
+    from utils.event_news_desk_flags import event_news_yes_floor_skip_reason
+
+    reasons: list[str] = []
+    veto = "veto_not_called"
+    entry = None if universe_failed() else match_market(market)
+    scored = {item.series for item in paper_score_entries()}
+    if universe_failed():
+        reasons.append("universe_unavailable")
+    elif entry is None or entry.series not in scored or entry.mode == "off":
+        reasons.append("not_paper_series" if entry is None or entry.mode != "off" else "series_off")
+    else:
+        if entry.transcript_skip and entry.paper_score:
+            reasons.append("transcript_skip_bypassed_for_paper_score")
+        elif entry.transcript_skip:
+            reasons.append("mention_requires_transcript")
+        denied = event_news_non_politics_series(market, config=config)
+        if denied:
+            reasons.append(denied)
+        quote = _paper_quote_skip(market, config=config)
+        if quote:
+            reasons.append(quote)
+        side, cents = event_news_favorite_side(market, config=config)
+        if side is not None and cents is not None:
+            floor = event_news_yes_floor_skip_reason(
+                side,
+                int(cents),
+                live=True,
+                environ=environ,
+            )
+            if floor:
+                reasons.append(floor)
+            if event_news_cents_in_excluded_band(
+                int(cents),
+                config=config,
+                environ=environ,
+            ):
+                reasons.append("executed_ask_in_excluded_band")
+        edge_reason = _paper_edge_reason(market, probability, config=config)
+        if edge_reason:
+            reasons.append(edge_reason)
+    informational = {"transcript_skip_bypassed_for_paper_score"}
+    blocking = [reason for reason in reasons if reason not in informational]
+    if any(reason != "edge_not_evaluated" for reason in blocking):
+        decision = "skip"
+    elif "edge_not_evaluated" in blocking:
+        decision = "incomplete_no_probability"
+    else:
+        decision = "quote_pass_veto_not_called"
+    log.info(
+        "[EVENT_NEWS_PAPER_SCORE] series=%s ticker=%s decision=%s reasons=%s "
+        "veto=%s contract_cap=%s would_post=false",
+        entry.series if entry is not None else "",
+        getattr(market, "ticker", ""),
+        decision,
+        ",".join(reasons),
+        veto,
+        EVENT_NEWS_MAX_CONTRACTS,
+    )
+    return {
+        "series": entry.series if entry is not None else "",
+        "ticker": str(getattr(market, "ticker", "") or ""),
+        "decision": decision,
+        "reasons": tuple(reasons),
+        "veto": veto,
+        "contract_cap": EVENT_NEWS_MAX_CONTRACTS,
+        "would_post": False,
+    }
+
+
+def _paper_quote_skip(market: Any, *, config: Any) -> str | None:
+    missing = event_news_missing_snapshot_ask(market, config=config)
+    if missing:
+        return missing
+    illiquid = event_news_illiquid(market, config=config)
+    if illiquid:
+        return illiquid
+    crossed = event_news_crossed_asks(market, config=config)
+    if crossed:
+        return crossed
+    wide = event_news_wide_spread(market, config=config)
+    if wide:
+        return wide
+    if event_news_in_allowed_ask_band(market, config=config):
+        return None
+    yes_ask, no_ask = snapshot_ask_cents(market)
+    favorite_cents = None
+    if yes_ask is not None and 55 <= yes_ask <= 99:
+        favorite_cents = yes_ask
+    elif no_ask is not None and 55 <= no_ask <= 99:
+        favorite_cents = no_ask
+    if favorite_cents is not None and favorite_cents >= _FAVORITE_ASK_CERTAIN_CENTS:
+        return "near_certain_ask"
+    return "ask_outside_favorite_band"
+
+
+def _paper_edge_reason(
+    market: Any,
+    probability: float | None,
+    *,
+    config: Any,
+) -> str | None:
+    """Live min-edge base is 0.04, then the fee floor. No probability, no edge."""
+    if probability is None:
+        return "edge_not_evaluated"
+    try:
+        estimated = float(probability)
+    except (TypeError, ValueError):
+        return "edge_not_evaluated"
+    if not 0.0 < estimated < 1.0:
+        return "edge_not_evaluated"
+    yes_ask, no_ask = snapshot_ask_cents(market)
+    required = event_news_min_edge(0.04, market, config=config)
+    best: float | None = None
+    if yes_ask is not None:
+        best = estimated - (yes_ask / 100.0)
+    if no_ask is not None:
+        no_edge = (1.0 - estimated) - (no_ask / 100.0)
+        best = no_edge if best is None else max(best, no_edge)
+    if best is None:
+        return "edge_not_evaluated"
+    if best + 1e-12 < required:
+        return "below_fee_net_min_edge"
     return None
 
 
@@ -1319,27 +1458,17 @@ def event_news_forecast_refresh_series(
     return tuple(str(series).strip().upper() for series in (configured or ()) if str(series).strip())
 
 
-# Pin these into matcher discovery so recency-top-N cannot drop them.
-_MATCHER_RESERVE_SERIES = (
-    "KXTRUTHSOCIAL",
-    "KXCANUSDEAL",
-    "KXMOCTRUMP25",
-    "KXTRUMPACT",
-    "KXTRUMPSAY",
-    "KXTRUMPMENTION",
-    "KXAPRPOTUS",
-    "KXPOLLPOTUS",
-    "KXEFFTARIFF",
-    "KXVOTESAVEAMERICA",
-    "KXSBUDGETRES",
-    "KXLEAVECONGRESS",
-    "KXFISAEXTEND",
-)
-
-
 def event_news_matcher_reserve_series(*, config: Any = None) -> tuple[str, ...]:
-    """Series that must stay in the politics matcher cache."""
+    """Series that must stay in the politics matcher cache.
+
+    Live rows come from the universe file. Paper rows stay out of this
+    tuple so they do not take a prewarm slot. Env extra and the configured
+    fallback are still prepended, then deduped, when the file loads.
+    A failed file returns nothing.
+    """
     if not is_event_news_paper_cohort(config):
+        return ()
+    if universe_failed():
         return ()
     extra = tuple(
         part.strip().upper()
@@ -1356,7 +1485,7 @@ def event_news_matcher_reserve_series(*, config: Any = None) -> tuple[str, ...]:
     )
     seen: set[str] = set()
     ordered: list[str] = []
-    for series in (*extra, *fallback, *_MATCHER_RESERVE_SERIES):
+    for series in (*extra, *fallback, *live_series_tickers()):
         if series and series not in seen:
             seen.add(series)
             ordered.append(series)
@@ -1364,17 +1493,19 @@ def event_news_matcher_reserve_series(*, config: Any = None) -> tuple[str, ...]:
 
 
 def event_news_is_reserve_series(market: Any, *, config: Any = None) -> bool:
-    """True for freeze, and for politics only on pinned money-path series."""
+    """True for freeze, and for politics only on pinned money-path series.
+
+    A series matches the exact ticker or that ticker plus a hyphen.
+    A glued sibling name does not match the shorter series.
+    """
     if not is_event_news_paper_cohort(config):
         return True
+    if universe_failed():
+        return False
     series = event_news_series_ticker(market)
     ticker = str(getattr(market, "ticker", "") or "").strip().upper()
     for prefix in event_news_matcher_reserve_series(config=config):
-        if not prefix:
-            continue
-        if series == prefix or series.startswith(prefix):
-            return True
-        if ticker == prefix or ticker.startswith(prefix + "-"):
+        if series_ticker_matches(series, prefix) or series_ticker_matches(ticker, prefix):
             return True
     return False
 
@@ -1394,6 +1525,8 @@ def event_news_prewarm_seed_markets(
     cache = list(matcher_markets or [])
     if not is_event_news_paper_cohort(config):
         return cache
+    if universe_failed():
+        return []
     series = event_news_matcher_reserve_series(config=config)
     reader = getattr(rest_client, "get_markets", None)
     if not callable(reader) or not series:

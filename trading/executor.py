@@ -2512,6 +2512,16 @@ class TradeExecutor:
                     analysis.market.ticker,
                 )
                 return None
+            from utils.series_universe import event_news_live_post_block_reason
+
+            universe_block = event_news_live_post_block_reason(analysis.market)
+            if universe_block:
+                log.error(
+                    "[EVENT_NEWS_UNIVERSE] BLOCKED %s reason=%s no POST",
+                    analysis.market.ticker,
+                    universe_block,
+                )
+                return None
 
         client_order_id = uuid.uuid4().hex
         # Last price check before the submission intent, reserve, and POST.
