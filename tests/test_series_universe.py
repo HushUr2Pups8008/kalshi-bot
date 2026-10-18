@@ -106,7 +106,7 @@ def test_shipped_paper_series_are_not_live_and_cannot_post():
     politics = _politics()
     entries = {entry.series: entry for entry in get_universe().entries}
     assert tuple(series for series in entries if entries[series].mode == "paper") == (
-        EXPECTED_PAPER
+        ("KXTRUMPMENTION",) + EXPECTED_PAPER
     )
     assert live_series_tickers() == EXPECTED_LIVE
     for series in EXPECTED_PAPER:
@@ -122,9 +122,17 @@ def test_shipped_paper_series_are_not_live_and_cannot_post():
             "paper_series_no_post"
         )
     mention = entries["KXTRUMPMENTION"]
-    assert mention.mode == "live"
+    assert mention.mode == "paper"
     assert mention.transcript_skip is True
     assert mention.paper_score is True
+    mention_market = SimpleNamespace(
+        ticker="KXTRUMPMENTION-26AUG30-MAGA",
+        series_ticker="KXTRUMPMENTION",
+    )
+    assert "KXTRUMPMENTION" in live_series_tickers()
+    assert event_news_live_post_block_reason(mention_market, config=politics) == (
+        "transcript_skip"
+    )
 
 
 def test_fallback_still_dedupes_in_front_of_the_yaml_live_rows():
@@ -223,6 +231,129 @@ def test_mention_live_skip_stays_and_paper_score_does_not_call_veto():
     assert "mention_requires_transcript" not in decision["reasons"]
     assert "edge_not_evaluated" in decision["reasons"]
     assert decision["decision"] == "incomplete_no_probability"
+
+
+def _act_yes_38():
+    return SimpleNamespace(
+        ticker="KXTRUMPACT-26AUG23-T4",
+        series_ticker="KXTRUMPACT",
+        yes_ask_cents=38,
+        no_ask_cents=100,
+        yes_ask_size=12.0,
+        no_ask_size=12.0,
+        open_interest_fp=200.0,
+        volume_24h_fp=100.0,
+    )
+
+
+def _truth_no_63():
+    return SimpleNamespace(
+        ticker="KXTRUTHSOCIAL-26AUG29-B230",
+        series_ticker="KXTRUTHSOCIAL",
+        yes_ask_cents=38,
+        no_ask_cents=63,
+        yes_ask_size=12.0,
+        no_ask_size=10.0,
+        open_interest_fp=200.0,
+        volume_24h_fp=100.0,
+    )
+
+
+def test_flag_off_still_researches_and_shadows_the_drop(monkeypatch, caplog):
+    # YES at 38c is inside the act band and below the 55c live YES floor.
+    monkeypatch.delenv("EVENT_NEWS_LIVE_TRADABLE_RESEARCH", raising=False)
+    politics = _politics()
+    mention = SimpleNamespace(
+        ticker="KXTRUMPMENTION-26AUG30-MAGA",
+        series_ticker="KXTRUMPMENTION",
+        yes_ask_cents=22,
+        no_ask_cents=81,
+        yes_ask_size=10.0,
+        no_ask_size=10.0,
+        open_interest_fp=2000.0,
+        volume_24h_fp=2000.0,
+    )
+    with caplog.at_level(logging.INFO):
+        assert event_news_prewarm_skip_reason(_act_yes_38(), config=politics) is None
+        assert event_news_prewarm_skip_reason(mention, config=politics) == (
+            "mention_requires_transcript"
+        )
+    assert "ticker=KXTRUMPACT-26AUG23-T4 old=research new=not_live_tradable" in caplog.text
+    assert "ticker=KXTRUMPMENTION-26AUG30-MAGA old=research new=not_researched" in caplog.text
+    assert event_news_prewarm_skip_reason(_truth_no_63(), config=politics) is None
+    assert "KXTRUMPMENTION" in live_series_tickers()
+
+
+def test_flag_on_researches_only_live_tradable_books(monkeypatch):
+    monkeypatch.setenv("EVENT_NEWS_LIVE_TRADABLE_RESEARCH", "true")
+    politics = _politics()
+    mention = SimpleNamespace(
+        ticker="KXTRUMPMENTION-26AUG30-MAGA",
+        series_ticker="KXTRUMPMENTION",
+    )
+    assert event_news_prewarm_skip_reason(_act_yes_38(), config=politics) == (
+        "not_live_tradable"
+    )
+    assert event_news_prewarm_skip_reason(_truth_no_63(), config=politics) is None
+    assert "KXTRUMPMENTION" not in live_series_tickers()
+    assert event_news_is_reserve_series(mention, config=politics) is False
+    assert event_news_prewarm_skip_reason(mention, config=politics) == "not_reserve_series"
+    assert event_news_live_post_block_reason(mention, config=politics) == (
+        "paper_series_no_post"
+    )
+    no_36 = SimpleNamespace(
+        ticker="KXTRUMPACT-26AUG23-N36",
+        series_ticker="KXTRUMPACT",
+        yes_ask_cents=100,
+        no_ask_cents=36,
+        yes_ask_size=12.0,
+        no_ask_size=12.0,
+        open_interest_fp=200.0,
+        volume_24h_fp=100.0,
+    )
+    no_35 = SimpleNamespace(
+        ticker="KXTRUMPACT-26AUG23-N35",
+        series_ticker="KXTRUMPACT",
+        yes_ask_cents=100,
+        no_ask_cents=35,
+        yes_ask_size=12.0,
+        no_ask_size=12.0,
+        open_interest_fp=200.0,
+        volume_24h_fp=100.0,
+    )
+    assert event_news_prewarm_skip_reason(no_36, config=politics) is None
+    assert event_news_prewarm_skip_reason(no_35, config=politics) == "not_live_tradable"
+
+
+def test_shadow_log_failure_does_not_change_the_skip(monkeypatch):
+    monkeypatch.delenv("EVENT_NEWS_LIVE_TRADABLE_RESEARCH", raising=False)
+    politics = _politics()
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("log down")
+
+    monkeypatch.setattr("utils.event_news_research.log.info", _boom)
+    assert event_news_prewarm_skip_reason(_act_yes_38(), config=politics) is None
+    mention = SimpleNamespace(
+        ticker="KXTRUMPMENTION-26AUG30-MAGA",
+        series_ticker="KXTRUMPMENTION",
+        yes_ask_cents=22,
+        no_ask_cents=81,
+        yes_ask_size=10.0,
+        no_ask_size=10.0,
+        open_interest_fp=2000.0,
+        volume_24h_fp=2000.0,
+    )
+    assert event_news_prewarm_skip_reason(mention, config=politics) == (
+        "mention_requires_transcript"
+    )
+
+
+def test_research_flag_zero_stays_off(monkeypatch):
+    monkeypatch.setenv("EVENT_NEWS_LIVE_TRADABLE_RESEARCH", "0")
+    politics = _politics()
+    assert event_news_prewarm_skip_reason(_act_yes_38(), config=politics) is None
+    assert "KXTRUMPMENTION" in live_series_tickers()
 
 
 def test_missing_universe_admits_nothing_and_logs_once(tmp_path, caplog):

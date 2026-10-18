@@ -19,6 +19,14 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.36.2] - 2026-10-18
+
+### Changed
+
+- **Live-tradable research stays off unless EVENT_NEWS_LIVE_TRADABLE_RESEARCH is true or 1.** Prewarm still uses the current favorite bands. KXTRUMPMENTION is mode paper in config/series_universe.yaml and is still fetched. The row still returns mention_requires_transcript, and live still does not POST. Markets the flag would drop are shadow-logged and still researched. The flag is not a desk flag. The start script does not export it.
+
+- **With the flag on, prewarm keeps books live can trade.** The favorite ask must be above 35c and below 91c. YES must be at least 55c. NO must be at least 36c. KXTRUMPMENTION leaves the live research set and cannot POST. The other paper series stay paper.
+
 ## [0.36.1] - 2026-10-18
 
 ### Changed

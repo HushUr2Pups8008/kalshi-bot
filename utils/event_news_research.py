@@ -816,7 +816,10 @@ def event_news_prewarm_skip_reason(market: Any, *, config: Any = None) -> str | 
         # Fox/speech mention books have no Factbase official p. Google
         # fan-out burns the 18s gate and ends as research_provider_error.
         # The series flag lives in the universe file. Paper scoring does
-        # not use this live skip.
+        # not use this live skip. The flag-off shadow records that this
+        # fetch leaves the research set when the flag is turned on.
+        if not _live_tradable_research_on():
+            _shadow_research_drop(market, "not_researched")
         return "mention_requires_transcript"
     missing = event_news_missing_snapshot_ask(market, config=config)
     if missing:
@@ -840,7 +843,55 @@ def event_news_prewarm_skip_reason(market: Any, *, config: Any = None) -> str | 
         if favorite_cents is not None and favorite_cents >= _FAVORITE_ASK_CERTAIN_CENTS:
             return "near_certain_ask"
         return "ask_outside_favorite_band"
+    blocked = _live_tradable_research_block(market, config=config)
+    if blocked:
+        if _live_tradable_research_on():
+            return blocked
+        _shadow_research_drop(market, blocked)
     return None
+
+
+def _live_tradable_research_on() -> bool:
+    from utils.event_news_desk_flags import event_news_live_tradable_research_enabled
+
+    return event_news_live_tradable_research_enabled()
+
+
+def _live_tradable_research_block(market: Any, *, config: Any) -> str | None:
+    """Skip prewarm when the favorite ask is not a live order.
+
+    YES needs 55c through 90c. NO needs 36c through 90c. 35c and 91c stay out.
+    """
+    side, cents = event_news_favorite_side(market, config=config)
+    if side is None or cents is None:
+        return "not_live_tradable"
+    price = int(cents)
+    if price <= 35 or price >= _FAVORITE_ASK_CERTAIN_CENTS:
+        return "not_live_tradable"
+    if side == "yes" and price < 55:
+        return "not_live_tradable"
+    if side == "no" and price < 36:
+        return "not_live_tradable"
+    return None
+
+
+def _shadow_research_drop(market: Any, new_reason: str) -> None:
+    """Record a market the flag would stop researching. Never raises."""
+    try:
+        ticker = getattr(market, "ticker", "")
+    except Exception:
+        ticker = ""
+    try:
+        log.info(
+            "[EVENT_NEWS_PREWARM] shadow ticker=%s old=research new=%s",
+            ticker,
+            new_reason,
+        )
+    except Exception:
+        try:
+            log.info("[EVENT_NEWS_PREWARM] shadow_unreadable")
+        except Exception:
+            return
 
 
 def event_news_paper_score_decision(
