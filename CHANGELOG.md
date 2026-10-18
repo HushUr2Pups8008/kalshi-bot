@@ -19,6 +19,18 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.36.4] - 2026-10-18
+
+### Changed
+
+- **Series caps, edge, and desk flags live in config/series_universe.yaml.** Every shipped row records category politics, max_contracts 8, and edge_min 0.04. Category is a label. max_contracts above 8 fails the file closed. edge_min is stored and does not replace the fee edge gate. The order clamp stays at 8 contracts.
+
+- **The politics desk no longer uses a separate non-politics prefix deny list.** A series outside the live yaml set skips as not_reserve_series. The politics reserve keeps an env or fallback name only when that name is already an effective-live yaml series, so the macro fallback does not add KXGDP or KXNBA. KXTRUMPMENTION stays effective-live while EVENT_NEWS_LIVE_TRADABLE_RESEARCH is unset, and it still cannot POST.
+
+- **On the politics desk, an exact yaml series is exempt from the sports prefix block.** This covers matcher intake and the research-prewarm due-task filter. KXTRUMPSAY, KXAPRPOTUS, and KXPOLLPOTUS stay in. Glued siblings such as KXTRUMPSAYMONTH stay out. The blocklist prefixes themselves stay, and a non-politics cohort still applies them.
+
+- **The paper scan list and the Trump X-handle list come from the yaml.** The scan is the effective-live set. A position on a series outside that set is not scanned. X handles attach only to rows flagged x_search, matched exactly or with a hyphen. Family lock reads occupancy_family and open_family_lock. The shipped file still locks KXTRUMPACT, KXTRUMPSAY, and KXTRUTHSOCIAL, and the open-week lock is still only Truth Social. A failed universe file keeps those locks closed: the family lock returns the positions-unknown sentinel, and one-per-family skips when that paper flag is on. Live one-per-family stays off unless the env sets it.
+
 ## [0.36.3] - 2026-10-18
 
 ### Changed

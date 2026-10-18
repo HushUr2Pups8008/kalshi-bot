@@ -140,6 +140,78 @@ def test_fallback_still_dedupes_in_front_of_the_yaml_live_rows():
     assert event_news_matcher_reserve_series(config=politics) == EXPECTED_LIVE
 
 
+def test_shipped_caps_families_and_x_search_match_todays_desk():
+    """Caps and edge stay at today's values. Category is a label, not a gate."""
+    from utils.series_universe import get_universe
+
+    entries = {entry.series: entry for entry in get_universe().entries}
+    assert all(entry.max_contracts == 8 for entry in entries.values())
+    assert all(entry.edge_min == "0.04" for entry in entries.values())
+    assert all(entry.category == "politics" for entry in entries.values())
+    assert tuple(
+        series for series, entry in entries.items() if entry.occupancy_family
+    ) == ("KXTRUTHSOCIAL", "KXTRUMPACT", "KXTRUMPSAY")
+    assert tuple(
+        series for series, entry in entries.items() if entry.open_family_lock
+    ) == ("KXTRUTHSOCIAL",)
+    assert tuple(series for series, entry in entries.items() if entry.x_search) == (
+        "KXTRUTHSOCIAL",
+        "KXMOCTRUMP25",
+        "KXTRUMPACT",
+        "KXTRUMPSAY",
+        "KXTRUMPMENTION",
+        "KXAPRPOTUS",
+        "KXPOLLPOTUS",
+        "KXVOTESAVEAMERICA",
+        "KXTRUMPUFC",
+        "KXTRUMPAPPROVE",
+        "KXTRUMPNOMNUM",
+    )
+
+
+def test_yaml_exact_series_survive_the_prefix_block_and_glued_siblings_do_not(
+    monkeypatch,
+):
+    from main import _research_prewarm_ticker_blocked
+    from utils.series_universe import event_news_prefix_blocked
+
+    monkeypatch.setattr("config.cfg.paper_cohort_id", EVENT_NEWS_COHORT_ID)
+    prefixes = ("KXTRUMPSAY", "KXAPRPOTUS", "KXPOLLPOTUS", "KXNBA", "KXMVE")
+    for series in ("KXTRUMPSAY", "KXAPRPOTUS", "KXPOLLPOTUS"):
+        assert event_news_prefix_blocked(series, prefixes) is False
+        assert _research_prewarm_ticker_blocked(f"{series}-26OCT19-A") is False
+    assert event_news_prefix_blocked("KXTRUMPSAYMONTH", prefixes) is True
+    assert _research_prewarm_ticker_blocked("KXTRUMPSAYMONTH-26OCT-X") is True
+    assert event_news_prefix_blocked("KXNBA", prefixes) is True
+    assert _research_prewarm_ticker_blocked("KXNBA-26OCT-G") is True
+    assert _research_prewarm_ticker_blocked("KXMVE-SPORT") is True
+
+
+def test_prefix_block_stays_on_a_non_politics_cohort(monkeypatch):
+    from utils.series_universe import event_news_prefix_blocked
+
+    monkeypatch.setattr("config.cfg.paper_cohort_id", "legacy")
+    assert event_news_prefix_blocked("KXTRUMPSAY", ("KXTRUMPSAY",)) is True
+    assert event_news_prefix_blocked("KXTRUMPSAYMONTH", ("KXTRUMPSAY",)) is True
+
+
+def test_macro_fallback_does_not_enter_the_politics_reserve():
+    politics = _politics(
+        research_prewarm_sourceable_series_fallback=(
+            "KXGDP",
+            "KXCPI",
+            "KXFED",
+            "KXNASDAQ100",
+            "KXBTC",
+            "KXETH",
+            "KXHIGHNY",
+            "KXMLB",
+            "KXNBA",
+        )
+    )
+    assert event_news_matcher_reserve_series(config=politics) == EXPECTED_LIVE
+
+
 def test_favorite_bands_match_the_previous_hardcoded_pairs():
     from utils.series_universe import get_universe
 
@@ -413,6 +485,24 @@ def test_missing_universe_admits_nothing_and_logs_once(tmp_path, caplog):
             "  notes: two\n",
             "duplicate",
         ),
+        (
+            "- series: KXTRUTHSOCIAL\n"
+            "  mode: live\n"
+            "  favorite_lo_cents: 36\n"
+            "  favorite_hi_cents: 90\n"
+            "  max_contracts: 9\n"
+            "  notes: over the hard cap\n",
+            "bad_max_contracts",
+        ),
+        (
+            "- series: KXTRUTHSOCIAL\n"
+            "  mode: live\n"
+            "  favorite_lo_cents: 36\n"
+            "  favorite_hi_cents: 90\n"
+            "  edge_min: \"1.5\"\n"
+            "  notes: edge above 1\n",
+            "bad_edge_min",
+        ),
     ],
 )
 def test_invalid_universe_admits_nothing(tmp_path, text, reason):
@@ -618,7 +708,7 @@ def test_politics_recommendation_skips_blocklist_and_configured_series():
         {"series": "KXFEDRATE", "category": "Economics", "volume_24h": Decimal("5")},
     ]
     explicit = {"KXTRUTHSOCIAL"}
-    assert is_denied("KXFEDRATE", explicit) is True
+    assert is_denied("KXFEDRATE", explicit) is False
     assert is_denied("KXFISAEXTEND", explicit) is False
     assert is_politics_econ_policy(
         "KXPOLICY",
@@ -626,7 +716,7 @@ def test_politics_recommendation_skips_blocklist_and_configured_series():
         explicit=explicit,
     )
     picked = recommend_paper_series(rows, explicit=explicit, limit=10)
-    assert [row["series"] for row in picked] == ["KXPOLICY"]
+    assert [row["series"] for row in picked] == ["KXPOLICY", "KXFEDRATE"]
 
 
 def test_settlement_join_uses_fee_net_and_does_not_invent_zero(tmp_path):

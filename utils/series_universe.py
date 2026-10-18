@@ -8,8 +8,9 @@ place orders.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import yaml
 
@@ -27,8 +28,16 @@ _ALLOWED_KEYS = frozenset(
         "notes",
         "transcript_skip",
         "paper_score",
+        "category",
+        "max_contracts",
+        "edge_min",
+        "occupancy_family",
+        "open_family_lock",
+        "x_search",
     }
 )
+_DEFAULT_MAX_CONTRACTS = 8
+_DEFAULT_EDGE_MIN = "0.04"
 _POLITICS_COHORT_ID = "kalshi-event-news-20260820"
 _MENTION_SERIES = "KXTRUMPMENTION"
 
@@ -46,6 +55,12 @@ class SeriesEntry:
     notes: str
     transcript_skip: bool = False
     paper_score: bool = False
+    category: str = ""
+    max_contracts: int = _DEFAULT_MAX_CONTRACTS
+    edge_min: str = _DEFAULT_EDGE_MIN
+    occupancy_family: bool = False
+    open_family_lock: bool = False
+    x_search: bool = False
 
     @property
     def favorite_band(self) -> tuple[float, float]:
@@ -120,6 +135,59 @@ def live_series_tickers() -> tuple[str, ...]:
     return tuple(
         entry.series for entry in universe.entries if effective_mode(entry) == "live"
     )
+
+
+def exact_series_in_universe(series: str) -> bool:
+    """True when the ticker is a yaml series and its mode is not off.
+
+    A blocklist prefix must not drop that series. A glued sibling does not match.
+    """
+    name = str(series or "").strip().upper()
+    if not name:
+        return False
+    universe = get_universe()
+    if universe.failed:
+        return False
+    return any(entry.series == name and entry.mode != "off" for entry in universe.entries)
+
+
+def event_news_prefix_blocked(series: str, prefixes: Sequence[str]) -> bool:
+    """True when a startswith block applies.
+
+    On the politics desk, an exact yaml series is exempt. Glued siblings
+    stay blocked. Other cohorts keep the prefix block. A failed universe
+    exempts nothing.
+    """
+    name = str(series or "").strip().upper()
+    if not name:
+        return False
+    if exact_series_in_universe(name):
+        from utils.event_news_research import is_event_news_paper_cohort
+
+        if is_event_news_paper_cohort():
+            return False
+    return any(name.startswith(str(prefix)) for prefix in prefixes if prefix)
+
+
+def occupancy_family_series() -> tuple[str, ...]:
+    universe = get_universe()
+    if universe.failed:
+        return ()
+    return tuple(entry.series for entry in universe.entries if entry.occupancy_family)
+
+
+def open_family_lock_series() -> tuple[str, ...]:
+    universe = get_universe()
+    if universe.failed:
+        return ()
+    return tuple(entry.series for entry in universe.entries if entry.open_family_lock)
+
+
+def x_search_series() -> tuple[str, ...]:
+    universe = get_universe()
+    if universe.failed:
+        return ()
+    return tuple(entry.series for entry in universe.entries if entry.x_search)
 
 
 def paper_score_entries() -> tuple[SeriesEntry, ...]:
@@ -270,6 +338,11 @@ def _parse_entries(payload: Any) -> tuple[SeriesEntry, ...]:
             raise ValueError("missing_notes")
         transcript_skip = _flag(item, "transcript_skip")
         paper_score = _flag(item, "paper_score")
+        category = item.get("category", "")
+        if not isinstance(category, str):
+            raise ValueError("bad_category")
+        max_contracts = _max_contracts(item.get("max_contracts", _DEFAULT_MAX_CONTRACTS))
+        edge_min = _edge_min(item.get("edge_min", _DEFAULT_EDGE_MIN))
         entries.append(
             SeriesEntry(
                 series=series,
@@ -279,6 +352,12 @@ def _parse_entries(payload: Any) -> tuple[SeriesEntry, ...]:
                 notes=notes.strip(),
                 transcript_skip=transcript_skip,
                 paper_score=paper_score,
+                category=category.strip(),
+                max_contracts=max_contracts,
+                edge_min=edge_min,
+                occupancy_family=_flag(item, "occupancy_family"),
+                open_family_lock=_flag(item, "open_family_lock"),
+                x_search=_flag(item, "x_search"),
             )
         )
     if not entries:
@@ -301,3 +380,25 @@ def _flag(item: dict[str, Any], name: str) -> bool:
     if not isinstance(value, bool):
         raise ValueError("bad_flag")
     return value
+
+
+def _max_contracts(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("bad_max_contracts")
+    if value < 1 or value > _DEFAULT_MAX_CONTRACTS:
+        raise ValueError("bad_max_contracts")
+    return value
+
+
+def _edge_min(value: Any) -> str:
+    """A decimal string. Category and this field do not change a live gate."""
+    if not isinstance(value, str):
+        raise ValueError("bad_edge_min")
+    text = value.strip()
+    try:
+        number = Decimal(text)
+    except Exception as exc:
+        raise ValueError("bad_edge_min") from exc
+    if number < 0 or number > 1:
+        raise ValueError("bad_edge_min")
+    return format(number, "f")

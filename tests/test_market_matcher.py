@@ -663,6 +663,41 @@ class TestMarketCacheTestTickerExclusion:
         assert series_count == 1
         assert [m.ticker for m in markets] == ["KXIRAN-1"]
 
+    def test_fetch_geo_markets_keeps_exact_yaml_series_and_drops_glued_siblings(
+        self, monkeypatch
+    ):
+        """KXTRUMPSAY stays on the politics desk. Glued siblings and KXNBA stay out."""
+        monkeypatch.setattr(
+            "config.cfg.paper_cohort_id",
+            "kalshi-event-news-20260820",
+        )
+        rest = MagicMock()
+        rest.get_all_series.return_value = [
+            {"ticker": "KXTRUMPSAY", "title": "Trump say"},
+            {"ticker": "KXTRUMPSAYMONTH", "title": "Trump month"},
+            {"ticker": "KXNBA", "title": "Saudi basketball"},
+        ]
+
+        def get_markets(**kwargs):
+            series = kwargs["series_ticker"]
+            return ([
+                _make_market(
+                    f"{series}-1",
+                    "Will Trump speak?",
+                    series_ticker=series,
+                )
+            ], None)
+
+        rest.get_markets.side_effect = get_markets
+        matcher = MarketMatcher(rest)
+
+        markets, _series_count = matcher._cache._fetch_geo_markets()
+        series = {market.series_ticker for market in markets}
+
+        assert "KXTRUMPSAY" in series
+        assert "KXTRUMPSAYMONTH" not in series
+        assert "KXNBA" not in series
+
     def test_fetch_geo_markets_attaches_regime_weights(self):
         rest = MagicMock()
         rest.get_all_series.return_value = [

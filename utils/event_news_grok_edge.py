@@ -32,10 +32,11 @@ from utils.event_news_desk_flags import (
 )
 from utils.event_news_grok_flags import EVENT_NEWS_BAND_FLOOR_CENTS
 from utils.event_news_grok_veto import GROK_MODEL, XAI_API_KEY_ENV
-from utils.event_news_research import (
-    _NON_POLITICS_SERIES_PREFIXES,
-    event_news_series_ticker,
-    snapshot_ask_cents,
+from utils.event_news_research import event_news_series_ticker, snapshot_ask_cents
+from utils.series_universe import (
+    live_series_tickers,
+    series_ticker_matches,
+    x_search_series,
 )
 from utils.logger import get_logger
 
@@ -72,32 +73,7 @@ MAX_SEARCH_RESULTS_CAP = 20
 # Responses API x_search handles, without the @. Truth Social itself is not
 # an X handle; the Factbase fingerprint is the Truth Social change trigger.
 TRUMP_X_HANDLES = ("realDonaldTrump", "POTUS", "WhiteHouse")
-_TRUMP_X_SERIES_PREFIXES = (
-    "KXTRUTHSOCIAL",
-    "KXTRUMP",
-    "KXMOCTRUMP",
-    "KXAPRPOTUS",
-    "KXPOLLPOTUS",
-    "KXVOTESAVEAMERICA",
-)
 _SCAN_TOOLS = ("web_search", "x_search")
-# Desk families plus the pinned politics matcher reserve. The research
-# prewarm fallback (KXDJI and the other macro series) is not part of this list.
-POLITICS_SCAN_SERIES = (
-    "KXTRUTHSOCIAL",
-    "KXCANUSDEAL",
-    "KXMOCTRUMP25",
-    "KXTRUMPACT",
-    "KXTRUMPSAY",
-    "KXTRUMPMENTION",
-    "KXAPRPOTUS",
-    "KXPOLLPOTUS",
-    "KXEFFTARIFF",
-    "KXVOTESAVEAMERICA",
-    "KXSBUDGETRES",
-    "KXLEAVECONGRESS",
-    "KXFISAEXTEND",
-)
 
 CALL_LOG_PATH = Path("logs/state/grok_edge_calls.jsonl")
 CANDIDATE_LOG_PATH = Path("logs/state/grok_edge_candidates.jsonl")
@@ -295,25 +271,19 @@ def verdicts_agree(left: Decimal, right: Decimal) -> bool:
     return abs(left - right) <= AGREE_ABS
 
 
-def _non_politics_series(series: str, ticker: str = "") -> bool:
-    for prefix in _NON_POLITICS_SERIES_PREFIXES:
-        if series.startswith(prefix) or ticker.startswith(prefix):
-            return True
-    return False
-
-
 def politics_scan_series(extra: Sequence[str] = ()) -> tuple[str, ...]:
-    """Politics series the sidecar may scan.
+    """Live yaml series the sidecar may scan.
 
-    The desk families and the pinned matcher reserve are included. A series
-    the live book is actually holding is included too. KXDJI and the other
-    non-politics prefixes are dropped, including when they arrive from the
-    research prewarm fallback.
+    An extra name is kept only when it is already in that live set. A
+    position on a series the file does not mark live is not scanned. A
+    failed universe returns nothing.
     """
+    live = live_series_tickers()
+    allowed = set(live)
     seen: list[str] = []
-    for raw in (*POLITICS_SCAN_SERIES, *extra):
+    for raw in (*live, *extra):
         series = str(raw or "").strip().upper()
-        if not series or series in seen or _non_politics_series(series):
+        if not series or series in seen or series not in allowed:
             continue
         seen.append(series)
     return tuple(seen)
@@ -405,7 +375,7 @@ def rank_politics_markets(
         ticker, market_series, status, close = _market_identity(market)
         if status != "active" or close is None:
             continue
-        if market_series not in allowed or _non_politics_series(market_series, ticker):
+        if market_series not in allowed:
             continue
         if close <= now or close > window_end:
             continue
@@ -621,8 +591,8 @@ def _search_turns(limit: int) -> int:
 
 
 def _trump_x_series(series: str) -> bool:
-    token = str(series or "").upper()
-    return any(token.startswith(prefix) for prefix in _TRUMP_X_SERIES_PREFIXES)
+    """Exact yaml x_search series, or that series plus a hyphen."""
+    return any(series_ticker_matches(series, name) for name in x_search_series())
 
 
 def _grounded_tool_payload(

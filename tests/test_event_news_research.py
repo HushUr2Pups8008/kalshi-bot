@@ -396,6 +396,32 @@ def test_event_news_family_lock_second_truth_social_week():
     assert event_news_family_lock_ticker(week_b, open_week_a, config=freeze) is None
 
 
+def test_failed_universe_family_lock_stays_closed(tmp_path):
+    """A bad file must not let a second politics paper row through."""
+    from utils.series_universe import reset_series_universe
+
+    reset_series_universe(tmp_path / "missing.yaml")
+    try:
+        politics = SimpleNamespace(paper_cohort_id=EVENT_NEWS_COHORT_ID)
+        truth = SimpleNamespace(
+            ticker="KXTRUTHSOCIAL-26OCT10-B200",
+            series_ticker="KXTRUTHSOCIAL",
+        )
+        other = SimpleNamespace(ticker="KXCPI-26OCT-T1", series_ticker="KXCPI")
+        freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
+        assert (
+            event_news_family_lock_ticker(truth, [], config=politics)
+            == EVENT_NEWS_LIVE_OCCUPANCY_UNKNOWN
+        )
+        assert (
+            event_news_family_lock_ticker(other, [], config=politics)
+            == EVENT_NEWS_LIVE_OCCUPANCY_UNKNOWN
+        )
+        assert event_news_family_lock_ticker(truth, [], config=freeze) is None
+    finally:
+        reset_series_universe()
+
+
 def test_positions_sentinel_blocks_trump_say_and_act_like_truth_social():
     politics = SimpleNamespace(paper_cohort_id=EVENT_NEWS_COHORT_ID)
     say = SimpleNamespace(
@@ -869,11 +895,11 @@ def test_non_politics_series_denied_on_politics_only():
         ticker="KXTRUTHSOCIAL-26AUG22-T240", series_ticker="KXTRUTHSOCIAL"
     )
     assert event_news_non_politics_series(gas, config=freeze) is None
-    assert event_news_non_politics_series(gas, config=politics) == "non_politics_series"
+    assert event_news_non_politics_series(gas, config=politics) is None
     assert event_news_non_politics_series(truth, config=politics) is None
-    assert event_news_prewarm_skip_reason(gas, config=politics) == "non_politics_series"
+    assert event_news_prewarm_skip_reason(gas, config=politics) == "not_reserve_series"
     korea_cpi = SimpleNamespace(ticker="KXSKEXPYOY-26AUG31-T55.0", series_ticker="KXSKEXPYOY")
-    assert event_news_prewarm_skip_reason(korea_cpi, config=politics) == "non_politics_series"
+    assert event_news_prewarm_skip_reason(korea_cpi, config=politics) == "not_reserve_series"
 
 
 def test_one_market_per_event_prefers_yes_favorite():

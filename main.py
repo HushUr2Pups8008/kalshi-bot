@@ -326,9 +326,11 @@ def _research_prewarm_ticker_blocked(ticker: str) -> bool:
     series_ticker = str(ticker or "").strip().split("-", 1)[0]
     if not series_ticker:
         return False
-    return any(
-        series_ticker.startswith(prefix)
-        for prefix in _RESEARCH_PREWARM_BLOCKED_SERIES_PREFIXES
+    from utils.series_universe import event_news_prefix_blocked
+
+    return event_news_prefix_blocked(
+        series_ticker,
+        _RESEARCH_PREWARM_BLOCKED_SERIES_PREFIXES,
     )
 
 

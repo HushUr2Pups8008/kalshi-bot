@@ -83,7 +83,7 @@ def _spent(path: Path) -> str | None:
 
 
 def _position_series(positions) -> tuple[str, ...]:
-    """Series prefixes of open positions. Non-politics prefixes are dropped later."""
+    """Series prefixes of open positions. Names outside the live yaml set are dropped later."""
     from utils.event_news_grok_edge import paper_position_rows
 
     found: list[str] = []
