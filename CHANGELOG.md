@@ -19,6 +19,20 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.36.0] - 2026-10-18
+
+### Changed
+
+- **The politics reserve series come from config/series_universe.yaml.** The 13 live series and their favorite bands are unchanged. KXTRUTHSOCIAL stays 36c through 90c. KXTRUMPACT stays 12c through 90c. The other live series stay 55c through 99c. A missing or invalid file admits nothing and logs one fail-closed line. A series matches the exact ticker, or that ticker plus a hyphen. KXTRUMPSAYCOUNTRY, KXTRUMPSAYCOMPANY, KXTRUMPSAYMONTH, and KXTRUMPSAYNICKNAME do not match KXTRUMPSAY.
+
+- **New series are paper-only.** KXTRUMPMENTION stays mode live. Prewarm still returns mention_requires_transcript, and paper scoring can bypass that gate without a live POST. Ten politics series from the 2026-10-18 discovery report are mode paper: KXHORMUZWEEKLY, KXSUEZWEEKLY, KXBABELMANDEBWEEKLY, KXTRUMPUFC, KXHORMUZMAX, KXTRUMPAPPROVE, KXTRUMPNOMNUM, KXHORMUZPEAK, KXPANAMAWEEKLY, and KXUSAIRANAGREEMENT. They are not in the reserve list. A paper series cannot POST.
+
+- **A daily discovery job writes a report and does not add series.** It requests GET /markets?status=open&mve_filter=exclude. A candidate needs a market with response status active, a close inside 14 days, 24h volume of at least 500 contracts, and a two-sided spread under 15c. The report is docs/reports/universe-candidates-YYYYMMDD.md. The launchd template runs at 06:00 local and is not installed by this change. Promotion to live is report text only: at least 15 settled paper trades with fee-net EV above 0.
+
+### Not enabled
+
+- **Live behavior for the current 13 is unchanged.** The 0-35c executed-ask block, the 55c YES floor, the 8-contract cap, the edge floor, the halt, and the Grok veto are unchanged. This change does not restart the politics process and does not place an order.
+
 ## [0.35.3] - 2026-10-18
 
 ### Changed

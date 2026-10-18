@@ -1,0 +1,236 @@
+# Politics series universe. The root is a list. mode live may POST.
+# mode paper is scored and cannot POST. mode off admits nothing.
+# A missing or invalid file admits nothing.
+# Favorite bands are integer cents. The gate converts them to the same
+# half-open prices the desk already uses (90c and 99c stay outside).
+- series: KXTRUTHSOCIAL
+  mode: live
+  favorite_lo_cents: 36
+  favorite_hi_cents: 90
+  transcript_skip: false
+  paper_score: false
+  notes: >-
+    Truth Social weekly counts. Favorite band is 36c through 90c.
+    90c is outside the half-open band. The 0-35c executed-ask
+    exclusion is not applied on top of this band.
+- series: KXCANUSDEAL
+  mode: live
+  favorite_lo_cents: 55
+  favorite_hi_cents: 99
+  transcript_skip: false
+  paper_score: false
+  notes: >-
+    Canada-US deal. Desk default favorite band, 55c through 99c.
+    99c is outside the half-open band. Asks at or above 91c still
+    fail the near-certain gate.
+- series: KXMOCTRUMP25
+  mode: live
+  favorite_lo_cents: 55
+  favorite_hi_cents: 99
+  transcript_skip: false
+  paper_score: false
+  notes: >-
+    Desk default favorite band, 55c through 99c. 99c is outside
+    the half-open band. Asks at or above 91c still fail the
+    near-certain gate.
+- series: KXTRUMPACT
+  mode: live
+  favorite_lo_cents: 12
+  favorite_hi_cents: 90
+  transcript_skip: false
+  paper_score: false
+  notes: >-
+    White House action counts. Favorite band is 12c through 90c so
+    official-p cheap YES stays in research. 90c is outside the
+    half-open band. The 0-35c executed-ask exclusion still blocks
+    a take and is not folded into this band.
+- series: KXTRUMPSAY
+  mode: live
+  favorite_lo_cents: 55
+  favorite_hi_cents: 99
+  transcript_skip: false
+  paper_score: false
+  notes: >-
+    Exact series KXTRUMPSAY only. KXTRUMPSAYCOUNTRY and the other
+    glued siblings do not match. Desk default favorite band.
+- series: KXTRUMPMENTION
+  mode: live
+  favorite_lo_cents: 55
+  favorite_hi_cents: 99
+  transcript_skip: true
+  paper_score: true
+  notes: >-
+    Stays mode live so prewarm still fetches it and returns
+    mention_requires_transcript. Live does not POST. Paper scoring
+    skips the transcript gate and would use Grok grounding. A run
+    with no probability logs veto_not_called and does not call Grok.
+- series: KXAPRPOTUS
+  mode: live
+  favorite_lo_cents: 55
+  favorite_hi_cents: 99
+  transcript_skip: false
+  paper_score: false
+  notes: >-
+    Desk default favorite band, 55c through 99c. 99c is outside
+    the half-open band. Asks at or above 91c still fail the
+    near-certain gate.
+- series: KXPOLLPOTUS
+  mode: live
+  favorite_lo_cents: 55
+  favorite_hi_cents: 99
+  transcript_skip: false
+  paper_score: false
+  notes: >-
+    Desk default favorite band, 55c through 99c. 99c is outside
+    the half-open band. Asks at or above 91c still fail the
+    near-certain gate.
+- series: KXEFFTARIFF
+  mode: live
+  favorite_lo_cents: 55
+  favorite_hi_cents: 99
+  transcript_skip: false
+  paper_score: false
+  notes: >-
+    Desk default favorite band, 55c through 99c. 99c is outside
+    the half-open band. Asks at or above 91c still fail the
+    near-certain gate.
+- series: KXVOTESAVEAMERICA
+  mode: live
+  favorite_lo_cents: 55
+  favorite_hi_cents: 99
+  transcript_skip: false
+  paper_score: false
+  notes: >-
+    Desk default favorite band, 55c through 99c. 99c is outside
+    the half-open band. Asks at or above 91c still fail the
+    near-certain gate.
+- series: KXSBUDGETRES
+  mode: live
+  favorite_lo_cents: 55
+  favorite_hi_cents: 99
+  transcript_skip: false
+  paper_score: false
+  notes: >-
+    Desk default favorite band, 55c through 99c. 99c is outside
+    the half-open band. Asks at or above 91c still fail the
+    near-certain gate.
+- series: KXLEAVECONGRESS
+  mode: live
+  favorite_lo_cents: 55
+  favorite_hi_cents: 99
+  transcript_skip: false
+  paper_score: false
+  notes: >-
+    Desk default favorite band, 55c through 99c. 99c is outside
+    the half-open band. Asks at or above 91c still fail the
+    near-certain gate.
+- series: KXFISAEXTEND
+  mode: live
+  favorite_lo_cents: 55
+  favorite_hi_cents: 99
+  transcript_skip: false
+  paper_score: false
+  notes: >-
+    Desk default favorite band, 55c through 99c. 99c is outside
+    the half-open band. Asks at or above 91c still fail the
+    near-certain gate. The KXFED deny prefix does not match this series.
+- series: KXHORMUZWEEKLY
+  mode: paper
+  favorite_lo_cents: 55
+  favorite_hi_cents: 99
+  transcript_skip: false
+  paper_score: false
+  notes: >-
+    Traffic through the Strait of Hormuz. Paper only. Cannot POST.
+    Added by hand from the 2026-10-18 discovery report. Not in the
+    live reserve. Desk default favorite band, 55c through 99c.
+- series: KXSUEZWEEKLY
+  mode: paper
+  favorite_lo_cents: 55
+  favorite_hi_cents: 99
+  transcript_skip: false
+  paper_score: false
+  notes: >-
+    Traffic through the Suez Canal. Paper only. Cannot POST.
+    Added by hand from the 2026-10-18 discovery report. Not in the
+    live reserve. Desk default favorite band, 55c through 99c.
+- series: KXBABELMANDEBWEEKLY
+  mode: paper
+  favorite_lo_cents: 55
+  favorite_hi_cents: 99
+  transcript_skip: false
+  paper_score: false
+  notes: >-
+    Traffic through the Bab al-Mandab Strait. Paper only. Cannot POST.
+    Added by hand from the 2026-10-18 discovery report. Not in the
+    live reserve. Desk default favorite band, 55c through 99c.
+- series: KXTRUMPUFC
+  mode: paper
+  favorite_lo_cents: 55
+  favorite_hi_cents: 99
+  transcript_skip: false
+  paper_score: false
+  notes: >-
+    Trump attend another UFC event this year. Paper only. Cannot POST.
+    Added by hand from the 2026-10-18 discovery report. Not in the
+    live reserve. Desk default favorite band, 55c through 99c.
+- series: KXHORMUZMAX
+  mode: paper
+  favorite_lo_cents: 55
+  favorite_hi_cents: 99
+  transcript_skip: false
+  paper_score: false
+  notes: >-
+    Maximum traffic through the Strait of Hormuz. Paper only.
+    Cannot POST. Added by hand from the 2026-10-18 discovery report.
+    Not in the live reserve. Desk default favorite band, 55c through 99c.
+- series: KXTRUMPAPPROVE
+  mode: paper
+  favorite_lo_cents: 55
+  favorite_hi_cents: 99
+  transcript_skip: false
+  paper_score: false
+  notes: >-
+    Trump approval rating. Paper only. Cannot POST. Added by hand
+    from the 2026-10-18 discovery report. Not in the live reserve.
+    Desk default favorite band, 55c through 99c.
+- series: KXTRUMPNOMNUM
+  mode: paper
+  favorite_lo_cents: 55
+  favorite_hi_cents: 99
+  transcript_skip: false
+  paper_score: false
+  notes: >-
+    How many nominations will Trump send to the Senate. Paper only.
+    Cannot POST. Added by hand from the 2026-10-18 discovery report.
+    Not in the live reserve. Desk default favorite band, 55c through 99c.
+- series: KXHORMUZPEAK
+  mode: paper
+  favorite_lo_cents: 55
+  favorite_hi_cents: 99
+  transcript_skip: false
+  paper_score: false
+  notes: >-
+    Peak traffic through the Strait of Hormuz. Paper only. Cannot POST.
+    Added by hand from the 2026-10-18 discovery report. Not in the
+    live reserve. Desk default favorite band, 55c through 99c.
+- series: KXPANAMAWEEKLY
+  mode: paper
+  favorite_lo_cents: 55
+  favorite_hi_cents: 99
+  transcript_skip: false
+  paper_score: false
+  notes: >-
+    Traffic through the Panama Canal. Paper only. Cannot POST.
+    Added by hand from the 2026-10-18 discovery report. Not in the
+    live reserve. Desk default favorite band, 55c through 99c.
+- series: KXUSAIRANAGREEMENT
+  mode: paper
+  favorite_lo_cents: 55
+  favorite_hi_cents: 99
+  transcript_skip: false
+  paper_score: false
+  notes: >-
+    US Iran nuclear deal. Paper only. Cannot POST. Added by hand
+    from the 2026-10-18 discovery report. Not in the live reserve.
+    Desk default favorite band, 55c through 99c.
