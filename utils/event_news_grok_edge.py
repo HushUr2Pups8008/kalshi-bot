@@ -1,9 +1,9 @@
 """Paper-only Grok edge scan, exit watch, and calibration.
 
-Live stays off unless the flag is explicitly true, and even then this
-module never submits, cancels, or reprices an order. A missing, late, or
-malformed Grok answer queues nothing. The sizing buckets are a proposal
-stored on the candidate. The queued contract count stays at 4.
+``live=True`` returns before any call, even when the flag is the string
+true. This module never submits, cancels, or reprices an order. A missing,
+late, or malformed Grok answer queues nothing. The sizing buckets are a
+proposal stored on the candidate. The queued contract count stays at 4.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -34,6 +35,7 @@ from utils.event_news_research import event_news_series_ticker, snapshot_ask_cen
 from utils.logger import get_logger
 
 log = get_logger("event_news_grok_edge")
+_SPEND_LOCK = threading.Lock()
 
 XAI_RESPONSES_URL = "https://api.x.ai/v1/responses"
 GROK_EDGE_TIMEOUT_SECONDS = 20.0
@@ -725,9 +727,12 @@ def _call_grok(
     extra = _reported_cost(body)
     cost = reserved
     if extra is not None and extra > reserved:
-        added = _reserve_spend(spend_path, extra - reserved, cap=_daily_cap(env), now=now)
+        cap = _daily_cap(env)
+        added = _reserve_spend(spend_path, extra - reserved, cap=cap, now=now)
         if added is not None:
             cost = reserved + added
+        else:
+            _pin_spend_to_cap(spend_path, cap, now=now)
     return _finish(None, body, cost)
 
 
@@ -749,7 +754,7 @@ def _parse_edge_body(
         confidence = _unit_decimal(obj.get("confidence"))
         probability = _unit_decimal(obj.get("probability"))
         if probability is None:
-            probability = Decimal("0")
+            return None
         if obj["contrary"] is True and (confidence is None or not sources):
             return None
         verdict = "CONTRARY" if obj["contrary"] else "OK"
@@ -900,6 +905,17 @@ def _reserve_spend(
     now: datetime | None,
 ) -> Decimal | None:
     """Debit ``amount`` if the UTC day still has room. None means do not call."""
+    with _SPEND_LOCK:
+        return _reserve_spend_unlocked(path, amount, cap=cap, now=now)
+
+
+def _reserve_spend_unlocked(
+    path: Path,
+    amount: Decimal,
+    *,
+    cap: Decimal,
+    now: datetime | None,
+) -> Decimal | None:
     if amount <= 0 or cap < 0:
         return None
     today = _day(now)
@@ -923,6 +939,36 @@ def _reserve_spend(
     except OSError:
         return None
     return amount
+
+
+def _pin_spend_to_cap(path: Path, cap: Decimal, now: datetime | None) -> None:
+    """Fill today's ledger so a later reserve cannot fit.
+
+    Used when a reported cost is above the reserve and the difference does
+    not fit. A smaller reported cost is not refunded.
+    """
+    if cap < 0:
+        return
+    with _SPEND_LOCK:
+        today = _day(now)
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return
+        if not isinstance(existing, dict):
+            return
+        if existing.get("date") != today:
+            spent = Decimal("0")
+        else:
+            spent = _decimal(existing.get("spent_usd"))
+            if spent is None or spent < 0:
+                return
+        if spent >= cap:
+            return
+        try:
+            _write_json(path, {"date": today, "spent_usd": str(cap)})
+        except OSError:
+            return
 
 
 def _reported_cost(body: Any) -> Decimal | None:

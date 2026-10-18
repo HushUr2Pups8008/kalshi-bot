@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import threading
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -24,6 +25,7 @@ from utils.event_news_grok_edge import (
     GROK_EDGE_TIMEOUT_SECONDS,
     GROUNDED_RESERVE_USD,
     PAPER_QUEUE_CONTRACTS,
+    _reserve_spend,
     brier_report,
     comparison_summary,
     edge_scan_interval_seconds,
@@ -635,3 +637,78 @@ async def test_paper_mode_starts_the_loops_and_cancels_them(monkeypatch) -> None
     await asyncio.gather(edge, watch, return_exceptions=True)
     assert edge.cancelled()
     assert watch.cancelled()
+
+
+def test_reported_cost_above_the_reserve_fills_the_cap(tmp_path: Path) -> None:
+    """A reported cost that does not fit stops every later call that day."""
+
+    def post(url, json, headers, timeout):  # noqa: A002
+        grounded = "tools" in json
+        body = _body(
+            "0.70",
+            sources=["https://example.test/source"] if grounded else [],
+            grounded=grounded,
+        )
+        if grounded:
+            body["cost_in_usd"] = "2.00"
+        return _Response(body)
+
+    first = _scan(
+        tmp_path,
+        [_market()],
+        post,
+        {XAI_API_KEY_ENV: "test-key", "GROK_DAILY_USD_CAP": "0.60"},
+    )
+    assert first["queued"] == 1
+    spent = json.loads((tmp_path / "spend.json").read_text(encoding="utf-8"))
+    assert Decimal(spent["spent_usd"]) == Decimal("0.60")
+    later: list[dict] = []
+    second = _scan(tmp_path, [_market()], _poster(later), {XAI_API_KEY_ENV: "test-key", "GROK_DAILY_USD_CAP": "0.60"})
+    assert later == []
+    assert second["queued"] == 0
+
+
+def test_exit_without_a_probability_does_not_log(tmp_path: Path) -> None:
+    def post(url, headers, timeout, **_payload):
+        text = (
+            '{"contrary": true, "confidence": 0.95, '
+            '"sources": ["https://example.test/contrary"]}'
+        )
+        return _Response({"output_text": text, "citations": ["https://example.test/contrary"]})
+
+    logged = run_paper_exit_watch(
+        [{"ticker": "KXTRUMPSAY-26OCT20-TEST", "side": "yes"}],
+        live=False,
+        market_lookup=lambda ticker: {"yes_bid": 60},
+        environ={XAI_API_KEY_ENV: "test-key"},
+        post=post,
+        call_log_path=tmp_path / "calls.jsonl",
+        exit_log_path=tmp_path / "exits.jsonl",
+        spend_path=tmp_path / "spend.json",
+        now=NOW,
+    )
+    assert logged == 0
+    assert not (tmp_path / "exits.jsonl").exists()
+    assert _rows(tmp_path / "calls.jsonl")[0]["skip_reason"] == "malformed"
+
+
+def test_two_reserves_cannot_both_pass_the_same_cap(tmp_path: Path) -> None:
+    path = tmp_path / "spend.json"
+    results: list[Decimal | None] = []
+    barrier = threading.Barrier(2)
+
+    def once() -> None:
+        barrier.wait()
+        results.append(
+            _reserve_spend(path, Decimal("0.50"), cap=Decimal("0.50"), now=NOW)
+        )
+
+    threads = [threading.Thread(target=once) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert results.count(Decimal("0.50")) == 1
+    assert results.count(None) == 1
+    spent = json.loads(path.read_text(encoding="utf-8"))
+    assert Decimal(spent["spent_usd"]) == Decimal("0.50")
