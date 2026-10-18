@@ -1616,7 +1616,7 @@ class TradeExecutor:
             usable = _positive_dollars(balance)
             if usable is None:
                 log.warning(
-                    "[SESSION_HALT] balance unreadable; skip and do not seed"
+                    "[SESSION_HALT] balance unreadable; cash=not_measured; skip and do not seed"
                 )
                 return "live balance unreadable"
             self._maybe_record_cash_cents(usable)
@@ -2079,7 +2079,10 @@ class TradeExecutor:
             balance = request("GET", "/portfolio/balance")
             positions = request("GET", "/portfolio/positions")
         except Exception:
-            log.warning("[EVENT_NEWS_RISK] exposure read failed", exc_info=True)
+            log.warning(
+                "[EVENT_NEWS_RISK] exposure read failed; cash=not_measured",
+                exc_info=True,
+            )
             return None, None
         if not isinstance(balance, dict) or not isinstance(positions, dict):
             return None, None
@@ -2087,7 +2090,12 @@ class TradeExecutor:
             cash = int(balance["balance"])
             portfolio_value = int(balance.get("portfolio_value") or 0)
         except (KeyError, TypeError, ValueError):
+            log.warning("[CASH_CENTS] cash=not_measured reason=invalid_read")
             return None, None
+        if not self._is_paper:
+            from utils.event_news_session_halt import record_cash_cents
+
+            record_cash_cents(cash / 100.0)
         rows = positions.get("market_positions")
         if not isinstance(rows, list):
             return None, None

@@ -242,6 +242,87 @@ def test_handled_stop_alert_is_politics_only(monkeypatch, tmp_path):
     assert payload["reason"] == "handled_stop"
 
 
+def test_cash_drop_from_3995_to_3470_is_recorded_and_a_rise_updates_last(tmp_path):
+    """3995c then 3470c is a same-day drop. A later rise still rewrites last."""
+    from datetime import datetime, timezone
+
+    path = tmp_path / "cash.json"
+    assert halt.record_cash_cents(
+        39.95,
+        path,
+        now=datetime(2026, 10, 17, 3, 9, 46, tzinfo=timezone.utc),
+    )
+    assert halt.record_cash_cents(
+        34.70,
+        path,
+        now=datetime(2026, 10, 17, 23, 24, 48, tzinfo=timezone.utc),
+    )
+    dropped = json.loads(path.read_text(encoding="utf-8"))
+    assert dropped["date"] == "2026-10-17"
+    assert dropped["start_cents"] == 3995
+    assert dropped["prev_cents"] == 3995
+    assert dropped["last_cents"] == 3470
+    assert dropped["ts"] == "2026-10-17T23:24:48Z"
+    assert 3995 - 3470 > halt.CASH_DROP_CENTS
+
+    assert halt.record_cash_cents(
+        36.00,
+        path,
+        now=datetime(2026, 10, 17, 23, 30, tzinfo=timezone.utc),
+    )
+    risen = json.loads(path.read_text(encoding="utf-8"))
+    assert risen["start_cents"] == 3995
+    assert risen["prev_cents"] == 3470
+    assert risen["last_cents"] == 3600
+    assert risen["ts"] == "2026-10-17T23:30:00Z"
+
+
+def test_invalid_cash_read_keeps_the_prior_file(tmp_path, caplog):
+    """None, 0, NaN, and inf must not replace a valid cash file."""
+    import logging
+    from datetime import datetime, timezone
+
+    path = tmp_path / "cash.json"
+    assert halt.record_cash_cents(
+        39.95,
+        path,
+        now=datetime(2026, 10, 17, 3, 9, 46, tzinfo=timezone.utc),
+    )
+    prior = path.read_bytes()
+    caplog.set_level(logging.WARNING, logger="utils.event_news_session_halt")
+    for bad in (None, 0, 0.0, float("nan"), float("inf"), float("-inf"), False):
+        assert halt.record_cash_cents(bad, path) is False
+        assert path.read_bytes() == prior
+    assert "cash=not_measured" in caplog.text
+
+
+def test_failed_balance_get_does_not_overwrite_cash(monkeypatch, tmp_path, caplog):
+    """An HTTP failure and a zero read leave the previous cash file in place."""
+    import logging
+
+    _enable(monkeypatch, tmp_path)
+    path = tmp_path / "cash.json"
+    from datetime import datetime, timezone
+
+    assert halt.record_cash_cents(
+        39.95,
+        path,
+        now=datetime(2026, 10, 17, 3, 9, 46, tzinfo=timezone.utc),
+    )
+    prior = path.read_bytes()
+    ex, rest, _ = _make_executor(monkeypatch, bankroll=500.0, loss_limit_pct=0.10)
+    rest.get_balance.return_value = None
+    caplog.set_level(logging.WARNING)
+    reason = ex._validate(_make_analysis())
+    assert reason == "live balance unreadable"
+    assert "cash=not_measured" in caplog.text
+    assert path.read_bytes() == prior
+
+    rest.get_balance.return_value = 0.0
+    assert ex._validate(_make_analysis()) == "live balance unreadable"
+    assert path.read_bytes() == prior
+
+
 def test_cash_integer_resets_on_a_new_utc_date(tmp_path):
     from datetime import datetime, timezone
 
