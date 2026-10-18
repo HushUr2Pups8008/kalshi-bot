@@ -54,16 +54,17 @@
     Exact series KXTRUMPSAY only. KXTRUMPSAYCOUNTRY and the other
     glued siblings do not match. Desk default favorite band.
 - series: KXTRUMPMENTION
-  mode: live
+  mode: paper
   favorite_lo_cents: 55
   favorite_hi_cents: 99
   transcript_skip: true
   paper_score: true
   notes: >-
-    Stays mode live so prewarm still fetches it and returns
-    mention_requires_transcript. Live does not POST. Paper scoring
-    skips the transcript gate and would use Grok grounding. A run
-    with no probability logs veto_not_called and does not call Grok.
+    The file records mode paper. Until EVENT_NEWS_LIVE_TRADABLE_RESEARCH
+    is true, decisions still treat this row as live: prewarm fetches it
+    and returns mention_requires_transcript, and live does not POST.
+    Paper scoring skips the transcript gate. A run with no probability
+    logs veto_not_called and does not call Grok.
 - series: KXAPRPOTUS
   mode: live
   favorite_lo_cents: 55

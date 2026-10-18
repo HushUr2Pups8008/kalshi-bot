@@ -30,6 +30,7 @@ _ALLOWED_KEYS = frozenset(
     }
 )
 _POLITICS_COHORT_ID = "kalshi-event-news-20260820"
+_MENTION_SERIES = "KXTRUMPMENTION"
 
 _cached: SeriesUniverse | None = None
 _cached_path: Path | None = None
@@ -95,11 +96,30 @@ def universe_failed() -> bool:
     return get_universe().failed
 
 
+def effective_mode(entry: SeriesEntry) -> str:
+    """File mode. Mention stays live until the research flag is on.
+
+    The yaml row records paper. A restart with the flag unset must still
+    fetch mention and block POST with transcript_skip.
+    """
+    from utils.event_news_desk_flags import event_news_live_tradable_research_enabled
+
+    if (
+        entry.series == _MENTION_SERIES
+        and entry.mode == "paper"
+        and not event_news_live_tradable_research_enabled()
+    ):
+        return "live"
+    return entry.mode
+
+
 def live_series_tickers() -> tuple[str, ...]:
     universe = get_universe()
     if universe.failed:
         return ()
-    return tuple(entry.series for entry in universe.entries if entry.mode == "live")
+    return tuple(
+        entry.series for entry in universe.entries if effective_mode(entry) == "live"
+    )
 
 
 def paper_score_entries() -> tuple[SeriesEntry, ...]:
@@ -150,9 +170,10 @@ def event_news_live_post_block_reason(
     entry = match_market(market)
     if entry is None:
         return "not_live_series"
-    if entry.mode == "paper":
+    mode = effective_mode(entry)
+    if mode == "paper":
         return "paper_series_no_post"
-    if entry.mode != "live":
+    if mode != "live":
         return "series_off"
     if entry.transcript_skip:
         return "transcript_skip"
@@ -195,11 +216,13 @@ def _load_universe(path: Path) -> SeriesUniverse:
         return _fail(path, str(exc))
     live = sum(1 for entry in entries if entry.mode == "live")
     paper = sum(1 for entry in entries if entry.mode == "paper")
+    effective_live = sum(1 for entry in entries if effective_mode(entry) == "live")
     log.info(
-        "[EVENT_NEWS_UNIVERSE] loaded path=%s live=%d paper=%d",
+        "[EVENT_NEWS_UNIVERSE] loaded path=%s live=%d paper=%d effective_live=%d",
         path,
         live,
         paper,
+        effective_live,
     )
     return SeriesUniverse(
         path=str(path),
