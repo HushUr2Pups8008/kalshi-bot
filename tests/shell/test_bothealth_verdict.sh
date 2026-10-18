@@ -538,12 +538,13 @@ assert_contains "$out" "Verdict: **RED** — bot not running"
 assert_contains "$out" "politics_operator_alert=restart_cap counts=yes"
 
 today="$(date -u +%Y-%m-%d)"
+cash_epoch="$(TS="${today}T00:00:00+00:00" "$PYTHON_BIN" -c 'import datetime, os; print(int(datetime.datetime.fromisoformat(os.environ["TS"]).timestamp()))')"
 fixture="$TMP_ROOT/politics-cash-drop"
 make_fixture "$fixture"
 make_db "$fixture/data/paper_trades.db" "2026-05-12T23:50:04+00:00" "2026-05-13T01:00:00+00:00"
 mkdir -p "$fixture/logs/state"
 printf '{"date":"%s","last_cents":2419,"start_cents":2920,"ts":"%sT00:00:00Z"}\n' "$today" "$today" >"$fixture/logs/state/politics_cash_cents.json"
-out="$(run_bothealth "$fixture")"
+out="$(BOTHEALTH_NOW_EPOCH="$cash_epoch" run_bothealth "$fixture")"
 assert_contains "$out" "Verdict: **RED** — cash integer dropped more than \$5 today"
 assert_contains "$out" "politics_cash=drop"
 
@@ -552,9 +553,60 @@ make_fixture "$fixture"
 make_db "$fixture/data/paper_trades.db" "2026-05-12T23:50:04+00:00" "2026-05-13T01:00:00+00:00"
 mkdir -p "$fixture/logs/state"
 printf '{"date":"%s","last_cents":2420,"start_cents":2920,"ts":"%sT00:00:00Z"}\n' "$today" "$today" >"$fixture/logs/state/politics_cash_cents.json"
-out="$(run_bothealth "$fixture")"
+out="$(BOTHEALTH_NOW_EPOCH="$cash_epoch" run_bothealth "$fixture")"
 assert_contains "$out" "Verdict: **YELLOW** — runtime cohort provenance unavailable; review section 1a"
 assert_contains "$out" "politics_cash=ok"
+
+fixture="$TMP_ROOT/politics-cash-stale"
+make_fixture "$fixture"
+make_db "$fixture/data/paper_trades.db" "2026-05-12T23:50:04+00:00" "2026-05-13T01:00:00+00:00"
+mkdir -p "$fixture/logs/state"
+printf '{"date":"%s","last_cents":3995,"start_cents":3995,"ts":"%sT00:00:00Z"}\n' "$today" "$today" >"$fixture/logs/state/politics_cash_cents.json"
+out="$(BOTHEALTH_NOW_EPOCH="$((cash_epoch + 7201))" run_bothealth "$fixture")"
+assert_contains "$out" "Verdict: **RED** — cash file older than 2 hours"
+assert_contains "$out" "politics_cash=stale"
+
+fixture="$TMP_ROOT/politics-cash-age-boundary"
+make_fixture "$fixture"
+make_db "$fixture/data/paper_trades.db" "2026-05-12T23:50:04+00:00" "2026-05-13T01:00:00+00:00"
+mkdir -p "$fixture/logs/state"
+printf '{"date":"%s","last_cents":3995,"start_cents":3995,"ts":"%sT00:00:00Z"}\n' "$today" "$today" >"$fixture/logs/state/politics_cash_cents.json"
+out="$(BOTHEALTH_NOW_EPOCH="$((cash_epoch + 7200))" run_bothealth "$fixture")"
+assert_contains "$out" "politics_cash=ok"
+assert_not_contains "$out" "cash file older than 2 hours"
+
+# 23:00Z then 00:30Z is 90 minutes, under 2h, and a new UTC date.
+# 3995 -> 3470 must still alert. Age over 2h wins when both are true.
+# Exact $5 across midnight stays not_today.
+cross_file_epoch="$(TS="2026-10-17T23:00:00+00:00" "$PYTHON_BIN" -c 'import datetime, os; print(int(datetime.datetime.fromisoformat(os.environ["TS"]).timestamp()))')"
+cross_now_epoch="$(TS="2026-10-18T00:30:00+00:00" "$PYTHON_BIN" -c 'import datetime, os; print(int(datetime.datetime.fromisoformat(os.environ["TS"]).timestamp()))')"
+fixture="$TMP_ROOT/politics-cash-cross-midnight-drop"
+make_fixture "$fixture"
+make_db "$fixture/data/paper_trades.db" "2026-05-12T23:50:04+00:00" "2026-05-13T01:00:00+00:00"
+mkdir -p "$fixture/logs/state"
+printf '%s\n' '{"date":"2026-10-17","last_cents":3470,"prev_cents":3995,"start_cents":3995,"ts":"2026-10-17T23:00:00Z"}' >"$fixture/logs/state/politics_cash_cents.json"
+out="$(BOTHEALTH_NOW_EPOCH="$cross_now_epoch" run_bothealth "$fixture")"
+assert_contains "$out" "Verdict: **RED** — cash integer dropped more than \$5 today"
+assert_contains "$out" "politics_cash=drop"
+
+fixture="$TMP_ROOT/politics-cash-stale-beats-drop"
+make_fixture "$fixture"
+make_db "$fixture/data/paper_trades.db" "2026-05-12T23:50:04+00:00" "2026-05-13T01:00:00+00:00"
+mkdir -p "$fixture/logs/state"
+printf '%s\n' '{"date":"2026-10-17","last_cents":3470,"prev_cents":3995,"start_cents":3995,"ts":"2026-10-17T23:00:00Z"}' >"$fixture/logs/state/politics_cash_cents.json"
+out="$(BOTHEALTH_NOW_EPOCH="$((cross_file_epoch + 7201))" run_bothealth "$fixture")"
+assert_contains "$out" "Verdict: **RED** — cash file older than 2 hours"
+assert_contains "$out" "politics_cash=stale"
+assert_not_contains "$out" "cash integer dropped"
+
+fixture="$TMP_ROOT/politics-cash-cross-midnight-exact-5"
+make_fixture "$fixture"
+make_db "$fixture/data/paper_trades.db" "2026-05-12T23:50:04+00:00" "2026-05-13T01:00:00+00:00"
+mkdir -p "$fixture/logs/state"
+printf '%s\n' '{"date":"2026-10-17","last_cents":3495,"prev_cents":3995,"start_cents":3995,"ts":"2026-10-17T23:00:00Z"}' >"$fixture/logs/state/politics_cash_cents.json"
+out="$(BOTHEALTH_NOW_EPOCH="$cross_now_epoch" run_bothealth "$fixture")"
+assert_contains "$out" "politics_cash=not_today"
+assert_not_contains "$out" "cash integer dropped"
 
 fixture="$TMP_ROOT/politics-dry-run"
 make_fixture "$fixture"
@@ -578,6 +630,39 @@ exit 0
 EOF
     chmod +x "$root/bin/curl"
 }
+
+fixture="$TMP_ROOT/alert-cash-stale"
+make_fixture "$fixture"
+make_db "$fixture/data/paper_trades.db" "2026-05-12T23:50:04+00:00" "2026-05-13T01:00:00+00:00"
+mkdir -p "$fixture/logs/state"
+printf '{"date":"%s","last_cents":3995,"start_cents":3995,"ts":"%sT00:00:00Z"}\n' "$today" "$today" >"$fixture/logs/state/politics_cash_cents.json"
+install_curl_capture "$fixture"
+out="$(
+    ALERT_NTFY_TOPIC=desk-test \
+    BOTHEALTH_NOW_EPOCH="$((cash_epoch + 7201))" \
+    BOTHEALTH_CURL_CAPTURE="$fixture/curl.args" \
+    run_bothealth "$fixture"
+)"
+assert_contains "$out" "politics_cash=stale"
+assert_contains "$(cat "$fixture/curl.args")" "cash_stale"
+assert_contains "$(cat "$fixture/curl.args")" "https://ntfy.sh/desk-test"
+assert_not_contains "$out" "desk-test"
+
+fixture="$TMP_ROOT/alert-cash-drop"
+make_fixture "$fixture"
+make_db "$fixture/data/paper_trades.db" "2026-05-12T23:50:04+00:00" "2026-05-13T01:00:00+00:00"
+mkdir -p "$fixture/logs/state"
+printf '{"date":"%s","last_cents":3470,"prev_cents":3995,"start_cents":3995,"ts":"%sT00:00:00Z"}\n' "$today" "$today" >"$fixture/logs/state/politics_cash_cents.json"
+install_curl_capture "$fixture"
+out="$(
+    ALERT_NTFY_TOPIC=desk-test \
+    BOTHEALTH_NOW_EPOCH="$cash_epoch" \
+    BOTHEALTH_CURL_CAPTURE="$fixture/curl.args" \
+    run_bothealth "$fixture"
+)"
+assert_contains "$out" "politics_cash=drop"
+assert_contains "$(cat "$fixture/curl.args")" "cash_drop"
+assert_not_contains "$out" "desk-test"
 
 fixture="$TMP_ROOT/test-alert-unconfigured"
 make_fixture "$fixture"
@@ -731,5 +816,27 @@ start_runtime_lock_holder "$fixture" "$cohort_id" "$cohort_kind" "bot_runtime.ka
 out="$(run_bothealth "$fixture")"
 assert_contains "$out" "Verdict: **GREEN**"
 assert_not_contains "$out" "runtime_lock_unheld"
+
+fixture="$TMP_ROOT/alert-env-file"
+make_fixture "$fixture"
+install_curl_capture "$fixture"
+printf '%s\n' 'ALERT_NTFY_TOPIC="desk-test"' >"$fixture/alerts.env"
+out="$(
+    KALSHI_ALERTS_ENV="$fixture/alerts.env" \
+    BOTHEALTH_CURL_CAPTURE="$fixture/curl.args" \
+    PATH="$fixture/bin:$PATH" \
+    /bin/bash "$REPO_ROOT/scripts/bothealth_launchd.sh" --test-alert
+)"
+assert_contains "$out" "alert_channel=ntfy"
+assert_not_contains "$out" "desk-test"
+assert_contains "$(cat "$fixture/curl.args")" "https://ntfy.sh/desk-test"
+
+fixture="$TMP_ROOT/alert-env-missing"
+make_fixture "$fixture"
+out="$(
+    KALSHI_ALERTS_ENV="$fixture/missing.env" \
+    /bin/bash "$REPO_ROOT/scripts/bothealth_launchd.sh" --test-alert
+)"
+assert_contains "$out" "alert channel not configured"
 
 echo "test_bothealth_verdict.sh: PASS"

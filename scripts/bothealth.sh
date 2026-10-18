@@ -406,11 +406,13 @@ POLITICS_ALERT="none"
 POLITICS_ALERT_COUNTS="no"
 POLITICS_CASH="not_measured"
 POLITICS_CASH_DROP=""
+POLITICS_CASH_AGE=""
 POLITICS_STATE_DIR="$REPO_ROOT/logs/state"
 _politics_py="$(python_bin || true)"
 if [[ -n "${_politics_py}" ]]; then
     _politics_status="$("$_politics_py" - "$LOG_DIR" "$POLITICS_STATE_DIR" <<'PY'
 import json
+import os
 import sys
 import time
 from datetime import datetime, timezone
@@ -449,40 +451,79 @@ except (OSError, UnicodeError, json.JSONDecodeError):
     alert = "none"
 cash = "not_measured"
 drop = ""
+cash_age = ""
+# 500 cents is $5. Age above 2h is stale even when the cent delta is small.
+# BOTHEALTH_NOW_EPOCH pins both clocks so a midnight fixture is not stale.
+CASH_DROP_CENTS = 500
+CASH_STALE_S = 7200
+raw_now = os.environ.get("BOTHEALTH_NOW_EPOCH", "").strip()
+now_epoch = now
+now_dt = datetime.now(timezone.utc)
+if raw_now:
+    try:
+        now_epoch = int(raw_now)
+        now_dt = datetime.fromtimestamp(now_epoch, timezone.utc)
+    except (TypeError, ValueError, OverflowError, OSError):
+        now_epoch = now
+        now_dt = datetime.now(timezone.utc)
 try:
     data = json.loads((state_dir / "politics_cash_cents.json").read_text(encoding="utf-8"))
 except (OSError, UnicodeError, json.JSONDecodeError):
     data = None
 if isinstance(data, dict):
-    today = datetime.now(timezone.utc).date().isoformat()
-    if data.get("date") != today:
-        cash = "not_today"
+    try:
+        start = int(data["start_cents"])
+        last = int(data["last_cents"])
+        stamp = datetime.strptime(str(data["ts"]), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except (KeyError, TypeError, ValueError):
+        cash = "not_measured"
     else:
-        try:
-            start = int(data["start_cents"])
-            last = int(data["last_cents"])
-        except (KeyError, TypeError, ValueError):
-            cash = "not_measured"
+        age_s = now_epoch - stamp.timestamp()
+        cash_age = str(int(age_s))
+        day_drop = start - last
+        step_drop = day_drop
+        raw_prev = data.get("prev_cents")
+        if raw_prev is not None:
+            try:
+                step_drop = int(raw_prev) - last
+            except (TypeError, ValueError):
+                step_drop = day_drop
+        reported = day_drop if day_drop >= step_drop else step_drop
+        drop = str(reported)
+        breach = day_drop > CASH_DROP_CENTS or step_drop > CASH_DROP_CENTS
+        today = now_dt.date().isoformat()
+        # Age wins. A drop beats a date mismatch so a cross-midnight
+        # step over $5 still alerts while the file is younger than 2h.
+        if age_s > CASH_STALE_S:
+            cash = "stale"
+        elif breach:
+            cash = "drop"
+        elif data.get("date") != today:
+            cash = "not_today"
         else:
-            delta = start - last
-            drop = str(delta)
-            cash = "drop" if delta > 500 else "ok"
+            cash = "ok"
 
 def _cell(value: str) -> str:
     # A tab is IFS whitespace, so an empty age would shift the halt field.
     text = value.replace("|", "/")
     return text if text else "-"
 
-print("|".join([_cell(log_state), _cell(log_age), _cell(halt), _cell(alert), _cell(cash), _cell(drop)]))
+print("|".join([
+    _cell(log_state), _cell(log_age), _cell(halt), _cell(alert),
+    _cell(cash), _cell(drop), _cell(cash_age),
+]))
 PY
 )" || true
     if [[ -n "${_politics_status}" ]]; then
-        IFS='|' read -r POLITICS_LOG POLITICS_LOG_AGE POLITICS_HALT POLITICS_ALERT POLITICS_CASH POLITICS_CASH_DROP <<<"$_politics_status"
+        IFS='|' read -r POLITICS_LOG POLITICS_LOG_AGE POLITICS_HALT POLITICS_ALERT POLITICS_CASH POLITICS_CASH_DROP POLITICS_CASH_AGE <<<"$_politics_status"
         if [[ "$POLITICS_LOG_AGE" == "-" ]]; then
             POLITICS_LOG_AGE=""
         fi
         if [[ "$POLITICS_CASH_DROP" == "-" ]]; then
             POLITICS_CASH_DROP=""
+        fi
+        if [[ "$POLITICS_CASH_AGE" == "-" ]]; then
+            POLITICS_CASH_AGE=""
         fi
     fi
 fi
@@ -503,7 +544,7 @@ printf 'politics_log=%s age_s=%s\n' "$POLITICS_LOG" "${POLITICS_LOG_AGE:-}" >>"$
 printf 'politics_halt=%s\n' "$POLITICS_HALT" >>"$REPORT"
 printf 'politics_operator_alert=%s counts=%s\n' "$POLITICS_ALERT" "$POLITICS_ALERT_COUNTS" >>"$REPORT"
 printf 'politics_alert_counts=%s\n' "$POLITICS_ALERT_COUNTS" >>"$REPORT"
-printf 'politics_cash=%s drop_cents=%s\n' "$POLITICS_CASH" "${POLITICS_CASH_DROP:-}" >>"$REPORT"
+printf 'politics_cash=%s drop_cents=%s age_s=%s\n' "$POLITICS_CASH" "${POLITICS_CASH_DROP:-}" "${POLITICS_CASH_AGE:-}" >>"$REPORT"
 codeblock_end
 
 # ── 1a. Runtime cohort provenance ───────────────────────────────────────────
@@ -913,6 +954,8 @@ section "Verdict"
         VERDICT="**RED** — session halt latched"
     elif [[ "$POLITICS_LOG" == "stale" ]]; then
         VERDICT="**RED** — no log lines for 30 min"
+    elif [[ "$POLITICS_CASH" == "stale" ]]; then
+        VERDICT="**RED** — cash file older than 2 hours"
     elif [[ "$POLITICS_CASH" == "drop" ]]; then
         VERDICT="**RED** — cash integer dropped more than \$5 today"
     elif (( APPLIED > 0 || KS > 0 || VE > 0 || BATCH_ABORTED > 0 )); then
@@ -941,7 +984,10 @@ section "Verdict"
 
 # Notify operator. osascript is the local toast. ntfy or Pushover is the
 # off-box channel and is used only for RED, a YELLOW that has lasted 30
-# minutes, a down process, a latched halt, or a new live fill line.
+# minutes, a down process, a latched halt, a cash drop, a cash file
+# older than 2 hours, or a new live fill line.
+# new_fill and halt call send_offbox_alert. cash_drop and cash_stale
+# call that same sender. There is no second alert path.
 # The first sighting of the fill log records a watermark and does not page.
 # A missing off-box channel logs "alert channel not configured" and still
 # exits 0. --dry-run does not send and does not move that watermark.
@@ -955,6 +1001,7 @@ alert_reasons() {
     VERDICT="$VERDICT" \
     POLITICS_PROCESS="$POLITICS_PROCESS" \
     POLITICS_HALT="$POLITICS_HALT" \
+    POLITICS_CASH="$POLITICS_CASH" \
     ALERT_STATE_PATH="$ALERT_STATE_PATH" \
     LIVE_FILL_LOG="$LIVE_FILL_LOG" \
     DRY_RUN="$DRY_RUN" \
@@ -967,6 +1014,7 @@ from pathlib import Path
 verdict = os.environ.get("VERDICT", "")
 process = os.environ.get("POLITICS_PROCESS", "")
 halt = os.environ.get("POLITICS_HALT", "")
+cash = os.environ.get("POLITICS_CASH", "")
 dry = os.environ.get("DRY_RUN", "0") == "1"
 state_path = Path(os.environ["ALERT_STATE_PATH"])
 fill_path = Path(os.environ["LIVE_FILL_LOG"])
@@ -988,6 +1036,10 @@ if process == "down":
     reasons.append("process_down")
 if halt == "latched":
     reasons.append("halt")
+if cash == "drop":
+    reasons.append("cash_drop")
+elif cash == "stale":
+    reasons.append("cash_stale")
 
 lines = []
 try:
@@ -1091,4 +1143,4 @@ echo "politics_log=${POLITICS_LOG} age_s=${POLITICS_LOG_AGE:-}"
 echo "politics_halt=${POLITICS_HALT}"
 echo "politics_operator_alert=${POLITICS_ALERT} counts=${POLITICS_ALERT_COUNTS}"
 echo "politics_alert_counts=${POLITICS_ALERT_COUNTS}"
-echo "politics_cash=${POLITICS_CASH} drop_cents=${POLITICS_CASH_DROP:-}"
+echo "politics_cash=${POLITICS_CASH} drop_cents=${POLITICS_CASH_DROP:-} age_s=${POLITICS_CASH_AGE:-}"

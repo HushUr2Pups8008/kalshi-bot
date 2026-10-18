@@ -41,6 +41,11 @@ def test_all_launchd_templates_render_valid_plists():
     assert set(rendered) == EXPECTED_LABELS
     bothealth = rendered["com.jake.kalshi-bothealth"]
     assert "--daily-review" in bothealth["ProgramArguments"]
+    assert any(
+        str(arg).endswith("scripts/bothealth_launchd.sh")
+        for arg in bothealth["ProgramArguments"]
+    )
+    assert "ALERT_NTFY_TOPIC" not in str(bothealth)
     assert bothealth["StartCalendarInterval"] == {"Hour": 5, "Minute": 0}
     assert "com.jake.kalshi-daily-review" not in rendered
     for label, plist in rendered.items():
