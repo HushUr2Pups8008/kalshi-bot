@@ -10,6 +10,7 @@ Kalshi API docs: https://trading-api.kalshi.com/trade-api/v2/openapi.json
 import base64
 import json
 import math
+import os
 import re
 import threading
 import time
@@ -331,6 +332,30 @@ class KalshiSeriesDiscoveryError(RuntimeError):
     """Raised when the authoritative Kalshi series inventory is incomplete."""
 
 
+SIDECAR_ENV = "KALSHI_GROK_PAPER_SIDECAR"
+
+
+class KalshiSidecarOrderBlocked(RuntimeError):
+    """The paper sidecar refused an order write before any HTTP call."""
+
+
+def sidecar_blocks_order_write(method: str, endpoint: str) -> bool:
+    """Block order POST and DELETE only while the paper sidecar env is true.
+
+    The politics process does not set that env, so its order path is
+    unchanged. GET market data and GET positions are not order writes.
+    ``/portfolio/events/orders`` is the live create-order path, and
+    ``/portfolio/orders`` is the cancel path.
+    """
+    if str(os.environ.get(SIDECAR_ENV) or "").strip().lower() != "true":
+        return False
+    verb = str(method or "").strip().upper()
+    if verb not in {"POST", "DELETE"}:
+        return False
+    path = str(endpoint or "")
+    return "/portfolio/orders" in path or "/portfolio/events/orders" in path
+
+
 def _normalize_market_page(data: dict[str, Any]) -> tuple[list[KalshiMarket], str | None]:
     markets = []
     for market in data.get("markets", []):
@@ -511,6 +536,10 @@ class KalshiRestClient:
         *,
         allow_redirects: bool | None = None,
     ) -> dict[str, Any]:
+        if sidecar_blocks_order_write(method, endpoint):
+            raise KalshiSidecarOrderBlocked(
+                f"paper sidecar blocked {str(method or '').strip().upper()} {endpoint}"
+            )
         path        = "/trade-api/v2" + endpoint   # used for signing
         url         = self._base + endpoint
         body_str    = json.dumps(payload) if payload else ""
@@ -1141,6 +1170,8 @@ class KalshiRestClient:
                 error=None,
                 http_status=201,
             )
+        except KalshiSidecarOrderBlocked:
+            raise
         except requests.HTTPError as exc:
             response = getattr(exc, "response", None)
             status_code = getattr(response, "status_code", None)
@@ -1170,6 +1201,8 @@ class KalshiRestClient:
         try:
             self._request("DELETE", f"/portfolio/orders/{order_id}")
             return True
+        except KalshiSidecarOrderBlocked:
+            raise
         except Exception as exc:
             log.warning("cancel_order(%s) failed: %s", order_id, exc)
             return False

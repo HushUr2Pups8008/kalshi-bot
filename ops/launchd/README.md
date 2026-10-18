@@ -22,6 +22,13 @@ generated `*.plist` files are per-machine artifacts ignored by git.
 | `com.kalshi.governance.fast` | governance fast cadence | every 2 hours |
 | `com.kalshi.governance.deep` | governance deep cadence | local 09:00 daily |
 
+`com.jake.kalshi-grok-paper` is the paper-only Grok sidecar. It is not in
+`install.sh` and not in the equivalence audit's default labels, because it
+is not installed until the operator copies the rendered plist and bootstraps
+that label alone. Do not add it to the default audit list before that copy
+exists. Do not bootstrap `com.jake.kalshi-bot` or `com.jake.kalshi-bot-politics`
+as part of installing this label.
+
 ## Generate
 
 ```bash

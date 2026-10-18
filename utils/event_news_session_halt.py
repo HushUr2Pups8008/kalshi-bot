@@ -18,13 +18,14 @@ import os
 from datetime import datetime, timezone
 from numbers import Real
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 HALT_LATCH_PATH = Path("logs/state/politics_session_halt.json")
 OPERATOR_ALERT_PATH = Path("logs/state/politics_operator_alert.json")
 CASH_CENTS_PATH = Path("logs/state/politics_cash_cents.json")
 SESSION_HALT_DOLLAR_CAP = 10.0
 CASH_DROP_CENTS = 500
+CASH_STALE_SECONDS = 7200
 
 log = logging.getLogger(__name__)
 
@@ -150,3 +151,54 @@ def record_cash_cents(
         payload["prev_cents"] = prev
     _write_json(target, payload)
     return True
+
+
+def cash_file_is_stale(
+    path: Path,
+    *,
+    now: datetime,
+    max_age_seconds: int = CASH_STALE_SECONDS,
+) -> bool:
+    """True when the cash file is missing, unreadable, or older than 2 hours.
+
+    Age equal to 2 hours is still fresh. The health check uses the same
+    strict greater-than boundary.
+    """
+    moment = now if now.tzinfo is not None else now.replace(tzinfo=timezone.utc)
+    moment = moment.astimezone(timezone.utc)
+    data = _read_json(path)
+    if not data:
+        return True
+    try:
+        stamp = datetime.strptime(str(data["ts"]), "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc
+        )
+    except (KeyError, TypeError, ValueError):
+        return True
+    return (moment - stamp).total_seconds() > max_age_seconds
+
+
+def refresh_stale_cash(
+    *,
+    read_cents: Callable[[], int | None],
+    path: Path,
+    now: datetime,
+    max_age_seconds: int = CASH_STALE_SECONDS,
+) -> str:
+    """GET-backed refresh. A bad read does not overwrite a cash file.
+
+    ``read_cents`` must return positive integer cents or None. This function
+    does not call an order endpoint.
+    """
+    if not cash_file_is_stale(path, now=now, max_age_seconds=max_age_seconds):
+        return "fresh"
+    try:
+        cents = read_cents()
+    except Exception:
+        log.warning("[CASH_CENTS] cash=not_measured reason=refresh_failed")
+        return "not_measured"
+    if isinstance(cents, bool) or not isinstance(cents, int) or cents <= 0:
+        log.warning("[CASH_CENTS] cash=not_measured reason=invalid_read")
+        return "not_measured"
+    wrote = record_cash_cents(cents / 100.0, path, now=now)
+    return "refreshed" if wrote else "not_measured"

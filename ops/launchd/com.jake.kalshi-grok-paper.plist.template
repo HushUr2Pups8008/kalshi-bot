@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jake.kalshi-grok-paper</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>@REPO_ROOT@/scripts/start_grok_paper.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>@REPO_ROOT@</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+        <key>LIVE_TRADING_ENABLED</key>
+        <string>false</string>
+        <key>KALSHI_GROK_PAPER_SIDECAR</key>
+        <string>true</string>
+        <key>GROK_DAILY_USD_CAP</key>
+        <string>3</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>@REPO_ROOT@/logs/app/grok_paper.launchd.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>@REPO_ROOT@/logs/app/grok_paper.launchd.stderr.log</string>
+</dict>
+</plist>

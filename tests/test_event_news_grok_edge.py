@@ -248,7 +248,7 @@ def test_grounded_scan_queues_four_and_records_the_disabled_proposal(tmp_path: P
     )
     assert counts == {"examined": 1, "queued": 1, "skipped": 0}
     assert len(calls) == 2
-    ungrounded, grounded = calls
+    grounded, ungrounded = calls
     assert "tools" not in ungrounded["payload"]
     assert grounded["payload"]["tools"] == [{"type": "web_search"}, {"type": "x_search"}]
     assert grounded["payload"]["model"] == GROK_MODEL
@@ -266,8 +266,8 @@ def test_grounded_scan_queues_four_and_records_the_disabled_proposal(tmp_path: P
     assert comparison["agree"] is True
     logged = _rows(tmp_path / "calls.jsonl")
     assert len(logged[0]["prompt_hash"]) == 16
-    assert logged[0]["tools"] == []
-    assert logged[1]["tools"] == ["web_search", "x_search"]
+    assert logged[0]["tools"] == ["web_search", "x_search"]
+    assert logged[1]["tools"] == []
 
 
 def test_open_status_is_not_a_tradeable_response(tmp_path: Path) -> None:
@@ -292,7 +292,7 @@ def test_malformed_grounded_reply_does_not_queue(tmp_path: Path) -> None:
     counts = _scan(tmp_path, [_market()], post, {XAI_API_KEY_ENV: "test-key"})
     assert counts["queued"] == 0
     assert _rows(tmp_path / "candidates.jsonl") == []
-    assert _rows(tmp_path / "calls.jsonl")[1]["skip_reason"] == "malformed"
+    assert _rows(tmp_path / "calls.jsonl")[0]["skip_reason"] == "malformed"
 
 
 def test_grounded_reply_without_a_source_does_not_queue(tmp_path: Path) -> None:
@@ -301,7 +301,7 @@ def test_grounded_reply_without_a_source_does_not_queue(tmp_path: Path) -> None:
 
     counts = _scan(tmp_path, [_market()], post, {XAI_API_KEY_ENV: "test-key"})
     assert counts["queued"] == 0
-    assert _rows(tmp_path / "calls.jsonl")[1]["skip_reason"] == "malformed"
+    assert _rows(tmp_path / "calls.jsonl")[0]["skip_reason"] == "malformed"
 
 
 def test_timeout_keeps_the_reserve_and_does_not_queue(tmp_path: Path) -> None:
@@ -316,7 +316,7 @@ def test_timeout_keeps_the_reserve_and_does_not_queue(tmp_path: Path) -> None:
 
 
 def test_spend_cap_skips_before_the_post(tmp_path: Path) -> None:
-    """$2.60 already spent leaves room for the $0.05 call and not the $0.50 call."""
+    """$2.60 already spent rejects the grounded reserve and still allows $0.05."""
     (tmp_path / "spend.json").write_text(
         json.dumps({"date": "2026-10-17", "spent_usd": "2.60"}) + "\n",
         encoding="utf-8",
@@ -326,9 +326,10 @@ def test_spend_cap_skips_before_the_post(tmp_path: Path) -> None:
     assert len(calls) == 1
     assert "tools" not in calls[0]["payload"]
     assert counts["queued"] == 0
-    grounded = _rows(tmp_path / "calls.jsonl")[1]
+    grounded = _rows(tmp_path / "calls.jsonl")[0]
     assert grounded["grounded"] is True
     assert grounded["skip_reason"] == "spend_cap"
+    assert _rows(tmp_path / "calls.jsonl")[1]["grounded"] is False
 
 
 def test_missing_key_does_not_post(tmp_path: Path) -> None:
@@ -566,7 +567,19 @@ def test_new_flags_do_not_arm_the_live_order_path_or_the_plist() -> None:
         text = Path(relative).read_text(encoding="utf-8")
         assert "EVENT_NEWS_GROK_EDGE_SCAN" not in text
         assert "EVENT_NEWS_GROK_EXIT_WATCH" not in text
+        assert "EVENT_NEWS_GROK_GROUNDING" not in text
+        assert "KALSHI_GROK_PAPER_SIDECAR" not in text
         assert "GROK_DAILY_USD_CAP" not in text
+    sidecar_script = Path("scripts/start_grok_paper.sh").read_text(encoding="utf-8")
+    assert "LIVE_TRADING_ENABLED=false" in sidecar_script
+    assert "KALSHI_GROK_PAPER_SIDECAR=true" in sidecar_script
+    assert "EVENT_NEWS_GROK_EDGE_SCAN=true" in sidecar_script
+    assert "EVENT_NEWS_GROK_EXIT_WATCH=true" in sidecar_script
+    assert "EVENT_NEWS_GROK_GROUNDING=true" in sidecar_script
+    assert "GROK_DAILY_USD_CAP=3" in sidecar_script
+    assert "bot_runtime.kalshi-grok-paper.lock" in sidecar_script
+    assert "bot_runtime.kalshi-event-news-20260820.lock" not in sidecar_script
+    assert "main.py" not in sidecar_script
     executor = Path("trading/executor.py").read_text(encoding="utf-8")
     edge = Path("utils/event_news_grok_edge.py").read_text(encoding="utf-8")
     assert "proposed_contracts_for_edge" not in executor
