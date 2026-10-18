@@ -19,6 +19,16 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.35.0] - 2026-10-17
+
+### Added
+
+- **Paper-only Grok edge scan and exit watch.** The scan and exit loops share one lock on the daily spend ledger. If a reported cost is above the reserve and the difference does not fit under the cap, the ledger is filled to the cap so a later call cannot start. A smaller reported cost is not refunded. An exit reply with no probability in `[0, 1]` is skipped. `EVENT_NEWS_GROK_EDGE_SCAN` and `EVENT_NEWS_GROK_EXIT_WATCH` default paper=on and live=off. They are not live-order desk flags. The loops also refuse to start when live trading is on, so the politics process does not call them. A scan asks `grok-4.20-0309-non-reasoning` through the Responses API. A grounded call sends `web_search` and `x_search` and must cite an http source. The new calls time out at 20 seconds. The existing veto stays on chat completions, at 45 seconds, and ungrounded unless `EVENT_NEWS_GROK_GROUNDING` is the exact string `true`. A missing key, timeout, non-200, malformed reply, missing citation, or a debit that would pass `GROK_DAILY_USD_CAP` (default $3) queues nothing. Edge is the floored per-contract cents of the Grok probability minus the executable ask minus the Kalshi taker fee, which rounds up to the next cent. A paper candidate is logged only when that edge is at least `EVENT_NEWS_GROK_EDGE_MIN_CENTS` (default 8), the ask is at least 36c, a YES ask is at least 55c, and the logged size is 4. The 4/6/8 sizing buckets are stored on the candidate and are not read by the order path. The exit watch logs a paper exit at the bid when grounded Grok returns contrary evidence at confidence 0.70 or higher with an http source. It does not cancel or sell. The scan period defaults to 30 minutes and cannot drop below 5.
+
+### Not enabled
+
+- **Live=on stays off until paper evidence exists.** The written bar is at least 30 settled paper comparisons, a grounded hit rate that is not worse than the ungrounded call, a Brier score better than the fee-inclusive market ask, and fee-net EV whose 95% interval is above 0 in the buckets at or above 8c, with measured daily spend inside the $3 cap. None of those flags is set in `scripts/start_politics_paper.sh` or the politics plist.
+
 ## [0.34.0] - 2026-10-17
 
 ### Fixed

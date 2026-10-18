@@ -362,13 +362,16 @@ async def test_run_drains_only_weather_before_existing_cleanup(monkeypatch):
     monkeypatch.setattr(config_module.cfg, "polymarket_us_enabled", False)
     monkeypatch.setattr(config_module.cfg, "is_paper_trading", True)
     # The operator .env turns canonical settlement on, and the event-news
-    # cohort starts a watch task. This test pins the weather drain.
+    # cohort starts a watch task. The paper Grok edge loops are the same
+    # kind of extra task. This test pins the weather drain.
     monkeypatch.setattr(
         config_module.cfg,
         "enable_canonical_persisted_settlement_reconciliation",
         False,
     )
     monkeypatch.setattr(bot, "_create_event_news_grok_watch_task", lambda: None)
+    monkeypatch.setattr(bot, "_create_event_news_grok_edge_task", lambda: None)
+    monkeypatch.setattr(bot, "_create_event_news_grok_exit_task", lambda: None)
     monkeypatch.setenv("NEWS_CONSUMER_WORKERS", "1")
     monkeypatch.setattr(
         config_module.cfg,
