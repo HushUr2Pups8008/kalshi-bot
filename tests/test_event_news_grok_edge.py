@@ -408,9 +408,11 @@ def test_rank_keeps_politics_inside_72h_and_drops_kxdji() -> None:
     ranked = rank_politics_markets(markets, now=NOW, series=politics_scan_series())
     tickers = [row["ticker"] for row in ranked]
     assert tickers == ["KXTRUMPSAY-SOON", "KXTRUMPSAY-EDGE", "KXTRUMPSAY-THIN"]
-    assert "KXDJI" not in politics_scan_series(("KXDJI", "KXNEWPOL"))
-    assert "KXNEWPOL" in politics_scan_series(("KXNEWPOL",))
-    assert "KXTRUMPSAY" in politics_scan_series()
+    scanned = politics_scan_series(("KXDJI", "KXNEWPOL"))
+    assert "KXDJI" not in scanned
+    assert "KXNEWPOL" not in scanned
+    assert "KXTRUMPSAY" in scanned
+    assert len(scanned) == 13
 
 
 def _responses_shape(text: str, *, annotation: str | None = None) -> dict:

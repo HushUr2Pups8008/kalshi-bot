@@ -95,6 +95,34 @@ def test_one_per_family_blocks_a_second_open_row() -> None:
     )
 
 
+def test_failed_universe_one_per_family_stays_closed(tmp_path) -> None:
+    """Paper defaults the flag on. Live stays off when the env is unset."""
+    from utils.series_universe import reset_series_universe
+
+    reset_series_universe(tmp_path / "missing.yaml")
+    try:
+        assert (
+            event_news_family_skip_reason(
+                "KXTRUTHSOCIAL-26OCT10-B200",
+                [],
+                live=False,
+                environ={},
+            )
+            == "one_per_family"
+        )
+        assert (
+            event_news_family_skip_reason(
+                "KXTRUTHSOCIAL-26OCT10-B200",
+                [],
+                live=True,
+                environ={},
+            )
+            is None
+        )
+    finally:
+        reset_series_universe()
+
+
 def test_exposure_blocks_when_open_cost_exceeds_a_quarter_of_equity() -> None:
     """Today's book is 1872 cents against 1160 cents of room on 4640 equity."""
     assert (

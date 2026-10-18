@@ -941,12 +941,15 @@ class MarketCache:
         keyword_matched = [s for s in all_series if _is_geo_series(s)]
 
         # Pass 2: drop sports leagues from geo-relevant countries (e.g. Saudi
-        # Pro League matches "saudi", J-League matches "japan").
+        # Pro League matches "saudi", J-League matches "japan"). An exact
+        # yaml series stays. A glued sibling such as KXTRUMPSAYMONTH does not.
+        from utils.series_universe import event_news_prefix_blocked
+
         geo_tickers = [
             s["ticker"] for s in keyword_matched
-            if not any(
-                s["ticker"].upper().startswith(p)
-                for p in MARKET_SERIES_BLOCKLIST_PREFIXES
+            if not event_news_prefix_blocked(
+                s["ticker"],
+                MARKET_SERIES_BLOCKLIST_PREFIXES,
             )
         ]
         from utils.event_news_research import event_news_pin_matcher_series

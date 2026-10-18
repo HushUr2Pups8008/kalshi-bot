@@ -185,7 +185,7 @@ def test_sidecar_source_does_not_use_the_prewarm_fallback() -> None:
 
 
 def test_cycle_scores_open_positions_before_the_politics_scan(monkeypatch) -> None:
-    """KXDJI is not fetched. A live politics series is. Score runs before scan."""
+    """KXDJI and a series outside the yaml are not fetched. Score runs before scan."""
     from utils.event_news_grok_edge import SCAN_TOP_N
 
     order: list[str] = []
@@ -260,10 +260,10 @@ def test_cycle_scores_open_positions_before_the_politics_scan(monkeypatch) -> No
     assert order == ["score", "scan"]
     assert seen["positions"][0] == "KXTRUMPSAY-26OCT19-ZACH"
     assert "KXDJI" not in rest.series
-    assert "KXNEWPOL" in rest.series
+    assert "KXNEWPOL" not in rest.series
     assert "KXTRUMPSAY" in rest.series
     assert "KXDJI" not in seen["allow"]
-    assert "KXNEWPOL" in seen["allow"]
+    assert "KXNEWPOL" not in seen["allow"]
     assert seen["max_markets"] == SCAN_TOP_N == 3
     assert seen["open_tickers"] == (
         "KXTRUMPSAY-26OCT19-ZACH",
@@ -271,8 +271,8 @@ def test_cycle_scores_open_positions_before_the_politics_scan(monkeypatch) -> No
         "KXDJI-26OCT19-51550",
     )
     assert seen["scan"][0] == "KXTRUMPSAY-26OCT18-A"
-    assert seen["scan"][1] == "KXNEWPOL-26OCT18-A"
     assert all(not ticker.startswith("KXDJI") for ticker in seen["scan"])
+    assert all(not ticker.startswith("KXNEWPOL") for ticker in seen["scan"])
     assert scan_counts["fetched"] == len(rest.series) + 3
     assert scan_counts["politics"] == len(rest.series)
     assert scan_counts["examined"] == 3

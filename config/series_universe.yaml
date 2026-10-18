@@ -9,6 +9,12 @@
   favorite_hi_cents: 90
   transcript_skip: false
   paper_score: false
+  category: politics
+  max_contracts: 8
+  edge_min: "0.04"
+  occupancy_family: true
+  open_family_lock: true
+  x_search: true
   notes: >-
     Truth Social weekly counts. Favorite band is 36c through 90c.
     90c is outside the half-open band. The 0-35c executed-ask
@@ -19,6 +25,9 @@
   favorite_hi_cents: 99
   transcript_skip: false
   paper_score: false
+  category: politics
+  max_contracts: 8
+  edge_min: "0.04"
   notes: >-
     Canada-US deal. Desk default favorite band, 55c through 99c.
     99c is outside the half-open band. Asks at or above 91c still
@@ -29,6 +38,10 @@
   favorite_hi_cents: 99
   transcript_skip: false
   paper_score: false
+  category: politics
+  max_contracts: 8
+  edge_min: "0.04"
+  x_search: true
   notes: >-
     Desk default favorite band, 55c through 99c. 99c is outside
     the half-open band. Asks at or above 91c still fail the
@@ -39,6 +52,11 @@
   favorite_hi_cents: 90
   transcript_skip: false
   paper_score: false
+  category: politics
+  max_contracts: 8
+  edge_min: "0.04"
+  occupancy_family: true
+  x_search: true
   notes: >-
     White House action counts. Favorite band is 12c through 90c so
     official-p cheap YES stays in research. 90c is outside the
@@ -50,6 +68,11 @@
   favorite_hi_cents: 99
   transcript_skip: false
   paper_score: false
+  category: politics
+  max_contracts: 8
+  edge_min: "0.04"
+  occupancy_family: true
+  x_search: true
   notes: >-
     Exact series KXTRUMPSAY only. KXTRUMPSAYCOUNTRY and the other
     glued siblings do not match. Desk default favorite band.
@@ -59,6 +82,10 @@
   favorite_hi_cents: 99
   transcript_skip: true
   paper_score: true
+  category: politics
+  max_contracts: 8
+  edge_min: "0.04"
+  x_search: true
   notes: >-
     The file records mode paper. Until EVENT_NEWS_LIVE_TRADABLE_RESEARCH
     is true, decisions still treat this row as live: prewarm fetches it
@@ -71,6 +98,10 @@
   favorite_hi_cents: 99
   transcript_skip: false
   paper_score: false
+  category: politics
+  max_contracts: 8
+  edge_min: "0.04"
+  x_search: true
   notes: >-
     Desk default favorite band, 55c through 99c. 99c is outside
     the half-open band. Asks at or above 91c still fail the
@@ -81,6 +112,10 @@
   favorite_hi_cents: 99
   transcript_skip: false
   paper_score: false
+  category: politics
+  max_contracts: 8
+  edge_min: "0.04"
+  x_search: true
   notes: >-
     Desk default favorite band, 55c through 99c. 99c is outside
     the half-open band. Asks at or above 91c still fail the
@@ -91,6 +126,9 @@
   favorite_hi_cents: 99
   transcript_skip: false
   paper_score: false
+  category: politics
+  max_contracts: 8
+  edge_min: "0.04"
   notes: >-
     Desk default favorite band, 55c through 99c. 99c is outside
     the half-open band. Asks at or above 91c still fail the
@@ -101,6 +139,10 @@
   favorite_hi_cents: 99
   transcript_skip: false
   paper_score: false
+  category: politics
+  max_contracts: 8
+  edge_min: "0.04"
+  x_search: true
   notes: >-
     Desk default favorite band, 55c through 99c. 99c is outside
     the half-open band. Asks at or above 91c still fail the
@@ -111,6 +153,9 @@
   favorite_hi_cents: 99
   transcript_skip: false
   paper_score: false
+  category: politics
+  max_contracts: 8
+  edge_min: "0.04"
   notes: >-
     Desk default favorite band, 55c through 99c. 99c is outside
     the half-open band. Asks at or above 91c still fail the
@@ -121,6 +166,9 @@
   favorite_hi_cents: 99
   transcript_skip: false
   paper_score: false
+  category: politics
+  max_contracts: 8
+  edge_min: "0.04"
   notes: >-
     Desk default favorite band, 55c through 99c. 99c is outside
     the half-open band. Asks at or above 91c still fail the
@@ -131,6 +179,9 @@
   favorite_hi_cents: 99
   transcript_skip: false
   paper_score: false
+  category: politics
+  max_contracts: 8
+  edge_min: "0.04"
   notes: >-
     Desk default favorite band, 55c through 99c. 99c is outside
     the half-open band. Asks at or above 91c still fail the
@@ -141,6 +192,9 @@
   favorite_hi_cents: 99
   transcript_skip: false
   paper_score: false
+  category: politics
+  max_contracts: 8
+  edge_min: "0.04"
   notes: >-
     Traffic through the Strait of Hormuz. Paper only. Cannot POST.
     Added by hand from the 2026-10-18 discovery report. Not in the
@@ -151,6 +205,9 @@
   favorite_hi_cents: 99
   transcript_skip: false
   paper_score: false
+  category: politics
+  max_contracts: 8
+  edge_min: "0.04"
   notes: >-
     Traffic through the Suez Canal. Paper only. Cannot POST.
     Added by hand from the 2026-10-18 discovery report. Not in the
@@ -161,6 +218,9 @@
   favorite_hi_cents: 99
   transcript_skip: false
   paper_score: false
+  category: politics
+  max_contracts: 8
+  edge_min: "0.04"
   notes: >-
     Traffic through the Bab al-Mandab Strait. Paper only. Cannot POST.
     Added by hand from the 2026-10-18 discovery report. Not in the
@@ -171,6 +231,10 @@
   favorite_hi_cents: 99
   transcript_skip: false
   paper_score: false
+  category: politics
+  max_contracts: 8
+  edge_min: "0.04"
+  x_search: true
   notes: >-
     Trump attend another UFC event this year. Paper only. Cannot POST.
     Added by hand from the 2026-10-18 discovery report. Not in the
@@ -181,6 +245,9 @@
   favorite_hi_cents: 99
   transcript_skip: false
   paper_score: false
+  category: politics
+  max_contracts: 8
+  edge_min: "0.04"
   notes: >-
     Maximum traffic through the Strait of Hormuz. Paper only.
     Cannot POST. Added by hand from the 2026-10-18 discovery report.
@@ -191,6 +258,10 @@
   favorite_hi_cents: 99
   transcript_skip: false
   paper_score: false
+  category: politics
+  max_contracts: 8
+  edge_min: "0.04"
+  x_search: true
   notes: >-
     Trump approval rating. Paper only. Cannot POST. Added by hand
     from the 2026-10-18 discovery report. Not in the live reserve.
@@ -201,6 +272,10 @@
   favorite_hi_cents: 99
   transcript_skip: false
   paper_score: false
+  category: politics
+  max_contracts: 8
+  edge_min: "0.04"
+  x_search: true
   notes: >-
     How many nominations will Trump send to the Senate. Paper only.
     Cannot POST. Added by hand from the 2026-10-18 discovery report.
@@ -211,6 +286,9 @@
   favorite_hi_cents: 99
   transcript_skip: false
   paper_score: false
+  category: politics
+  max_contracts: 8
+  edge_min: "0.04"
   notes: >-
     Peak traffic through the Strait of Hormuz. Paper only. Cannot POST.
     Added by hand from the 2026-10-18 discovery report. Not in the
@@ -221,6 +299,9 @@
   favorite_hi_cents: 99
   transcript_skip: false
   paper_score: false
+  category: politics
+  max_contracts: 8
+  edge_min: "0.04"
   notes: >-
     Traffic through the Panama Canal. Paper only. Cannot POST.
     Added by hand from the 2026-10-18 discovery report. Not in the
@@ -231,6 +312,9 @@
   favorite_hi_cents: 99
   transcript_skip: false
   paper_score: false
+  category: politics
+  max_contracts: 8
+  edge_min: "0.04"
   notes: >-
     US Iran nuclear deal. Paper only. Cannot POST. Added by hand
     from the 2026-10-18 discovery report. Not in the live reserve.

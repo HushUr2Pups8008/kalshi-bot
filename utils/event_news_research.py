@@ -62,33 +62,8 @@ _MIN_EDGE_FEE_BUFFER = 0.005
 # T4 bought 22 lots at 33c and lost $7.60. Dollar cap held; contract count did not.
 # Clamp AFTER Kelly conversion. Do not change kelly_bet math.
 EVENT_NEWS_MAX_CONTRACTS = 8
-# One open Truth Social week: event_ticker cap still allows two KXTRUTHSOCIAL weeks.
-_TRUTH_SOCIAL_FAMILY = "KXTRUTHSOCIAL"
-# A failed live positions GET blocks every desk family, not only Truth Social.
-_DESK_OCCUPANCY_SERIES = ("KXTRUMPACT", "KXTRUMPSAY", "KXTRUTHSOCIAL")
 # Fail-closed occupancy marker when live GET /portfolio/positions fails.
 EVENT_NEWS_LIVE_OCCUPANCY_UNKNOWN = "KXTRUTHSOCIAL-LIVE-UNKNOWN"
-# Commodity / macro / weather ladders that steal favorite-band prewarm.
-_NON_POLITICS_SERIES_PREFIXES = (
-    "KXAAAGAS",
-    "KXDJI",
-    "KXNASDAQ",
-    "KXGOLD",
-    "KXSILVER",
-    "KXHIGHNY",
-    "KXHIGHLAX",
-    "KXWEATHER",
-    "KXFEAR",
-    "KXCPI",
-    "KXGDP",
-    "KXFED",
-    "KXBTC",
-    "KXETH",
-    "KXSKEXPYOY",
-    "KXBRAZILGDP",
-    "KXSATRADEBAL",
-    "KXARMOMINF",
-)
 
 
 
@@ -347,6 +322,7 @@ def event_news_family_lock_ticker(
 ) -> str | None:
     """Occupying ticker when this order must not join an open desk family.
 
+    A failed universe file returns the positions-unknown sentinel.
     A failed live positions read occupies KXTRUMPACT, KXTRUMPSAY, and
     KXTRUTHSOCIAL. An open Truth Social week still blocks only that family.
     Sibling strikes of the same event use event_open_prefix_cap.
@@ -359,18 +335,26 @@ def event_news_family_lock_ticker(
     if not series:
         series = event_news_series_prefix(ticker)
     open_rows = [str(raw or "").strip() for raw in open_tickers or () if str(raw or "").strip()]
+    from utils.series_universe import (
+        occupancy_family_series,
+        open_family_lock_series,
+        universe_failed,
+    )
+
+    if universe_failed():
+        return EVENT_NEWS_LIVE_OCCUPANCY_UNKNOWN
     if (
-        series in _DESK_OCCUPANCY_SERIES
+        series in occupancy_family_series()
         and EVENT_NEWS_LIVE_OCCUPANCY_UNKNOWN in open_rows
     ):
         return EVENT_NEWS_LIVE_OCCUPANCY_UNKNOWN
-    if series != _TRUTH_SOCIAL_FAMILY:
+    if series not in open_family_lock_series():
         return None
     for raw in open_tickers or ():
         occupied = str(raw or "").strip()
         if not occupied:
             continue
-        if event_news_series_prefix(occupied) == _TRUTH_SOCIAL_FAMILY:
+        if event_news_series_prefix(occupied) == series:
             return occupied
     return None
 
@@ -724,24 +708,8 @@ def event_news_series_ticker(market: Any) -> str:
 
 
 def event_news_non_politics_series(market: Any, *, config: Any = None) -> str | None:
-    """Skip commodity/macro/weather ladders on the politics desk."""
-    if not is_event_news_paper_cohort(config):
-        return None
-    series = event_news_series_ticker(market)
-    ticker = str(getattr(market, "ticker", "") or "").strip().upper()
-    extra = tuple(
-        part.strip().upper()
-        for part in str(os.getenv("EVENT_NEWS_SERIES_DENY_PREFIXES", "")).split(",")
-        if part.strip()
-    )
-    for prefix in (*_NON_POLITICS_SERIES_PREFIXES, *extra):
-        if series.startswith(prefix) or ticker.startswith(prefix):
-            log.info(
-                "[EVENT_NEWS_PREWARM] skip ticker=%s series=%s reason=non_politics_series",
-                getattr(market, "ticker", ""),
-                series or ticker,
-            )
-            return "non_politics_series"
+    """The yaml mode is the desk gate. A prefix deny list does not skip."""
+    del market, config
     return None
 
 
@@ -1521,6 +1489,8 @@ def event_news_matcher_reserve_series(*, config: Any = None) -> tuple[str, ...]:
         return ()
     if universe_failed():
         return ()
+    live = live_series_tickers()
+    allowed = set(live)
     extra = tuple(
         part.strip().upper()
         for part in str(os.getenv("EVENT_NEWS_SERIES_RESERVE", "")).split(",")
@@ -1536,8 +1506,8 @@ def event_news_matcher_reserve_series(*, config: Any = None) -> tuple[str, ...]:
     )
     seen: set[str] = set()
     ordered: list[str] = []
-    for series in (*extra, *fallback, *live_series_tickers()):
-        if series and series not in seen:
+    for series in (*extra, *fallback, *live):
+        if series in allowed and series not in seen:
             seen.add(series)
             ordered.append(series)
     return tuple(ordered)

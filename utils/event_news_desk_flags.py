@@ -36,7 +36,6 @@ DEFAULT_MAX_RISK_CENTS = 600
 DEFAULT_MAX_EXPOSURE_PCT = 25
 DEFAULT_MAKER_WAIT_S = 180
 HARD_MAX_CONTRACTS = 8
-DESK_FAMILIES = ("KXTRUMPACT", "KXTRUMPSAY", "KXTRUTHSOCIAL")
 
 _DESK_FLAG_NAMES = (
     EVENT_NEWS_YES_FLOOR,
@@ -242,8 +241,12 @@ def event_news_family_skip_reason(
         environ=environ,
     ):
         return None
+    from utils.series_universe import occupancy_family_series, universe_failed
+
+    if universe_failed():
+        return "one_per_family"
     family = event_news_series_family(ticker)
-    if family not in DESK_FAMILIES:
+    if family not in occupancy_family_series():
         return None
     from utils.event_news_research import EVENT_NEWS_LIVE_OCCUPANCY_UNKNOWN
 

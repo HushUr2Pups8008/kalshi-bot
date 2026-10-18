@@ -4,8 +4,8 @@
 GET /markets?status=open&mve_filter=exclude. A series is a candidate when
 it has a market that closes within 14 days, has 24h volume of at least 500
 contracts, and a two-sided spread of 0c through 14c. Crossed books are
-excluded. Response status must be active. Deny-list prefixes are excluded
-unless that exact series is already in the universe file.
+excluded. Response status must be active. Sports prefixes stay out.
+Series already in the universe file are not recommended again.
 
 The script writes a report. It does not edit the universe file and it does
 not apply the promotion rule.
@@ -31,10 +31,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from config import MARKET_SERIES_BLOCKLIST_PREFIXES
-from utils.event_news_research import (
-    _NON_POLITICS_SERIES_PREFIXES,
-    event_news_paper_score_decision,
-)
+from utils.event_news_research import event_news_paper_score_decision
 from utils.series_universe import get_universe, universe_failed
 
 HORIZON = timedelta(days=14)
@@ -124,9 +121,9 @@ def prefix_hit(series: str, prefixes: tuple[str, ...] | list[str]) -> bool:
 
 
 def is_denied(series: str, explicit: set[str]) -> bool:
-    if series in explicit:
-        return False
-    return prefix_hit(series, _NON_POLITICS_SERIES_PREFIXES)
+    """Prefix deny is gone. The universe file mode is the desk gate."""
+    del series, explicit
+    return False
 
 
 def is_politics_econ_policy(
@@ -135,7 +132,7 @@ def is_politics_econ_policy(
     category: str,
     explicit: set[str],
 ) -> bool:
-    """Politics or economics, and not a sports or deny-list prefix."""
+    """Politics or economics, and not a sports prefix."""
     if is_denied(series, explicit):
         return False
     if prefix_hit(series, MARKET_SERIES_BLOCKLIST_PREFIXES):
