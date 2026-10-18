@@ -14,7 +14,11 @@ from kalshi.rest_client import (
     KalshiSidecarOrderBlocked,
     sidecar_blocks_order_write,
 )
-from scripts.grok_paper_sidecar import arm_sidecar_environment, refuse_live_trading
+from scripts.grok_paper_sidecar import (
+    arm_sidecar_environment,
+    refuse_live_trading,
+    run_score_then_scan,
+)
 from scripts.refresh_politics_cash import balance_cents
 from utils.event_news_grok_edge import (
     PAPER_DB_PATH,
@@ -123,8 +127,8 @@ def test_arm_keeps_an_explicit_dry_run_cap(monkeypatch) -> None:
     assert os.environ["LIVE_TRADING_ENABLED"] == "false"
 
 
-def test_half_dollar_cap_keeps_the_grounded_call(tmp_path: Path) -> None:
-    """A $0.50 cap pays the grounded reserve and skips the ungrounded one."""
+def test_reserve_floor_cap_keeps_the_grounded_call(tmp_path: Path) -> None:
+    """The $0.05 floor pays the grounded call and skips the ungrounded one."""
     from utils.event_news_grok_edge import run_paper_edge_scan
 
     calls: list[dict] = []
@@ -151,7 +155,7 @@ def test_half_dollar_cap_keeps_the_grounded_call(tmp_path: Path) -> None:
         [_market()],
         live=False,
         allowlist=("KXTRUMPSAY",),
-        environ={XAI_API_KEY_ENV: "test-key", "GROK_DAILY_USD_CAP": "0.50"},
+        environ={XAI_API_KEY_ENV: "test-key", "GROK_DAILY_USD_CAP": "0.05"},
         post=post,
         now=NOW,
         call_log_path=tmp_path / "calls.jsonl",
@@ -165,6 +169,131 @@ def test_half_dollar_cap_keeps_the_grounded_call(tmp_path: Path) -> None:
     assert counts["queued"] == 1
     assert not (tmp_path / "comparisons.jsonl").exists()
     assert (tmp_path / "grok_paper.db").is_file()
+
+
+def test_sidecar_source_does_not_use_the_prewarm_fallback() -> None:
+    source = (ROOT / "scripts" / "grok_paper_sidecar.py").read_text(encoding="utf-8")
+    assert "event_news_matcher_reserve_series" not in source
+    assert "run_score_then_scan" in source
+
+
+def test_cycle_scores_open_positions_before_the_politics_scan(monkeypatch) -> None:
+    """KXDJI is not fetched. A live politics series is. Score runs before scan."""
+    from utils.event_news_grok_edge import SCAN_TOP_N
+
+    order: list[str] = []
+    seen: dict = {}
+
+    def score(positions, **_kwargs):
+        order.append("score")
+        seen["positions"] = [row["ticker"] for row in positions]
+        return {"scored": 1, "skipped": 0}
+
+    def scan(markets, **kwargs):
+        order.append("scan")
+        seen["scan"] = [row["ticker"] for row in markets]
+        seen["max_markets"] = kwargs["max_markets"]
+        seen["allow"] = set(kwargs["allowlist"])
+        return {"examined": len(markets), "queued": 0, "skipped": 0}
+
+    monkeypatch.setattr("utils.event_news_grok_edge.score_open_positions", score)
+    monkeypatch.setattr("utils.event_news_grok_edge.run_paper_edge_scan", scan)
+
+    class Rest:
+        def __init__(self) -> None:
+            self.series: list[str] = []
+
+        def get_open_positions(self, strict=True):
+            assert strict is True
+            return [
+                {"ticker": "KXTRUMPSAY-26OCT19-ZACH", "position_fp": "8"},
+                {"ticker": "KXNEWPOL-26OCT18-A", "position_fp": "-2"},
+                {"ticker": "KXDJI-26OCT19-51550", "position_fp": "1"},
+            ]
+
+        def get_market(self, ticker):
+            return {"ticker": ticker, "status": "active", "yes_ask": 55, "no_ask": 46}
+
+        def get_markets(self, status="open", series_ticker="", limit=20):
+            assert status == "open"
+            assert limit == 20
+            self.series.append(series_ticker)
+            close = "2026-10-18T12:00:00Z"
+            good = {
+                "ticker": f"{series_ticker}-26OCT18-A",
+                "series_ticker": series_ticker,
+                "status": "active",
+                "yes_ask": 55,
+                "no_ask": 46,
+                "close_time": close,
+                "volume": 100 if series_ticker == "KXTRUMPSAY" else 80 if series_ticker == "KXNEWPOL" else 1,
+                "title": series_ticker,
+                "rules": "rules",
+            }
+            if series_ticker != "KXTRUMPSAY":
+                return [good], None
+            return [
+                good,
+                {**good, "ticker": "KXTRUMPSAY-OPEN", "status": "open", "volume": 500},
+                {
+                    **good,
+                    "ticker": "KXDJI-26OCT19-51550",
+                    "series_ticker": "KXDJI",
+                    "series": "KXDJI",
+                    "volume": 9999,
+                },
+                {**good, "ticker": "KXTRUMPSAY-WIDE", "yes_ask": 95, "no_ask": 6, "volume": 400},
+            ], None
+
+    rest = Rest()
+    scores, scan_counts, score_error = run_score_then_scan(rest, now=NOW)
+    assert score_error is None
+    assert scores == {"scored": 1, "skipped": 0}
+    assert order == ["score", "scan"]
+    assert seen["positions"][0] == "KXTRUMPSAY-26OCT19-ZACH"
+    assert "KXDJI" not in rest.series
+    assert "KXNEWPOL" in rest.series
+    assert "KXTRUMPSAY" in rest.series
+    assert "KXDJI" not in seen["allow"]
+    assert "KXNEWPOL" in seen["allow"]
+    assert seen["max_markets"] == SCAN_TOP_N == 3
+    assert seen["scan"][0] == "KXTRUMPSAY-26OCT18-A"
+    assert seen["scan"][1] == "KXNEWPOL-26OCT18-A"
+    assert all(not ticker.startswith("KXDJI") for ticker in seen["scan"])
+    assert scan_counts["fetched"] == len(rest.series) + 3
+    assert scan_counts["politics"] == len(rest.series)
+    assert scan_counts["examined"] == 3
+
+
+def test_score_failure_still_scans(monkeypatch) -> None:
+    order: list[str] = []
+
+    def score(_positions, **_kwargs):
+        order.append("score")
+        raise RuntimeError("score broke")
+
+    def scan(_markets, **_kwargs):
+        order.append("scan")
+        return {"examined": 0, "queued": 0, "skipped": 0}
+
+    monkeypatch.setattr("utils.event_news_grok_edge.score_open_positions", score)
+    monkeypatch.setattr("utils.event_news_grok_edge.run_paper_edge_scan", scan)
+
+    class Rest:
+        def get_open_positions(self, strict=True):
+            return [{"ticker": "KXTRUMPSAY-26OCT19-ZACH", "position_fp": "8"}]
+
+        def get_market(self, ticker):
+            return {"ticker": ticker}
+
+        def get_markets(self, status="open", series_ticker="", limit=20):
+            return [], None
+
+    _scores, scan_counts, score_error = run_score_then_scan(Rest(), now=NOW)
+    assert isinstance(score_error, RuntimeError)
+    assert order == ["score", "scan"]
+    assert scan_counts["politics"] == 0
+    assert scan_counts["fetched"] == 0
 
 
 def test_position_score_records_take_and_veto_without_ordering(tmp_path: Path) -> None:

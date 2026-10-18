@@ -6,7 +6,7 @@ import asyncio
 import inspect
 import json
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -23,10 +23,11 @@ from utils.event_news_desk_flags import (
 )
 from utils.event_news_grok_edge import (
     GROK_EDGE_TIMEOUT_SECONDS,
-    GROUNDED_RESERVE_USD,
+    MIN_CALL_RESERVE_USD,
     PAPER_QUEUE_CONTRACTS,
     _reserve_spend,
     brier_report,
+    call_reserve_usd,
     comparison_summary,
     edge_scan_interval_seconds,
     ev_by_edge_bucket,
@@ -34,7 +35,9 @@ from utils.event_news_grok_edge import (
     fee_net_edge_cents,
     paper_position_rows,
     paper_queue_decision,
+    politics_scan_series,
     proposed_contracts_for_edge,
+    rank_politics_markets,
     run_paper_edge_scan,
     run_paper_exit_watch,
     taker_fee_cents,
@@ -130,6 +133,7 @@ def _scan(tmp_path: Path, markets, post, environ) -> dict:
         environ=environ,
         post=post,
         now=NOW,
+        raw_dir=tmp_path / "raw",
         **_paths(tmp_path),
     )
 
@@ -251,6 +255,10 @@ def test_grounded_scan_queues_four_and_records_the_disabled_proposal(tmp_path: P
     grounded, ungrounded = calls
     assert "tools" not in ungrounded["payload"]
     assert grounded["payload"]["tools"] == [{"type": "web_search"}, {"type": "x_search"}]
+    schema = grounded["payload"]["text"]["format"]
+    assert schema["type"] == "json_schema"
+    assert schema["strict"] is True
+    assert schema["schema"]["required"] == ["prob", "confidence", "sources", "rationale"]
     assert grounded["payload"]["model"] == GROK_MODEL
     assert grounded["timeout"] == GROK_EDGE_TIMEOUT_SECONDS == 20.0
     assert ungrounded["timeout"] == 20.0
@@ -311,25 +319,230 @@ def test_timeout_keeps_the_reserve_and_does_not_queue(tmp_path: Path) -> None:
     counts = _scan(tmp_path, [_market()], post, {XAI_API_KEY_ENV: "test-key"})
     assert counts["queued"] == 0
     spent = json.loads((tmp_path / "spend.json").read_text(encoding="utf-8"))
-    assert Decimal(spent["spent_usd"]) == GROUNDED_RESERVE_USD + Decimal("0.05")
+    assert Decimal(spent["spent_usd"]) == MIN_CALL_RESERVE_USD * 2
     assert _rows(tmp_path / "calls.jsonl")[0]["skip_reason"] == "timeout"
 
 
 def test_spend_cap_skips_before_the_post(tmp_path: Path) -> None:
-    """$2.60 already spent rejects the grounded reserve and still allows $0.05."""
+    """A measured grounded reserve that does not fit still leaves room for $0.05."""
     (tmp_path / "spend.json").write_text(
         json.dumps({"date": "2026-10-17", "spent_usd": "2.60"}) + "\n",
         encoding="utf-8",
     )
+    history = {
+        "cost_source": "provider",
+        "grounded": True,
+        "cost_usd": "0.40",
+    }
+    (tmp_path / "calls.jsonl").write_text(json.dumps(history) + "\n", encoding="utf-8")
     calls: list[dict] = []
     counts = _scan(tmp_path, [_market()], _poster(calls), {XAI_API_KEY_ENV: "test-key"})
     assert len(calls) == 1
     assert "tools" not in calls[0]["payload"]
     assert counts["queued"] == 0
-    grounded = _rows(tmp_path / "calls.jsonl")[0]
-    assert grounded["grounded"] is True
-    assert grounded["skip_reason"] == "spend_cap"
-    assert _rows(tmp_path / "calls.jsonl")[1]["grounded"] is False
+    logged = [row for row in _rows(tmp_path / "calls.jsonl") if row.get("ticker")]
+    assert logged[0]["grounded"] is True
+    assert logged[0]["skip_reason"] == "spend_cap"
+    assert logged[1]["grounded"] is False
+
+
+def _close_in(hours: int) -> str:
+    return (NOW + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_rank_keeps_politics_inside_72h_and_drops_kxdji() -> None:
+    """Response status open, a 95c ask, and KXDJI are not scan candidates."""
+    markets = [
+        _market(ticker="KXTRUMPSAY-SOON", close_time=_close_in(24), volume=50),
+        _market(ticker="KXTRUMPSAY-THIN", close_time=_close_in(24), volume=0),
+        _market(ticker="KXTRUMPSAY-OPEN", close_time=_close_in(24), status="open", volume=999),
+        _market(ticker="KXTRUMPSAY-WIDE", close_time=_close_in(24), yes_ask=95, no_ask=6),
+        _market(ticker="KXTRUMPSAY-CHEAP", close_time=_close_in(24), yes_ask=20, no_ask=35),
+        _market(ticker="KXTRUMPSAY-LATER", close_time=_close_in(96), volume=5000),
+        _market(
+            ticker="KXDJI-26OCT19-51550",
+            series="KXDJI",
+            close_time=_close_in(24),
+            volume=9000,
+        ),
+        _market(ticker="KXTRUMPSAY-EDGE", close_time=_close_in(72), yes_ask=94, no_ask=7, volume=5),
+    ]
+    ranked = rank_politics_markets(markets, now=NOW, series=politics_scan_series())
+    tickers = [row["ticker"] for row in ranked]
+    assert tickers == ["KXTRUMPSAY-SOON", "KXTRUMPSAY-EDGE", "KXTRUMPSAY-THIN"]
+    assert "KXDJI" not in politics_scan_series(("KXDJI", "KXNEWPOL"))
+    assert "KXNEWPOL" in politics_scan_series(("KXNEWPOL",))
+    assert "KXTRUMPSAY" in politics_scan_series()
+
+
+def _responses_shape(text: str, *, annotation: str | None = None) -> dict:
+    """Responses payload whose blank output_text used to hide the message JSON.
+
+    This is the shape that produced a malformed skip. It is not a byte copy
+    of the 2026-10-18 KXDJI reply. That body was not saved.
+    """
+    part: dict = {"type": "output_text", "text": text}
+    if annotation:
+        part["annotations"] = [{"type": "url_citation", "url": annotation}]
+    return {
+        "output_text": "",
+        "output": [{"type": "message", "content": [part]}],
+    }
+
+
+def test_blank_output_text_parses_prob_and_ignores_trailing_tool_args(tmp_path: Path) -> None:
+    payload = json.dumps(
+        {
+            "prob": 0.70,
+            "confidence": 0.80,
+            "sources": ["https://example.test/source"],
+            "rationale": "public schedule",
+        }
+    )
+    tool_args = json.dumps({"query": "trump", "tool": "web_search"})
+
+    def post(url, json, headers, timeout):  # noqa: A002
+        grounded = "tools" in json
+        if grounded:
+            return _Response(
+                _responses_shape(payload + "\n" + tool_args, annotation="https://example.test/source")
+            )
+        return _Response(_body("0.72", sources=[], grounded=False))
+
+    counts = _scan(tmp_path, [_market()], post, {XAI_API_KEY_ENV: "test-key"})
+    assert counts["queued"] == 1
+    logged = _rows(tmp_path / "calls.jsonl")[0]
+    assert Decimal(logged["probability"]) == Decimal("0.70")
+    assert logged["sources"] == ["https://example.test/source"]
+    assert logged["rationale"] == "public schedule"
+
+
+def test_annotation_url_is_enough_for_a_grounded_source(tmp_path: Path) -> None:
+    text = json.dumps(
+        {"prob": 0.70, "confidence": 0.80, "sources": [], "rationale": "annotation only"}
+    )
+
+    def post(url, json, headers, timeout):  # noqa: A002
+        if "tools" in json:
+            return _Response(_responses_shape(text, annotation="https://example.test/ann"))
+        return _Response(_body("0.72", sources=[], grounded=False))
+
+    counts = _scan(tmp_path, [_market()], post, {XAI_API_KEY_ENV: "test-key"})
+    assert counts["queued"] == 1
+    assert _rows(tmp_path / "calls.jsonl")[0]["sources"] == ["https://example.test/ann"]
+
+
+def test_malformed_reply_retries_once_then_skips_and_redacts_the_raw_body(tmp_path: Path) -> None:
+    def post(url, json, headers, timeout):  # noqa: A002
+        if "tools" in json:
+            return _Response(
+                {
+                    "output_text": "not json",
+                    "api_key": "secret-value",
+                    "note": "Bearer supersecret sk-live-secret xai-live-secret",
+                }
+            )
+        return _Response(_body("0.70", sources=[], grounded=False))
+
+    counts = _scan(tmp_path, [_market()], post, {XAI_API_KEY_ENV: "test-key"})
+    assert counts["queued"] == 0
+    grounded = [row for row in _rows(tmp_path / "calls.jsonl") if row["grounded"]]
+    assert [row["attempt"] for row in grounded] == [1, 2]
+    assert all(row["skip_reason"] == "malformed" for row in grounded)
+    raw_files = list((tmp_path / "raw").glob("*.json"))
+    assert len(raw_files) == 2
+    saved = "\n".join(path.read_text(encoding="utf-8") for path in raw_files)
+    assert "secret-value" not in saved
+    assert "sk-live-secret" not in saved
+    assert "xai-live-secret" not in saved
+    assert "supersecret" not in saved
+    assert "[redacted]" in saved
+
+
+def test_retry_success_uses_the_second_probability(tmp_path: Path) -> None:
+    attempts = {"n": 0}
+
+    def post(url, json, headers, timeout):  # noqa: A002
+        if "tools" in json:
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                return _Response({"output_text": "not json"})
+            return _Response(_body("0.70", sources=["https://example.test/source"], grounded=True))
+        return _Response(_body("0.72", sources=[], grounded=False))
+
+    counts = _scan(tmp_path, [_market()], post, {XAI_API_KEY_ENV: "test-key"})
+    assert counts["queued"] == 1
+    grounded = [row for row in _rows(tmp_path / "calls.jsonl") if row["grounded"]]
+    assert grounded[0]["skip_reason"] == "malformed"
+    assert grounded[1]["attempt"] == 2
+    assert grounded[1]["probability"] == "0.70"
+    assert len(list((tmp_path / "raw").glob("*.json"))) == 1
+
+
+def test_cost_ticks_replace_the_reserve(tmp_path: Path) -> None:
+    """37756000 ticks is $0.0037756. A missing usage field keeps the reserve."""
+
+    def with_ticks(ticks):
+        def post(url, json, headers, timeout):  # noqa: A002
+            grounded = "tools" in json
+            body = _body(
+                "0.70",
+                sources=["https://example.test/source"] if grounded else [],
+                grounded=grounded,
+            )
+            if ticks is not None:
+                body["usage"] = {
+                    "cost_in_usd_ticks": ticks if grounded else 0,
+                    "input_tokens": 12,
+                    "output_tokens": 4,
+                }
+            return _Response(body)
+
+        return post
+
+    counted = _scan(tmp_path / "ticks", [_market()], with_ticks(37756000), {XAI_API_KEY_ENV: "test-key"})
+    assert counted["queued"] == 1
+    grounded = _rows(tmp_path / "ticks" / "calls.jsonl")[0]
+    assert grounded["cost_source"] == "provider"
+    assert Decimal(grounded["cost_usd"]) == Decimal("0.0037756")
+    assert grounded["cost_in_usd_ticks"] == 37756000
+    assert grounded["input_tokens"] == 12
+    spent = json.loads((tmp_path / "ticks" / "spend.json").read_text(encoding="utf-8"))
+    assert Decimal(spent["spent_usd"]) == Decimal("0.0037756")
+
+    zero = _scan(tmp_path / "zero-ticks", [_market()], with_ticks(0), {XAI_API_KEY_ENV: "test-key"})
+    assert zero["queued"] == 1
+    zero_spent = json.loads((tmp_path / "zero-ticks" / "spend.json").read_text(encoding="utf-8"))
+    assert Decimal(zero_spent["spent_usd"]) == Decimal("0")
+
+    missing = _scan(tmp_path / "missing", [_market()], with_ticks(None), {XAI_API_KEY_ENV: "test-key"})
+    assert missing["queued"] == 1
+    missing_rows = _rows(tmp_path / "missing" / "calls.jsonl")
+    assert missing_rows[0]["cost_source"] == "reserve"
+    assert Decimal(missing_rows[0]["cost_usd"]) == MIN_CALL_RESERVE_USD
+    missing_spent = json.loads((tmp_path / "missing" / "spend.json").read_text(encoding="utf-8"))
+    assert Decimal(missing_spent["spent_usd"]) == MIN_CALL_RESERVE_USD * 2
+
+
+def test_measured_p90_sets_the_next_reserve(tmp_path: Path) -> None:
+    """Five provider costs of $0.20 reserve 0.30, which fills a 0.30 cap."""
+    lines = [
+        json.dumps({"cost_source": "provider", "grounded": True, "cost_usd": "0.20"})
+        for _ in range(5)
+    ]
+    (tmp_path / "calls.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    assert call_reserve_usd(tmp_path / "calls.jsonl", grounded=True) == Decimal("0.30")
+    assert call_reserve_usd(tmp_path / "calls.jsonl", grounded=False) == MIN_CALL_RESERVE_USD
+    calls: list[dict] = []
+    counts = _scan(
+        tmp_path,
+        [_market()],
+        _poster(calls),
+        {XAI_API_KEY_ENV: "test-key", "GROK_DAILY_USD_CAP": "0.30"},
+    )
+    assert len(calls) == 1
+    assert "tools" in calls[0]["payload"]
+    assert counts["queued"] == 1
 
 
 def test_missing_key_does_not_post(tmp_path: Path) -> None:
@@ -698,6 +911,7 @@ def test_exit_without_a_probability_does_not_log(tmp_path: Path) -> None:
         call_log_path=tmp_path / "calls.jsonl",
         exit_log_path=tmp_path / "exits.jsonl",
         spend_path=tmp_path / "spend.json",
+        raw_dir=tmp_path / "raw",
         now=NOW,
     )
     assert logged == 0

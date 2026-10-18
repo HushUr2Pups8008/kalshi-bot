@@ -11,11 +11,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import threading
-import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 from numbers import Real
 from pathlib import Path
@@ -32,7 +32,11 @@ from utils.event_news_desk_flags import (
 )
 from utils.event_news_grok_flags import EVENT_NEWS_BAND_FLOOR_CENTS
 from utils.event_news_grok_veto import GROK_MODEL, XAI_API_KEY_ENV
-from utils.event_news_research import event_news_series_ticker, snapshot_ask_cents
+from utils.event_news_research import (
+    _NON_POLITICS_SERIES_PREFIXES,
+    event_news_series_ticker,
+    snapshot_ask_cents,
+)
 from utils.logger import get_logger
 
 log = get_logger("event_news_grok_edge")
@@ -49,12 +53,34 @@ DEFAULT_SCAN_MINUTES = 30
 MIN_SCAN_MINUTES = 5
 PAPER_QUEUE_CONTRACTS = 4
 TAKER_FEE_COEFFICIENT = Decimal("0.07")
-GROUNDED_RESERVE_USD = Decimal("0.50")
-UNGROUNDED_RESERVE_USD = Decimal("0.05")
+MIN_CALL_RESERVE_USD = Decimal("0.05")
+RESERVE_P90_MULTIPLIER = Decimal("1.5")
+COST_TICKS_PER_USD = Decimal("10000000000")
+MEASURED_COST_WINDOW = 20
 AGREE_ABS = Decimal("0.05")
 STRONG_CONTRARY_CONFIDENCE = Decimal("0.70")
 MAX_MARKETS_PER_CYCLE = 1
+SCAN_TOP_N = 3
+SCAN_CLOSE_WINDOW = timedelta(hours=72)
+SCAN_ASK_MAX_CENTS = 94
 _SCAN_TOOLS = ("web_search", "x_search")
+# Desk families plus the pinned politics matcher reserve. The research
+# prewarm fallback (KXDJI and the other macro series) is not part of this list.
+POLITICS_SCAN_SERIES = (
+    "KXTRUTHSOCIAL",
+    "KXCANUSDEAL",
+    "KXMOCTRUMP25",
+    "KXTRUMPACT",
+    "KXTRUMPSAY",
+    "KXTRUMPMENTION",
+    "KXAPRPOTUS",
+    "KXPOLLPOTUS",
+    "KXEFFTARIFF",
+    "KXVOTESAVEAMERICA",
+    "KXSBUDGETRES",
+    "KXLEAVECONGRESS",
+    "KXFISAEXTEND",
+)
 
 CALL_LOG_PATH = Path("logs/state/grok_edge_calls.jsonl")
 CANDIDATE_LOG_PATH = Path("logs/state/grok_edge_candidates.jsonl")
@@ -63,29 +89,55 @@ EXIT_LOG_PATH = Path("logs/state/grok_edge_exits.jsonl")
 POSITION_SCORE_LOG_PATH = Path("logs/state/grok_edge_position_scores.jsonl")
 SPEND_PATH = Path("logs/state/grok_edge_spend.json")
 PAPER_DB_PATH = Path("logs/state/grok_paper.db")
+RAW_DIR = Path("logs/state/grok_raw")
 DAILY_REPORT_PATH = Path("docs/reports/grok-edge-daily.md")
 _SETTLED_STATUSES = frozenset({"finalized", "settled", "determined"})
 _DB_LOCK = threading.Lock()
 
 _GROUNDED_SYSTEM = (
-    "Use web search and X search. Reply with one JSON object only. "
-    "Keys are probability, confidence, verdict, and sources. "
-    "probability and confidence are numbers from 0 to 1. "
-    "verdict is YES or NO. sources is a list of http urls. "
-    "A probability without a source url is invalid."
+    "Use web search and X search. "
+    "prob is the probability the market resolves YES, from 0 to 1. "
+    "confidence is from 0 to 1. sources is a list of http urls you used. "
+    "rationale is one short sentence. A prob without a source url is invalid."
 )
 _UNGROUNDED_SYSTEM = (
-    "Do not browse. Reply with one JSON object only. "
-    "Keys are probability, confidence, verdict, and sources. "
-    "probability and confidence are numbers from 0 to 1. "
-    "verdict is YES or NO. sources is an empty list."
+    "Do not browse. "
+    "prob is the probability the market resolves YES, from 0 to 1. "
+    "confidence is from 0 to 1. sources is an empty list. "
+    "rationale is one short sentence."
 )
 _EXIT_SYSTEM = (
-    "Use web search and X search. Reply with one JSON object only. "
-    "Keys are contrary, confidence, probability, and sources. "
+    "Use web search and X search. "
     "contrary is true only for strong evidence against the open side. "
-    "confidence and probability are numbers from 0 to 1. "
-    "sources is a list of http urls."
+    "prob is the probability the market resolves YES, from 0 to 1. "
+    "confidence is from 0 to 1. sources is a list of http urls."
+)
+_EDGE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "prob": {"type": "number", "minimum": 0, "maximum": 1},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "sources": {"type": "array", "items": {"type": "string"}},
+        "rationale": {"type": "string"},
+    },
+    "required": ["prob", "confidence", "sources", "rationale"],
+}
+_EXIT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "contrary": {"type": "boolean"},
+        "prob": {"type": "number", "minimum": 0, "maximum": 1},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "sources": {"type": "array", "items": {"type": "string"}},
+        "rationale": {"type": "string"},
+    },
+    "required": ["contrary", "prob", "confidence", "sources", "rationale"],
+}
+_SECRET_KEY = re.compile(
+    r"(authorization|api[_-]?key|token|secret|signature|password)",
+    re.IGNORECASE,
 )
 
 
@@ -196,6 +248,133 @@ def paper_queue_decision(
 
 def verdicts_agree(left: Decimal, right: Decimal) -> bool:
     return abs(left - right) <= AGREE_ABS
+
+
+def _non_politics_series(series: str, ticker: str = "") -> bool:
+    for prefix in _NON_POLITICS_SERIES_PREFIXES:
+        if series.startswith(prefix) or ticker.startswith(prefix):
+            return True
+    return False
+
+
+def politics_scan_series(extra: Sequence[str] = ()) -> tuple[str, ...]:
+    """Politics series the sidecar may scan.
+
+    The desk families and the pinned matcher reserve are included. A series
+    the live book is actually holding is included too. KXDJI and the other
+    non-politics prefixes are dropped, including when they arrive from the
+    research prewarm fallback.
+    """
+    seen: list[str] = []
+    for raw in (*POLITICS_SCAN_SERIES, *extra):
+        series = str(raw or "").strip().upper()
+        if not series or series in seen or _non_politics_series(series):
+            continue
+        seen.append(series)
+    return tuple(seen)
+
+
+def _parse_utc(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _ask_cents(raw: Any) -> int | None:
+    if isinstance(raw, bool) or raw is None:
+        return None
+    if isinstance(raw, int):
+        cents = raw
+    else:
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return None
+        cents = int(round(value * 100)) if value <= 1 else int(round(value))
+    if 1 <= cents <= 99:
+        return cents
+    return None
+
+
+def _market_asks(market: Any) -> tuple[int | None, int | None]:
+    if isinstance(market, Mapping):
+        return _ask_cents(market.get("yes_ask")), _ask_cents(market.get("no_ask"))
+    return snapshot_ask_cents(market)
+
+
+def _market_liquidity(market: Any) -> Decimal:
+    names = ("liquidity_dollars", "volume_fp", "volume_24h_fp", "volume", "open_interest")
+    for name in names:
+        raw = market.get(name) if isinstance(market, Mapping) else getattr(market, name, None)
+        number = _decimal(raw)
+        if number is not None and number > 0:
+            return number
+    return Decimal("0")
+
+
+def _market_identity(market: Any) -> tuple[str, str, str, datetime | None]:
+    if isinstance(market, Mapping):
+        ticker = str(market.get("ticker") or "").strip().upper()
+        series = str(market.get("series") or market.get("series_ticker") or "").strip().upper()
+        status = str(market.get("status") or "").strip().lower()
+        close = _parse_utc(market.get("close_time"))
+    else:
+        ticker = str(getattr(market, "ticker", "") or "").strip().upper()
+        series = event_news_series_ticker(market)
+        status = str(getattr(market, "status", "") or "").strip().lower()
+        close = _parse_utc(getattr(market, "close_time", None))
+        if close is None:
+            close = _parse_utc(getattr(market, "expected_expiration_time", None))
+    if not series and ticker:
+        series = ticker.split("-", 1)[0]
+    return ticker, series, status, close
+
+
+def rank_politics_markets(
+    markets: Sequence[Any],
+    *,
+    now: datetime,
+    series: Sequence[str] | None = None,
+) -> list[Any]:
+    """Open politics markets that close within 72h and have an ask from 36c to 94c.
+
+    Higher liquidity (then volume) ranks first. An earlier close breaks a tie.
+    Response status ``open`` is not tradeable. KXDJI is not eligible.
+    """
+    allowed = {item.strip().upper() for item in (series or politics_scan_series()) if item.strip()}
+    window_end = now + SCAN_CLOSE_WINDOW
+    ranked: list[tuple[Decimal, datetime, str, Any]] = []
+    for market in markets:
+        ticker, market_series, status, close = _market_identity(market)
+        if status != "active" or close is None:
+            continue
+        if market_series not in allowed or _non_politics_series(market_series, ticker):
+            continue
+        if close <= now or close > window_end:
+            continue
+        yes_ask, no_ask = _market_asks(market)
+        asks = [
+            ask
+            for ask in (yes_ask, no_ask)
+            if ask is not None and EVENT_NEWS_BAND_FLOOR_CENTS <= ask <= SCAN_ASK_MAX_CENTS
+        ]
+        if not asks:
+            continue
+        ranked.append((-_market_liquidity(market), close, ticker, market))
+    ranked.sort(key=lambda item: (item[0], item[1], item[2]))
+    return [item[3] for item in ranked]
 
 
 def comparison_summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -391,9 +570,11 @@ def run_paper_edge_scan(
     comparison_log_path: Path = COMPARISON_LOG_PATH,
     spend_path: Path = SPEND_PATH,
     db_path: Path | None = None,
+    raw_dir: Path = RAW_DIR,
+    max_markets: int = MAX_MARKETS_PER_CYCLE,
     now: datetime | None = None,
 ) -> dict[str, int]:
-    """Queue at most one paper candidate. Live and a failed Grok call queue none.
+    """Queue at most ``max_markets`` paper candidates. Live and a failed Grok call queue none.
 
     The grounded call runs first. A cap that can pay one grounded reserve
     still records the call that can queue. The ungrounded call runs only
@@ -425,6 +606,7 @@ def run_paper_edge_scan(
             post=post,
             call_log_path=call_log_path,
             spend_path=spend_path,
+            raw_dir=raw_dir,
             now=now,
         )
         ungrounded = _call_grok(
@@ -436,11 +618,12 @@ def run_paper_edge_scan(
             post=post,
             call_log_path=call_log_path,
             spend_path=spend_path,
+            raw_dir=raw_dir,
             now=now,
         )
         if grounded is None or grounded.probability is None or grounded.skip_reason:
             counts["skipped"] += 1
-            if counts["examined"] >= MAX_MARKETS_PER_CYCLE:
+            if counts["examined"] >= max_markets:
                 break
             continue
         if (
@@ -472,7 +655,7 @@ def run_paper_edge_scan(
             counts["queued"] += 1
         else:
             counts["skipped"] += 1
-        if counts["examined"] >= MAX_MARKETS_PER_CYCLE:
+        if counts["examined"] >= max_markets:
             break
     return counts
 
@@ -523,6 +706,7 @@ def run_paper_exit_watch(
     call_log_path: Path = CALL_LOG_PATH,
     exit_log_path: Path = EXIT_LOG_PATH,
     spend_path: Path = SPEND_PATH,
+    raw_dir: Path = RAW_DIR,
     now: datetime | None = None,
 ) -> int:
     """Log a paper exit at the bid. Does not cancel or sell."""
@@ -556,6 +740,7 @@ def run_paper_exit_watch(
             post=post,
             call_log_path=call_log_path,
             spend_path=spend_path,
+            raw_dir=raw_dir,
             now=now,
             kind="exit",
         )
@@ -593,6 +778,7 @@ def score_open_positions(
     score_log_path: Path = POSITION_SCORE_LOG_PATH,
     spend_path: Path = SPEND_PATH,
     db_path: Path | None = None,
+    raw_dir: Path = RAW_DIR,
     now: datetime | None = None,
 ) -> dict[str, int]:
     """Score open positions with one grounded call each. Does not order.
@@ -633,6 +819,7 @@ def score_open_positions(
             post=post,
             call_log_path=call_log_path,
             spend_path=spend_path,
+            raw_dir=raw_dir,
             now=now,
             kind="position_score",
         )
@@ -765,6 +952,127 @@ def _queue_best_side(
     return best is not None
 
 
+def _schema_format(kind: str) -> dict[str, Any]:
+    if kind == "exit":
+        return {
+            "type": "json_schema",
+            "name": "grok_exit_watch",
+            "strict": True,
+            "schema": _EXIT_SCHEMA,
+        }
+    return {
+        "type": "json_schema",
+        "name": "grok_edge_prob",
+        "strict": True,
+        "schema": _EDGE_SCHEMA,
+    }
+
+
+def _p90(values: Sequence[Decimal]) -> Decimal | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    rank = int(
+        (Decimal("0.9") * Decimal(len(ordered))).to_integral_value(rounding=ROUND_CEILING)
+    )
+    index = min(len(ordered), max(1, rank)) - 1
+    return ordered[index]
+
+
+def _measured_costs(path: Path, *, grounded: bool) -> list[Decimal]:
+    if not path.is_file():
+        return []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return []
+    found: list[Decimal] = []
+    for line in lines[-200:]:
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict) or row.get("cost_source") != "provider":
+            continue
+        if bool(row.get("grounded")) != grounded:
+            continue
+        cost = _decimal(row.get("cost_usd"))
+        if cost is not None and cost > 0:
+            found.append(cost)
+    return found[-MEASURED_COST_WINDOW:]
+
+
+def call_reserve_usd(path: Path, *, grounded: bool) -> Decimal:
+    """Reserve max(recent measured p90 x 1.5, $0.05) for this call class."""
+    p90 = _p90(_measured_costs(path, grounded=grounded))
+    if p90 is None:
+        return MIN_CALL_RESERVE_USD
+    scaled = p90 * RESERVE_P90_MULTIPLIER
+    if scaled < MIN_CALL_RESERVE_USD:
+        return MIN_CALL_RESERVE_USD
+    return scaled
+
+
+def _provider_usage(body: Any) -> tuple[Decimal | None, dict[str, Any]]:
+    """Provider cost from cost_in_usd_ticks, else cost_in_usd. Tokens are logged either way."""
+    if not isinstance(body, dict):
+        return None, {}
+    usage = body.get("usage") if isinstance(body.get("usage"), dict) else {}
+    meta: dict[str, Any] = {}
+    for key in ("input_tokens", "output_tokens", "total_tokens"):
+        raw = usage.get(key)
+        if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0:
+            meta[key] = raw
+    ticks = usage.get("cost_in_usd_ticks")
+    if isinstance(ticks, int) and not isinstance(ticks, bool) and ticks >= 0:
+        meta["cost_in_usd_ticks"] = ticks
+        return Decimal(ticks) / COST_TICKS_PER_USD, meta
+    reported = _reported_cost(body)
+    if reported is not None:
+        return reported, meta
+    return None, meta
+
+
+def _redact_reply(value: Any) -> Any:
+    if isinstance(value, dict):
+        cleaned: dict[str, Any] = {}
+        for key, item in value.items():
+            name = str(key)
+            if _SECRET_KEY.search(name):
+                cleaned[name] = "[redacted]"
+            else:
+                cleaned[name] = _redact_reply(item)
+        return cleaned
+    if isinstance(value, list):
+        return [_redact_reply(item) for item in value]
+    if isinstance(value, str):
+        text = re.sub(r"(?i)bearer\s+\S+", "Bearer [redacted]", value)
+        return re.sub(r"(?i)\b(?:sk|xai)-[A-Za-z0-9_\-]+", "[redacted]", text)
+    return value
+
+
+def _save_raw_reply(
+    directory: Path,
+    *,
+    ticker: str,
+    kind: str,
+    attempt: int,
+    body: Any,
+) -> None:
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", ticker)[:80] or "market"
+        path = directory / f"{stamp}_{safe}_{kind}_{attempt}.json"
+        payload = body if isinstance(body, (dict, list)) else {"body": str(body)[:8000]}
+        path.write_text(
+            json.dumps(_redact_reply(payload), sort_keys=True, default=str),
+            encoding="utf-8",
+        )
+    except OSError:
+        return
+
+
 def _call_grok(
     *,
     ticker: str,
@@ -777,18 +1085,27 @@ def _call_grok(
     spend_path: Path,
     now: datetime | None,
     kind: str = "scan",
+    raw_dir: Path = RAW_DIR,
 ) -> GrokEdgeCall | None:
     env = os.environ if environ is None else environ
     tools = _SCAN_TOOLS if grounded else ()
     prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
-    reserve = GROUNDED_RESERVE_USD if grounded else UNGROUNDED_RESERVE_USD
-    started = time.monotonic()
+    cap = _daily_cap(env)
 
-    def _finish(skip: str | None, body: Any, cost: Decimal) -> GrokEdgeCall:
-        latency_ms = int(round((time.monotonic() - started) * 1000))
+    def _finish(
+        skip: str | None,
+        body: Any,
+        cost: Decimal,
+        *,
+        cost_source: str,
+        usage: Mapping[str, Any],
+        attempt: int,
+    ) -> GrokEdgeCall:
         parsed = _parse_edge_body(body, grounded=grounded, kind=kind) if skip is None else None
         if skip is None and parsed is None:
             skip = "malformed"
+            _save_raw_reply(raw_dir, ticker=ticker, kind=kind, attempt=attempt, body=body)
+        rationale = "" if parsed is None or len(parsed) < 5 else parsed[4]
         call = GrokEdgeCall(
             ticker=ticker,
             grounded=grounded,
@@ -798,86 +1115,108 @@ def _call_grok(
             sources=() if parsed is None else parsed[3],
             tools=tools,
             prompt_hash=prompt_hash,
-            latency_ms=latency_ms,
+            latency_ms=0,
             cost_usd=cost,
             skip_reason=skip,
         )
-        _append_jsonl(
-            call_log_path,
-            {
-                "ts": _stamp(now),
-                "kind": kind,
-                "ticker": ticker,
-                "prompt_hash": prompt_hash,
-                "grounded": grounded,
-                "tools": list(tools),
-                "sources": list(call.sources),
-                "verdict": call.verdict,
-                "probability": None if call.probability is None else str(call.probability),
-                "confidence": None if call.confidence is None else str(call.confidence),
-                "latency_ms": latency_ms,
-                "cost_usd": str(cost),
-                "skip_reason": skip,
-            },
-        )
+        record = {
+            "ts": _stamp(now),
+            "kind": kind,
+            "ticker": ticker,
+            "prompt_hash": prompt_hash,
+            "grounded": grounded,
+            "tools": list(tools),
+            "sources": list(call.sources),
+            "verdict": call.verdict,
+            "probability": None if call.probability is None else str(call.probability),
+            "confidence": None if call.confidence is None else str(call.confidence),
+            "rationale": rationale[:500],
+            "attempt": attempt,
+            "cost_usd": format(cost, "f"),
+            "cost_source": cost_source,
+            "skip_reason": skip,
+        }
+        for key in ("input_tokens", "output_tokens", "total_tokens", "cost_in_usd_ticks"):
+            if key in usage:
+                record[key] = usage[key]
+        _append_jsonl(call_log_path, record)
         if skip:
             log.info(
-                "[GROK_EDGE] skip=%s ticker=%s grounded=%s latency_ms=%s",
+                "[GROK_EDGE] skip=%s ticker=%s grounded=%s attempt=%s",
                 skip,
                 ticker,
                 grounded,
-                latency_ms,
+                attempt,
             )
         return call
 
-    key = str(env.get(XAI_API_KEY_ENV) or "").strip()
-    if not key:
-        return _finish("missing_key", None, Decimal("0"))
-    reserved = _reserve_spend(spend_path, reserve, cap=_daily_cap(env), now=now)
-    if reserved is None:
-        return _finish("spend_cap", None, Decimal("0"))
-    payload: dict[str, Any] = {
-        "model": GROK_MODEL,
-        "temperature": 0,
-        "input": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": prompt},
-        ],
-    }
-    if grounded:
-        payload["tools"] = [{"type": name} for name in _SCAN_TOOLS]
-    headers = {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-    }
-    sender = post if post is not None else requests.post
-    try:
-        response = sender(
-            XAI_RESPONSES_URL,
-            json=payload,
-            headers=headers,
-            timeout=GROK_EDGE_TIMEOUT_SECONDS,
-        )
-    except requests.Timeout:
-        return _finish("timeout", None, reserved)
-    except Exception:
-        return _finish("request_error", None, reserved)
-    if getattr(response, "status_code", None) != 200:
-        return _finish("http", None, reserved)
-    try:
-        body = response.json()
-    except Exception:
-        return _finish("malformed", None, reserved)
-    extra = _reported_cost(body)
-    cost = reserved
-    if extra is not None and extra > reserved:
-        cap = _daily_cap(env)
-        added = _reserve_spend(spend_path, extra - reserved, cap=cap, now=now)
-        if added is not None:
-            cost = reserved + added
-        else:
-            _pin_spend_to_cap(spend_path, cap, now=now)
-    return _finish(None, body, cost)
+    def _attempt(user_prompt: str, attempt: int) -> GrokEdgeCall:
+        reserve = call_reserve_usd(call_log_path, grounded=grounded)
+        key = str(env.get(XAI_API_KEY_ENV) or "").strip()
+        if not key:
+            return _finish(
+                "missing_key", None, Decimal("0"), cost_source="reserve", usage={}, attempt=attempt
+            )
+        reserved = _reserve_spend(spend_path, reserve, cap=cap, now=now)
+        if reserved is None:
+            return _finish(
+                "spend_cap", None, Decimal("0"), cost_source="reserve", usage={}, attempt=attempt
+            )
+        payload: dict[str, Any] = {
+            "model": GROK_MODEL,
+            "temperature": 0,
+            "input": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_prompt},
+            ],
+            "text": {"format": _schema_format(kind)},
+        }
+        if grounded:
+            payload["tools"] = [{"type": name} for name in _SCAN_TOOLS]
+        headers = {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+        }
+        sender = post if post is not None else requests.post
+        try:
+            response = sender(
+                XAI_RESPONSES_URL,
+                json=payload,
+                headers=headers,
+                timeout=GROK_EDGE_TIMEOUT_SECONDS,
+            )
+        except requests.Timeout:
+            return _finish(
+                "timeout", None, reserved, cost_source="reserve", usage={}, attempt=attempt
+            )
+        except Exception:
+            return _finish(
+                "request_error", None, reserved, cost_source="reserve", usage={}, attempt=attempt
+            )
+        if getattr(response, "status_code", None) != 200:
+            return _finish("http", None, reserved, cost_source="reserve", usage={}, attempt=attempt)
+        try:
+            body = response.json()
+        except Exception:
+            return _finish(
+                "malformed", None, reserved, cost_source="reserve", usage={}, attempt=attempt
+            )
+        actual, usage = _provider_usage(body)
+        cost = reserved
+        source = "reserve"
+        if actual is not None:
+            _reconcile_spend(spend_path, reserved, actual, cap=cap, now=now)
+            cost = actual
+            source = "provider"
+        return _finish(None, body, cost, cost_source=source, usage=usage, attempt=attempt)
+
+    first = _attempt(prompt, 1)
+    if first.skip_reason != "malformed":
+        return first
+    return _attempt(
+        prompt + "\n\nPrevious reply did not parse. Return the schema object only.",
+        2,
+    )
 
 
 def _parse_edge_body(
@@ -885,25 +1224,26 @@ def _parse_edge_body(
     *,
     grounded: bool,
     kind: str,
-) -> tuple[Decimal, Decimal | None, str, tuple[str, ...]] | None:
+) -> tuple[Decimal, Decimal | None, str, tuple[str, ...], str] | None:
     if not isinstance(body, dict):
         return None
-    obj = _last_json_object(_response_text(body))
+    obj = _select_json_object(_response_text(body), kind=kind)
     if obj is None:
         return None
     sources = _http_sources(body, obj)
+    rationale = str(obj.get("rationale") or "").strip()
     if kind == "exit":
         if not isinstance(obj.get("contrary"), bool):
             return None
         confidence = _unit_decimal(obj.get("confidence"))
-        probability = _unit_decimal(obj.get("probability"))
+        probability = _unit_decimal(obj.get("prob", obj.get("probability")))
         if probability is None:
             return None
         if obj["contrary"] is True and (confidence is None or not sources):
             return None
         verdict = "CONTRARY" if obj["contrary"] else "OK"
-        return probability, confidence, verdict, sources
-    probability = _unit_decimal(obj.get("probability"))
+        return probability, confidence, verdict, sources, rationale
+    probability = _unit_decimal(obj.get("prob", obj.get("probability")))
     if probability is None:
         return None
     if grounded and not sources:
@@ -912,7 +1252,7 @@ def _parse_edge_body(
     verdict = str(obj.get("verdict") or "").strip().upper()
     if verdict not in {"YES", "NO"}:
         verdict = "YES" if probability >= Decimal("0.5") else "NO"
-    return probability, confidence, verdict, sources
+    return probability, confidence, verdict, sources, rationale
 
 
 def _market_view(market: Any) -> dict[str, Any] | None:
@@ -978,10 +1318,10 @@ def _bid_cents(market: Any, side: str) -> int | None:
 
 
 def _response_text(body: Mapping[str, Any]) -> str:
-    output_text = body.get("output_text")
-    if isinstance(output_text, str):
-        return output_text
     chunks: list[str] = []
+    output_text = body.get("output_text")
+    if isinstance(output_text, str) and output_text.strip():
+        chunks.append(output_text)
     output = body.get("output")
     if isinstance(output, list):
         for item in output:
@@ -1023,12 +1363,25 @@ def _http_sources(body: Mapping[str, Any], obj: Mapping[str, Any]) -> tuple[str,
     if isinstance(sources, list):
         for item in sources:
             _add(item)
+
+    def _walk(node: Any) -> None:
+        if isinstance(node, dict):
+            _add(node.get("url"))
+            for item in node.values():
+                _walk(item)
+        elif isinstance(node, list):
+            for item in node:
+                _walk(item)
+
+    _walk(body.get("output"))
     return tuple(found)
 
 
-def _last_json_object(content: str) -> dict[str, Any] | None:
+def _select_json_object(content: str, *, kind: str) -> dict[str, Any] | None:
+    """Use the last object that has the schema fields. Ignore a trailing tool payload."""
+    wanted = ("contrary",) if kind == "exit" else ("prob", "probability")
     decoder = json.JSONDecoder()
-    found: dict[str, Any] | None = None
+    chosen: dict[str, Any] | None = None
     for index, char in enumerate(content):
         if char != "{":
             continue
@@ -1036,9 +1389,9 @@ def _last_json_object(content: str) -> dict[str, Any] | None:
             obj, _end = decoder.raw_decode(content[index:])
         except json.JSONDecodeError:
             continue
-        if isinstance(obj, dict):
-            found = obj
-    return found
+        if isinstance(obj, dict) and any(key in obj for key in wanted):
+            chosen = obj
+    return chosen
 
 
 def _reserve_spend(
@@ -1085,34 +1438,80 @@ def _reserve_spend_unlocked(
     return amount
 
 
-def _pin_spend_to_cap(path: Path, cap: Decimal, now: datetime | None) -> None:
-    """Fill today's ledger so a later reserve cannot fit.
+def _reconcile_spend(
+    path: Path,
+    reserved: Decimal,
+    actual: Decimal,
+    *,
+    cap: Decimal,
+    now: datetime | None,
+) -> None:
+    """Replace this call's reserve with the provider cost.
 
-    Used when a reported cost is above the reserve and the difference does
-    not fit. A smaller reported cost is not refunded.
+    A smaller actual cost is credited back. A larger one is debited until the
+    cap, and the ledger is pinned when the extra does not fit.
     """
-    if cap < 0:
+    if actual < 0 or reserved < 0:
+        return
+    delta = actual - reserved
+    if delta == 0:
         return
     with _SPEND_LOCK:
-        today = _day(now)
-        try:
-            existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-        except (OSError, UnicodeError, json.JSONDecodeError):
+        if delta > 0:
+            added = _reserve_spend_unlocked(path, delta, cap=cap, now=now)
+            if added is None:
+                _pin_spend_to_cap_unlocked(path, cap, now)
             return
-        if not isinstance(existing, dict):
+        _credit_spend_unlocked(path, -delta, now=now)
+
+
+def _credit_spend_unlocked(path: Path, amount: Decimal, *, now: datetime | None) -> None:
+    if amount <= 0:
+        return
+    today = _day(now)
+    try:
+        existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return
+    if not isinstance(existing, dict) or existing.get("date") != today:
+        return
+    spent = _decimal(existing.get("spent_usd"))
+    if spent is None or spent < amount:
+        return
+    try:
+        _write_json(path, {"date": today, "spent_usd": format(spent - amount, "f")})
+    except OSError:
+        return
+
+
+def _pin_spend_to_cap(path: Path, cap: Decimal, now: datetime | None) -> None:
+    """Fill today's ledger so a later reserve cannot fit."""
+    with _SPEND_LOCK:
+        _pin_spend_to_cap_unlocked(path, cap, now)
+
+
+def _pin_spend_to_cap_unlocked(path: Path, cap: Decimal, now: datetime | None) -> None:
+    if cap < 0:
+        return
+    today = _day(now)
+    try:
+        existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return
+    if not isinstance(existing, dict):
+        return
+    if existing.get("date") != today:
+        spent = Decimal("0")
+    else:
+        spent = _decimal(existing.get("spent_usd"))
+        if spent is None or spent < 0:
             return
-        if existing.get("date") != today:
-            spent = Decimal("0")
-        else:
-            spent = _decimal(existing.get("spent_usd"))
-            if spent is None or spent < 0:
-                return
-        if spent >= cap:
-            return
-        try:
-            _write_json(path, {"date": today, "spent_usd": str(cap)})
-        except OSError:
-            return
+    if spent >= cap:
+        return
+    try:
+        _write_json(path, {"date": today, "spent_usd": str(cap)})
+    except OSError:
+        return
 
 
 def _reported_cost(body: Any) -> Decimal | None:
