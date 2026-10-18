@@ -23,7 +23,7 @@ request-vs-response status contract that the P-7 author misread.
 
 ### Fixed
 
-- **A valid politics cash GET rewrites the cash file, up or down.** `logs/state/politics_cash_cents.json` stores the first valid cents of the UTC day, the previous valid cents, the latest cents, and a UTC timestamp. None, 0, NaN, inf, and a failed read do not overwrite the file and log `cash=not_measured`. Health alerts when that drop exceeds $5 or the timestamp is older than 2 hours. New-fill and halt alerts call the same `send_offbox_alert` sender.
+- **A valid politics cash GET rewrites the cash file, up or down.** `logs/state/politics_cash_cents.json` stores the first valid cents of the UTC day, the previous valid cents, the latest cents, and a UTC timestamp. A new UTC date resets the day's start and keeps the prior last cents, so a cross-midnight drop is still visible. None, 0, NaN, inf, and a failed read do not overwrite the file and log `cash=not_measured`. Health alerts when that drop exceeds $5 or the timestamp is older than 2 hours. A drop is classified before a date mismatch. Age over 2 hours still wins. A positions GET failure does not discard a balance that already parsed. New-fill and halt alerts call the same `send_offbox_alert` sender.
 
 ### Added
 

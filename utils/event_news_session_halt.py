@@ -3,7 +3,8 @@
 The latch keeps a tripped halt across a restart so a new process cannot
 seed a fresh baseline and trade. The only reset is deleting the latch
 file. A new process does not clear it. A new UTC date resets the cash
-file's start cents and does not clear the latch.
+file's start cents, keeps the previous last cents as ``prev_cents``,
+and does not clear the latch.
 
 The cash file is integer cents for the health check. Tests monkeypatch
 the path constants.
@@ -112,8 +113,9 @@ def record_cash_cents(
 
     ``start_cents`` is the first valid read of the UTC date. ``last_cents``
     and ``ts`` update on every later valid read, up or down. ``prev_cents``
-    is the previous valid ``last_cents`` on that date. None, 0, NaN, inf,
-    and a non-number log ``cash=not_measured`` and return False.
+    is the previous valid ``last_cents``, including the last read from the
+    previous UTC date. None, 0, NaN, inf, and a non-number log
+    ``cash=not_measured`` and return False.
     """
     cents = _usable_cash_cents(dollars)
     if cents is None:
@@ -128,15 +130,16 @@ def record_cash_cents(
     existing = _read_json(target)
     start = cents
     prev: int | None = None
-    if existing and existing.get("date") == today:
-        try:
-            start = int(existing["start_cents"])
-        except (KeyError, TypeError, ValueError):
-            start = cents
+    if existing:
         try:
             prev = int(existing["last_cents"])
         except (KeyError, TypeError, ValueError):
             prev = None
+        if existing.get("date") == today:
+            try:
+                start = int(existing["start_cents"])
+            except (KeyError, TypeError, ValueError):
+                start = cents
     payload: dict[str, Any] = {
         "date": today,
         "last_cents": cents,

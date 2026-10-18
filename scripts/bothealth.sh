@@ -492,12 +492,14 @@ if isinstance(data, dict):
         drop = str(reported)
         breach = day_drop > CASH_DROP_CENTS or step_drop > CASH_DROP_CENTS
         today = now_dt.date().isoformat()
+        # Age wins. A drop beats a date mismatch so a cross-midnight
+        # step over $5 still alerts while the file is younger than 2h.
         if age_s > CASH_STALE_S:
             cash = "stale"
-        elif data.get("date") != today:
-            cash = "not_today"
         elif breach:
             cash = "drop"
+        elif data.get("date") != today:
+            cash = "not_today"
         else:
             cash = "ok"
 

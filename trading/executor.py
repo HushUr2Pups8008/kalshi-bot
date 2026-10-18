@@ -2077,18 +2077,17 @@ class TradeExecutor:
             return None, None
         try:
             balance = request("GET", "/portfolio/balance")
-            positions = request("GET", "/portfolio/positions")
         except Exception:
             log.warning(
-                "[EVENT_NEWS_RISK] exposure read failed; cash=not_measured",
+                "[EVENT_NEWS_RISK] balance read failed; cash=not_measured",
                 exc_info=True,
             )
             return None, None
-        if not isinstance(balance, dict) or not isinstance(positions, dict):
+        if not isinstance(balance, dict):
+            log.warning("[CASH_CENTS] cash=not_measured reason=invalid_read")
             return None, None
         try:
             cash = int(balance["balance"])
-            portfolio_value = int(balance.get("portfolio_value") or 0)
         except (KeyError, TypeError, ValueError):
             log.warning("[CASH_CENTS] cash=not_measured reason=invalid_read")
             return None, None
@@ -2096,6 +2095,18 @@ class TradeExecutor:
             from utils.event_news_session_halt import record_cash_cents
 
             record_cash_cents(cash / 100.0)
+        try:
+            portfolio_value = int(balance.get("portfolio_value") or 0)
+        except (TypeError, ValueError):
+            log.warning("[EVENT_NEWS_RISK] portfolio value unreadable")
+            return None, None
+        try:
+            positions = request("GET", "/portfolio/positions")
+        except Exception:
+            log.warning("[EVENT_NEWS_RISK] positions read failed", exc_info=True)
+            return None, None
+        if not isinstance(positions, dict):
+            return None, None
         rows = positions.get("market_positions")
         if not isinstance(rows, list):
             return None, None
