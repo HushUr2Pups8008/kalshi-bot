@@ -23,8 +23,11 @@ from utils.event_news_desk_flags import (
 )
 from utils.event_news_grok_edge import (
     GROK_EDGE_TIMEOUT_SECONDS,
+    GROK_MAX_SEARCH_RESULTS,
+    MAX_MARKETS_PER_CYCLE,
     MIN_CALL_RESERVE_USD,
     PAPER_QUEUE_CONTRACTS,
+    _grounded_tool_payload,
     _reserve_spend,
     brier_report,
     call_reserve_usd,
@@ -33,6 +36,7 @@ from utils.event_news_grok_edge import (
     ev_by_edge_bucket,
     exit_versus_hold,
     fee_net_edge_cents,
+    grok_max_search_results,
     paper_position_rows,
     paper_queue_decision,
     politics_scan_series,
@@ -65,6 +69,8 @@ def _paths(tmp_path: Path) -> dict:
         "candidate_log_path": tmp_path / "candidates.jsonl",
         "comparison_log_path": tmp_path / "comparisons.jsonl",
         "spend_path": tmp_path / "spend.json",
+        "cache_path": tmp_path / "cache.json",
+        "screen_log_path": tmp_path / "screen.jsonl",
     }
 
 
@@ -125,17 +131,19 @@ def _rows(path: Path) -> list[dict]:
     ]
 
 
-def _scan(tmp_path: Path, markets, post, environ) -> dict:
-    return run_paper_edge_scan(
-        markets,
-        live=False,
-        allowlist=ALLOW,
-        environ=environ,
-        post=post,
-        now=NOW,
-        raw_dir=tmp_path / "raw",
-        **_paths(tmp_path),
-    )
+def _scan(tmp_path: Path, markets, post, environ, **extra) -> dict:
+    payload = {
+        "live": False,
+        "allowlist": ALLOW,
+        "environ": environ,
+        "post": post,
+        "now": NOW,
+        "raw_dir": tmp_path / "raw",
+        "post_lookup": lambda: "post-1",
+    }
+    payload.update(_paths(tmp_path))
+    payload.update(extra)
+    return run_paper_edge_scan(markets, **payload)
 
 
 def test_taker_fee_ceils_the_half_cent_case() -> None:
@@ -250,18 +258,34 @@ def test_grounded_scan_queues_four_and_records_the_disabled_proposal(tmp_path: P
         _poster(calls),
         {XAI_API_KEY_ENV: "test-key"},
     )
-    assert counts == {"examined": 1, "queued": 1, "skipped": 0}
+    assert counts == {
+        "examined": 1,
+        "queued": 1,
+        "skipped": 0,
+        "screen_skipped": 0,
+        "cache_hits": 0,
+        "grounded_calls": 1,
+    }
     assert len(calls) == 2
-    grounded, ungrounded = calls
+    ungrounded, grounded = calls
     assert "tools" not in ungrounded["payload"]
-    assert grounded["payload"]["tools"] == [{"type": "web_search"}, {"type": "x_search"}]
+    web_tool, x_tool = grounded["payload"]["tools"]
+    assert web_tool == {"type": "web_search"}
+    assert x_tool["type"] == "x_search"
+    assert x_tool["from_date"] == "2026-10-14"
+    assert x_tool["to_date"] == "2026-10-18"
+    assert x_tool["allowed_x_handles"] == ["realDonaldTrump", "POTUS", "WhiteHouse"]
+    assert "max_search_results" not in x_tool
+    assert grounded["payload"]["max_turns"] == 2
     schema = grounded["payload"]["text"]["format"]
     assert schema["type"] == "json_schema"
+    assert schema["name"] == "grok_series_context"
     assert schema["strict"] is True
-    assert schema["schema"]["required"] == ["prob", "confidence", "sources", "rationale"]
+    assert schema["schema"]["required"] == ["latest_post_id", "summary", "sources", "markets"]
     assert grounded["payload"]["model"] == GROK_MODEL
     assert grounded["timeout"] == GROK_EDGE_TIMEOUT_SECONDS == 20.0
     assert ungrounded["timeout"] == 20.0
+    assert "Use at most 8 sources." in grounded["payload"]["input"][0]["content"]
     candidate = _rows(tmp_path / "candidates.jsonl")[0]
     assert candidate["queued"] is True
     assert candidate["contracts"] == 4
@@ -273,9 +297,12 @@ def test_grounded_scan_queues_four_and_records_the_disabled_proposal(tmp_path: P
     comparison = _rows(tmp_path / "comparisons.jsonl")[0]
     assert comparison["agree"] is True
     logged = _rows(tmp_path / "calls.jsonl")
-    assert len(logged[0]["prompt_hash"]) == 16
-    assert logged[0]["tools"] == ["web_search", "x_search"]
-    assert logged[1]["tools"] == []
+    assert logged[0]["grounded"] is False
+    assert logged[0]["tools"] == []
+    assert len(logged[1]["prompt_hash"]) == 16
+    assert logged[1]["tools"] == ["web_search", "x_search"]
+    assert logged[1]["max_search_results"] == 8
+    assert logged[1]["max_turns"] == 2
 
 
 def test_open_status_is_not_a_tradeable_response(tmp_path: Path) -> None:
@@ -300,7 +327,11 @@ def test_malformed_grounded_reply_does_not_queue(tmp_path: Path) -> None:
     counts = _scan(tmp_path, [_market()], post, {XAI_API_KEY_ENV: "test-key"})
     assert counts["queued"] == 0
     assert _rows(tmp_path / "candidates.jsonl") == []
-    assert _rows(tmp_path / "calls.jsonl")[0]["skip_reason"] == "malformed"
+    rows = _rows(tmp_path / "calls.jsonl")
+    assert rows[0]["grounded"] is False
+    assert rows[0]["skip_reason"] is None
+    grounded = [row for row in rows if row["grounded"]]
+    assert [row["skip_reason"] for row in grounded] == ["malformed", "malformed"]
 
 
 def test_grounded_reply_without_a_source_does_not_queue(tmp_path: Path) -> None:
@@ -309,22 +340,28 @@ def test_grounded_reply_without_a_source_does_not_queue(tmp_path: Path) -> None:
 
     counts = _scan(tmp_path, [_market()], post, {XAI_API_KEY_ENV: "test-key"})
     assert counts["queued"] == 0
-    assert _rows(tmp_path / "calls.jsonl")[0]["skip_reason"] == "malformed"
+    grounded = [row for row in _rows(tmp_path / "calls.jsonl") if row["grounded"]]
+    assert grounded
+    assert all(row["skip_reason"] == "malformed" for row in grounded)
 
 
 def test_timeout_keeps_the_reserve_and_does_not_queue(tmp_path: Path) -> None:
+    """A screen timeout is not a reason to pay for the grounded call."""
+
     def post(url, json, headers, timeout):  # noqa: A002
         raise requests.Timeout("late")
 
     counts = _scan(tmp_path, [_market()], post, {XAI_API_KEY_ENV: "test-key"})
     assert counts["queued"] == 0
+    assert counts["screen_skipped"] == 1
+    assert counts["grounded_calls"] == 0
     spent = json.loads((tmp_path / "spend.json").read_text(encoding="utf-8"))
-    assert Decimal(spent["spent_usd"]) == MIN_CALL_RESERVE_USD * 2
+    assert Decimal(spent["spent_usd"]) == MIN_CALL_RESERVE_USD
     assert _rows(tmp_path / "calls.jsonl")[0]["skip_reason"] == "timeout"
 
 
 def test_spend_cap_skips_before_the_post(tmp_path: Path) -> None:
-    """A measured grounded reserve that does not fit still leaves room for $0.05."""
+    """The cheap screen still runs. A grounded reserve that does not fit is not posted."""
     (tmp_path / "spend.json").write_text(
         json.dumps({"date": "2026-10-17", "spent_usd": "2.60"}) + "\n",
         encoding="utf-8",
@@ -341,9 +378,10 @@ def test_spend_cap_skips_before_the_post(tmp_path: Path) -> None:
     assert "tools" not in calls[0]["payload"]
     assert counts["queued"] == 0
     logged = [row for row in _rows(tmp_path / "calls.jsonl") if row.get("ticker")]
-    assert logged[0]["grounded"] is True
-    assert logged[0]["skip_reason"] == "spend_cap"
-    assert logged[1]["grounded"] is False
+    assert logged[0]["grounded"] is False
+    assert logged[0]["skip_reason"] is None
+    assert logged[1]["grounded"] is True
+    assert logged[1]["skip_reason"] == "spend_cap"
 
 
 def _close_in(hours: int) -> str:
@@ -411,10 +449,11 @@ def test_blank_output_text_parses_prob_and_ignores_trailing_tool_args(tmp_path: 
 
     counts = _scan(tmp_path, [_market()], post, {XAI_API_KEY_ENV: "test-key"})
     assert counts["queued"] == 1
-    logged = _rows(tmp_path / "calls.jsonl")[0]
-    assert Decimal(logged["probability"]) == Decimal("0.70")
+    logged = [row for row in _rows(tmp_path / "calls.jsonl") if row["grounded"]][-1]
     assert logged["sources"] == ["https://example.test/source"]
     assert logged["rationale"] == "public schedule"
+    candidate = _rows(tmp_path / "candidates.jsonl")[0]
+    assert Decimal(candidate["grok_probability"]) == Decimal("0.70")
 
 
 def test_annotation_url_is_enough_for_a_grounded_source(tmp_path: Path) -> None:
@@ -429,7 +468,8 @@ def test_annotation_url_is_enough_for_a_grounded_source(tmp_path: Path) -> None:
 
     counts = _scan(tmp_path, [_market()], post, {XAI_API_KEY_ENV: "test-key"})
     assert counts["queued"] == 1
-    assert _rows(tmp_path / "calls.jsonl")[0]["sources"] == ["https://example.test/ann"]
+    grounded = [row for row in _rows(tmp_path / "calls.jsonl") if row["grounded"]]
+    assert grounded[-1]["sources"] == ["https://example.test/ann"]
 
 
 def test_malformed_reply_retries_once_then_skips_and_redacts_the_raw_body(tmp_path: Path) -> None:
@@ -475,7 +515,9 @@ def test_retry_success_uses_the_second_probability(tmp_path: Path) -> None:
     grounded = [row for row in _rows(tmp_path / "calls.jsonl") if row["grounded"]]
     assert grounded[0]["skip_reason"] == "malformed"
     assert grounded[1]["attempt"] == 2
-    assert grounded[1]["probability"] == "0.70"
+    assert grounded[1]["skip_reason"] is None
+    candidate = _rows(tmp_path / "candidates.jsonl")[0]
+    assert Decimal(candidate["grok_probability"]) == Decimal("0.70")
     assert len(list((tmp_path / "raw").glob("*.json"))) == 1
 
 
@@ -502,7 +544,8 @@ def test_cost_ticks_replace_the_reserve(tmp_path: Path) -> None:
 
     counted = _scan(tmp_path / "ticks", [_market()], with_ticks(37756000), {XAI_API_KEY_ENV: "test-key"})
     assert counted["queued"] == 1
-    grounded = _rows(tmp_path / "ticks" / "calls.jsonl")[0]
+    grounded_rows = [row for row in _rows(tmp_path / "ticks" / "calls.jsonl") if row["grounded"]]
+    grounded = grounded_rows[0]
     assert grounded["cost_source"] == "provider"
     assert Decimal(grounded["cost_usd"]) == Decimal("0.0037756")
     assert grounded["cost_in_usd_ticks"] == 37756000
@@ -525,7 +568,7 @@ def test_cost_ticks_replace_the_reserve(tmp_path: Path) -> None:
 
 
 def test_measured_p90_sets_the_next_reserve(tmp_path: Path) -> None:
-    """Five provider costs of $0.20 reserve 0.30, which fills a 0.30 cap."""
+    """Five provider costs of $0.20 reserve 0.30. A zero-tick screen refunds its nickel."""
     lines = [
         json.dumps({"cost_source": "provider", "grounded": True, "cost_usd": "0.20"})
         for _ in range(5)
@@ -534,14 +577,30 @@ def test_measured_p90_sets_the_next_reserve(tmp_path: Path) -> None:
     assert call_reserve_usd(tmp_path / "calls.jsonl", grounded=True) == Decimal("0.30")
     assert call_reserve_usd(tmp_path / "calls.jsonl", grounded=False) == MIN_CALL_RESERVE_USD
     calls: list[dict] = []
+
+    def post(url, json, headers, timeout):  # noqa: A002
+        calls.append(
+            {"url": url, "payload": json, "timeout": timeout, "authorization": headers.get("Authorization")}
+        )
+        grounded = "tools" in json
+        body = _body(
+            "0.70",
+            sources=["https://example.test/source"] if grounded else [],
+            grounded=grounded,
+        )
+        if not grounded:
+            body["usage"] = {"cost_in_usd_ticks": 0, "input_tokens": 1, "output_tokens": 1}
+        return _Response(body)
+
     counts = _scan(
         tmp_path,
         [_market()],
-        _poster(calls),
+        post,
         {XAI_API_KEY_ENV: "test-key", "GROK_DAILY_USD_CAP": "0.30"},
     )
-    assert len(calls) == 1
-    assert "tools" in calls[0]["payload"]
+    assert len(calls) == 2
+    assert "tools" not in calls[0]["payload"]
+    assert "tools" in calls[1]["payload"]
     assert counts["queued"] == 1
 
 
@@ -889,9 +948,15 @@ def test_reported_cost_above_the_reserve_fills_the_cap(tmp_path: Path) -> None:
     spent = json.loads((tmp_path / "spend.json").read_text(encoding="utf-8"))
     assert Decimal(spent["spent_usd"]) == Decimal("0.60")
     later: list[dict] = []
-    second = _scan(tmp_path, [_market()], _poster(later), {XAI_API_KEY_ENV: "test-key", "GROK_DAILY_USD_CAP": "0.60"})
+    second = _scan(
+        tmp_path,
+        [_market(ticker="KXTRUMPSAY-26OCT20-NEXT")],
+        _poster(later),
+        {XAI_API_KEY_ENV: "test-key", "GROK_DAILY_USD_CAP": "0.60"},
+    )
     assert later == []
     assert second["queued"] == 0
+    assert second["cache_hits"] == 0
 
 
 def test_exit_without_a_probability_does_not_log(tmp_path: Path) -> None:
@@ -939,3 +1004,255 @@ def test_two_reserves_cannot_both_pass_the_same_cap(tmp_path: Path) -> None:
     assert results.count(None) == 1
     spent = json.loads(path.read_text(encoding="utf-8"))
     assert Decimal(spent["spent_usd"]) == Decimal("0.50")
+
+
+def _seed_cache(path: Path, ticker: str, **overrides) -> None:
+    row = {
+        "ts": "2026-10-17T11:00:00Z",
+        "prob": "0.70",
+        "confidence": "0.80",
+        "sources": ["https://example.test/cached"],
+        "yes_ask": 55,
+        "no_ask": 46,
+        "post_id": "post-1",
+        "series": "KXTRUMPSAY",
+        "summary": "cached",
+    }
+    row.update(overrides)
+    path.write_text(json.dumps({"tickers": {ticker: row}}) + "\n", encoding="utf-8")
+
+
+def test_search_budget_defaults_to_8_and_clamps() -> None:
+    """Blank, zero, and junk keep 8. The Responses tools have no result field to send."""
+    assert grok_max_search_results({}) == 8
+    assert grok_max_search_results({GROK_MAX_SEARCH_RESULTS: ""}) == 8
+    assert grok_max_search_results({GROK_MAX_SEARCH_RESULTS: "0"}) == 8
+    assert grok_max_search_results({GROK_MAX_SEARCH_RESULTS: "nope"}) == 8
+    assert grok_max_search_results({GROK_MAX_SEARCH_RESULTS: "4"}) == 4
+    assert grok_max_search_results({GROK_MAX_SEARCH_RESULTS: "99"}) == 20
+    trump, turns = _grounded_tool_payload("KXTRUMPSAY", NOW, 8)
+    assert turns == 2
+    assert trump[1]["from_date"] == "2026-10-14"
+    assert trump[1]["to_date"] == "2026-10-18"
+    assert trump[1]["allowed_x_handles"] == ["realDonaldTrump", "POTUS", "WhiteHouse"]
+    assert "max_search_results" not in trump[0]
+    assert "max_search_results" not in trump[1]
+    other, wide = _grounded_tool_payload("KXCANUSDEAL", NOW, 16)
+    assert wide == 3
+    assert other[1]["from_date"] == "2026-10-14"
+    assert "allowed_x_handles" not in other[1]
+    assert "allowed_x_handles" not in _grounded_tool_payload("KXFED", NOW, 8)[0][1]
+    assert "allowed_x_handles" not in _grounded_tool_payload("KXFISAEXTEND", NOW, 8)[0][1]
+
+
+def test_below_5c_screen_does_not_pay_for_grounding(tmp_path: Path) -> None:
+    """0.56 at 55c/46c is under 5c on both sides, so the grounded call is not posted."""
+    calls: list[dict] = []
+    yes_edge = fee_net_edge_cents(Decimal("0.56"), 55, PAPER_QUEUE_CONTRACTS)
+    no_edge = fee_net_edge_cents(Decimal("0.44"), 46, PAPER_QUEUE_CONTRACTS)
+    assert yes_edge is not None and yes_edge < 5
+    assert no_edge is not None and no_edge < 5
+    counts = _scan(
+        tmp_path,
+        [_market()],
+        _poster(calls, ungrounded_prob="0.56"),
+        {XAI_API_KEY_ENV: "test-key"},
+    )
+    assert counts["queued"] == 0
+    assert counts["screen_skipped"] == 1
+    assert counts["grounded_calls"] == 0
+    assert len(calls) == 1
+    assert "tools" not in calls[0]["payload"]
+    screen = _rows(tmp_path / "screen.jsonl")[0]
+    assert screen["decision"] == "skip"
+    assert screen["reason"] == "below_screen"
+    assert screen["yes_edge_cents"] == yes_edge
+    assert screen["no_edge_cents"] == no_edge
+
+
+def test_open_position_is_grounded_below_the_screen(tmp_path: Path) -> None:
+    """An open ticker still pays for grounding when the cheap edge is under 5c."""
+    calls: list[dict] = []
+    ticker = "KXTRUMPSAY-26OCT20-TEST"
+    counts = _scan(
+        tmp_path,
+        [_market()],
+        _poster(calls, ungrounded_prob="0.56"),
+        {XAI_API_KEY_ENV: "test-key"},
+        open_tickers=(ticker,),
+    )
+    assert counts["queued"] == 1
+    assert counts["grounded_calls"] == 1
+    assert len(calls) == 2
+    assert "tools" in calls[1]["payload"]
+    screen = _rows(tmp_path / "screen.jsonl")[0]
+    assert screen["decision"] == "ground"
+    assert screen["reason"] == "open_position"
+    assert screen["yes_edge_cents"] < 5
+    assert screen["no_edge_cents"] < 5
+    assert Decimal(_rows(tmp_path / "candidates.jsonl")[0]["grok_probability"]) == Decimal("0.70")
+
+
+def test_fresh_cache_queues_without_another_grok_call(tmp_path: Path) -> None:
+    """A 3h grounded read is reused. The cache hit is what queues, not a new call."""
+    ticker = "KXTRUMPSAY-26OCT20-TEST"
+    _seed_cache(tmp_path / "cache.json", ticker)
+    calls: list[dict] = []
+    counts = _scan(tmp_path, [_market()], _poster(calls), {XAI_API_KEY_ENV: "test-key"})
+    assert calls == []
+    assert counts["cache_hits"] == 1
+    assert counts["queued"] == 1
+    assert counts["grounded_calls"] == 0
+    screen = _rows(tmp_path / "screen.jsonl")[0]
+    assert screen["decision"] == "cache_hit"
+    assert screen["reason"] == "cache_fresh"
+    candidate = _rows(tmp_path / "candidates.jsonl")[0]
+    assert candidate["sources"] == ["https://example.test/cached"]
+    assert Decimal(candidate["grok_probability"]) == Decimal("0.70")
+    assert not (tmp_path / "calls.jsonl").exists()
+
+
+def test_ask_move_or_new_post_bypasses_the_3h_cache(tmp_path: Path) -> None:
+    """Five cents of ask movement, or a new post id, pays for a new grounded read."""
+    ticker = "KXTRUMPSAY-26OCT20-TEST"
+    moved = tmp_path / "moved"
+    moved.mkdir()
+    _seed_cache(moved / "cache.json", ticker, yes_ask=50)
+    moved_calls: list[dict] = []
+    moved_counts = _scan(moved, [_market()], _poster(moved_calls), {XAI_API_KEY_ENV: "test-key"})
+    assert moved_counts["cache_hits"] == 0
+    assert len(moved_calls) == 2
+    assert "tools" in moved_calls[1]["payload"]
+
+    posted = tmp_path / "posted"
+    posted.mkdir()
+    _seed_cache(posted / "cache.json", ticker, post_id="")
+    posted_calls: list[dict] = []
+    posted_counts = _scan(
+        posted,
+        [_market()],
+        _poster(posted_calls),
+        {XAI_API_KEY_ENV: "test-key"},
+        post_lookup=lambda: "https://example.test/new-post",
+    )
+    assert posted_counts["cache_hits"] == 0
+    assert len(posted_calls) == 2
+
+    quiet = tmp_path / "quiet"
+    quiet.mkdir()
+    _seed_cache(quiet / "cache.json", ticker, post_id="post-1")
+    quiet_calls: list[dict] = []
+    quiet_counts = _scan(
+        quiet,
+        [_market()],
+        _poster(quiet_calls),
+        {XAI_API_KEY_ENV: "test-key"},
+        post_lookup=lambda: None,
+    )
+    assert quiet_calls == []
+    assert quiet_counts["cache_hits"] == 1
+    assert quiet_counts["queued"] == 1
+
+
+def test_one_grounded_call_covers_a_truth_social_series(tmp_path: Path) -> None:
+    """Two count buckets share one grounded read. A flat prob is not copied onto both."""
+    assert MAX_MARKETS_PER_CYCLE == 1
+    first = _market(ticker="KXTRUTHSOCIAL-26OCT17-B149", series="KXTRUTHSOCIAL")
+    second = _market(ticker="KXTRUTHSOCIAL-26OCT17-B169", series="KXTRUTHSOCIAL")
+    calls: list[dict] = []
+    dumps = json.dumps
+
+    def post(url, json, headers, timeout):  # noqa: A002
+        calls.append(json)
+        if "tools" not in json:
+            return _Response(_body("0.72", sources=[], grounded=False))
+        text = dumps(
+            {
+                "latest_post_id": "ts-1",
+                "summary": "three posts",
+                "sources": ["https://example.test/source"],
+                "markets": [
+                    {
+                        "ticker": "KXTRUTHSOCIAL-26OCT17-B149",
+                        "prob": "0.12",
+                        "confidence": "0.50",
+                        "rationale": "low",
+                    },
+                    {
+                        "ticker": "KXTRUTHSOCIAL-26OCT17-B169",
+                        "prob": "0.80",
+                        "confidence": "0.50",
+                        "rationale": "high",
+                    },
+                ],
+            }
+        )
+        return _Response({"output_text": text, "citations": ["https://example.test/source"]})
+
+    counts = _scan(
+        tmp_path,
+        [first, second],
+        post,
+        {XAI_API_KEY_ENV: "test-key"},
+        allowlist=("KXTRUTHSOCIAL",),
+        max_markets=2,
+    )
+    grounded_posts = [payload for payload in calls if "tools" in payload]
+    assert len(grounded_posts) == 1
+    assert counts["examined"] == 2
+    assert counts["grounded_calls"] == 1
+    assert counts["queued"] == 2
+    by_ticker = {row["ticker"]: row for row in _rows(tmp_path / "candidates.jsonl")}
+    assert Decimal(by_ticker["KXTRUTHSOCIAL-26OCT17-B149"]["grok_probability"]) == Decimal("0.12")
+    assert Decimal(by_ticker["KXTRUTHSOCIAL-26OCT17-B169"]["grok_probability"]) == Decimal("0.80")
+    assert by_ticker["KXTRUTHSOCIAL-26OCT17-B149"]["sources"] == ["https://example.test/source"]
+    assert by_ticker["KXTRUTHSOCIAL-26OCT17-B169"]["sources"] == ["https://example.test/source"]
+
+    flat = tmp_path / "flat"
+    flat.mkdir()
+    flat_calls: list[dict] = []
+    flat_counts = _scan(
+        flat,
+        [first, second],
+        _poster(flat_calls),
+        {XAI_API_KEY_ENV: "test-key"},
+        allowlist=("KXTRUTHSOCIAL",),
+        max_markets=2,
+    )
+    assert flat_counts["queued"] == 0
+    assert flat_counts["grounded_calls"] == 1
+    assert len([payload for payload in flat_calls if "tools" in payload["payload"]]) == 2
+
+
+def test_search_cap_is_in_the_prompt_and_the_call_log(tmp_path: Path) -> None:
+    """The env caps the prompt and max_turns. It is not sent as a Live Search field."""
+    calls: list[dict] = []
+    _scan(
+        tmp_path,
+        [_market(series="KXCANUSDEAL", ticker="KXCANUSDEAL-26OCT20-TEST")],
+        _poster(calls),
+        {XAI_API_KEY_ENV: "test-key", GROK_MAX_SEARCH_RESULTS: "4"},
+        allowlist=("KXCANUSDEAL",),
+    )
+    grounded = calls[1]["payload"]
+    assert "Use at most 4 sources." in grounded["input"][0]["content"]
+    assert grounded["max_turns"] == 2
+    assert "allowed_x_handles" not in grounded["tools"][1]
+    assert grounded["tools"][1]["from_date"] == "2026-10-14"
+    logged = [row for row in _rows(tmp_path / "calls.jsonl") if row["grounded"]][-1]
+    assert logged["max_search_results"] == 4
+    assert logged["max_turns"] == 2
+
+    wide = tmp_path / "wide"
+    wide.mkdir()
+    wide_calls: list[dict] = []
+    _scan(
+        wide,
+        [_market()],
+        _poster(wide_calls),
+        {XAI_API_KEY_ENV: "test-key", GROK_MAX_SEARCH_RESULTS: "16"},
+    )
+    assert wide_calls[1]["payload"]["max_turns"] == 3
+    wide_logged = [row for row in _rows(wide / "calls.jsonl") if row["grounded"]][-1]
+    assert wide_logged["max_search_results"] == 16
+    assert wide_logged["max_turns"] == 3

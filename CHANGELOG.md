@@ -19,6 +19,16 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.35.3] - 2026-10-18
+
+### Changed
+
+- **The Grok sidecar spends less on search.** `GROK_MAX_SEARCH_RESULTS` defaults to 8 and clamps to 1..20. The Responses web_search and x_search tools have no max_search_results field, so the cap is the prompt plus max_turns (2 at 8 results, 3 above that). Trump series restrict X search to realDonaldTrump, POTUS, and WhiteHouse over the last 72 hours. Other series get the date window only. Truth Social is read from the Factbase page, not from an invented X handle. The cheap ungrounded call runs first. A grounded call runs only when that fee-net edge is at least 5c on either side, or the ticker is an open position. Grounded results are cached per ticker for 3 hours and reused unless an ask moves by at least 5c or a new Truth Social post is seen. A failed Factbase read does not bust the cache. Tickers in one series share one grounded call. The order block, the 8c edge gate, the 36c band, the 55c YES floor, the grounded http source gate, and the 8-contract cap are unchanged. Ungrounded probabilities do not queue.
+
+### Not enabled
+
+- **Live=on stays off.** The sidecar is paper-only. The 0.35.0 evidence bar is unchanged. None of the sidecar flags is set in scripts/start_politics_paper.sh or the politics plist.
+
 ## [0.35.2] - 2026-10-18
 
 ### Fixed

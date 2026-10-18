@@ -105,6 +105,7 @@ def _run_scan(rest, positions=None, *, now: datetime | None = None) -> dict[str,
     from utils.event_news_grok_edge import (
         PAPER_DB_PATH,
         SCAN_TOP_N,
+        paper_position_rows,
         politics_scan_series,
         rank_politics_markets,
         run_paper_edge_scan,
@@ -117,6 +118,7 @@ def _run_scan(rest, positions=None, *, now: datetime | None = None) -> dict[str,
         page, _cursor = rest.get_markets(status="open", series_ticker=series, limit=20)
         markets.extend(page or [])
     ranked = rank_politics_markets(markets, now=moment, series=series_list)
+    open_tickers = tuple(row["ticker"] for row in paper_position_rows(positions))
     counts = run_paper_edge_scan(
         ranked[:SCAN_TOP_N],
         live=False,
@@ -124,6 +126,7 @@ def _run_scan(rest, positions=None, *, now: datetime | None = None) -> dict[str,
         db_path=PAPER_DB_PATH,
         max_markets=SCAN_TOP_N,
         now=moment,
+        open_tickers=open_tickers,
     )
     counts["fetched"] = len(markets)
     counts["politics"] = len(ranked)
@@ -192,6 +195,9 @@ def _print_once(scan: dict[str, int], scores: dict[str, int], before: str | None
         "examined": scan.get("examined", 0),
         "queued": scan.get("queued", 0),
         "scan_skipped": scan.get("skipped", 0),
+        "screen_skipped": scan.get("screen_skipped", 0),
+        "cache_hits": scan.get("cache_hits", 0) + scores.get("cache_hits", 0),
+        "grounded_calls": scan.get("grounded_calls", 0) + scores.get("grounded_calls", 0),
         "positions_scored": scores.get("scored", 0),
         "positions_not_scored": scores.get("skipped", 0),
         "spend_before_usd": before,
