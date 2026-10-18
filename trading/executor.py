@@ -459,6 +459,9 @@ class TradeExecutor:
         self._is_paper: bool = cfg.is_paper_trading
         # Live session loss limit state
         self._session_start_balance: Optional[float] = None
+        # Mark-to-market seed. Separate from the cash baseline so the shadow
+        # log cannot move the live cash halt.
+        self._equity_halt_seed: Optional[float] = None
         self._live_halted: bool = False
         self._shutdown_callback: Optional[Callable] = None
         # Paper rows are queued from the admit gate and from a live
@@ -680,6 +683,121 @@ class TradeExecutor:
         loss = self._session_start_balance - usable
         limit = cfg.bankroll * cfg.live_loss_limit_pct
         return loss >= limit
+
+    def _equity_loss_halt_enabled(self) -> bool:
+        """Politics live only. Unset is off for paper and for live."""
+        from utils.event_news_desk_flags import event_news_equity_loss_halt_enabled
+        from utils.event_news_research import is_event_news_paper_cohort
+
+        if self._is_paper or not is_event_news_paper_cohort():
+            return False
+        return event_news_equity_loss_halt_enabled()
+
+    def _read_mtm_equity_dollars(self) -> float | None:
+        """Cash cents plus portfolio_value cents. Missing value is not zero."""
+        request = getattr(self._rest, "_request", None)
+        if not callable(request):
+            return None
+        try:
+            payload = request("GET", "/portfolio/balance")
+        except Exception:
+            log.warning("[EQUITY_HALT] balance read failed")
+            return None
+        if not isinstance(payload, dict):
+            return None
+        cash = self._cents_field(payload.get("balance"))
+        if "portfolio_value" not in payload:
+            return None
+        portfolio_value = self._cents_field(payload.get("portfolio_value"))
+        if cash is None or portfolio_value is None:
+            return None
+        return (cash + portfolio_value) / 100.0
+
+    @staticmethod
+    def _cents_field(value: Any) -> int | None:
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None
+        if value < 0:
+            return None
+        return value
+
+    def _observe_equity_halt(self, equity: float | None, bankroll: float | None) -> str:
+        """Seed on the first good equity. Do not latch and do not shut down."""
+        from utils.event_news_session_halt import session_halt_loss_line
+
+        if bankroll is None or equity is None:
+            return "unreadable"
+        if equity != equity or equity <= 0 or equity == float("inf"):
+            return "unreadable"
+        if self._equity_halt_seed is None:
+            self._equity_halt_seed = equity
+            return "seed"
+        loss = self._equity_halt_seed - equity
+        line = session_halt_loss_line(self._equity_halt_seed, cfg.live_loss_limit_pct)
+        if loss >= line:
+            return "halt"
+        return "pass"
+
+    def _equity_loss_halt_reason(self) -> str | None:
+        """Fail closed when equity or the sizing bankroll cannot be read."""
+        bankroll = self._configured_starting_bankroll()
+        equity = self._read_mtm_equity_dollars()
+        decision = self._observe_equity_halt(equity, bankroll)
+        bankroll_text = "unreadable" if bankroll is None else f"{bankroll:.2f}"
+        equity_text = "unreadable" if equity is None else f"{equity:.2f}"
+        if decision == "unreadable":
+            log.warning(
+                "[EQUITY_HALT] unreadable sizing_bankroll=%s equity=%s; skip and do not seed",
+                bankroll_text,
+                equity_text,
+            )
+            return "live equity unreadable"
+        if decision == "seed":
+            from utils.event_news_session_halt import session_halt_loss_line
+
+            line = session_halt_loss_line(float(equity), cfg.live_loss_limit_pct)
+            log.info(
+                "[EQUITY_HALT] seed equity $%.2f line $%.2f sizing_bankroll $%.2f",
+                equity,
+                line,
+                bankroll,
+            )
+            return None
+        if decision == "halt":
+            self._live_halted = True
+            log.critical(
+                "[EQUITY_HALT] tripped equity $%.2f seed $%.2f sizing_bankroll $%.2f"
+                " -- no new orders and no shutdown",
+                equity,
+                self._equity_halt_seed,
+                bankroll,
+            )
+            return "LIVE HALTED: session loss limit reached -- all trading suspended"
+        return None
+
+    def _shadow_equity_loss_halt(self, *, cash_halted: bool) -> None:
+        """Log the cash decision against mark-to-market equity. Never blocks."""
+        try:
+            from utils.event_news_research import is_event_news_paper_cohort
+
+            if self._is_paper or not is_event_news_paper_cohort():
+                return
+            if self._equity_loss_halt_enabled():
+                return
+            bankroll = self._configured_starting_bankroll()
+            equity = self._read_mtm_equity_dollars()
+            decision = self._observe_equity_halt(equity, bankroll)
+            bankroll_text = "unreadable" if bankroll is None else f"{bankroll:.2f}"
+            equity_text = "unreadable" if equity is None else f"{equity:.2f}"
+            log.info(
+                "[EQUITY_HALT] shadow old=%s new=%s sizing_bankroll=%s equity=%s",
+                "halt" if cash_halted else "pass",
+                decision,
+                bankroll_text,
+                equity_text,
+            )
+        except Exception:
+            log.info("[EQUITY_HALT] shadow_unreadable")
 
     def _seed_cooldowns_from_db(self) -> None:
         """
@@ -1632,21 +1750,28 @@ class TradeExecutor:
                     return "live equity unreadable"
                 if self._check_session_equity_halt(equity):
                     return self._trip_session_halt(equity)
-            elif self._check_live_loss_limit(usable):
-                self._live_halted = True
-                loss = self._session_start_balance - usable
-                log.critical(
-                    "LIVE LOSS LIMIT BREACHED -- halting all trading. "
-                    "Session loss $%.2f >= limit $%.2f (%.0f%% of $%.2f bankroll). "
-                    "Restart bot to reset.",
-                    loss,
-                    cfg.bankroll * cfg.live_loss_limit_pct,
-                    cfg.live_loss_limit_pct * 100,
-                    cfg.bankroll,
-                )
-                if self._shutdown_callback:
-                    self._shutdown_callback()
-                return "LIVE HALTED: session loss limit reached -- all trading suspended"
+            elif self._equity_loss_halt_enabled():
+                equity_reason = self._equity_loss_halt_reason()
+                if equity_reason is not None:
+                    return equity_reason
+            else:
+                cash_halted = self._check_live_loss_limit(usable)
+                self._shadow_equity_loss_halt(cash_halted=cash_halted)
+                if cash_halted:
+                    self._live_halted = True
+                    loss = self._session_start_balance - usable
+                    log.critical(
+                        "LIVE LOSS LIMIT BREACHED -- halting all trading. "
+                        "Session loss $%.2f >= limit $%.2f (%.0f%% of $%.2f bankroll). "
+                        "Restart bot to reset.",
+                        loss,
+                        cfg.bankroll * cfg.live_loss_limit_pct,
+                        cfg.live_loss_limit_pct * 100,
+                        cfg.bankroll,
+                    )
+                    if self._shutdown_callback:
+                        self._shutdown_callback()
+                    return "LIVE HALTED: session loss limit reached -- all trading suspended"
             if analysis.capped_dollars > usable * 0.9:
                 return f"insufficient live balance (${usable:.2f})"
 

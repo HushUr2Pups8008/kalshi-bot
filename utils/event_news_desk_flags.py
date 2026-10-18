@@ -28,6 +28,7 @@ EVENT_NEWS_GROK_RULES_CHECK = "EVENT_NEWS_GROK_RULES_CHECK"
 EVENT_NEWS_GROK_EDGE_SCAN = "EVENT_NEWS_GROK_EDGE_SCAN"
 EVENT_NEWS_GROK_EXIT_WATCH = "EVENT_NEWS_GROK_EXIT_WATCH"
 EVENT_NEWS_SESSION_HALT = "EVENT_NEWS_SESSION_HALT"
+EVENT_NEWS_EQUITY_LOSS_HALT = "EVENT_NEWS_EQUITY_LOSS_HALT"
 
 DEFAULT_YES_FLOOR_CENTS = 55
 DEFAULT_MAX_RISK_CENTS = 600
@@ -71,6 +72,18 @@ def event_news_desk_flag_enabled(
     if raw == "true" or raw.isdigit():
         return True
     return False
+
+
+def event_news_equity_loss_halt_enabled(
+    environ: Mapping[str, str] | None = None,
+) -> bool:
+    """Off for paper and live unless the env is exactly true or 1.
+
+    This name is not a desk flag. An unset value, ``0``, and ``false`` keep
+    the cash loss limit. ``0`` must not enable the halt.
+    """
+    raw = _raw_flag(EVENT_NEWS_EQUITY_LOSS_HALT, environ)
+    return raw in {"true", "1"}
 
 
 def event_news_any_live_desk_flag(

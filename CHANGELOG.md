@@ -19,6 +19,14 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.36.1] - 2026-10-18
+
+### Changed
+
+- **The equity loss halt stays off unless EVENT_NEWS_EQUITY_LOSS_HALT is true or 1.** Live politics still halts on the cash loss limit. Each cash check shadow-logs that decision against mark-to-market equity (balance cents plus portfolio_value cents from GET /portfolio/balance). A failed shadow read does not block the order and does not move the cash baseline. The flag is not a desk flag, so paper does not default it on. The start script does not export it. EVENT_NEWS_SESSION_HALT stays unset and the unapplied session-halt patch stays unapplied.
+
+- **With the flag on, a politics live order halts on equity.** The baseline is the first readable equity. The line is min(10% of that equity, $10). A buy that moves cash into a position at the same mark is not a loss. A mark drop that meets the line stops new orders in memory, does not call shutdown, and does not write the session-halt latch. An unreadable equity read or an unreadable sizing bankroll skips the order and does not seed. The freeze cohort keeps the cash halt.
+
 ## [0.36.0] - 2026-10-18
 
 ### Changed

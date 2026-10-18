@@ -9,7 +9,7 @@ import tempfile
 import threading
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import pytest
 
@@ -250,8 +250,10 @@ async def test_shadow_row_does_not_block_or_resize_the_next_live_check(monkeypat
     assert portfolio.open_positions()[0].paper_shadow is True
     assert executor._validate(analysis) is None
     rest.place_limit_order.assert_not_called()
-    rest._request.assert_not_called()
     rest.cancel_order.assert_not_called()
+    # The $40 shadow row still does not block or resize the live check.
+    # The default-off equity halt may read balance once. That read is not an order.
+    assert rest._request.call_args_list == [call("GET", "/portfolio/balance")]
 
 
 def test_paper_exposure_adds_open_cost_back_onto_residual_cash(monkeypatch) -> None:
