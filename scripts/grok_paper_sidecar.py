@@ -82,35 +82,88 @@ def _spent(path: Path) -> str | None:
     return format(number, "f")
 
 
-def _run_scan(rest) -> dict[str, int]:
-    from utils.event_news_grok_edge import PAPER_DB_PATH, run_paper_edge_scan
-    from utils.event_news_research import event_news_matcher_reserve_series
+def _position_series(positions) -> tuple[str, ...]:
+    """Series prefixes of open positions. Non-politics prefixes are dropped later."""
+    from utils.event_news_grok_edge import paper_position_rows
 
-    series_list = event_news_matcher_reserve_series()
+    found: list[str] = []
+    for row in paper_position_rows(positions):
+        ticker = str(row.get("ticker") or "").strip().upper()
+        series = ticker.split("-", 1)[0] if ticker else ""
+        if series and series not in found:
+            found.append(series)
+    return tuple(found)
+
+
+def _run_scan(rest, positions=None, *, now: datetime | None = None) -> dict[str, int]:
+    """Fetch politics series only, rank them, and examine the top of that list.
+
+    ``fetched`` is the raw page length. ``politics`` is how many of those
+    markets are open, close within 72h, and have an ask from 36c to 94c.
+    KXDJI and the research prewarm fallback are not requested.
+    """
+    from utils.event_news_grok_edge import (
+        PAPER_DB_PATH,
+        SCAN_TOP_N,
+        politics_scan_series,
+        rank_politics_markets,
+        run_paper_edge_scan,
+    )
+
+    moment = now or datetime.now(timezone.utc)
+    series_list = politics_scan_series(_position_series(positions))
     markets: list = []
     for series in series_list:
         page, _cursor = rest.get_markets(status="open", series_ticker=series, limit=20)
-        markets.extend(page)
+        markets.extend(page or [])
+    ranked = rank_politics_markets(markets, now=moment, series=series_list)
     counts = run_paper_edge_scan(
-        markets,
+        ranked[:SCAN_TOP_N],
         live=False,
         allowlist=series_list,
         db_path=PAPER_DB_PATH,
+        max_markets=SCAN_TOP_N,
+        now=moment,
     )
     counts["fetched"] = len(markets)
+    counts["politics"] = len(ranked)
     return counts
 
 
-def _run_scores(rest) -> dict[str, int]:
+def _run_scores(rest, positions=None) -> dict[str, int]:
     from utils.event_news_grok_edge import PAPER_DB_PATH, score_open_positions
 
-    positions = rest.get_open_positions(strict=True)
+    if positions is None:
+        positions = rest.get_open_positions(strict=True)
     return score_open_positions(
         positions,
         live=False,
         market_lookup=rest.get_market,
         db_path=PAPER_DB_PATH,
     )
+
+
+def run_score_then_scan(
+    rest,
+    *,
+    now: datetime | None = None,
+) -> tuple[dict[str, int], dict[str, int], BaseException | None]:
+    """Score open positions, then scan the ranked politics book.
+
+    A score or positions failure still scans. This does not arm the process
+    and it does not import the executor. Callers print the score error.
+    """
+    positions: list = []
+    scores = {"scored": 0, "skipped": 0}
+    score_error: BaseException | None = None
+    try:
+        positions = list(rest.get_open_positions(strict=True) or [])
+        scores = _run_scores(rest, positions)
+    except Exception as exc:
+        score_error = exc
+        scores = {"scored": 0, "skipped": 0}
+    scan = _run_scan(rest, positions, now=now)
+    return scores, scan, score_error
 
 
 def _run_exit(rest) -> int:
@@ -135,6 +188,7 @@ def _print_once(scan: dict[str, int], scores: dict[str, int], before: str | None
 
     payload = {
         "fetched": scan.get("fetched", 0),
+        "politics": scan.get("politics", 0),
         "examined": scan.get("examined", 0),
         "queued": scan.get("queued", 0),
         "scan_skipped": scan.get("skipped", 0),
@@ -161,23 +215,24 @@ def main(argv: list[str] | None = None) -> int:
         rest = KalshiRestClient()
         if once:
             before = _spent(SPEND_PATH)
-            scan = _run_scan(rest)
-            try:
-                scores = _run_scores(rest)
-            except Exception as exc:
+            scores, scan, score_error = run_score_then_scan(rest)
+            if score_error is not None:
                 print(
-                    f"grok paper score failed error_type={type(exc).__name__}",
+                    f"grok paper score failed error_type={type(score_error).__name__}",
                     file=sys.stderr,
                 )
-                scores = {"scored": 0, "skipped": 0}
             _print_once(scan, scores, before, _spent(SPEND_PATH))
             return 0
         next_exit = time.monotonic() + 60
         report_day = ""
         while True:
             try:
-                _run_scan(rest)
-                _run_scores(rest)
+                _scores, _scan, score_error = run_score_then_scan(rest)
+                if score_error is not None:
+                    print(
+                        f"grok paper score failed error_type={type(score_error).__name__}",
+                        file=sys.stderr,
+                    )
             except Exception as exc:
                 print(f"grok paper scan failed error_type={type(exc).__name__}", file=sys.stderr)
             now_mono = time.monotonic()
