@@ -11,7 +11,9 @@ Live mode: tighter checks, live balance verified, source credibility applied.
 
 import asyncio
 import copy
+import functools
 import re
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -438,6 +440,53 @@ def _correlated_exposure_prefix(market: Any) -> str:
     return ticker.split("-", 1)[0]
 
 
+class _OffLoopCall:
+    """One off-loop decision. Abandoning it drops a late mutation."""
+
+    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+        self._lock = threading.Lock()
+        self._abandoned = False
+        self.loop = loop
+
+    def abandon(self) -> None:
+        with self._lock:
+            self._abandoned = True
+
+    def current(self) -> bool:
+        with self._lock:
+            return not self._abandoned
+
+
+class _OffLoopTimeout:
+    """The hard timeout fired. Callers must not place an order."""
+
+
+_OFF_LOOP_TIMEOUT = _OffLoopTimeout()
+
+
+def _grok_hard_timeout_s() -> float:
+    """Stay above the veto request timeout so a late success still decides."""
+    from utils.event_news_grok_veto import GROK_TIMEOUT_SECONDS
+
+    return float(GROK_TIMEOUT_SECONDS) + 5.0
+
+
+def _rules_hard_timeout_s() -> float:
+    """Cover the 5s source fetch plus the Grok request timeout."""
+    from utils.event_news_grok_veto import GROK_TIMEOUT_SECONDS
+
+    return float(GROK_TIMEOUT_SECONDS) + 15.0
+
+
+def _kalshi_read_hard_timeout_s(reads: int = 3) -> float:
+    """Cover each GET's 10s socket timeout and its four attempts.
+
+    A read that finishes inside that budget keeps today's decision. A read
+    that does not finish skips the order.
+    """
+    return 45.0 * reads + 15.0
+
+
 class TradeExecutor:
     """Routes validated trade signals to paper or live execution."""
 
@@ -468,6 +517,8 @@ class TradeExecutor:
         # decision. The lock keeps those rows ordered. The live consumer
         # does not wait on the paper Grok check.
         self._paper_shadow_tasks: set[asyncio.Task[None]] = set()
+        self._maker_wait_tasks: set[asyncio.Task[None]] = set()
+        self._offloop_local = threading.local()
         self._paper_shadow_lock = asyncio.Lock()
         self._paper_shadow_entry_mono: dict[str, float] = {}
         log.info(
@@ -493,6 +544,21 @@ class TradeExecutor:
     def set_shutdown_callback(self, cb: Callable) -> None:
         """Register a callback that is invoked when the live loss limit is breached."""
         self._shutdown_callback = cb
+
+    def _invoke_shutdown_callback(self) -> None:
+        """Run the halt callback on the event loop.
+
+        The live callback is ``asyncio.create_task``. That raises off the
+        loop. An abandoned read does not reach this method.
+        """
+        callback = self._shutdown_callback
+        if callback is None:
+            return
+        call = getattr(self._offloop_local, "call", None)
+        if call is None:
+            callback()
+            return
+        call.loop.call_soon_threadsafe(callback)
 
     def _session_halt_enabled(self) -> bool:
         """Event-news cohort. Unset is on for paper and off for live."""
@@ -525,6 +591,8 @@ class TradeExecutor:
 
         if self._is_paper or not is_event_news_paper_cohort():
             return
+        if not self._offloop_current():
+            return
         from utils.event_news_session_halt import record_cash_cents
 
         record_cash_cents(cash)
@@ -551,7 +619,8 @@ class TradeExecutor:
                 result = ("fail", None)
             else:
                 result = ("ok", rows) if isinstance(rows, list) else ("absent", None)
-        self._live_position_cache = result
+        if self._offloop_current():
+            self._live_position_cache = result
         return result
 
     def _session_open_cost_dollars(self) -> float | None:
@@ -581,6 +650,8 @@ class TradeExecutor:
         from utils.event_news_session_halt import session_halt_loss_line
 
         if self._session_start_balance is None:
+            if not self._offloop_current():
+                return False
             self._session_start_balance = equity
             line = session_halt_loss_line(equity, cfg.live_loss_limit_pct)
             log.info(
@@ -642,6 +713,8 @@ class TradeExecutor:
 
     def _trip_session_halt(self, equity: float, *, mode: str = "LIVE") -> str:
         """Hold the process. Do not call shutdown: exit 0 leaves launchd down."""
+        if not self._offloop_current():
+            return "live balance unreadable"
         from utils.event_news_session_halt import (
             session_halt_loss_line,
             write_halt_latch,
@@ -670,6 +743,8 @@ class TradeExecutor:
             return False
         usable = _positive_dollars(balance)
         if usable is None:
+            return False
+        if not self._offloop_current():
             return False
         if self._session_start_balance is None:
             self._session_start_balance = usable
@@ -730,6 +805,8 @@ class TradeExecutor:
         if equity != equity or equity <= 0 or equity == float("inf"):
             return "unreadable"
         if self._equity_halt_seed is None:
+            if not self._offloop_current():
+                return "unreadable"
             self._equity_halt_seed = equity
             return "seed"
         loss = self._equity_halt_seed - equity
@@ -764,6 +841,8 @@ class TradeExecutor:
             )
             return None
         if decision == "halt":
+            if not self._offloop_current():
+                return "live equity unreadable"
             self._live_halted = True
             log.critical(
                 "[EQUITY_HALT] tripped equity $%.2f seed $%.2f sizing_bankroll $%.2f"
@@ -828,6 +907,75 @@ class TradeExecutor:
                     ticker,
                     age_secs / 3600,
                 )
+
+    def _offloop_current(self) -> bool:
+        """Sync callers are always current. An abandoned read must not latch."""
+        call = getattr(self._offloop_local, "call", None)
+        if call is None:
+            return True
+        return bool(call.current())
+
+    async def _run_off_loop(self, fn: Callable[..., Any], *args: Any, timeout: float) -> Any:
+        """Run one sync decision off the loop. A late return cannot mutate."""
+        call = _OffLoopCall(asyncio.get_running_loop())
+
+        def run() -> Any:
+            self._offloop_local.call = call
+            try:
+                return fn(*args)
+            finally:
+                self._offloop_local.call = None
+
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(run), timeout=timeout)
+        except asyncio.CancelledError:
+            call.abandon()
+            raise
+        except asyncio.TimeoutError:
+            call.abandon()
+            return _OFF_LOOP_TIMEOUT
+
+    async def _wait_off_loop(self, fn: Callable[[], Any], *, timeout: float) -> Any:
+        """Run a sync call off the loop. Timeout is not an allow."""
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(fn), timeout=timeout)
+        except asyncio.TimeoutError:
+            return _OFF_LOOP_TIMEOUT
+
+    async def _validate_off_loop(self, analysis: SignalAnalysis) -> Optional[str]:
+        """Balance and the other validate reads leave the event loop."""
+        result = await self._run_off_loop(
+            self._validate,
+            analysis,
+            timeout=_kalshi_read_hard_timeout_s(3),
+        )
+        if result is _OFF_LOOP_TIMEOUT:
+            log.warning(
+                "[SESSION_HALT] balance unreadable; reason=timeout; skip and do not seed"
+            )
+            return "live balance unreadable"
+        return result
+
+    async def _event_news_plan_skip_off_loop(
+        self,
+        analysis: SignalAnalysis,
+        execution_plan: FinalExecutionTerms,
+    ) -> str | None:
+        """Exposure GETs leave the event loop. Timeout skips the order."""
+        result = await self._run_off_loop(
+            self._event_news_plan_skip,
+            analysis,
+            execution_plan,
+            timeout=_kalshi_read_hard_timeout_s(2),
+        )
+        if result is _OFF_LOOP_TIMEOUT:
+            ticker = str(getattr(getattr(analysis, "market", None), "ticker", "") or "")
+            log.info(
+                "[EVENT_NEWS_RISK] exposure_cap ticker=%s reason=timeout",
+                ticker,
+            )
+            return "exposure_cap"
+        return result
 
     async def execute(self, candidate: Any) -> Optional[str]:
         """
@@ -903,12 +1051,15 @@ class TradeExecutor:
         ):
             skip_reason = "paper_llm_only_requires_decision_grade_research"
         else:
-            skip_reason = self._validate(analysis)
+            skip_reason = await self._validate_off_loop(analysis)
         execution_plan: FinalExecutionTerms | None = None
         if skip_reason is None:
             execution_plan, skip_reason = await self._final_execution_plan(analysis)
         if skip_reason is None and execution_plan is not None:
-            skip_reason = self._event_news_plan_skip(analysis, execution_plan)
+            skip_reason = await self._event_news_plan_skip_off_loop(
+                analysis,
+                execution_plan,
+            )
         if skip_reason is None and self._is_paper:
             assert execution_plan is not None
             skip_reason = self._paper_fee_admission_skip_reason(
@@ -1731,6 +1882,11 @@ class TradeExecutor:
                 return f"cooldown: last trade {elapsed:.0f}s ago (cooldown={cfg.live_ticker_cooldown}s)"
             # Live balance check + session loss limit (single API call covers both)
             balance = self._rest.get_balance()
+            if not self._offloop_current():
+                log.warning(
+                    "[SESSION_HALT] balance unreadable; reason=abandoned; skip and do not seed"
+                )
+                return "live balance unreadable"
             usable = _positive_dollars(balance)
             if usable is None:
                 log.warning(
@@ -1758,6 +1914,8 @@ class TradeExecutor:
                 cash_halted = self._check_live_loss_limit(usable)
                 self._shadow_equity_loss_halt(cash_halted=cash_halted)
                 if cash_halted:
+                    if not self._offloop_current():
+                        return "live balance unreadable"
                     self._live_halted = True
                     loss = self._session_start_balance - usable
                     log.critical(
@@ -1769,8 +1927,7 @@ class TradeExecutor:
                         cfg.live_loss_limit_pct * 100,
                         cfg.bankroll,
                     )
-                    if self._shutdown_callback:
-                        self._shutdown_callback()
+                    self._invoke_shutdown_callback()
                     return "LIVE HALTED: session loss limit reached -- all trading suspended"
             if analysis.capped_dollars > usable * 0.9:
                 return f"insufficient live balance (${usable:.2f})"
@@ -2216,7 +2373,7 @@ class TradeExecutor:
         except (KeyError, TypeError, ValueError):
             log.warning("[CASH_CENTS] cash=not_measured reason=invalid_read")
             return None, None
-        if not self._is_paper:
+        if not self._is_paper and self._offloop_current():
             from utils.event_news_session_halt import record_cash_cents
 
             record_cash_cents(cash / 100.0)
@@ -2402,7 +2559,7 @@ class TradeExecutor:
             )
             if risk_reason is not None or execution_plan is None:
                 return None
-            if self._event_news_plan_skip(analysis, execution_plan):
+            if await self._event_news_plan_skip_off_loop(analysis, execution_plan):
                 return None
             self._event_news_log_paper_maker(analysis, execution_plan)
             from utils.event_news_grok_veto import event_news_paper_grounding_skip
@@ -2419,13 +2576,17 @@ class TradeExecutor:
                 return None
             from utils.event_news_rules_check import event_news_rules_check_skip
 
-            if await asyncio.to_thread(
-                event_news_rules_check_skip,
-                analysis,
-                live=False,
-            ):
+            rules_skip = await self._wait_off_loop(
+                functools.partial(
+                    event_news_rules_check_skip,
+                    analysis,
+                    live=False,
+                ),
+                timeout=_rules_hard_timeout_s(),
+            )
+            if rules_skip is _OFF_LOOP_TIMEOUT or rules_skip:
                 log.info(
-                    "[EVENT_NEWS_RULES] skip=mismatch ticker=%s",
+                    "[EVENT_NEWS_RULES] skip=rules_check ticker=%s",
                     analysis.market.ticker,
                 )
                 return None
@@ -2612,13 +2773,21 @@ class TradeExecutor:
         ):
             from utils.event_news_rules_check import event_news_rules_check_skip
 
-            if event_news_rules_check_skip(analysis, live=True):
+            rules_skip = await self._wait_off_loop(
+                functools.partial(
+                    event_news_rules_check_skip,
+                    analysis,
+                    live=True,
+                ),
+                timeout=_rules_hard_timeout_s(),
+            )
+            if rules_skip is _OFF_LOOP_TIMEOUT or rules_skip:
                 log.info(
-                    "[EVENT_NEWS_RULES] skip=mismatch ticker=%s",
+                    "[EVENT_NEWS_RULES] skip=rules_check ticker=%s",
                     analysis.market.ticker,
                 )
                 return None
-        if not band_blocked and self._event_news_plan_skip(
+        if not band_blocked and await self._event_news_plan_skip_off_loop(
             analysis,
             FinalExecutionTerms(
                 price_cents=price_cents,
@@ -2628,10 +2797,15 @@ class TradeExecutor:
         ):
             return None
         if not band_blocked and is_event_news_paper_cohort():
-            if not event_news_grok_veto_allows_live_post(
-                analysis,
-                contracts=contracts,
-            ):
+            veto = await self._wait_off_loop(
+                functools.partial(
+                    event_news_grok_veto_allows_live_post,
+                    analysis,
+                    contracts=contracts,
+                ),
+                timeout=_grok_hard_timeout_s(),
+            )
+            if veto is _OFF_LOOP_TIMEOUT or not veto:
                 log.info(
                     "[LIVE] BLOCKED %s: EVENT_NEWS_GROK_VETO did not return yes; no POST",
                     analysis.market.ticker,
@@ -2921,11 +3095,9 @@ class TradeExecutor:
             EVENT_NEWS_YES_FLOOR,
             event_news_desk_flag_enabled,
             event_news_maker_limit_cents,
-            event_news_maker_wait_s,
             event_news_yes_floor_cents,
         )
         from utils.event_news_grok_flags import EVENT_NEWS_BAND_FLOOR_CENTS
-        from utils.event_news_research import event_news_fresh_ask_cents
 
         if execution_plan is None:
             return None
@@ -2979,57 +3151,125 @@ class TradeExecutor:
             filled_count = 0
         if status == "executed" or filled_count >= execution_plan.contracts:
             return str(maker_order_id)
+        self._schedule_maker_wait(
+            analysis,
+            execution_plan,
+            str(maker_order_id),
+            side,
+        )
+        return str(maker_order_id)
+
+    def _schedule_maker_wait(
+        self,
+        analysis: SignalAnalysis,
+        execution_plan: FinalExecutionTerms,
+        maker_order_id: str,
+        side: str,
+    ) -> None:
+        """The 180s wait must not hold the order queue."""
+        from utils.event_news_desk_flags import event_news_maker_wait_s
+
+        try:
+            task = asyncio.create_task(
+                self._event_news_maker_after_wait(
+                    analysis,
+                    execution_plan,
+                    maker_order_id,
+                    side,
+                ),
+                name="event-news-maker-wait",
+            )
+        except Exception:
+            log.warning(
+                "[EVENT_NEWS_MAKER] wait schedule failed ticker=%s",
+                getattr(analysis.market, "ticker", ""),
+                exc_info=True,
+            )
+            return
+        self._maker_wait_tasks.add(task)
+        task.add_done_callback(self._maker_wait_done)
+        log.info(
+            "[EVENT_NEWS_MAKER] wait_detached ticker=%s sleep_s=%s",
+            getattr(analysis.market, "ticker", ""),
+            event_news_maker_wait_s(),
+        )
+
+    def _maker_wait_done(self, task: asyncio.Task[Any]) -> None:
+        self._maker_wait_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.warning("[EVENT_NEWS_MAKER] wait_task_failed", exc_info=exc)
+
+    async def _await_maker_waits(self) -> None:
+        """Tests drain the detached wait. Production does not block on it."""
+        tasks = tuple(self._maker_wait_tasks)
+        if tasks:
+            await asyncio.gather(*tasks)
+
+    async def _event_news_maker_after_wait(
+        self,
+        analysis: SignalAnalysis,
+        execution_plan: FinalExecutionTerms,
+        maker_order_id: str,
+        side: str,
+    ) -> Optional[str]:
+        """Cancel and maybe take after the maker rest. Same orders as before."""
+        from utils.event_news_desk_flags import event_news_maker_wait_s
+        from utils.event_news_research import event_news_fresh_ask_cents
+
         await asyncio.sleep(event_news_maker_wait_s())
-        filled_after_wait = self._event_news_maker_filled_after_wait(str(maker_order_id))
+        filled_after_wait = self._event_news_maker_filled_after_wait(maker_order_id)
         if filled_after_wait is None:
             log.info("[EVENT_NEWS_MAKER] fill_unknown order_id=%s", maker_order_id)
             try:
-                self._rest.cancel_order(str(maker_order_id))
+                self._rest.cancel_order(maker_order_id)
             except Exception:
                 log.warning(
                     "[EVENT_NEWS_MAKER] cancel_failed order_id=%s",
                     maker_order_id,
                     exc_info=True,
                 )
-            return str(maker_order_id)
+            return maker_order_id
         filled_count = filled_after_wait
         if filled_count >= execution_plan.contracts:
-            return str(maker_order_id)
+            return maker_order_id
         try:
-            cancelled = bool(self._rest.cancel_order(str(maker_order_id)))
+            cancelled = bool(self._rest.cancel_order(maker_order_id))
         except Exception:
             log.warning(
                 "[EVENT_NEWS_MAKER] cancel_failed order_id=%s",
                 maker_order_id,
                 exc_info=True,
             )
-            return str(maker_order_id)
+            return maker_order_id
         if not cancelled:
             log.info(
                 "[EVENT_NEWS_MAKER] cancel_failed order_id=%s no_taker",
                 maker_order_id,
             )
-            return str(maker_order_id)
+            return maker_order_id
         remaining = execution_plan.contracts - max(filled_count, 0)
         if remaining <= 0:
-            return str(maker_order_id)
+            return maker_order_id
         try:
             liquidity = await fetch_kalshi_execution_liquidity(self._rest, analysis)
             fresh, invalid = event_news_fresh_ask_cents(liquidity.best_price)
         except Exception:
             log.info("[EVENT_NEWS_MAKER] requote_unavailable ticker=%s", analysis.market.ticker)
-            return str(maker_order_id) if filled_count > 0 else None
+            return maker_order_id if filled_count > 0 else None
         analysis._event_news_final_ask_cents = fresh
         analysis._event_news_final_ask_invalid = invalid is True
         if invalid or not isinstance(fresh, int):
-            return str(maker_order_id) if filled_count > 0 else None
+            return maker_order_id if filled_count > 0 else None
         if self._event_news_pre_post_band_skip(
             analysis,
             limit_cents=fresh,
             client_order_id="",
             log_skip=True,
         ):
-            return str(maker_order_id) if filled_count > 0 else None
+            return maker_order_id if filled_count > 0 else None
         estimated = float(getattr(analysis, "estimated_probability", 0.0) or 0.0)
         market_p = fresh / 100.0
         edge = (estimated - market_p) if side == "yes" else ((1.0 - estimated) - market_p)
@@ -3040,7 +3280,7 @@ class TradeExecutor:
                 edge,
                 fresh,
             )
-            return str(maker_order_id) if filled_count > 0 else None
+            return maker_order_id if filled_count > 0 else None
         taker_plan = FinalExecutionTerms(
             price_cents=fresh,
             contracts=remaining,

@@ -1,9 +1,11 @@
-"""Ask Grok to read market rules before a paper entry.
+"""Ask Grok to read market rules before an entry.
 
-The live flag defaults off, so the live order path does not call this.
-A skip happens only when the JSON answer sets mismatch to true. Timeout,
-a missing key, and missing rules text do not skip. The stored file is
-gitignored and does not contain an API key or a headline.
+The live flag defaults off, so the live order path does not call this
+unless that flag is on. A finished check skips only when mismatch is
+true. A timeout, a request error, or a missing key skips too: the order
+does not proceed. Missing rules text still does not skip, because there
+is nothing to check. The stored file is gitignored and does not contain
+an API key or a headline.
 """
 
 from __future__ import annotations
@@ -187,7 +189,12 @@ def event_news_rules_check_skip(
     fetch: Callable[[str], str] | None = None,
     log_path: Path | None = None,
 ) -> bool:
-    """True only when Grok's JSON sets mismatch to true."""
+    """True when the order must not proceed.
+
+    A finished answer skips only when mismatch is true. An error, a
+    timeout, or a missing key also skips. A finished answer whose
+    mismatch is not true does not skip.
+    """
     if not is_event_news_paper_cohort():
         return False
     if not event_news_desk_flag_enabled(
@@ -221,7 +228,7 @@ def event_news_rules_check_skip(
     side = str(getattr(analysis, "side", "") or "")
     if not key:
         log.info("[EVENT_NEWS_RULES] result=timeout ticker=%s reason=missing_key", ticker)
-        return False
+        return True
     user = json.dumps(
         {
             "ticker": ticker,
@@ -281,7 +288,7 @@ def event_news_rules_check_skip(
             )
         except Exception:
             log.warning("[EVENT_NEWS_RULES] journal_failed ticker=%s", ticker)
-        return False
+        return True
     elapsed_ms = int((time.monotonic() - started) * 1000)
     answer = _last_object(content)
     mismatch = bool(answer and answer.get("mismatch") is True)

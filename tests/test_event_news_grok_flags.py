@@ -1252,7 +1252,8 @@ async def test_maker_first_uses_a_new_id_after_cancelling_only_that_order(
             analysis,
             execution_plan=FinalExecutionTerms(89, 8, 7.12),
         )
-    assert order_id == "taker-ord"
+        assert order_id == "maker-ord"
+        await executor._await_maker_waits()
     sleep.assert_awaited_once_with(180)
     posts = executor._rest.place_limit_order.call_args_list
     assert len(posts) == 2
@@ -1315,7 +1316,8 @@ async def test_maker_cancel_failure_does_not_take(monkeypatch, tmp_path):
             analysis,
             execution_plan=FinalExecutionTerms(89, 8, 7.12),
         )
-    assert order_id == "maker-ord"
+        assert order_id == "maker-ord"
+        await executor._await_maker_waits()
     assert executor._rest.place_limit_order.call_count == 1
     executor._rest.cancel_order.assert_called_once_with("maker-ord")
 
@@ -1356,7 +1358,8 @@ async def test_maker_fill_during_the_wait_shrinks_the_taker(monkeypatch, tmp_pat
             analysis,
             execution_plan=FinalExecutionTerms(89, 8, 7.12),
         )
-    assert order_id == "taker-ord"
+        assert order_id == "maker-ord"
+        await executor._await_maker_waits()
     taker = executor._rest.place_limit_order.call_args_list[1].kwargs
     assert taker["count"] == 5
     assert "post_only" not in taker
@@ -1387,7 +1390,8 @@ async def test_maker_full_fill_during_the_wait_does_not_take(monkeypatch, tmp_pa
             analysis,
             execution_plan=FinalExecutionTerms(89, 8, 7.12),
         )
-    assert order_id == "maker-ord"
+        assert order_id == "maker-ord"
+        await executor._await_maker_waits()
     assert executor._rest.place_limit_order.call_count == 1
     executor._rest.cancel_order.assert_not_called()
 

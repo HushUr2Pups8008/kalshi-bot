@@ -19,6 +19,16 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.36.3] - 2026-10-18
+
+### Changed
+
+- **Grok veto, rules check, balance, and exposure reads run off the event loop.** A call that returns inside its hard timeout makes the same decision as before. The ceilings sit above today's HTTP timeouts: the veto is the Grok timeout plus 5 seconds, the rules check is the Grok timeout plus 15 seconds, and each Kalshi read budget is 45 seconds times the read count plus 15 seconds. A timeout skips the order. A late result does not POST, does not seed a halt, and does not call shutdown. The cash-loss shutdown callback is scheduled back onto the event loop, because that callback uses asyncio.create_task.
+
+- **The rules check skips on a timeout, a request error, or a missing key.** A finished answer still skips only when mismatch is true. Empty rules and an empty source still allow the order. A source fetch error when rules text exists still asks Grok. EVENT_NEWS_GROK_RULES_CHECK stays off for live unless it is set, so the running politics process does not enter this check. Paper already defaults the flag on, so a paper error now skips that paper record.
+
+- **The maker-first 180 second wait no longer holds the order queue.** The post-only order is still awaited. The wait, cancel, and requote run on a per-order task. The wait length is unchanged. EVENT_NEWS_MAKER_FIRST stays unset, so the running politics process does not enter this path.
+
 ## [0.36.2] - 2026-10-18
 
 ### Changed
