@@ -19,6 +19,20 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.35.1] - 2026-10-18
+
+### Added
+
+- **Paper-only Grok sidecar.** `scripts/start_grok_paper.sh` and `ops/launchd/com.jake.kalshi-grok-paper.plist.template` run the edge scan and exit watch in a separate process. That process forces `LIVE_TRADING_ENABLED=false`, turns the paper edge scan, exit watch, and grounding on for itself, and sets `GROK_DAILY_USD_CAP=3`. It uses its own lock, `logs/state/grok_edge_*.jsonl`, and `logs/state/grok_paper.db`. It does not start the trading process. While `KALSHI_GROK_PAPER_SIDECAR=true`, POST and DELETE to `/portfolio/orders` and `/portfolio/events/orders` raise before any HTTP call. The politics start script and politics plist do not set these flags. The grounded scan call runs first, so a cap that can pay one grounded reserve still records the call that can queue. The ungrounded call runs only when the cap still has room. Open positions are scored as take or veto from the grounded call and are not orders. A daily join writes `docs/reports/grok-edge-daily.md` from settled market GETs. Empty input says not enough data.
+
+### Fixed
+
+- **A cash file older than 2 hours can be refreshed from a balance GET.** `scripts/refresh_politics_cash.py` rewrites `logs/state/politics_cash_cents.json` only from a positive integer cent balance. None, 0, and a failed read do not overwrite the file. The health script calls it outside fixture runs. It does not restart the politics process and it does not call an order endpoint.
+
+### Not enabled
+
+- **Live=on stays off.** The sidecar is paper-only. The 0.35.0 evidence bar is unchanged. None of the sidecar flags is set in `scripts/start_politics_paper.sh` or the politics plist.
+
 ## [0.35.0] - 2026-10-17
 
 ### Added

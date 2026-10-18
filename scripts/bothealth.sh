@@ -19,8 +19,11 @@
 # self-clean the trigger plist — it is meant to keep firing forever until the
 # operator removes it.
 #
-# Read-only. No DB writes. No trade-log writes. No process control.
-# Safe to run at any time.
+# Read-only except one cash-file refresh. When the politics cash timestamp
+# is older than 2 hours, scripts/refresh_politics_cash.py GETs
+# /portfolio/balance and rewrites that file. A failed read leaves the file
+# alone. Fixture runs set BOTHEALTH_REPO_ROOT and do not GET. No order
+# calls. No process control. Safe to run at any time.
 
 set -uo pipefail
 
@@ -410,6 +413,10 @@ POLITICS_CASH_AGE=""
 POLITICS_STATE_DIR="$REPO_ROOT/logs/state"
 _politics_py="$(python_bin || true)"
 if [[ -n "${_politics_py}" ]]; then
+    # A pinned clock or a fixture root must not GET. Production leaves both unset.
+    if [[ -z "${BOTHEALTH_REPO_ROOT:-}" && -z "${BOTHEALTH_NOW_EPOCH:-}" && "${BOTHEALTH_SKIP_CASH_REFRESH:-}" != "1" ]]; then
+        PYTHONPATH="$REPO_ROOT" "$_politics_py" "$REPO_ROOT/scripts/refresh_politics_cash.py" >>"$REPORT" 2>&1 || true
+    fi
     _politics_status="$("$_politics_py" - "$LOG_DIR" "$POLITICS_STATE_DIR" <<'PY'
 import json
 import os

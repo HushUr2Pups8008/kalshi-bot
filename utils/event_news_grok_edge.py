@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sqlite3
 import threading
 import time
 from dataclasses import dataclass
@@ -59,7 +60,12 @@ CALL_LOG_PATH = Path("logs/state/grok_edge_calls.jsonl")
 CANDIDATE_LOG_PATH = Path("logs/state/grok_edge_candidates.jsonl")
 COMPARISON_LOG_PATH = Path("logs/state/grok_edge_comparisons.jsonl")
 EXIT_LOG_PATH = Path("logs/state/grok_edge_exits.jsonl")
+POSITION_SCORE_LOG_PATH = Path("logs/state/grok_edge_position_scores.jsonl")
 SPEND_PATH = Path("logs/state/grok_edge_spend.json")
+PAPER_DB_PATH = Path("logs/state/grok_paper.db")
+DAILY_REPORT_PATH = Path("docs/reports/grok-edge-daily.md")
+_SETTLED_STATUSES = frozenset({"finalized", "settled", "determined"})
+_DB_LOCK = threading.Lock()
 
 _GROUNDED_SYSTEM = (
     "Use web search and X search. Reply with one JSON object only. "
@@ -384,9 +390,16 @@ def run_paper_edge_scan(
     candidate_log_path: Path = CANDIDATE_LOG_PATH,
     comparison_log_path: Path = COMPARISON_LOG_PATH,
     spend_path: Path = SPEND_PATH,
+    db_path: Path | None = None,
     now: datetime | None = None,
 ) -> dict[str, int]:
-    """Queue at most one paper candidate. Live and a failed Grok call queue none."""
+    """Queue at most one paper candidate. Live and a failed Grok call queue none.
+
+    The grounded call runs first. A cap that can pay one grounded reserve
+    still records the call that can queue. The ungrounded call runs only
+    when the cap still has room. A comparison is written only when both
+    calls return a probability.
+    """
     counts = {"examined": 0, "queued": 0, "skipped": 0}
     if live or not event_news_desk_flag_enabled(
         EVENT_NEWS_GROK_EDGE_SCAN,
@@ -403,22 +416,22 @@ def run_paper_edge_scan(
             continue
         counts["examined"] += 1
         prompt = _market_prompt(view)
-        ungrounded = _call_grok(
+        grounded = _call_grok(
             ticker=view["ticker"],
             prompt=prompt,
-            system=_UNGROUNDED_SYSTEM,
-            grounded=False,
+            system=_GROUNDED_SYSTEM,
+            grounded=True,
             environ=environ,
             post=post,
             call_log_path=call_log_path,
             spend_path=spend_path,
             now=now,
         )
-        grounded = _call_grok(
+        ungrounded = _call_grok(
             ticker=view["ticker"],
             prompt=prompt,
-            system=_GROUNDED_SYSTEM,
-            grounded=True,
+            system=_UNGROUNDED_SYSTEM,
+            grounded=False,
             environ=environ,
             post=post,
             call_log_path=call_log_path,
@@ -452,6 +465,7 @@ def run_paper_edge_scan(
             edge_min=edge_min,
             yes_floor=floor,
             candidate_log_path=candidate_log_path,
+            db_path=db_path,
             now=now,
         )
         if queued:
@@ -568,6 +582,133 @@ def run_paper_exit_watch(
     return logged
 
 
+def score_open_positions(
+    positions: Sequence[Any] | None,
+    *,
+    live: bool,
+    market_lookup: Callable[[str], Any],
+    environ: Mapping[str, str] | None = None,
+    post: Callable[..., Any] | None = None,
+    call_log_path: Path = CALL_LOG_PATH,
+    score_log_path: Path = POSITION_SCORE_LOG_PATH,
+    spend_path: Path = SPEND_PATH,
+    db_path: Path | None = None,
+    now: datetime | None = None,
+) -> dict[str, int]:
+    """Score open positions with one grounded call each. Does not order.
+
+    ``take`` means the grounded probability would queue that side. ``veto``
+    means the call returned and the side would not queue. A skipped call
+    is ``not_scored`` and is not treated as a veto.
+    """
+    counts = {"scored": 0, "skipped": 0}
+    if live or not event_news_desk_flag_enabled(
+        EVENT_NEWS_GROK_EDGE_SCAN,
+        live=False,
+        environ=environ,
+    ):
+        return counts
+    floor = event_news_yes_floor_cents(environ)
+    edge_min = _edge_min(environ)
+    for position in paper_position_rows(positions):
+        ticker = position["ticker"]
+        side = position["side"]
+        try:
+            market = market_lookup(ticker)
+        except Exception:
+            market = None
+        view = _market_view(market) if market is not None else None
+        ask = None if view is None else view["yes_ask" if side == "yes" else "no_ask"]
+        prompt = (
+            _market_prompt(view)
+            if view is not None
+            else f"Estimate the probability this Kalshi market resolves YES. ticker={ticker}"
+        )
+        grounded = _call_grok(
+            ticker=ticker,
+            prompt=prompt,
+            system=_GROUNDED_SYSTEM,
+            grounded=True,
+            environ=environ,
+            post=post,
+            call_log_path=call_log_path,
+            spend_path=spend_path,
+            now=now,
+            kind="position_score",
+        )
+        record: dict[str, Any] = {
+            "ts": _stamp(now),
+            "ticker": ticker,
+            "side": side,
+            "ask_cents": ask,
+            "decision": "not_scored",
+            "skip_reason": "no_call",
+            "grok_probability": None,
+            "edge_cents": None,
+            "sources": [],
+            "paper_only": True,
+        }
+        if (
+            grounded is None
+            or grounded.skip_reason
+            or grounded.probability is None
+        ):
+            if grounded is not None and grounded.skip_reason:
+                record["skip_reason"] = grounded.skip_reason
+            counts["skipped"] += 1
+        else:
+            probability = grounded.probability if side == "yes" else Decimal(1) - grounded.probability
+            reason, edge = paper_queue_decision(
+                probability=probability,
+                ask_cents=ask,
+                side=side,
+                contracts=PAPER_QUEUE_CONTRACTS,
+                edge_min_cents=edge_min,
+                yes_floor_cents=floor,
+            )
+            record.update(
+                {
+                    "decision": "take" if reason == "queue" else "veto",
+                    "skip_reason": None if reason == "queue" else reason,
+                    "grok_probability": str(grounded.probability),
+                    "edge_cents": edge,
+                    "sources": list(grounded.sources),
+                }
+            )
+            counts["scored"] += 1
+        _append_jsonl(score_log_path, record)
+        _insert_paper_row(db_path, "position_scores", record)
+    return counts
+
+
+def write_daily_edge_report(
+    *,
+    candidate_log_path: Path = CANDIDATE_LOG_PATH,
+    comparison_log_path: Path = COMPARISON_LOG_PATH,
+    spend_path: Path = SPEND_PATH,
+    market_lookup: Callable[[str], Any],
+    report_path: Path = DAILY_REPORT_PATH,
+    now: datetime | None = None,
+) -> str:
+    """Join settled market GETs to logged Grok probabilities and write the report.
+
+    Empty or unsettled input says not enough data. This does not read or
+    write orders.
+    """
+    candidates = _read_jsonl(candidate_log_path)
+    comparisons = _read_jsonl(comparison_log_path)
+    spend_line = _spend_line(spend_path)
+    settlements = _settlements_for(
+        [row.get("ticker") for row in (*candidates, *comparisons)],
+        market_lookup,
+    )
+    joined = _joined_settled_rows(candidates, comparisons, settlements)
+    text = _daily_report_text(joined, spend_line, now=now)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(text, encoding="utf-8")
+    return text
+
+
 def _queue_best_side(
     view: Mapping[str, Any],
     call: GrokEdgeCall,
@@ -575,7 +716,8 @@ def _queue_best_side(
     edge_min: int,
     yes_floor: int,
     candidate_log_path: Path,
-    now: datetime | None,
+    db_path: Path | None = None,
+    now: datetime | None = None,
 ) -> bool:
     assert call.probability is not None
     best: tuple[str, int, int] | None = None
@@ -599,6 +741,7 @@ def _queue_best_side(
         "ts": _stamp(now),
         "ticker": view["ticker"],
         "grok_probability": str(call.probability),
+        "yes_ask_cents": view.get("yes_ask"),
         "sources": list(call.sources),
         "contracts": PAPER_QUEUE_CONTRACTS,
         "sizing_proposal_enabled": False,
@@ -618,6 +761,7 @@ def _queue_best_side(
             }
         )
     _append_jsonl(candidate_log_path, record)
+    _insert_paper_row(db_path, "paper_candidates", record)
     return best is not None
 
 
@@ -1008,6 +1152,313 @@ def _append_jsonl(path: Path, record: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=True, sort_keys=True) + "\n")
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.is_file():
+        return []
+    rows: list[dict[str, Any]] = []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def _insert_paper_row(db_path: Path | None, table: str, record: Mapping[str, Any]) -> None:
+    if db_path is None:
+        return
+    if table not in {"paper_candidates", "position_scores"}:
+        return
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with _DB_LOCK:
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS paper_candidates (
+                    id INTEGER PRIMARY KEY,
+                    ts TEXT NOT NULL,
+                    ticker TEXT NOT NULL,
+                    side TEXT,
+                    ask_cents INTEGER,
+                    yes_ask_cents INTEGER,
+                    grok_probability TEXT,
+                    edge_cents INTEGER,
+                    sources_json TEXT NOT NULL,
+                    queued INTEGER NOT NULL,
+                    skip_reason TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS position_scores (
+                    id INTEGER PRIMARY KEY,
+                    ts TEXT NOT NULL,
+                    ticker TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    ask_cents INTEGER,
+                    grok_probability TEXT,
+                    edge_cents INTEGER,
+                    decision TEXT NOT NULL,
+                    skip_reason TEXT,
+                    sources_json TEXT NOT NULL
+                )
+                """
+            )
+            sources = json.dumps(list(record.get("sources") or []), ensure_ascii=True)
+            if table == "paper_candidates":
+                conn.execute(
+                    """
+                    INSERT INTO paper_candidates (
+                        ts, ticker, side, ask_cents, yes_ask_cents, grok_probability,
+                        edge_cents, sources_json, queued, skip_reason
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(record.get("ts") or ""),
+                        str(record.get("ticker") or ""),
+                        record.get("side"),
+                        _int_or_none(record.get("ask_cents")),
+                        _int_or_none(record.get("yes_ask_cents")),
+                        record.get("grok_probability"),
+                        _int_or_none(record.get("edge_cents")),
+                        sources,
+                        1 if record.get("queued") is True else 0,
+                        record.get("skip_reason"),
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO position_scores (
+                        ts, ticker, side, ask_cents, grok_probability, edge_cents,
+                        decision, skip_reason, sources_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(record.get("ts") or ""),
+                        str(record.get("ticker") or ""),
+                        str(record.get("side") or ""),
+                        _int_or_none(record.get("ask_cents")),
+                        record.get("grok_probability"),
+                        _int_or_none(record.get("edge_cents")),
+                        str(record.get("decision") or "not_scored"),
+                        record.get("skip_reason"),
+                        sources,
+                    ),
+                )
+
+
+def _spend_line(path: Path) -> str:
+    if not path.is_file():
+        return "spend: not measured"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return "spend: not measured"
+    if not isinstance(data, dict):
+        return "spend: not measured"
+    spent = _decimal(data.get("spent_usd"))
+    if spent is None or spent < 0:
+        return "spend: not measured"
+    day = str(data.get("date") or "").strip()
+    when = f" on {day}" if day else ""
+    return f"spend: {format(spent, 'f')} USD{when}"
+
+
+def _settlement_result(market: Any) -> str | None:
+    if market is None:
+        return None
+    if isinstance(market, Mapping):
+        status = str(market.get("status") or "").strip().lower()
+        result = str(market.get("result") or "").strip().lower()
+    else:
+        status = str(getattr(market, "status", "") or "").strip().lower()
+        result = str(getattr(market, "result", "") or "").strip().lower()
+    if status not in _SETTLED_STATUSES or result not in {"yes", "no"}:
+        return None
+    return result
+
+
+def _settlements_for(
+    tickers: Sequence[Any],
+    market_lookup: Callable[[str], Any],
+) -> dict[str, str]:
+    found: dict[str, str] = {}
+    for raw in tickers:
+        ticker = str(raw or "").strip()
+        if not ticker or ticker in found:
+            continue
+        try:
+            market = market_lookup(ticker)
+        except Exception:
+            continue
+        result = _settlement_result(market)
+        if result is not None:
+            found[ticker] = result
+    return found
+
+
+def _joined_settled_rows(
+    candidates: Sequence[Mapping[str, Any]],
+    comparisons: Sequence[Mapping[str, Any]],
+    settlements: Mapping[str, str],
+) -> list[dict[str, Any]]:
+    """One row per settled ticker that has a logged grounded probability."""
+    by_ticker: dict[str, dict[str, Any]] = {}
+    for row in candidates:
+        ticker = str(row.get("ticker") or "").strip()
+        probability = _unit_decimal(row.get("grok_probability"))
+        if not ticker or probability is None or ticker not in settlements:
+            continue
+        by_ticker[ticker] = {
+            "ticker": ticker,
+            "probability": probability,
+            "outcome": Decimal(1) if settlements[ticker] == "yes" else Decimal(0),
+            "yes_ask_cents": _int_or_none(row.get("yes_ask_cents")),
+            "side": row.get("side"),
+            "ask_cents": _int_or_none(row.get("ask_cents")),
+            "edge_cents": _int_or_none(row.get("edge_cents")),
+            "queued": row.get("queued") is True,
+            "contracts": _int_or_none(row.get("contracts")) or PAPER_QUEUE_CONTRACTS,
+        }
+    for row in comparisons:
+        ticker = str(row.get("ticker") or "").strip()
+        if ticker not in by_ticker or ticker not in settlements:
+            continue
+        grounded = _unit_decimal(row.get("grounded_probability"))
+        ungrounded = _unit_decimal(row.get("ungrounded_probability"))
+        if grounded is None or ungrounded is None:
+            continue
+        by_ticker[ticker]["grounded_probability"] = grounded
+        by_ticker[ticker]["ungrounded_probability"] = ungrounded
+        by_ticker[ticker]["outcome"] = Decimal(1) if settlements[ticker] == "yes" else Decimal(0)
+    return list(by_ticker.values())
+
+
+def _decimal_text(value: Decimal | None) -> str:
+    if value is None:
+        return "not enough data"
+    return format(value, "f")
+
+
+def _daily_report_text(
+    rows: Sequence[Mapping[str, Any]],
+    spend_line: str,
+    *,
+    now: datetime | None,
+) -> str:
+    del now
+    if not rows:
+        return (
+            "# Grok edge daily\n\n"
+            "n: not enough data\n"
+            "hit rate: not enough data\n"
+            "Brier vs ask: not enough data\n"
+            "fee-net paper EV: not enough data\n"
+            f"{spend_line}\n"
+        )
+    hits = 0
+    brier_rows = []
+    ask_rows = []
+    comparison_rows = []
+    ev_rows = []
+    for row in rows:
+        probability = row["probability"]
+        outcome = row["outcome"]
+        brier_rows.append({"probability": probability, "outcome": outcome})
+        if (probability >= Decimal("0.5") and outcome == 1) or (
+            probability < Decimal("0.5") and outcome == 0
+        ):
+            hits += 1
+        yes_ask = row.get("yes_ask_cents")
+        if isinstance(yes_ask, int) and 1 <= yes_ask <= 99:
+            ask_rows.append(
+                {"probability": Decimal(yes_ask) / Decimal(100), "outcome": outcome}
+            )
+        if "grounded_probability" in row and "ungrounded_probability" in row:
+            comparison_rows.append(
+                {
+                    "grounded_probability": row["grounded_probability"],
+                    "ungrounded_probability": row["ungrounded_probability"],
+                    "outcome": outcome,
+                }
+            )
+        if row.get("queued") is True and isinstance(row.get("edge_cents"), int):
+            side = str(row.get("side") or "")
+            ask = row.get("ask_cents")
+            contracts = row.get("contracts")
+            if side in {"yes", "no"} and isinstance(ask, int) and isinstance(contracts, int):
+                held = exit_versus_hold(
+                    side=side,
+                    bid_cents=ask,
+                    settlement_yes=outcome == 1,
+                    contracts=contracts,
+                    entry_ask_cents=ask,
+                )
+                if held is not None:
+                    ev_rows.append(
+                        {
+                            "edge_cents": row["edge_cents"],
+                            "pnl_dollars": Decimal(held["hold_cents"]) / Decimal(100),
+                        }
+                    )
+    count = len(rows)
+    grok_brier = brier_report(brier_rows)
+    ask_brier = brier_report(ask_rows)
+    compared = comparison_summary(comparison_rows)
+    ev = ev_by_edge_bucket(ev_rows)
+    lines = [
+        "# Grok edge daily",
+        "",
+        f"n: {count}",
+        f"hit rate: {hits} of {count}",
+        (
+            "Brier vs ask: "
+            f"grok {_decimal_text(_decimal(grok_brier.get('brier')))} "
+            f"ask {_decimal_text(_decimal(ask_brier.get('brier')))}"
+        ),
+    ]
+    if compared.get("status") == "ok" and compared.get("settled_n"):
+        lines.append(
+            "grounded closer than ungrounded: "
+            f"{compared.get('grounded_hits')} of {compared.get('settled_n')}"
+        )
+    else:
+        lines.append("grounded closer than ungrounded: not enough data")
+    measured_ev = [
+        bucket
+        for bucket in (ev.get("buckets") or [])
+        if bucket.get("status") == "ok"
+    ]
+    if not measured_ev:
+        lines.append("fee-net paper EV: not enough data")
+    else:
+        lines.append("fee-net paper EV:")
+        for bucket in ev.get("buckets") or []:
+            lines.append(
+                "  {bucket}: n={n} mean={mean} ci95_low={low} ci95_high={high} status={status}".format(
+                    bucket=bucket.get("bucket"),
+                    n=bucket.get("n"),
+                    mean=_decimal_text(_decimal(bucket.get("mean_ev"))),
+                    low=_decimal_text(_decimal(bucket.get("ci95_low"))),
+                    high=_decimal_text(_decimal(bucket.get("ci95_high"))),
+                    status=bucket.get("status"),
+                )
+            )
+    lines.append(spend_line)
+    lines.append("")
+    return "\n".join(lines)
 
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:

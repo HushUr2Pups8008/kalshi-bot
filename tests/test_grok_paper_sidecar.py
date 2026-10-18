@@ -1,0 +1,370 @@
+"""The paper sidecar cannot submit orders, and its report does not invent numbers."""
+
+from __future__ import annotations
+
+import ast
+import json
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import pytest
+
+from kalshi.rest_client import (
+    KalshiRestClient,
+    KalshiSidecarOrderBlocked,
+    sidecar_blocks_order_write,
+)
+from scripts.grok_paper_sidecar import arm_sidecar_environment, refuse_live_trading
+from scripts.refresh_politics_cash import balance_cents
+from utils.event_news_grok_edge import (
+    PAPER_DB_PATH,
+    score_open_positions,
+    write_daily_edge_report,
+)
+from utils.event_news_grok_veto import XAI_API_KEY_ENV
+from utils.event_news_session_halt import refresh_stale_cash
+
+NOW = datetime(2026, 10, 17, 12, 0, tzinfo=timezone.utc)
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _market() -> dict:
+    return {
+        "ticker": "KXTRUMPSAY-26OCT20-TEST",
+        "status": "active",
+        "yes_ask": 55,
+        "no_ask": 46,
+        "title": "Will Trump say the word",
+        "rules_primary": "Official transcript",
+        "close_time": "2026-10-20T23:00:00Z",
+        "series_ticker": "KXTRUMPSAY",
+    }
+
+
+class _Response:
+    status_code = 200
+
+    def __init__(self, body: dict) -> None:
+        self._body = body
+
+    def json(self) -> dict:
+        return self._body
+
+
+def test_sidecar_post_and_delete_raise_before_http(monkeypatch) -> None:
+    """Order writes raise in sidecar mode and never reach the HTTP session."""
+    monkeypatch.setenv("KALSHI_GROK_PAPER_SIDECAR", "true")
+    client = KalshiRestClient.__new__(KalshiRestClient)
+    with pytest.raises(KalshiSidecarOrderBlocked):
+        client._request("POST", "/portfolio/orders", payload={"ticker": "NOPE"})
+    with pytest.raises(KalshiSidecarOrderBlocked):
+        client._request("DELETE", "/portfolio/orders/order-1")
+    with pytest.raises(KalshiSidecarOrderBlocked):
+        client.place_limit_order("KXTRUMPSAY-26OCT20-TEST", "yes", 1, 40)
+    with pytest.raises(KalshiSidecarOrderBlocked):
+        client.cancel_order("order-1")
+
+
+def test_sidecar_off_does_not_block_the_politics_order_path(monkeypatch) -> None:
+    monkeypatch.delenv("KALSHI_GROK_PAPER_SIDECAR", raising=False)
+    assert sidecar_blocks_order_write("POST", "/portfolio/orders") is False
+    assert sidecar_blocks_order_write("POST", "/portfolio/events/orders") is False
+    assert sidecar_blocks_order_write("DELETE", "/portfolio/orders/order-1") is False
+    client = KalshiRestClient.__new__(KalshiRestClient)
+    with pytest.raises(Exception) as caught:
+        client._request("POST", "/portfolio/events/orders", payload={"ticker": "NOPE"})
+    assert not isinstance(caught.value, KalshiSidecarOrderBlocked)
+
+
+def test_sidecar_still_allows_market_and_position_gets(monkeypatch) -> None:
+    monkeypatch.setenv("KALSHI_GROK_PAPER_SIDECAR", "true")
+    assert sidecar_blocks_order_write("GET", "/markets") is False
+    assert sidecar_blocks_order_write("GET", "/markets/KXTRUMPSAY-26OCT20-TEST") is False
+    assert sidecar_blocks_order_write("GET", "/portfolio/positions") is False
+    assert sidecar_blocks_order_write("GET", "/portfolio/balance") is False
+
+
+def test_sidecar_source_does_not_construct_an_order_client() -> None:
+    source = (ROOT / "scripts" / "grok_paper_sidecar.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    imported = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            imported.append(node.module)
+    assert "trading.executor" not in imported
+    assert "place_limit_order" not in source
+    assert "TradeExecutor" not in source
+
+
+def test_sidecar_refuses_a_live_start(monkeypatch) -> None:
+    monkeypatch.setenv("LIVE_TRADING_ENABLED", "true")
+    with pytest.raises(SystemExit) as caught:
+        refuse_live_trading()
+    assert caught.value.code == 2
+
+
+def test_arm_keeps_an_explicit_dry_run_cap(monkeypatch) -> None:
+    import os
+
+    for name in (
+        "GROK_DAILY_USD_CAP",
+        "LIVE_TRADING_ENABLED",
+        "KALSHI_GROK_PAPER_SIDECAR",
+        "PAPER_COHORT_ID",
+        "EVENT_NEWS_GROK_EDGE_SCAN",
+        "EVENT_NEWS_GROK_EXIT_WATCH",
+        "EVENT_NEWS_GROK_GROUNDING",
+    ):
+        monkeypatch.setenv(name, os.environ.get(name, ""))
+    monkeypatch.setenv("GROK_DAILY_USD_CAP", "0.50")
+    arm_sidecar_environment()
+    assert os.environ["GROK_DAILY_USD_CAP"] == "0.50"
+    assert os.environ["KALSHI_GROK_PAPER_SIDECAR"] == "true"
+    assert os.environ["LIVE_TRADING_ENABLED"] == "false"
+
+
+def test_half_dollar_cap_keeps_the_grounded_call(tmp_path: Path) -> None:
+    """A $0.50 cap pays the grounded reserve and skips the ungrounded one."""
+    from utils.event_news_grok_edge import run_paper_edge_scan
+
+    calls: list[dict] = []
+
+    def post(url, json, headers, timeout):  # noqa: A002
+        calls.append(json)
+        body = {
+            "output_text": json_mod_dumps(),
+            "citations": ["https://example.test/source"],
+        }
+        return _Response(body)
+
+    def json_mod_dumps() -> str:
+        return json.dumps(
+            {
+                "probability": "0.70",
+                "confidence": "0.80",
+                "verdict": "YES",
+                "sources": ["https://example.test/source"],
+            }
+        )
+
+    counts = run_paper_edge_scan(
+        [_market()],
+        live=False,
+        allowlist=("KXTRUMPSAY",),
+        environ={XAI_API_KEY_ENV: "test-key", "GROK_DAILY_USD_CAP": "0.50"},
+        post=post,
+        now=NOW,
+        call_log_path=tmp_path / "calls.jsonl",
+        candidate_log_path=tmp_path / "candidates.jsonl",
+        comparison_log_path=tmp_path / "comparisons.jsonl",
+        spend_path=tmp_path / "spend.json",
+        db_path=tmp_path / "grok_paper.db",
+    )
+    assert len(calls) == 1
+    assert calls[0]["tools"] == [{"type": "web_search"}, {"type": "x_search"}]
+    assert counts["queued"] == 1
+    assert not (tmp_path / "comparisons.jsonl").exists()
+    assert (tmp_path / "grok_paper.db").is_file()
+
+
+def test_position_score_records_take_and_veto_without_ordering(tmp_path: Path) -> None:
+    calls: list[dict] = []
+
+    def post(url, json, headers, timeout):  # noqa: A002
+        content = json["input"][1]["content"]
+        calls.append(content)
+        probability = "0.90" if "TAKE" in content else "0.40"
+        text = __import__("json").dumps(
+            {
+                "probability": probability,
+                "confidence": "0.80",
+                "verdict": "YES",
+                "sources": ["https://example.test/source"],
+            }
+        )
+        return _Response({"output_text": text, "citations": ["https://example.test/source"]})
+
+    counts = score_open_positions(
+        [
+            {"ticker": "KXTRUMPSAY-TAKE", "position_fp": "8"},
+            {"ticker": "KXTRUMPSAY-VETO", "position_fp": "8"},
+        ],
+        live=False,
+        market_lookup=lambda ticker: {
+            "ticker": ticker,
+            "series_ticker": "KXTRUMPSAY",
+            "status": "active",
+            "title": ticker,
+            "yes_ask": 55,
+            "no_ask": 46,
+        },
+        environ={XAI_API_KEY_ENV: "test-key", "GROK_DAILY_USD_CAP": "3"},
+        post=post,
+        now=NOW,
+        call_log_path=tmp_path / "calls.jsonl",
+        score_log_path=tmp_path / "scores.jsonl",
+        spend_path=tmp_path / "spend.json",
+        db_path=tmp_path / "grok_paper.db",
+    )
+    assert counts == {"scored": 2, "skipped": 0}
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "scores.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    decisions = {row["ticker"]: row["decision"] for row in rows}
+    assert decisions == {"KXTRUMPSAY-TAKE": "take", "KXTRUMPSAY-VETO": "veto"}
+    assert all(call_has_tools(json.loads(line)) for line in (tmp_path / "calls.jsonl").read_text(encoding="utf-8").splitlines())
+
+
+def call_has_tools(row: dict) -> bool:
+    return row["grounded"] is True and row["tools"] == ["web_search", "x_search"]
+
+
+def test_live_position_score_does_not_call(tmp_path: Path) -> None:
+    calls: list[dict] = []
+
+    def post(url, json, headers, timeout):  # noqa: A002
+        calls.append(json)
+        return _Response({})
+
+    counts = score_open_positions(
+        [{"ticker": "KXTRUMPSAY-TAKE", "position": 8}],
+        live=True,
+        market_lookup=lambda ticker: _market(),
+        environ={XAI_API_KEY_ENV: "test-key", "EVENT_NEWS_GROK_EDGE_SCAN": "true"},
+        post=post,
+        now=NOW,
+        call_log_path=tmp_path / "calls.jsonl",
+        score_log_path=tmp_path / "scores.jsonl",
+        spend_path=tmp_path / "spend.json",
+    )
+    assert counts == {"scored": 0, "skipped": 0}
+    assert calls == []
+
+
+def test_empty_daily_report_does_not_invent_numbers(tmp_path: Path) -> None:
+    text = write_daily_edge_report(
+        candidate_log_path=tmp_path / "candidates.jsonl",
+        comparison_log_path=tmp_path / "comparisons.jsonl",
+        spend_path=tmp_path / "spend.json",
+        market_lookup=lambda ticker: None,
+        report_path=tmp_path / "grok-edge-daily.md",
+        now=NOW,
+    )
+    assert "not enough data" in text
+    assert "hit rate: not enough data" in text
+    assert "Brier vs ask: not enough data" in text
+    assert "fee-net paper EV: not enough data" in text
+    assert "spend: not measured" in text
+    assert "100%" not in text
+
+
+def test_daily_report_joins_a_settled_market_and_withholds_a_one_row_interval(tmp_path: Path) -> None:
+    candidate = {
+        "ts": "2026-10-17T12:00:00Z",
+        "ticker": "KXTRUMPSAY-26OCT20-TEST",
+        "grok_probability": "0.70",
+        "yes_ask_cents": 55,
+        "side": "yes",
+        "ask_cents": 55,
+        "edge_cents": 13,
+        "queued": True,
+        "contracts": 4,
+        "sources": ["https://example.test/source"],
+    }
+    comparison = {
+        "ticker": "KXTRUMPSAY-26OCT20-TEST",
+        "grounded_probability": "0.70",
+        "ungrounded_probability": "0.40",
+        "outcome": None,
+    }
+    (tmp_path / "candidates.jsonl").write_text(json.dumps(candidate) + "\n", encoding="utf-8")
+    (tmp_path / "comparisons.jsonl").write_text(json.dumps(comparison) + "\n", encoding="utf-8")
+    (tmp_path / "spend.json").write_text(
+        json.dumps({"date": "2026-10-17", "spent_usd": "0.55"}) + "\n",
+        encoding="utf-8",
+    )
+
+    def lookup(ticker: str) -> dict:
+        return {"ticker": ticker, "status": "finalized", "result": "yes"}
+
+    text = write_daily_edge_report(
+        candidate_log_path=tmp_path / "candidates.jsonl",
+        comparison_log_path=tmp_path / "comparisons.jsonl",
+        spend_path=tmp_path / "spend.json",
+        market_lookup=lookup,
+        report_path=tmp_path / "grok-edge-daily.md",
+        now=NOW,
+    )
+    assert "n: 1" in text
+    assert "hit rate: 1 of 1" in text
+    assert "Brier vs ask: grok " in text
+    assert "ask " in text
+    assert "grounded closer than ungrounded: 1 of 1" in text
+    assert "fee-net paper EV: not enough data" in text
+    assert "spend: 0.55 USD on 2026-10-17" in text
+
+
+def test_cash_refresh_writes_a_stale_file_and_keeps_a_bad_read(tmp_path: Path) -> None:
+    path = tmp_path / "politics_cash_cents.json"
+    stale = NOW - timedelta(seconds=7201)
+    path.write_text(
+        json.dumps(
+            {
+                "date": "2026-10-17",
+                "last_cents": 3995,
+                "start_cents": 3995,
+                "ts": stale.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    kept = refresh_stale_cash(
+        read_cents=lambda: None,
+        path=path,
+        now=NOW,
+    )
+    assert kept == "not_measured"
+    assert json.loads(path.read_text(encoding="utf-8"))["last_cents"] == 3995
+    fresh = refresh_stale_cash(read_cents=lambda: 3470, path=path, now=NOW)
+    assert fresh == "refreshed"
+    written = json.loads(path.read_text(encoding="utf-8"))
+    assert written["last_cents"] == 3470
+    assert written["prev_cents"] == 3995
+    boundary = refresh_stale_cash(
+        read_cents=lambda: 1000,
+        path=path,
+        now=datetime.strptime(written["ts"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        + timedelta(seconds=7200),
+    )
+    assert boundary == "fresh"
+    assert json.loads(path.read_text(encoding="utf-8"))["last_cents"] == 3470
+
+
+def test_balance_cents_rejects_a_missing_or_zero_balance() -> None:
+    class Client:
+        def __init__(self, payload) -> None:
+            self.payload = payload
+
+        def _request(self, method, endpoint):
+            assert method == "GET"
+            assert endpoint == "/portfolio/balance"
+            return self.payload
+
+    assert balance_cents(Client({"balance": 3470})) == 3470
+    assert balance_cents(Client({"balance": 0})) is None
+    assert balance_cents(Client({"balance": None})) is None
+    assert balance_cents(Client({})) is None
+
+
+def test_health_script_does_not_refresh_a_fixture_root() -> None:
+    text = (ROOT / "scripts" / "bothealth.sh").read_text(encoding="utf-8")
+    assert "BOTHEALTH_REPO_ROOT" in text
+    assert "refresh_politics_cash.py" in text
+    assert '[[ -z "${BOTHEALTH_REPO_ROOT:-}"' in text
+
+
+def test_default_paper_db_path_is_not_the_politics_database() -> None:
+    assert PAPER_DB_PATH.name == "grok_paper.db"
+    assert "paper_trades" not in str(PAPER_DB_PATH)
