@@ -25,6 +25,19 @@ import utils.event_news_session_halt as halt
 _HALT = "LIVE HALTED: session loss limit reached -- all trading suspended"
 
 
+def _desk_analysis(**kwargs):
+    """A live-series 60c book clears the chain, so the halt check still runs."""
+    kwargs.setdefault("ticker", "KXAPRPOTUS-26OCT17-HALT")
+    kwargs.setdefault("yes_price", 60.0)
+    analysis = _make_analysis(**kwargs)
+    analysis.market.series_ticker = "KXAPRPOTUS"
+    ask = analysis.market.yes_ask_cents
+    analysis.market.last_price_cents = ask
+    analysis.market.last_price = ask
+    analysis.executed_price_cents = int(ask)
+    return analysis
+
+
 def _politics(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(cfg_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
     monkeypatch.delenv("EVENT_NEWS_SESSION_HALT", raising=False)
@@ -65,7 +78,7 @@ def test_flag_off_cash_drop_still_halts_and_shuts_down(monkeypatch, tmp_path, ca
         raise RuntimeError("shadow read failed")
 
     rest._request.side_effect = _boom
-    analysis = _make_analysis(capped_dollars=2.0)
+    analysis = _desk_analysis(capped_dollars=2.0)
 
     assert ex._validate(analysis) is None
     assert ex._session_start_balance == pytest.approx(50.0)
@@ -93,7 +106,7 @@ def test_flag_off_mark_drop_does_not_halt(monkeypatch, tmp_path, caplog):
         {"balance": 5000, "portfolio_value": 0},
         {"balance": 4200, "portfolio_value": 0},
     ]
-    analysis = _make_analysis(capped_dollars=2.0)
+    analysis = _desk_analysis(capped_dollars=2.0)
 
     with caplog.at_level("INFO"):
         assert ex._validate(analysis) is None
@@ -118,7 +131,7 @@ def test_buy_that_keeps_equity_does_not_trip(monkeypatch, tmp_path):
         {"balance": 5000, "portfolio_value": 0},
         {"balance": 4200, "portfolio_value": 800},
     ]
-    analysis = _make_analysis(capped_dollars=2.0)
+    analysis = _desk_analysis(capped_dollars=2.0)
 
     assert ex._validate(analysis) is None
     assert ex._equity_halt_seed == pytest.approx(50.0)
@@ -142,7 +155,7 @@ def test_mark_drop_trips_without_shutdown_or_latch(monkeypatch, tmp_path):
         {"balance": 4200, "portfolio_value": 800},
         {"balance": 4200, "portfolio_value": 0},
     ]
-    analysis = _make_analysis(capped_dollars=2.0)
+    analysis = _desk_analysis(capped_dollars=2.0)
 
     assert ex._validate(analysis) is None
     reason = ex._validate(analysis)
@@ -161,7 +174,7 @@ def test_bad_equity_read_fails_closed_and_does_not_seed(monkeypatch, tmp_path):
     callback = MagicMock()
     ex.set_shutdown_callback(callback)
     rest.get_balance.return_value = 42.0
-    analysis = _make_analysis(capped_dollars=2.0)
+    analysis = _desk_analysis(capped_dollars=2.0)
 
     rest._request.side_effect = RuntimeError("balance down")
     assert ex._validate(analysis) == "live equity unreadable"
@@ -200,7 +213,7 @@ def test_unreadable_sizing_bankroll_fails_closed(monkeypatch, tmp_path):
     rest.get_balance.return_value = 42.0
     rest._request.return_value = {"balance": 4200, "portfolio_value": 800}
 
-    assert ex._validate(_make_analysis(capped_dollars=2.0)) == "live equity unreadable"
+    assert ex._validate(_desk_analysis(capped_dollars=2.0)) == "live equity unreadable"
     assert ex._equity_halt_seed is None
     assert ex._live_halted is False
     assert not (tmp_path / "halt.json").exists()

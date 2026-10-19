@@ -341,8 +341,12 @@ async def test_paper_politics_research_uses_rest_top_size_when_orderbook_unavail
     executor, rest, paper = _executor(monkeypatch, paper_mode=True)
     analysis = _analysis(side="yes")
     analysis.signal_type = "research_decision_grade"
+    analysis.market.ticker = "KXAPRPOTUS-26OCT17-DEPTH"
+    analysis.market.series_ticker = "KXAPRPOTUS"
     analysis.market.yes_ask_size = Decimal("20")
-    analysis.market.yes_ask_cents = 50
+    analysis.market.yes_ask_cents = 60
+    analysis.market.last_price_cents = 60
+    analysis.executed_price_cents = 60
     rest.get_market_orderbook.side_effect = RuntimeError("orderbook unavailable")
 
     result = await executor.execute(analysis)
@@ -371,6 +375,8 @@ async def test_live_politics_research_stays_g8_fail_closed_when_orderbook_unavai
     executor._live_submission_holds._path = tmp_path / "holds.json"
     analysis = _analysis(side="yes")
     analysis.signal_type = "research_decision_grade"
+    analysis.market.ticker = "KXAPRPOTUS-26OCT17-DEPTH"
+    analysis.market.series_ticker = "KXAPRPOTUS"
     analysis.market.yes_ask_size = Decimal("20")
     rest.get_market_orderbook.side_effect = RuntimeError("orderbook unavailable")
 
