@@ -22,7 +22,6 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Mapping
 from zoneinfo import ZoneInfo
 
@@ -31,7 +30,6 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from config import MARKET_SERIES_BLOCKLIST_PREFIXES
-from utils.event_news_research import event_news_paper_score_decision
 from utils.series_universe import get_universe, universe_failed
 
 HORIZON = timedelta(days=14)
@@ -39,15 +37,13 @@ MIN_VOLUME = Decimal("500")
 MAX_SPREAD_EXCLUSIVE = 15
 MOUNTAIN = ZoneInfo("America/Denver")
 PROMOTION_RULE = (
-    "A series moves to live after at least 15 settled paper trades "
-    "with fee-net EV above 0. This report does not change modes."
+    "A series is eligible for live after at least 15 settled paper trades "
+    "when the fee-net EV 95% CI lower bound is above 0. A live series is "
+    "recommend off when that many trades have a CI upper bound below 0. "
+    "This report does not change modes."
 )
 POLITICS_CATEGORIES = frozenset({"politics", "elections"})
 ECON_POLICY_CATEGORIES = frozenset({"economics"})
-SCORE_ENV = {
-    "EVENT_NEWS_YES_FLOOR_CENTS": "55",
-    "EVENT_NEWS_EXCLUDE_EXACT_35": "true",
-}
 _PAGE_CAP = 500
 
 
@@ -273,7 +269,6 @@ def render_report(
     series_pages: int,
     candidates: list[dict[str, Any]],
     recommendations: list[dict[str, Any]],
-    scores: list[dict[str, Any]],
     settlement: list[dict[str, Any]],
     paper_configured: list[dict[str, Any]],
     top: int,
@@ -348,6 +343,8 @@ def render_report(
             "Mode paper rows from config/series_universe.yaml. Stats are this",
             "fetch's qualifying markets. A blank volume means the series had no",
             "qualifying market. This job does not write the yaml and does not POST.",
+            "Probabilities for these series are scored by the paper sidecar.",
+            "This job does not call Grok.",
             "",
             "| series | markets | volume_24h | median_close_utc | category | title |",
             "|---|---:|---:|---|---|---|",
@@ -368,29 +365,6 @@ def render_report(
             )
     else:
         lines.append("| | | | | | |")
-    lines.extend(
-        [
-            "",
-            "## Paper filter log",
-            "",
-            "Paper rows and live rows with paper_score run through the favorite",
-            "band, the 55c YES floor, the 0-35c executed-ask band, the 8-contract",
-            "cap, and the live 0.04 edge floor. No probability was supplied, so",
-            "edge is edge_not_evaluated and the Grok veto is veto_not_called.",
-            "would_post is false.",
-            "",
-            "| series | ticker | decision | reasons | veto |",
-            "|---|---|---|---|---|",
-        ]
-    )
-    if scores:
-        for row in scores:
-            reasons = ",".join(row["reasons"])
-            lines.append(
-                f"| {row['series']} | {row['ticker']} | {row['decision']} | {reasons} | {row['veto']} |"
-            )
-    else:
-        lines.append("| | none | | | |")
     lines.extend(
         [
             "",
@@ -476,15 +450,6 @@ def _explicit_series() -> set[str]:
     if universe.failed:
         raise RuntimeError(f"universe fail_closed reason={universe.reason}")
     return {entry.series for entry in universe.entries}
-
-
-def _politics_config() -> SimpleNamespace:
-    return SimpleNamespace(
-        paper_cohort_id="kalshi-event-news-20260820",
-        llm_allowed_price_bands=[(0.55, 0.99)],
-        llm_excluded_price_bands=[(0.00, 0.35)],
-        research_prewarm_sourceable_series_fallback=(),
-    )
 
 
 def build_candidates(
@@ -597,47 +562,6 @@ def recommend_paper_series(
     return picked
 
 
-def score_snapshot_markets(
-    near_term: Mapping[str, list[dict[str, Any]]],
-) -> list[dict[str, Any]]:
-    if universe_failed():
-        raise RuntimeError("universe fail_closed")
-    wanted = {entry.series for entry in get_universe().entries if entry.mode == "paper" or entry.paper_score}
-    config = _politics_config()
-    scored: list[dict[str, Any]] = []
-    for series in sorted(wanted):
-        for row in near_term.get(series, []):
-            market = SimpleNamespace(
-                ticker=row.get("ticker") or "",
-                series_ticker=series,
-                yes_ask_cents=row.get("yes_ask_cents"),
-                no_ask_cents=row.get("no_ask_cents"),
-                yes_ask=row.get("yes_ask_cents"),
-                no_ask=row.get("no_ask_cents"),
-                yes_ask_size=_optional_float(row.get("yes_ask_size")),
-                no_ask_size=_optional_float(row.get("no_ask_size")),
-                open_interest_fp=_optional_float(row.get("open_interest")),
-                volume_24h_fp=_optional_float(row.get("volume_24h")),
-            )
-            decision = event_news_paper_score_decision(
-                market,
-                probability=None,
-                config=config,
-                environ=SCORE_ENV,
-            )
-            scored.append(decision)
-    return scored
-
-
-def _optional_float(raw: Any) -> float | None:
-    if raw is None or raw == "":
-        return None
-    try:
-        return float(raw)
-    except (TypeError, ValueError):
-        return None
-
-
 def _series_meta(rows: list[Any]) -> dict[str, dict[str, Any]]:
     meta: dict[str, dict[str, Any]] = {}
     for item in rows:
@@ -735,7 +659,6 @@ def write_outputs(
             )
         else:
             paper_configured.append(row)
-    scores = score_snapshot_markets(snapshot.get("near_term") or {})
     settlement_names = [
         entry.series
         for entry in get_universe().entries
@@ -750,7 +673,6 @@ def write_outputs(
         series_pages=int(snapshot["series_pages"]),
         candidates=candidates,
         recommendations=recommendations,
-        scores=scores,
         settlement=settlement,
         paper_configured=paper_configured,
         top=top,

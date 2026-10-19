@@ -14,7 +14,6 @@ import pytest
 
 from scripts.universe_discovery import (
     PROMOTION_RULE,
-    SCORE_ENV,
     format_money,
     is_denied,
     is_politics_econ_policy,
@@ -295,7 +294,7 @@ def test_mention_live_skip_stays_and_paper_score_does_not_call_veto():
         market,
         probability=None,
         config=politics,
-        environ=SCORE_ENV,
+        environ={"EVENT_NEWS_YES_FLOOR_CENTS": "55", "EVENT_NEWS_EXCLUDE_EXACT_35": "true"},
     )
     assert decision["would_post"] is False
     assert decision["veto"] == "veto_not_called"
@@ -766,7 +765,6 @@ def test_report_prints_paper_rows_and_rounds_fee_net_half_up():
         series_pages=1,
         candidates=[],
         recommendations=[],
-        scores=[],
         settlement=[
             {
                 "series": "KXTRUTHSOCIAL",
@@ -792,7 +790,7 @@ def test_report_prints_paper_rows_and_rounds_fee_net_half_up():
     assert "| KXPAPERTEST | 2 | 1000.5 | 2026-10-24T01:00:00Z | Politics | Example paper series |" in text
     assert "| KXTRUTHSOCIAL | 3 | 3 | 1 | 1.3157 |  |" in text
     assert "half-up to 0.0001" in text
-    assert "would_post is false" in text
+    assert "does not call Grok" in text
     assert "does not write the yaml" in text
 
 

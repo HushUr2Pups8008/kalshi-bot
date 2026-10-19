@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import requests
@@ -22,16 +24,20 @@ from utils.event_news_desk_flags import (
     event_news_any_live_desk_flag,
 )
 from utils.event_news_grok_edge import (
+    GROK_DAILY_USD_CAP,
     GROK_EDGE_TIMEOUT_SECONDS,
     GROK_MAX_SEARCH_RESULTS,
     MAX_MARKETS_PER_CYCLE,
     MIN_CALL_RESERVE_USD,
+    PAPER_CLOSE_WINDOW,
     PAPER_QUEUE_CONTRACTS,
     _grounded_tool_payload,
+    _insert_paper_row,
     _reserve_spend,
     brier_report,
     call_reserve_usd,
     comparison_summary,
+    contract_fee_net_dollars,
     edge_scan_interval_seconds,
     ev_by_edge_bucket,
     exit_versus_hold,
@@ -40,12 +46,16 @@ from utils.event_news_grok_edge import (
     paper_position_rows,
     paper_queue_decision,
     politics_scan_series,
+    promotion_label,
     proposed_contracts_for_edge,
     rank_politics_markets,
     run_paper_edge_scan,
     run_paper_exit_watch,
+    scorecard_interval,
     taker_fee_cents,
+    write_paper_scorecard,
 )
+from utils.series_universe import event_news_live_post_block_reason
 from utils.event_news_grok_flags import event_news_grok_grounding_for_mode
 from utils.event_news_grok_veto import GROK_MODEL, XAI_API_KEY_ENV
 from utils.event_news_research import EVENT_NEWS_COHORT_ID
@@ -326,7 +336,10 @@ def test_malformed_grounded_reply_does_not_queue(tmp_path: Path) -> None:
 
     counts = _scan(tmp_path, [_market()], post, {XAI_API_KEY_ENV: "test-key"})
     assert counts["queued"] == 0
-    assert _rows(tmp_path / "candidates.jsonl") == []
+    decision = _rows(tmp_path / "candidates.jsonl")
+    assert [row["reason_code"] for row in decision] == ["malformed"]
+    assert decision[0]["queued"] is False
+    assert decision[0]["grok_probability"] is None
     rows = _rows(tmp_path / "calls.jsonl")
     assert rows[0]["grounded"] is False
     assert rows[0]["skip_reason"] is None
@@ -358,6 +371,10 @@ def test_timeout_keeps_the_reserve_and_does_not_queue(tmp_path: Path) -> None:
     spent = json.loads((tmp_path / "spend.json").read_text(encoding="utf-8"))
     assert Decimal(spent["spent_usd"]) == MIN_CALL_RESERVE_USD
     assert _rows(tmp_path / "calls.jsonl")[0]["skip_reason"] == "timeout"
+    decision = _rows(tmp_path / "candidates.jsonl")
+    assert [row["reason_code"] for row in decision] == ["timeout"]
+    assert decision[0]["queued"] is False
+    assert decision[0]["grok_probability"] is None
 
 
 def test_spend_cap_skips_before_the_post(tmp_path: Path) -> None:
@@ -409,10 +426,18 @@ def test_rank_keeps_politics_inside_72h_and_drops_kxdji() -> None:
     tickers = [row["ticker"] for row in ranked]
     assert tickers == ["KXTRUMPSAY-SOON", "KXTRUMPSAY-EDGE", "KXTRUMPSAY-THIN"]
     scanned = politics_scan_series(("KXDJI", "KXNEWPOL"))
+    from utils.series_universe import get_universe, live_series_tickers
+
+    yaml_names = tuple(
+        entry.series for entry in get_universe().entries if entry.mode != "off"
+    )
+    assert scanned == yaml_names
+    assert set(live_series_tickers()) < set(scanned)
+    assert len(live_series_tickers()) == 13
     assert "KXDJI" not in scanned
     assert "KXNEWPOL" not in scanned
     assert "KXTRUMPSAY" in scanned
-    assert len(scanned) == 13
+    assert "KXHORMUZWEEKLY" in scanned
 
 
 def _responses_shape(text: str, *, annotation: str | None = None) -> dict:
@@ -1258,3 +1283,299 @@ def test_search_cap_is_in_the_prompt_and_the_call_log(tmp_path: Path) -> None:
     wide_logged = [row for row in _rows(wide / "calls.jsonl") if row["grounded"]][-1]
     assert wide_logged["max_search_results"] == 16
     assert wide_logged["max_turns"] == 3
+
+
+def test_paper_window_keeps_ten_days_and_drops_day_thirty_one() -> None:
+    """The sidecar window is 30 days. The default scan window stays 72h."""
+    ten_days = _market(ticker="KXTRUMPSAY-10D", close_time=_close_in(24 * 10), volume=10)
+    day_31 = _market(ticker="KXTRUMPSAY-31D", close_time=_close_in(24 * 31), volume=9999)
+    four_days = _market(ticker="KXTRUMPSAY-LATER", close_time=_close_in(96), volume=5000)
+    ranked = rank_politics_markets(
+        [ten_days, day_31, four_days],
+        now=NOW,
+        series=("KXTRUMPSAY",),
+        close_window=PAPER_CLOSE_WINDOW,
+    )
+    tickers = [row["ticker"] for row in ranked]
+    assert tickers == ["KXTRUMPSAY-LATER", "KXTRUMPSAY-10D"]
+    assert rank_politics_markets([four_days], now=NOW, series=("KXTRUMPSAY",)) == []
+
+
+def test_cache_is_one_probability_per_utc_day(tmp_path: Path) -> None:
+    """Yesterday's read misses. A read from earlier today still hits at 23:00 UTC."""
+    ticker = "KXTRUMPSAY-26OCT20-TEST"
+    stale = tmp_path / "stale"
+    stale.mkdir()
+    _seed_cache(stale / "cache.json", ticker, ts="2026-10-16T23:00:00Z")
+    stale_calls: list[dict] = []
+    stale_counts = _scan(stale, [_market()], _poster(stale_calls), {XAI_API_KEY_ENV: "test-key"})
+    assert stale_counts["cache_hits"] == 0
+    assert len(stale_calls) == 2
+
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    _seed_cache(fresh / "cache.json", ticker, ts="2026-10-17T00:30:00Z")
+    fresh_calls: list[dict] = []
+    later = datetime(2026, 10, 17, 23, 0, tzinfo=timezone.utc)
+    fresh_counts = _scan(
+        fresh,
+        [_market()],
+        _poster(fresh_calls),
+        {XAI_API_KEY_ENV: "test-key"},
+        now=later,
+    )
+    assert fresh_calls == []
+    assert fresh_counts["cache_hits"] == 1
+    assert fresh_counts["queued"] == 1
+
+
+def test_three_dollar_cap_stops_before_the_post(tmp_path: Path) -> None:
+    """A ledger already at $3 does not buy another call. The skip has one reason."""
+    (tmp_path / "spend.json").write_text(
+        json.dumps({"date": "2026-10-17", "spent_usd": "3"}) + "\n",
+        encoding="utf-8",
+    )
+    calls: list[dict] = []
+    counts = _scan(
+        tmp_path,
+        [_market()],
+        _poster(calls),
+        {XAI_API_KEY_ENV: "test-key", GROK_DAILY_USD_CAP: "3"},
+    )
+    assert calls == []
+    assert counts["queued"] == 0
+    assert counts["grounded_calls"] == 0
+    decision = _rows(tmp_path / "candidates.jsonl")
+    assert [row["reason_code"] for row in decision] == ["spend_cap"]
+    assert decision[0]["skip_reason"] == "spend_cap"
+    assert decision[0]["grok_probability"] is None
+    logged = _rows(tmp_path / "calls.jsonl")
+    assert logged[0]["skip_reason"] == "spend_cap"
+    assert "cost_usd" in logged[0]
+
+
+def test_paper_series_records_a_grounded_prob_and_cannot_post(tmp_path: Path) -> None:
+    """A recorded reply on a yaml paper series queues a fee-net row and never POSTs."""
+    market = _market(
+        ticker="KXHORMUZWEEKLY-26OCT25-T30",
+        series="KXHORMUZWEEKLY",
+        yes_ask=60,
+        no_ask=45,
+        close_time="2026-10-25T01:00:00Z",
+        volume=1000,
+    )
+    block = event_news_live_post_block_reason(
+        SimpleNamespace(
+            ticker="KXHORMUZWEEKLY-26OCT25-T30",
+            series_ticker="KXHORMUZWEEKLY",
+        ),
+        config=SimpleNamespace(paper_cohort_id=EVENT_NEWS_COHORT_ID),
+    )
+    assert block == "paper_series_no_post"
+    calls: list[dict] = []
+    db_path = tmp_path / "grok_paper.db"
+    counts = _scan(
+        tmp_path,
+        [market],
+        _poster(calls, grounded_prob="0.80", ungrounded_prob="0.80"),
+        {XAI_API_KEY_ENV: "test-key"},
+        allowlist=("KXHORMUZWEEKLY",),
+        db_path=db_path,
+    )
+    assert counts["queued"] == 1
+    assert all("/portfolio/orders" not in str(call["url"]) for call in calls)
+    candidate = _rows(tmp_path / "candidates.jsonl")[0]
+    assert candidate["series"] == "KXHORMUZWEEKLY"
+    assert candidate["ticker"] == "KXHORMUZWEEKLY-26OCT25-T30"
+    assert candidate["side"] == "yes"
+    assert candidate["ask_cents"] == 60
+    assert Decimal(candidate["grok_probability"]) == Decimal("0.80")
+    assert candidate["fee_cents"] == taker_fee_cents(60, PAPER_QUEUE_CONTRACTS) == 7
+    assert candidate["edge_cents"] == 18
+    assert candidate["reason_code"] == "queue"
+    assert candidate["skip_reason"] is None
+    assert candidate["queued"] is True
+    assert len(candidate["prompt_hash"]) == 16
+    assert candidate["model"] == GROK_MODEL
+    assert candidate["contracts"] == 4
+    logged = [row for row in _rows(tmp_path / "calls.jsonl") if row["grounded"]][-1]
+    assert "cost_usd" in logged
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT series, ticker, side, ask_cents, grok_probability, fee_cents, "
+            "edge_cents, reason_code, prompt_hash, model, queued FROM paper_candidates"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row[0] == "KXHORMUZWEEKLY"
+    assert row[1] == "KXHORMUZWEEKLY-26OCT25-T30"
+    assert row[2] == "yes"
+    assert row[3] == 60
+    assert row[4] == "0.80"
+    assert row[5] == 7
+    assert row[6] == 18
+    assert row[7] == "queue"
+    assert row[8] == candidate["prompt_hash"]
+    assert row[9] == GROK_MODEL
+    assert row[10] == 1
+
+
+def test_dataclass_book_with_a_one_lot_skips_illiquid_before_grok(tmp_path: Path) -> None:
+    """A non-mapping book keeps its size. A 1-lot with empty 24h fields does not call Grok."""
+    market = SimpleNamespace(
+        ticker="KXHORMUZWEEKLY-26OCT25-THIN",
+        series_ticker="KXHORMUZWEEKLY",
+        status="active",
+        yes_ask=60,
+        no_ask=45,
+        title="Hormuz weekly",
+        rules_primary="Official print",
+        close_time="2026-10-25T01:00:00Z",
+        yes_ask_size=Decimal("1"),
+        no_ask_size=Decimal("1"),
+        open_interest_fp=None,
+        open_interest=500,
+        volume_24h_fp=None,
+        volume=5000,
+    )
+    calls: list[dict] = []
+    counts = _scan(
+        tmp_path,
+        [market],
+        _poster(calls),
+        {XAI_API_KEY_ENV: "test-key"},
+        allowlist=("KXHORMUZWEEKLY",),
+        db_path=tmp_path / "grok_paper.db",
+    )
+    assert counts["queued"] == 0
+    assert counts["examined"] == 1
+    assert calls == []
+    candidate = _rows(tmp_path / "candidates.jsonl")[0]
+    assert candidate["reason_code"] == "illiquid_top_size"
+    assert candidate["grok_probability"] is None
+    assert candidate["queued"] is False
+
+
+def _score_row(ticker: str, series: str, *, side: str = "yes", ask: int = 50) -> dict:
+    return {
+        "ts": "2026-10-17T12:00:00Z",
+        "series": series,
+        "ticker": ticker,
+        "side": side,
+        "ask_cents": ask,
+        "yes_ask_cents": ask,
+        "grok_probability": "0.80",
+        "edge_cents": 8,
+        "fee_cents": 2,
+        "sources": ["https://example.test/source"],
+        "queued": True,
+        "skip_reason": None,
+        "reason_code": "queue",
+        "prompt_hash": "abc123abc123abcd",
+        "model": GROK_MODEL,
+    }
+
+
+def test_scorecard_matches_the_hand_interval_and_promotion(tmp_path: Path) -> None:
+    """n=2 fee-net EV and CI match the hand values. n=15 labels stay report-only."""
+    win = contract_fee_net_dollars("yes", 50, True)
+    loss = contract_fee_net_dollars("yes", 50, False)
+    assert win == Decimal("0.48")
+    assert loss == Decimal("-0.52")
+    stats = scorecard_interval([win, loss])
+    assert stats["n"] == 2
+    assert stats["mean"] == Decimal("-0.02")
+    assert stats["ci95_low"] == Decimal("-1.000000000000000000000000000")
+    assert stats["ci95_high"] == Decimal("0.9600000000000000000000000003")
+    flat_win = scorecard_interval([Decimal("0.10")] * 15)
+    flat_loss = scorecard_interval([Decimal("-0.10")] * 15)
+    assert flat_win["ci95_low"] == Decimal("0.10")
+    assert flat_loss["ci95_high"] == Decimal("-0.10")
+    assert promotion_label(
+        mode="paper", effective="paper", n=15, low=flat_win["ci95_low"], high=flat_win["ci95_high"]
+    ) == "eligible for live"
+    assert promotion_label(
+        mode="live", effective="live", n=15, low=flat_loss["ci95_low"], high=flat_loss["ci95_high"]
+    ) == "recommend off"
+    assert promotion_label(
+        mode="paper", effective="paper", n=14, low=Decimal("0.10"), high=Decimal("0.10")
+    ) == ""
+    assert promotion_label(
+        mode="paper", effective="live", n=15, low=Decimal("0.10"), high=Decimal("0.10")
+    ) == ""
+
+    db_path = tmp_path / "grok_paper.db"
+    _insert_paper_row(db_path, "paper_candidates", _score_row("KXHORMUZWEEKLY-A", "KXHORMUZWEEKLY"))
+    _insert_paper_row(db_path, "paper_candidates", _score_row("KXHORMUZWEEKLY-B", "KXHORMUZWEEKLY"))
+
+    def lookup(ticker: str) -> dict:
+        result = "yes" if ticker.endswith("-A") else "no"
+        return {"status": "finalized", "result": result}
+
+    text = write_paper_scorecard(
+        db_path=db_path,
+        market_lookup=lookup,
+        report_path=tmp_path / "card.md",
+        now=NOW,
+    )
+    assert "| KXHORMUZWEEKLY | paper | 2 | 1 | 0.5 | -0.02 | " in text
+    assert "-1.000000000000000000000000000" in text
+    assert "0.9600000000000000000000000003" in text
+    assert "eligible for live" not in text
+    assert "recommend off" not in text
+
+    live_db = tmp_path / "live.db"
+    for index in range(15):
+        _insert_paper_row(
+            live_db,
+            "paper_candidates",
+            _score_row(f"KXTRUMPSAY-LOSS-{index}", "KXTRUMPSAY"),
+        )
+    off = write_paper_scorecard(
+        db_path=live_db,
+        market_lookup=lambda _ticker: {"status": "settled", "result": "no"},
+        report_path=tmp_path / "off.md",
+        now=NOW,
+    )
+    assert "recommend off" in off
+    assert "| KXTRUMPSAY | live | 15 | 0 |" in off
+
+    paper_db = tmp_path / "paper.db"
+    for index in range(15):
+        _insert_paper_row(
+            paper_db,
+            "paper_candidates",
+            _score_row(f"KXHORMUZWEEKLY-WIN-{index}", "KXHORMUZWEEKLY"),
+        )
+    eligible = write_paper_scorecard(
+        db_path=paper_db,
+        market_lookup=lambda _ticker: {"status": "determined", "result": "yes"},
+        report_path=tmp_path / "eligible.md",
+        now=NOW,
+    )
+    assert "eligible for live" in eligible
+    empty = write_paper_scorecard(
+        db_path=tmp_path / "missing.db",
+        market_lookup=lookup,
+        report_path=tmp_path / "empty.md",
+        now=NOW,
+    )
+    assert "no settled fee-net rows" in empty
+    assert "One settled row per ticker." in text
+
+    dup_db = tmp_path / "dup.db"
+    for index in range(15):
+        row = _score_row("KXHORMUZWEEKLY-SAME", "KXHORMUZWEEKLY", ask=50)
+        row["ts"] = f"2026-10-17T12:{index:02d}:00Z"
+        row["ask_cents"] = 60 if index == 14 else 50
+        _insert_paper_row(dup_db, "paper_candidates", row)
+    dup = write_paper_scorecard(
+        db_path=dup_db,
+        market_lookup=lambda _ticker: {"status": "finalized", "result": "yes"},
+        report_path=tmp_path / "dup.md",
+        now=NOW,
+    )
+    assert "| KXHORMUZWEEKLY | paper | 1 | 1 |" in dup
+    assert "eligible for live" not in dup
+    assert "| 0.38 |" in dup or "| 0.38 | " in dup

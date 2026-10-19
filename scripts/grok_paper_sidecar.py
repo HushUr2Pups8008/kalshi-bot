@@ -83,7 +83,7 @@ def _spent(path: Path) -> str | None:
 
 
 def _position_series(positions) -> tuple[str, ...]:
-    """Series prefixes of open positions. Names outside the live yaml set are dropped later."""
+    """Series prefixes of open positions. Names outside the yaml set are dropped later."""
     from utils.event_news_grok_edge import paper_position_rows
 
     found: list[str] = []
@@ -99,10 +99,11 @@ def _run_scan(rest, positions=None, *, now: datetime | None = None) -> dict[str,
     """Fetch politics series only, rank them, and examine the top of that list.
 
     ``fetched`` is the raw page length. ``politics`` is how many of those
-    markets are open, close within 72h, and have an ask from 36c to 94c.
+    markets are open, close within 30 days, and have an ask from 36c to 94c.
     KXDJI and the research prewarm fallback are not requested.
     """
     from utils.event_news_grok_edge import (
+        PAPER_CLOSE_WINDOW,
         PAPER_DB_PATH,
         SCAN_TOP_N,
         paper_position_rows,
@@ -117,7 +118,7 @@ def _run_scan(rest, positions=None, *, now: datetime | None = None) -> dict[str,
     for series in series_list:
         page, _cursor = rest.get_markets(status="open", series_ticker=series, limit=20)
         markets.extend(page or [])
-    ranked = rank_politics_markets(markets, now=moment, series=series_list)
+    ranked = rank_politics_markets(markets, now=moment, series=series_list, close_window=PAPER_CLOSE_WINDOW)
     open_tickers = tuple(row["ticker"] for row in paper_position_rows(positions))
     counts = run_paper_edge_scan(
         ranked[:SCAN_TOP_N],
@@ -181,9 +182,15 @@ def _run_exit(rest) -> int:
 
 
 def _run_daily(rest) -> None:
-    from utils.event_news_grok_edge import write_daily_edge_report
+    from utils.event_news_grok_edge import PAPER_DB_PATH, write_daily_edge_report, write_paper_scorecard
 
     write_daily_edge_report(market_lookup=rest.get_market)
+    day = datetime.now(timezone.utc).strftime("%Y%m%d")
+    write_paper_scorecard(
+        db_path=PAPER_DB_PATH,
+        market_lookup=rest.get_market,
+        report_path=Path(f"docs/reports/paper-scorecard-{day}.md"),
+    )
 
 
 def _print_once(scan: dict[str, int], scores: dict[str, int], before: str | None, after: str | None) -> None:

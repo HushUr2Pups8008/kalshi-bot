@@ -19,6 +19,16 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.36.5] - 2026-10-18
+
+### Changed
+
+- **The paper sidecar scores every yaml series that is not off.** The names come from config/series_universe.yaml. A mode-paper series gets a grounded Grok probability, then the paper quote gate and the 8c fee-net check. A missing probability, a bad reply, a timeout, or the $3 daily cap stores one skip reason and does not queue. One grounded probability is cached per market per UTC day. The sidecar ranks books that close within 30 days. The 72h window used for the Truth Social fingerprint and grounded search dates stays.
+
+- **Each sidecar decision is one replayable row in the paper DB.** The row stores series, ticker, side, ask, Grok probability, the 4-contract fee, fee-net edge, one reason code, prompt hash, model, and timestamp. The daily file docs/reports/paper-scorecard-YYYYMMDD.md reports one settled market per ticker, hit rate, per-contract fee-net EV, and a 95% interval. A paper series with at least 15 settled rows and a CI lower bound above 0 is eligible for live. An effective-live series with that many rows and a CI upper bound below 0 is recommend off. The report does not change modes.
+
+- **Universe discovery no longer scores a book that has no probability.** It does not call Grok and it does not POST.
+
 ## [0.36.4] - 2026-10-18
 
 ### Changed
