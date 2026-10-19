@@ -75,6 +75,8 @@ def is_event_news_paper_cohort(config: Any = None) -> bool:
 def _as_float(value: Any) -> float | None:
     if value is None or isinstance(value, bool):
         return None
+    if not isinstance(value, (int, float, str, Decimal)):
+        return None
     try:
         number = float(value)
     except (TypeError, ValueError):
@@ -700,9 +702,11 @@ def event_news_min_edge(base: float, market: Any, *, config: Any = None) -> floa
 
 
 def event_news_series_ticker(market: Any) -> str:
-    series = str(getattr(market, "series_ticker", "") or "").strip().upper()
-    if series:
-        return series
+    raw = getattr(market, "series_ticker", "")
+    if isinstance(raw, str):
+        series = raw.strip().upper()
+        if series:
+            return series
     ticker = str(getattr(market, "ticker", "") or "").strip().upper()
     return ticker.split("-", 1)[0] if ticker else ""
 
@@ -771,6 +775,26 @@ def event_news_bypass_quote_skip_cooldown(
 
 def event_news_prewarm_skip_reason(market: Any, *, config: Any = None) -> str | None:
     """Politics prewarm only spends research on favorite-band executable books."""
+    return event_news_gate_chain_reason(market, config=config)
+
+
+def event_news_gate_chain_reason(
+    market: Any,
+    *,
+    side: str | None = None,
+    edge: float | None = None,
+    limit_cents: int | None = None,
+    fresh_ask_cents: int | None = None,
+    fresh_ask_invalid: bool = False,
+    open_tickers: list[str] | tuple[str, ...] | None = None,
+    config: Any = None,
+    environ: Mapping[str, str] | None = None,
+    live: bool = True,
+    min_edge_base: float = 0.02,
+    veto_reason: str | None = None,
+    halt_reason: str | None = None,
+    purpose: str = "order",
+) -> str | None:
     if not is_event_news_paper_cohort(config):
         return None
     denied = event_news_non_politics_series(market, config=config)
@@ -778,44 +802,99 @@ def event_news_prewarm_skip_reason(market: Any, *, config: Any = None) -> str | 
         return denied
     if universe_failed():
         return "universe_unavailable"
-    if not event_news_is_reserve_series(market, config=config):
+    if purpose == "score":
+        entry = match_market(market)
+        scored = {item.series for item in paper_score_entries()}
+        if entry is not None and entry.mode == "off":
+            return "series_off"
+        if entry is None or entry.series not in scored:
+            return "not_paper_series"
+        if market_transcript_skip(market) and not entry.paper_score:
+            return "mention_requires_transcript"
+    elif not event_news_is_reserve_series(market, config=config):
         return "not_reserve_series"
-    if market_transcript_skip(market):
-        # Fox/speech mention books have no Factbase official p. Google
-        # fan-out burns the 18s gate and ends as research_provider_error.
-        # The series flag lives in the universe file. Paper scoring does
-        # not use this live skip. The flag-off shadow records that this
-        # fetch leaves the research set when the flag is turned on.
+    elif market_transcript_skip(market):
         if not _live_tradable_research_on():
             _shadow_research_drop(market, "not_researched")
         return "mention_requires_transcript"
-    missing = event_news_missing_snapshot_ask(market, config=config)
-    if missing:
-        return missing
-    illiquid = event_news_illiquid(market, config=config)
-    if illiquid:
-        return illiquid
-    crossed = event_news_crossed_asks(market, config=config)
-    if crossed:
-        return crossed
-    wide = event_news_wide_spread(market, config=config)
-    if wide:
-        return wide
-    if not event_news_in_allowed_ask_band(market, config=config):
-        yes_ask, no_ask = snapshot_ask_cents(market)
-        favorite_cents = None
-        if yes_ask is not None and 55 <= yes_ask <= 99:
-            favorite_cents = yes_ask
-        elif no_ask is not None and 55 <= no_ask <= 99:
-            favorite_cents = no_ask
-        if favorite_cents is not None and favorite_cents >= _FAVORITE_ASK_CERTAIN_CENTS:
-            return "near_certain_ask"
-        return "ask_outside_favorite_band"
-    blocked = _live_tradable_research_block(market, config=config)
-    if blocked:
-        if _live_tradable_research_on():
-            return blocked
-        _shadow_research_drop(market, blocked)
+    yes_ask, no_ask = snapshot_ask_cents(market)
+    posted = type(limit_cents) is int or type(fresh_ask_cents) is int or fresh_ask_invalid is True
+    if yes_ask is not None or no_ask is not None or not posted:
+        for reason in (
+            event_news_missing_snapshot_ask(market, config=config),
+            event_news_illiquid(market, config=config),
+            event_news_crossed_asks(market, config=config),
+            event_news_wide_spread(market, config=config),
+            event_news_spread_disagreement(market, config=config),
+        ):
+            if reason:
+                return reason
+        if not event_news_in_allowed_ask_band(market, config=config):
+            favorite = yes_ask if yes_ask is not None and 55 <= yes_ask <= 99 else None
+            if favorite is None and no_ask is not None and 55 <= no_ask <= 99:
+                favorite = no_ask
+            if favorite is not None and favorite >= _FAVORITE_ASK_CERTAIN_CENTS:
+                return "near_certain_ask"
+            return "ask_outside_favorite_band"
+        if purpose != "score":
+            blocked = _live_tradable_research_block(market, config=config)
+            if blocked:
+                if _live_tradable_research_on():
+                    return blocked
+                _shadow_research_drop(market, blocked)
+    executed_side = str(side or "").strip().lower()
+    if executed_side in {"yes", "no"}:
+        from utils.event_news_desk_flags import event_news_yes_floor_skip_reason
+
+        side_ask = limit_cents if type(limit_cents) is int else (
+            yes_ask if executed_side == "yes" else no_ask
+        )
+        floor = event_news_yes_floor_skip_reason(
+            executed_side, side_ask, live=live, environ=environ
+        )
+        if floor:
+            return floor
+        executed = event_news_executed_side_skip_reason(market, executed_side, config=config)
+        if executed:
+            return executed
+    if fresh_ask_invalid or type(fresh_ask_cents) is int or type(limit_cents) is int:
+        blocked_ask = event_news_blocked_final_ask(
+            limit_cents=limit_cents if type(limit_cents) is int else None,
+            fresh_ask_cents=fresh_ask_cents if type(fresh_ask_cents) is int else None,
+            fresh_ask_invalid=fresh_ask_invalid is True,
+            config=config,
+            environ=environ,
+        )
+        if blocked_ask is not None:
+            return "executed_ask_in_excluded_band"
+    if open_tickers is not None:
+        occupied = event_news_family_lock_ticker(market, open_tickers, config=config)
+        if occupied:
+            log.info(
+                "[EVENT_NEWS_FAMILY_LOCK] open=%s blocked=%s series=%s",
+                occupied,
+                getattr(market, "ticker", ""),
+                event_news_series_prefix(str(getattr(market, "ticker", "") or "")),
+            )
+            return "event_news_family_lock"
+        from utils.event_news_desk_flags import event_news_family_skip_reason
+
+        desk = event_news_family_skip_reason(
+            str(getattr(market, "ticker", "") or ""),
+            open_tickers,
+            live=live,
+            environ=environ,
+        )
+        if desk:
+            return desk
+    if edge is not None and float(edge) + 1e-12 < event_news_min_edge(
+        min_edge_base, market, config=config
+    ):
+        return "below_fee_net_min_edge"
+    if veto_reason:
+        return str(veto_reason)
+    if halt_reason:
+        return str(halt_reason)
     return None
 
 
@@ -873,45 +952,26 @@ def event_news_paper_score_decision(
 
     A missing probability records edge_not_evaluated and veto_not_called.
     """
-    from utils.event_news_desk_flags import event_news_yes_floor_skip_reason
-
     reasons: list[str] = []
     veto = "veto_not_called"
     entry = None if universe_failed() else match_market(market)
-    scored = {item.series for item in paper_score_entries()}
-    if universe_failed():
-        reasons.append("universe_unavailable")
-    elif entry is None or entry.series not in scored or entry.mode == "off":
-        reasons.append("not_paper_series" if entry is None or entry.mode != "off" else "series_off")
-    else:
-        if entry.transcript_skip and entry.paper_score:
-            reasons.append("transcript_skip_bypassed_for_paper_score")
-        elif entry.transcript_skip:
-            reasons.append("mention_requires_transcript")
-        denied = event_news_non_politics_series(market, config=config)
-        if denied:
-            reasons.append(denied)
-        quote = _paper_quote_skip(market, config=config)
-        if quote:
-            reasons.append(quote)
-        side, cents = event_news_favorite_side(market, config=config)
-        if side is not None and cents is not None:
-            floor = event_news_yes_floor_skip_reason(
-                side,
-                int(cents),
-                live=True,
-                environ=environ,
-            )
-            if floor:
-                reasons.append(floor)
-            if event_news_cents_in_excluded_band(
-                int(cents),
-                config=config,
-                environ=environ,
-            ):
-                reasons.append("executed_ask_in_excluded_band")
+    if entry is not None and entry.transcript_skip and entry.paper_score:
+        reasons.append("transcript_skip_bypassed_for_paper_score")
+    side, cents = event_news_favorite_side(market, config=config)
+    chain_reason = event_news_gate_chain_reason(
+        market,
+        side=side,
+        limit_cents=int(cents) if type(cents) is int else None,
+        config=config,
+        environ=environ,
+        live=True,
+        purpose="score",
+    )
+    if chain_reason:
+        reasons.append(chain_reason)
+    if chain_reason not in {"universe_unavailable", "not_paper_series", "series_off"}:
         edge_reason = _paper_edge_reason(market, probability, config=config)
-        if edge_reason:
+        if edge_reason and edge_reason not in reasons:
             reasons.append(edge_reason)
     informational = {"transcript_skip_bypassed_for_paper_score"}
     blocking = [reason for reason in reasons if reason not in informational]
@@ -940,32 +1000,6 @@ def event_news_paper_score_decision(
         "contract_cap": EVENT_NEWS_MAX_CONTRACTS,
         "would_post": False,
     }
-
-
-def _paper_quote_skip(market: Any, *, config: Any) -> str | None:
-    missing = event_news_missing_snapshot_ask(market, config=config)
-    if missing:
-        return missing
-    illiquid = event_news_illiquid(market, config=config)
-    if illiquid:
-        return illiquid
-    crossed = event_news_crossed_asks(market, config=config)
-    if crossed:
-        return crossed
-    wide = event_news_wide_spread(market, config=config)
-    if wide:
-        return wide
-    if event_news_in_allowed_ask_band(market, config=config):
-        return None
-    yes_ask, no_ask = snapshot_ask_cents(market)
-    favorite_cents = None
-    if yes_ask is not None and 55 <= yes_ask <= 99:
-        favorite_cents = yes_ask
-    elif no_ask is not None and 55 <= no_ask <= 99:
-        favorite_cents = no_ask
-    if favorite_cents is not None and favorite_cents >= _FAVORITE_ASK_CERTAIN_CENTS:
-        return "near_certain_ask"
-    return "ask_outside_favorite_band"
 
 
 def _paper_edge_reason(
@@ -1395,28 +1429,21 @@ def event_news_admission_gate_reason(
     *,
     edge: float | None = None,
     force_side: str | None = None,
+    open_tickers: list[str] | tuple[str, ...] | None = None,
     config: Any = None,
+    environ: Mapping[str, str] | None = None,
+    live: bool = True,
 ) -> str | None:
-    """Re-apply favorite-band / executed-ask / last-ask / fee-net edge at admit time."""
-    if not is_event_news_paper_cohort(config):
-        return None
-    skip = event_news_prewarm_skip_reason(market, config=config)
-    if skip:
-        return skip
-    executed = event_news_executed_side_skip_reason(
-        market, force_side, config=config
+    """Admission is the gate chain. Family runs only when open tickers are passed."""
+    return event_news_gate_chain_reason(
+        market,
+        side=force_side,
+        edge=edge,
+        open_tickers=open_tickers,
+        config=config,
+        environ=environ,
+        live=live,
     )
-    if executed:
-        return executed
-    divergence = event_news_spread_disagreement(market, config=config)
-    if divergence:
-        return divergence
-    if edge is None:
-        return None
-    required = event_news_min_edge(0.02, market, config=config)
-    if float(edge) + 1e-12 < required:
-        return "below_fee_net_min_edge"
-    return None
 
 
 def event_news_dossier_is_stale(

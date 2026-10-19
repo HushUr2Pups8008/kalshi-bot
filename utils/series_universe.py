@@ -260,9 +260,11 @@ def _is_politics_cohort(config: Any) -> bool:
 
 
 def _market_series(market: Any) -> str:
-    series = str(getattr(market, "series_ticker", "") or "").strip().upper()
-    if series:
-        return series
+    raw = getattr(market, "series_ticker", "")
+    if isinstance(raw, str):
+        series = raw.strip().upper()
+        if series:
+            return series
     return _market_ticker(market).split("-", 1)[0]
 
 

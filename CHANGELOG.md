@@ -19,6 +19,14 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.36.6] - 2026-10-19
+
+### Changed
+
+- **Live and paper share one gate chain.** The order is series, liquidity, spread, band, YES floor, executed ask 0-35c, caps and family, fee-net edge, Grok veto, then halt. One reason code per skip. Admission and the step before POST both run it. The POST function keeps one last 0-35c check. A paper series still cannot POST.
+
+- **A sidecar cache hit does not take a paid slot.** The default scan is 180 minutes, eight cycles in a UTC day, at the measured cycle cost of $0.30324255 under the $3 cap. A below-screen book stores a decision row with its probability and prompt hash. The start script sets PYTHONPATH to the repo root. Runtime scorecards and the daily edge file go to logs/reports. docs/reports/live-fill-log.md stays tracked.
+
 ## [0.36.5] - 2026-10-18
 
 ### Changed

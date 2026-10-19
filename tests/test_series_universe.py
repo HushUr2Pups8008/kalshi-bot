@@ -592,12 +592,12 @@ async def test_paper_series_cannot_post(monkeypatch, tmp_path, caplog):
     )
     analysis = _make_analysis(ticker="KXPAPERTEST-26OCT-A", side="no", yes_price=63)
     analysis.market.series_ticker = "KXPAPERTEST"
-    with caplog.at_level(logging.ERROR), patch("trading.executor.trade_log"):
+    with caplog.at_level(logging.INFO), patch("trading.executor.trade_log"):
         order_id = await executor._execute_live(analysis)
     assert order_id is None
     rest.place_limit_order.assert_not_called()
     assert any(
-        "reason=paper_series_no_post" in rec.message and "no POST" in rec.message
+        "skip=not_reserve_series" in rec.message and "KXPAPERTEST-26OCT-A" in rec.message
         for rec in caplog.records
     )
 

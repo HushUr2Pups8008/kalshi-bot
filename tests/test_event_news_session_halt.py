@@ -14,6 +14,21 @@ from tests.test_executor import _make_analysis, _make_executor
 from utils.event_news_research import EVENT_NEWS_COHORT_ID
 from utils.event_news_session_halt import session_halt_loss_line
 
+_DESK_TICKER = "KXAPRPOTUS-26OCT17-HALT"
+
+
+def _desk_analysis(*args, **kwargs):
+    """A live-series 60c book clears the chain, so the halt check still runs."""
+    kwargs.setdefault("ticker", _DESK_TICKER)
+    kwargs.setdefault("yes_price", 60.0)
+    analysis = _make_analysis(*args, **kwargs)
+    analysis.market.series_ticker = "KXAPRPOTUS"
+    ask = analysis.market.yes_ask_cents
+    analysis.market.last_price_cents = ask
+    analysis.market.last_price = ask
+    analysis.executed_price_cents = int(ask)
+    return analysis
+
 import utils.event_news_session_halt as halt
 
 
@@ -52,7 +67,7 @@ def test_seed_of_29_20_falling_to_19_halts_without_shutdown(monkeypatch, tmp_pat
     rest.get_balance.side_effect = [29.20, 19.0]
     callback = MagicMock()
     ex.set_shutdown_callback(callback)
-    analysis = _make_analysis(capped_dollars=2.0)
+    analysis = _desk_analysis(capped_dollars=2.0)
 
     assert ex._validate(analysis) is None
     assert ex._session_start_balance == pytest.approx(29.20)
@@ -76,7 +91,7 @@ def test_open_cost_is_part_of_session_equity(monkeypatch, tmp_path):
         [{"ticker": "KXTRUMPSAY-26OCT19-GOLF", "position_fp": "8.00", "market_exposure_dollars": "19.20"}],
         [{"ticker": "KXTRUMPSAY-26OCT19-GOLF", "position_fp": "8.00", "market_exposure_dollars": "9.00"}],
     ]
-    analysis = _make_analysis(capped_dollars=2.0)
+    analysis = _desk_analysis(capped_dollars=2.0)
 
     assert ex._validate(analysis) is None
     assert ex._session_start_balance == pytest.approx(29.20)
@@ -91,7 +106,7 @@ def test_small_drop_under_the_equity_line_does_not_halt(monkeypatch, tmp_path):
     ex, rest, _ = _make_executor(monkeypatch, bankroll=500.0, loss_limit_pct=0.10)
     rest.get_open_positions.return_value = []
     rest.get_balance.side_effect = [29.20, 27.0]
-    analysis = _make_analysis(capped_dollars=2.0)
+    analysis = _desk_analysis(capped_dollars=2.0)
 
     assert ex._validate(analysis) is None
     assert ex._validate(analysis) is None
@@ -105,7 +120,7 @@ def test_zero_first_read_never_arms_the_baseline(monkeypatch, tmp_path):
     callback = MagicMock()
     ex.set_shutdown_callback(callback)
 
-    reason = ex._validate(_make_analysis())
+    reason = ex._validate(_desk_analysis())
 
     assert reason == "live balance unreadable"
     assert ex._session_start_balance is None
@@ -121,7 +136,7 @@ def test_zero_later_read_skips_and_is_not_a_loss(monkeypatch, tmp_path):
     rest.get_balance.side_effect = [29.20, 0.0, 29.20]
     callback = MagicMock()
     ex.set_shutdown_callback(callback)
-    analysis = _make_analysis(capped_dollars=2.0)
+    analysis = _desk_analysis(capped_dollars=2.0)
 
     assert ex._validate(analysis) is None
     reason = ex._validate(analysis)
@@ -139,7 +154,7 @@ def test_none_balance_does_not_seed(monkeypatch, tmp_path):
     ex, rest, _ = _make_executor(monkeypatch, bankroll=500.0, loss_limit_pct=0.10)
     rest.get_balance.return_value = None
 
-    reason = ex._validate(_make_analysis())
+    reason = ex._validate(_desk_analysis())
 
     assert reason == "live balance unreadable"
     assert ex._session_start_balance is None
@@ -151,7 +166,7 @@ def test_positions_get_failure_does_not_seed(monkeypatch, tmp_path):
     rest.get_balance.return_value = 29.20
     rest.get_open_positions.side_effect = RuntimeError("positions down")
 
-    reason = ex._validate(_make_analysis(capped_dollars=2.0))
+    reason = ex._validate(_desk_analysis(capped_dollars=2.0))
 
     assert reason == "live equity unreadable"
     assert ex._session_start_balance is None
@@ -173,7 +188,7 @@ def test_nan_open_cost_does_not_seed(monkeypatch, tmp_path):
     ]
     callback = MagicMock()
     ex.set_shutdown_callback(callback)
-    analysis = _make_analysis(capped_dollars=2.0)
+    analysis = _desk_analysis(capped_dollars=2.0)
 
     reason = ex._validate(analysis)
 
@@ -190,7 +205,7 @@ def test_latch_blocks_a_new_executor_without_a_new_baseline(monkeypatch, tmp_pat
     ex, rest, _ = _make_executor(monkeypatch, bankroll=500.0, loss_limit_pct=0.10)
     rest.get_open_positions.return_value = []
     rest.get_balance.side_effect = [29.20, 19.0]
-    analysis = _make_analysis(capped_dollars=2.0)
+    analysis = _desk_analysis(capped_dollars=2.0)
     ex._validate(analysis)
     assert "HALTED" in (ex._validate(analysis) or "")
 
@@ -199,7 +214,7 @@ def test_latch_blocks_a_new_executor_without_a_new_baseline(monkeypatch, tmp_pat
     )
 
     assert restarted._live_halted is True
-    reason = restarted._validate(_make_analysis(capped_dollars=2.0))
+    reason = restarted._validate(_desk_analysis(capped_dollars=2.0))
     assert reason is not None
     assert "HALTED" in reason
     restarted_rest.get_balance.assert_not_called()
@@ -214,7 +229,7 @@ def test_flag_off_keeps_the_bankroll_line_and_still_rejects_zero(monkeypatch, tm
     rest.get_balance.side_effect = [0.0, 500.0, 440.0]
     callback = MagicMock()
     ex.set_shutdown_callback(callback)
-    analysis = _make_analysis()
+    analysis = _desk_analysis()
 
     assert ex._validate(analysis) == "live balance unreadable"
     assert ex._session_start_balance is None
@@ -313,13 +328,13 @@ def test_failed_balance_get_does_not_overwrite_cash(monkeypatch, tmp_path, caplo
     ex, rest, _ = _make_executor(monkeypatch, bankroll=500.0, loss_limit_pct=0.10)
     rest.get_balance.return_value = None
     caplog.set_level(logging.WARNING)
-    reason = ex._validate(_make_analysis())
+    reason = ex._validate(_desk_analysis())
     assert reason == "live balance unreadable"
     assert "cash=not_measured" in caplog.text
     assert path.read_bytes() == prior
 
     rest.get_balance.return_value = 0.0
-    assert ex._validate(_make_analysis()) == "live balance unreadable"
+    assert ex._validate(_desk_analysis()) == "live balance unreadable"
     assert path.read_bytes() == prior
 
 
@@ -516,7 +531,7 @@ def test_unset_session_halt_is_paper_on_and_live_off(monkeypatch, tmp_path):
 
 def _paper_analysis():
     """Ask and last agree. An unset MagicMock last price floats to 1.0 on 3.14."""
-    analysis = _make_analysis(capped_dollars=2.0)
+    analysis = _desk_analysis(capped_dollars=2.0)
     ask = analysis.market.yes_ask_cents
     analysis.market.last_price_cents = ask
     analysis.market.last_price = ask

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 import config as cfg_module
@@ -36,22 +38,22 @@ def _act_candidate(ticker: str):
     return analysis
 
 
-def test_live_positions_exception_blocks_trump_act_without_an_order(monkeypatch):
+def test_live_positions_exception_blocks_trump_act_without_an_order(monkeypatch, caplog):
     _politics(monkeypatch)
     ex, rest, paper = _make_executor(monkeypatch)
     rest.get_open_positions.side_effect = RuntimeError("positions down")
     paper.portfolio.open_positions.return_value = []
     paper.portfolio.open_positions_by_prefix.return_value = []
 
-    reason = ex._validate(_act_candidate("KXTRUMPACT-26OCT11-T4"))
+    with caplog.at_level(logging.INFO, logger="event_news_research"):
+        reason = ex._validate(_act_candidate("KXTRUMPACT-26OCT11-T4"))
 
-    assert reason is not None
-    assert "event_news_family_lock" in reason
-    assert EVENT_NEWS_LIVE_OCCUPANCY_UNKNOWN in reason
+    assert reason == "event_news_family_lock"
+    assert EVENT_NEWS_LIVE_OCCUPANCY_UNKNOWN in caplog.text
     rest.place_limit_order.assert_not_called()
 
 
-def test_live_positions_exception_blocks_trump_say_without_an_order(monkeypatch):
+def test_live_positions_exception_blocks_trump_say_without_an_order(monkeypatch, caplog):
     _politics(monkeypatch)
     ex, rest, paper = _make_executor(monkeypatch)
     rest.get_open_positions.side_effect = RuntimeError("positions down")
@@ -61,10 +63,11 @@ def test_live_positions_exception_blocks_trump_say_without_an_order(monkeypatch)
     analysis.market.series_ticker = "KXTRUMPSAY"
     analysis.market.event_ticker = "KXTRUMPSAY-26OCT19"
 
-    reason = ex._validate(analysis)
+    with caplog.at_level(logging.INFO, logger="event_news_research"):
+        reason = ex._validate(analysis)
 
-    assert reason is not None
-    assert EVENT_NEWS_LIVE_OCCUPANCY_UNKNOWN in reason
+    assert reason == "event_news_family_lock"
+    assert EVENT_NEWS_LIVE_OCCUPANCY_UNKNOWN in caplog.text
     rest.place_limit_order.assert_not_called()
 
 

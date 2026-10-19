@@ -166,7 +166,15 @@ async def test_slow_balance_read_does_not_stall_the_loop(monkeypatch, tmp_path) 
 
     rest.get_balance.side_effect = slow_balance
     rest._request.side_effect = RuntimeError("shadow read")
-    analysis = _make_analysis(capped_dollars=2.0)
+    analysis = _make_analysis(
+        ticker="KXAPRPOTUS-26OCT17-SLOW",
+        yes_price=60.0,
+        capped_dollars=2.0,
+    )
+    analysis.market.series_ticker = "KXAPRPOTUS"
+    analysis.market.last_price_cents = analysis.market.yes_ask_cents
+    analysis.market.last_price = analysis.market.yes_ask_cents
+    analysis.executed_price_cents = int(analysis.market.yes_ask_cents)
     loop_ran = asyncio.Event()
 
     async def other() -> None:

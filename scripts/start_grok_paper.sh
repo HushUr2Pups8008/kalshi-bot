@@ -6,6 +6,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 
 export LIVE_TRADING_ENABLED=false
 export KALSHI_GROK_PAPER_SIDECAR=true

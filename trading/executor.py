@@ -1332,13 +1332,8 @@ class TradeExecutor:
         analysis: SignalAnalysis,
     ) -> str | None:
         """Write one paper row using paper desk flags. Does not post or cancel."""
-        from utils.event_news_desk_flags import (
-            event_news_exposure_skip_reason,
-            event_news_family_skip_reason,
-            event_news_yes_floor_skip_reason,
-        )
+        from utils.event_news_desk_flags import event_news_exposure_skip_reason
         from utils.event_news_research import (
-            event_news_blocked_final_ask,
             event_news_exposure_prefix,
             event_news_min_edge,
             event_news_open_prefix_cap,
@@ -1352,21 +1347,20 @@ class TradeExecutor:
         price = getattr(analysis, "executed_price_cents", None)
         if isinstance(price, bool) or not isinstance(price, int):
             return None
-        raw_invalid = getattr(analysis, "_event_news_final_ask_invalid", False)
-        raw_cents = getattr(analysis, "_event_news_final_ask_cents", None)
-        blocked = event_news_blocked_final_ask(
-            limit_cents=price,
-            fresh_ask_cents=raw_cents if type(raw_cents) is int else None,
-            fresh_ask_invalid=raw_invalid is True,
-        )
         ticker = str(getattr(getattr(analysis, "market", None), "ticker", "") or "")
-        if blocked is not None:
-            log.info(
-                "[EVENT_NEWS_RISK] executed_ask_in_excluded_band ticker=%s side=%s ask=%s",
-                ticker,
-                getattr(analysis, "side", ""),
-                blocked,
-            )
+        raw_positions = self._paper.portfolio.open_positions()
+        open_tickers = [
+            str(getattr(position, "ticker", "") or "").strip()
+            for position in (raw_positions if isinstance(raw_positions, list) else [])
+            if str(getattr(position, "ticker", "") or "").strip()
+        ]
+        chain_reason = self._event_news_chain_reason(
+            analysis,
+            limit_cents=price,
+            open_tickers=open_tickers,
+            live=False,
+        )
+        if chain_reason:
             return None
         window = int(getattr(cfg, "paper_ticker_cooldown", 0) or 0)
         if window > 0 and ticker:
@@ -1388,33 +1382,11 @@ class TradeExecutor:
         plan = self._paper_shadow_terms(analysis)
         if plan is None:
             return None
-        floor_reason = event_news_yes_floor_skip_reason(
-            getattr(analysis, "side", ""),
-            plan.price_cents,
-            live=False,
-        )
-        if floor_reason is not None:
-            log.info(
-                "[EVENT_NEWS_RISK] yes_below_floor ticker=%s side=%s ask=%s",
-                ticker,
-                getattr(analysis, "side", ""),
-                plan.price_cents,
-            )
-            return None
         book = self._paper_shadow_book_cents()
         if book is None:
             log.info("[EVENT_NEWS_RISK] exposure_cap ticker=%s reason=unreadable", ticker)
             return None
         _equity, _open_cost = book
-        positions = self._paper.portfolio.open_positions()
-        open_tickers = [
-            str(getattr(position, "ticker", "") or "").strip()
-            for position in positions
-            if str(getattr(position, "ticker", "") or "").strip()
-        ]
-        if event_news_family_skip_reason(ticker, open_tickers, live=False):
-            log.info("[EVENT_NEWS_RISK] one_per_family ticker=%s", ticker)
-            return None
         same_ticker = self._paper.portfolio.open_positions(ticker)
         if isinstance(same_ticker, list) and same_ticker:
             log.info(
@@ -1657,19 +1629,21 @@ class TradeExecutor:
         if yes_price < price_floor or yes_price > price_ceil:
             return f"price {yes_price:.1f}c is near limit (too illiquid)"
 
-        from utils.event_news_research import (
-            event_news_executed_side_skip_reason,
-            is_event_news_paper_cohort,
-        )
+        from utils.event_news_research import is_event_news_paper_cohort
 
         if is_event_news_paper_cohort():
-            executed_reason = event_news_executed_side_skip_reason(
-                analysis.market, analysis.side
+            chain_reason = self._event_news_chain_reason(
+                analysis,
+                limit_cents=(
+                    analysis.executed_price_cents
+                    if type(analysis.executed_price_cents) is int
+                    else None
+                ),
+                open_tickers=self._event_news_open_exposure_tickers(),
             )
-            if executed_reason:
-                return executed_reason
-
-        if self._is_paper:
+            if chain_reason:
+                return chain_reason
+        elif self._is_paper:
             from utils.event_news_research import (
                 event_news_crossed_asks,
                 event_news_missing_snapshot_ask,
@@ -1744,33 +1718,6 @@ class TradeExecutor:
                             f"(cap={prefix_cap}, "
                             f"open={open_tickers})"
                         )
-
-        from utils.event_news_research import (
-            event_news_family_lock_ticker,
-            is_event_news_paper_cohort,
-        )
-
-        family_occupied = (
-            event_news_family_lock_ticker(
-                analysis.market,
-                self._event_news_open_exposure_tickers(),
-            )
-            if is_event_news_paper_cohort()
-            else None
-        )
-        if family_occupied:
-            from utils.event_news_research import event_news_series_prefix
-
-            series = event_news_series_prefix(str(analysis.market.ticker))
-            log.info(
-                "[EVENT_NEWS_FAMILY_LOCK] open=%s blocked=%s series=%s",
-                family_occupied,
-                analysis.market.ticker,
-                series,
-            )
-            return (
-                f"event_news_family_lock: open {family_occupied} occupies {series}"
-            )
 
         # Multi-position guard: block opposing trades (no hedges) and duplicate
         # signals (same side, same probability estimate, same market price).
@@ -2299,58 +2246,85 @@ class TradeExecutor:
             return "fee_admission_non_positive_net_edge"
         return None
 
+    def _event_news_chain_reason(
+        self,
+        analysis: SignalAnalysis,
+        *,
+        limit_cents: int | None,
+        open_tickers: list[str] | tuple[str, ...] | None = None,
+        live: bool | None = None,
+    ) -> str | None:
+        from utils.event_news_research import (
+            event_news_blocked_final_ask,
+            event_news_gate_chain_reason,
+        )
+
+        if live is None:
+            live = not self._is_paper
+        raw_invalid = getattr(analysis, "_event_news_final_ask_invalid", False)
+        raw_cents = getattr(analysis, "_event_news_final_ask_cents", None)
+        posted = limit_cents if type(limit_cents) is int else None
+        fresh = raw_cents if type(raw_cents) is int else None
+        reason = event_news_gate_chain_reason(
+            analysis.market,
+            side=getattr(analysis, "side", None),
+            limit_cents=posted,
+            fresh_ask_cents=fresh,
+            fresh_ask_invalid=raw_invalid is True,
+            open_tickers=open_tickers,
+            live=live,
+        )
+        if reason is None:
+            return None
+        ticker = getattr(getattr(analysis, "market", None), "ticker", "")
+        side = getattr(analysis, "side", "")
+        if reason == "yes_below_floor":
+            log.info(
+                "[EVENT_NEWS_RISK] yes_below_floor ticker=%s side=%s ask=%s",
+                ticker,
+                side,
+                posted,
+            )
+        elif reason == "one_per_family":
+            log.info("[EVENT_NEWS_RISK] one_per_family ticker=%s", ticker)
+        elif reason == "event_news_family_lock":
+            log.info(
+                "[EVENT_NEWS_FAMILY_LOCK] blocked=%s",
+                ticker,
+            )
+        elif reason == "executed_ask_in_excluded_band":
+            blocked = event_news_blocked_final_ask(
+                limit_cents=posted,
+                fresh_ask_cents=fresh,
+                fresh_ask_invalid=raw_invalid is True,
+            )
+            log.info(
+                "[EVENT_NEWS_RISK] executed_ask_in_excluded_band ticker=%s "
+                "side=%s ask=%s client_order_id=",
+                ticker,
+                side,
+                blocked if blocked is not None else posted,
+            )
+        return reason
+
     def _event_news_plan_skip(
         self,
         analysis: SignalAnalysis,
         execution_plan: FinalExecutionTerms,
     ) -> str | None:
         """Politics desk skips. Paper defaults on. Live stays off until the env is set."""
-        from utils.event_news_desk_flags import event_news_yes_floor_skip_reason
         from utils.event_news_research import is_event_news_paper_cohort
 
         if not is_event_news_paper_cohort():
             return None
-        reason = event_news_yes_floor_skip_reason(
-            getattr(analysis, "side", ""),
-            execution_plan.price_cents,
-            live=not self._is_paper,
+        reason = self._event_news_chain_reason(
+            analysis,
+            limit_cents=execution_plan.price_cents,
+            open_tickers=self._event_news_open_exposure_tickers(),
         )
         if reason is not None:
-            log.info(
-                "[EVENT_NEWS_RISK] yes_below_floor ticker=%s side=%s ask=%s",
-                getattr(getattr(analysis, "market", None), "ticker", ""),
-                getattr(analysis, "side", ""),
-                execution_plan.price_cents,
-            )
             return reason
-        family_reason = self._event_news_family_skip(analysis)
-        if family_reason is not None:
-            return family_reason
         return self._event_news_exposure_skip(analysis, execution_plan)
-
-    def _event_news_family_skip(self, analysis: SignalAnalysis) -> str | None:
-        from utils.event_news_desk_flags import (
-            EVENT_NEWS_ONE_PER_FAMILY,
-            event_news_desk_flag_enabled,
-            event_news_family_skip_reason,
-        )
-
-        live = not self._is_paper
-        if not event_news_desk_flag_enabled(EVENT_NEWS_ONE_PER_FAMILY, live=live):
-            return None
-        ticker = str(getattr(getattr(analysis, "market", None), "ticker", "") or "")
-        reason = event_news_family_skip_reason(
-            ticker,
-            self._event_news_open_exposure_tickers(),
-            live=live,
-        )
-        if reason is None:
-            return None
-        log.info(
-            "[EVENT_NEWS_RISK] one_per_family ticker=%s",
-            ticker,
-        )
-        return reason
 
     def _event_news_equity_and_open_cost_cents(self) -> tuple[int | None, int | None]:
         """Cash plus portfolio value, and open market exposure, both in cents."""
@@ -2541,17 +2515,6 @@ class TradeExecutor:
         *,
         execution_plan: FinalExecutionTerms | None = None,
     ) -> Optional[str]:
-        limit_cents = (
-            execution_plan.price_cents
-            if execution_plan is not None
-            else getattr(analysis, "executed_price_cents", None)
-        )
-        if self._event_news_pre_post_band_skip(
-            analysis,
-            limit_cents=limit_cents,
-            client_order_id="",
-        ):
-            return None
         if execution_plan is not None:
             execution_plan, risk_reason = self._event_news_risk_capped_plan(
                 analysis,
@@ -2590,6 +2553,17 @@ class TradeExecutor:
                     analysis.market.ticker,
                 )
                 return None
+        posted_cents = (
+            execution_plan.price_cents
+            if execution_plan is not None
+            else getattr(analysis, "executed_price_cents", None)
+        )
+        if self._event_news_pre_post_band_skip(
+            analysis,
+            limit_cents=posted_cents if type(posted_cents) is int else None,
+            client_order_id="",
+        ):
+            return None
         entry_request_id: str | None = None
         fee_net_accounting = bool(cfg.enable_fee_net_paper_accounting)
         if fee_net_accounting:
@@ -2758,19 +2732,19 @@ class TradeExecutor:
         from utils.event_news_research import is_event_news_paper_cohort
         from utils.event_news_grok_veto import event_news_grok_veto_allows_live_post
 
-        # price_cents is final. A band skip must not call Grok or POST.
-        band_blocked = self._event_news_pre_post_band_skip(
+        chain_reason = self._event_news_chain_reason(
             analysis,
             limit_cents=price_cents,
-            client_order_id="",
-            log_skip=False,
+            open_tickers=self._event_news_open_exposure_tickers(),
         )
-        # New desk skips return before a client_order_id exists. The 0-35c
-        # band still mints an id only so the existing skip line can name it.
-        if (
-            not band_blocked
-            and event_news_desk_flag_enabled(EVENT_NEWS_GROK_RULES_CHECK, live=True)
-        ):
+        if chain_reason:
+            log.info(
+                "[EVENT_NEWS_GATE] skip=%s ticker=%s",
+                chain_reason,
+                analysis.market.ticker,
+            )
+            return None
+        if event_news_desk_flag_enabled(EVENT_NEWS_GROK_RULES_CHECK, live=True):
             from utils.event_news_rules_check import event_news_rules_check_skip
 
             rules_skip = await self._wait_off_loop(
@@ -2787,7 +2761,7 @@ class TradeExecutor:
                     analysis.market.ticker,
                 )
                 return None
-        if not band_blocked and await self._event_news_plan_skip_off_loop(
+        if await self._event_news_plan_skip_off_loop(
             analysis,
             FinalExecutionTerms(
                 price_cents=price_cents,
@@ -2796,7 +2770,7 @@ class TradeExecutor:
             ),
         ):
             return None
-        if not band_blocked and is_event_news_paper_cohort():
+        if is_event_news_paper_cohort():
             veto = await self._wait_off_loop(
                 functools.partial(
                     event_news_grok_veto_allows_live_post,
@@ -2821,16 +2795,14 @@ class TradeExecutor:
                     universe_block,
                 )
                 return None
+        if self._live_halted:
+            log.info(
+                "[LIVE] BLOCKED %s: session halt latched; no POST",
+                analysis.market.ticker,
+            )
+            return None
 
         client_order_id = uuid.uuid4().hex
-        # Last price check before the submission intent, reserve, and POST.
-        # Nothing below assigns price_cents.
-        if self._event_news_pre_post_band_skip(
-            analysis,
-            limit_cents=price_cents,
-            client_order_id=client_order_id,
-        ):
-            return None
         submission_summary = {
             "submission_id": uuid.uuid4().hex,
             "ticker": analysis.market.ticker,
@@ -2898,6 +2870,14 @@ class TradeExecutor:
                     analysis.market.ticker,
                     exc_info=True,
                 )
+
+        if self._event_news_pre_post_band_skip(
+            analysis,
+            limit_cents=price_cents,
+            client_order_id=client_order_id,
+        ):
+            self._live_submission_holds.release(analysis.market.ticker)
+            return None
 
         log.info(
             "[LIVE] Submitting one order: %s %s %d @ %dc | cost=$%.2f | edge=%+.3f | confidence=%.2f",
@@ -3122,13 +3102,6 @@ class TradeExecutor:
                 maker_passthrough=True,
                 fill_role="taker",
             )
-        if self._event_news_pre_post_band_skip(
-            analysis,
-            limit_cents=maker_price,
-            client_order_id="",
-            log_skip=True,
-        ):
-            return None
         maker_plan = FinalExecutionTerms(
             price_cents=maker_price,
             contracts=execution_plan.contracts,

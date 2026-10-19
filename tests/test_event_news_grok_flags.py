@@ -553,7 +553,18 @@ def _liquidity(best: str) -> ExecutableLiquidity:
 def _analysis():
     market = MagicMock()
     market.ticker = "KXTRUMPSAY-26OCT19-GOLF"
+    market.series_ticker = "KXTRUMPSAY"
     market.venue = "kalshi"
+    market.status = "active"
+    market.yes_ask_cents = 60
+    market.no_ask_cents = 45
+    market.yes_ask = 60
+    market.no_ask = 45
+    market.yes_ask_size = 10.0
+    market.no_ask_size = 10.0
+    market.open_interest_fp = 100.0
+    market.volume_24h_fp = 100.0
+    market.last_price_cents = 60
     analysis = MagicMock()
     analysis.market = market
     analysis.side = "yes"
@@ -992,7 +1003,7 @@ async def test_snapshot_36c_requote_34c_does_not_post(monkeypatch, tmp_path, cap
     assert found.group(1) == "KXTRUMPSAY-26OCT19-GOLF"
     assert found.group(2) == "yes"
     assert found.group(3) == "34"
-    assert re.fullmatch(r"[0-9a-f]{32}", found.group(4))
+    assert found.group(4) == ""
 
 
 @pytest.mark.asyncio
@@ -1014,7 +1025,7 @@ async def test_exact_35c_does_not_post(monkeypatch, tmp_path, caplog):
     executor._rest.place_limit_order.assert_not_called()
     found = _skip_line(caplog, "35")
     assert found.group(3) == "35"
-    assert re.fullmatch(r"[0-9a-f]{32}", found.group(4))
+    assert found.group(4) == ""
 
     direct = _analysis()
     direct.executed_price_cents = 35
@@ -1559,6 +1570,7 @@ async def test_paper_mode_skips_the_same_excluded_asks(monkeypatch, tmp_path, ca
     assert executor._is_paper is True
 
     cheap = _analysis()
+    cheap.side = "no"
     cheap.executed_price_cents = 36
     with (
         patch(
@@ -1723,7 +1735,8 @@ async def test_bad_requote_price_fails_closed(monkeypatch, tmp_path, caplog):
     assert order_id is None
     executor._rest.place_limit_order.assert_not_called()
     found = _skip_line(caplog, "invalid")
-    assert re.fullmatch(r"[0-9a-f]{32}", found.group(4))
+    assert found.group(3) == "invalid"
+    assert found.group(4) == ""
 
 
 def _boot_line(caplog) -> str:

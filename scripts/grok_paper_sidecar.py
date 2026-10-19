@@ -121,7 +121,7 @@ def _run_scan(rest, positions=None, *, now: datetime | None = None) -> dict[str,
     ranked = rank_politics_markets(markets, now=moment, series=series_list, close_window=PAPER_CLOSE_WINDOW)
     open_tickers = tuple(row["ticker"] for row in paper_position_rows(positions))
     counts = run_paper_edge_scan(
-        ranked[:SCAN_TOP_N],
+        ranked,
         live=False,
         allowlist=series_list,
         db_path=PAPER_DB_PATH,
@@ -189,7 +189,7 @@ def _run_daily(rest) -> None:
     write_paper_scorecard(
         db_path=PAPER_DB_PATH,
         market_lookup=rest.get_market,
-        report_path=Path(f"docs/reports/paper-scorecard-{day}.md"),
+        report_path=Path(f"logs/reports/paper-scorecard-{day}.md"),
     )
 
 
