@@ -271,11 +271,12 @@ def test_cycle_scores_open_positions_before_the_politics_scan(monkeypatch) -> No
         "KXDJI-26OCT19-51550",
     )
     assert seen["scan"][0] == "KXTRUMPSAY-26OCT18-A"
+    assert len(seen["scan"]) > SCAN_TOP_N
     assert all(not ticker.startswith("KXDJI") for ticker in seen["scan"])
     assert all(not ticker.startswith("KXNEWPOL") for ticker in seen["scan"])
     assert scan_counts["fetched"] == len(rest.series) + 3
     assert scan_counts["politics"] == len(rest.series)
-    assert scan_counts["examined"] == 3
+    assert scan_counts["examined"] == len(seen["scan"])
 
 
 def test_score_failure_still_scans(monkeypatch) -> None:

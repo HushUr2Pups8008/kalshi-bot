@@ -38,6 +38,9 @@ logs/edge_replay/
 logs/backups/
 # Runtime live fills. scripts/copy_live_fill_log.py copies the file into docs/reports.
 logs/state/
+# Sidecar runtime reports. docs/reports/live-fill-log.md stays tracked.
+docs/reports/paper-scorecard-*.md
+docs/reports/grok-edge-daily.md
 evidence_store.db
 
 # Test temp directories

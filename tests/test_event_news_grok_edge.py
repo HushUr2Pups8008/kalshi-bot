@@ -38,6 +38,8 @@ from utils.event_news_grok_edge import (
     call_reserve_usd,
     comparison_summary,
     contract_fee_net_dollars,
+    DEFAULT_DAILY_USD_CAP,
+    MEASURED_CYCLE_COST_USD,
     edge_scan_interval_seconds,
     ev_by_edge_bucket,
     exit_versus_hold,
@@ -846,9 +848,13 @@ def test_position_rows_use_the_signed_count() -> None:
 
 
 def test_scan_interval_cannot_drop_below_five_minutes() -> None:
-    assert edge_scan_interval_seconds({}) == 1800
+    """180 minutes fits 8 cycles in a UTC day. Measured cycle cost stays under $3."""
+    assert edge_scan_interval_seconds({}) == 10800
     assert edge_scan_interval_seconds({"EVENT_NEWS_GROK_EDGE_SCAN_MINUTES": "1"}) == 300
     assert edge_scan_interval_seconds({"EVENT_NEWS_GROK_EDGE_SCAN_MINUTES": "30"}) == 1800
+    cycles = (24 * 60 * 60) // edge_scan_interval_seconds({})
+    assert cycles == 8
+    assert cycles * MEASURED_CYCLE_COST_USD < DEFAULT_DAILY_USD_CAP
 
 
 def test_new_flags_do_not_arm_the_live_order_path_or_the_plist() -> None:
@@ -1095,6 +1101,10 @@ def test_below_5c_screen_does_not_pay_for_grounding(tmp_path: Path) -> None:
     assert screen["reason"] == "below_screen"
     assert screen["yes_edge_cents"] == yes_edge
     assert screen["no_edge_cents"] == no_edge
+    candidate = _rows(tmp_path / "candidates.jsonl")[0]
+    assert candidate["reason_code"] == "below_screen"
+    assert Decimal(candidate["grok_probability"]) == Decimal("0.56")
+    assert len(candidate["prompt_hash"]) == 16
 
 
 def test_open_position_is_grounded_below_the_screen(tmp_path: Path) -> None:
@@ -1118,6 +1128,44 @@ def test_open_position_is_grounded_below_the_screen(tmp_path: Path) -> None:
     assert screen["yes_edge_cents"] < 5
     assert screen["no_edge_cents"] < 5
     assert Decimal(_rows(tmp_path / "candidates.jsonl")[0]["grok_probability"]) == Decimal("0.70")
+
+
+def test_cache_hits_do_not_consume_paid_slots(tmp_path: Path) -> None:
+    """Three fresh cache rows leave the paid slots for the uncached book behind them."""
+    tickers: dict[str, dict] = {}
+    cached = []
+    for index in range(3):
+        ticker = f"KXTRUMPSAY-26OCT20-C{index}"
+        cached.append(_market(ticker=ticker))
+        tickers[ticker] = {
+            "ts": "2026-10-17T11:00:00Z",
+            "prob": "0.70",
+            "confidence": "0.80",
+            "sources": ["https://example.test/cached"],
+            "yes_ask": 55,
+            "no_ask": 46,
+            "post_id": "post-1",
+            "series": "KXTRUMPSAY",
+            "summary": "cached",
+        }
+    fresh = _market(ticker="KXTRUMPSAY-26OCT20-FRESH")
+    (tmp_path / "cache.json").write_text(
+        json.dumps({"tickers": tickers}) + "\n",
+        encoding="utf-8",
+    )
+    calls: list[dict] = []
+    counts = _scan(
+        tmp_path,
+        [*cached, fresh],
+        _poster(calls, ungrounded_prob="0.56"),
+        {XAI_API_KEY_ENV: "test-key"},
+        max_markets=3,
+    )
+    assert counts["cache_hits"] == 3
+    assert counts["examined"] == 1
+    assert len(calls) == 1
+    assert "KXTRUMPSAY-26OCT20-FRESH" in json.dumps(calls[0]["payload"])
+    assert "tools" not in calls[0]["payload"]
 
 
 def test_fresh_cache_queues_without_another_grok_call(tmp_path: Path) -> None:
@@ -1449,7 +1497,8 @@ def test_dataclass_book_with_a_one_lot_skips_illiquid_before_grok(tmp_path: Path
         db_path=tmp_path / "grok_paper.db",
     )
     assert counts["queued"] == 0
-    assert counts["examined"] == 1
+    assert counts["examined"] == 0
+    assert counts["skipped"] == 1
     assert calls == []
     candidate = _rows(tmp_path / "candidates.jsonl")[0]
     assert candidate["reason_code"] == "illiquid_top_size"

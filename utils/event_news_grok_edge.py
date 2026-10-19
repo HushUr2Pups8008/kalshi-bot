@@ -57,7 +57,8 @@ DEFAULT_DAILY_USD_CAP = Decimal("3")
 DEFAULT_EDGE_MIN_CENTS = 8
 EVENT_NEWS_GROK_EDGE_MIN_CENTS = "EVENT_NEWS_GROK_EDGE_MIN_CENTS"
 EVENT_NEWS_GROK_EDGE_SCAN_MINUTES = "EVENT_NEWS_GROK_EDGE_SCAN_MINUTES"
-DEFAULT_SCAN_MINUTES = 30
+DEFAULT_SCAN_MINUTES = 180
+MEASURED_CYCLE_COST_USD = Decimal("0.30324255")
 MIN_SCAN_MINUTES = 5
 PAPER_QUEUE_CONTRACTS = 4
 TAKER_FEE_COEFFICIENT = Decimal("0.07")
@@ -97,7 +98,7 @@ PAPER_DB_PATH = Path("logs/state/grok_paper.db")
 RAW_DIR = Path("logs/state/grok_raw")
 CACHE_PATH = Path("logs/state/grok_edge_cache.json")
 SCREEN_LOG_PATH = Path("logs/state/grok_edge_screen.jsonl")
-DAILY_REPORT_PATH = Path("docs/reports/grok-edge-daily.md")
+DAILY_REPORT_PATH = Path("logs/reports/grok-edge-daily.md")
 _CACHE_LOCK = threading.Lock()
 _SETTLED_STATUSES = frozenset({"finalized", "settled", "determined"})
 _DB_LOCK = threading.Lock()
@@ -948,12 +949,9 @@ def run_paper_edge_scan(
         view = _market_view(market)
         if view is None or view["series"] not in allowed or view["status"] != "active":
             continue
-        counts["examined"] += 1
         quote_block = _paper_gate_reason(market, view, None)
         if quote_block:
             _skip(view, quote_block)
-            if counts["examined"] >= max_markets:
-                break
             continue
         cached = _cache_get(cache_path, view["ticker"])
         if _cache_fresh(cached, view, fingerprint, moment):
@@ -996,65 +994,64 @@ def run_paper_edge_scan(
                 counts["queued"] += 1
             else:
                 counts["skipped"] += 1
+            continue
+        counts["examined"] += 1
+        ungrounded = _call_grok(
+            ticker=view["ticker"],
+            prompt=_market_prompt(view),
+            system=_UNGROUNDED_SYSTEM,
+            grounded=False,
+            environ=environ,
+            post=post,
+            call_log_path=call_log_path,
+            spend_path=spend_path,
+            raw_dir=raw_dir,
+            now=moment,
+        )
+        held = view["ticker"] in open_set
+        yes_edge = no_edge = None
+        probability = None
+        if (
+            ungrounded is not None
+            and ungrounded.skip_reason is None
+            and ungrounded.probability is not None
+        ):
+            probability = ungrounded.probability
+            yes_edge, no_edge = _screen_edges(probability, view["yes_ask"], view["no_ask"])
+        passed = held or (probability is not None and _screen_passes(yes_edge, no_edge))
+        reason = "open_position" if held else ("edge" if passed else "below_screen")
+        if probability is None and not held:
+            reason = (
+                ungrounded.skip_reason
+                if ungrounded is not None and ungrounded.skip_reason
+                else "no_probability"
+            )
+        _log_screen(
+            screen_log_path,
+            {
+                "ts": _stamp(moment),
+                "ticker": view["ticker"],
+                "series": view["series"],
+                "decision": "ground" if passed else "skip",
+                "reason": reason,
+                "ungrounded_probability": None if probability is None else str(probability),
+                "yes_edge_cents": yes_edge,
+                "no_edge_cents": no_edge,
+                "yes_ask": view.get("yes_ask"),
+                "no_ask": view.get("no_ask"),
+                "post_id": fingerprint,
+            },
+        )
+        if passed:
+            pending.append({"view": view, "ungrounded": ungrounded, "market": market})
         else:
-            ungrounded = _call_grok(
-                ticker=view["ticker"],
-                prompt=_market_prompt(view),
-                system=_UNGROUNDED_SYSTEM,
-                grounded=False,
-                environ=environ,
-                post=post,
-                call_log_path=call_log_path,
-                spend_path=spend_path,
-                raw_dir=raw_dir,
-                now=moment,
+            _skip(
+                view,
+                reason,
+                prompt_hash="" if ungrounded is None else ungrounded.prompt_hash,
+                probability=probability,
             )
-            held = view["ticker"] in open_set
-            yes_edge = no_edge = None
-            probability = None
-            if (
-                ungrounded is not None
-                and ungrounded.skip_reason is None
-                and ungrounded.probability is not None
-            ):
-                probability = ungrounded.probability
-                yes_edge, no_edge = _screen_edges(probability, view["yes_ask"], view["no_ask"])
-            passed = held or (probability is not None and _screen_passes(yes_edge, no_edge))
-            reason = "open_position" if held else ("edge" if passed else "below_screen")
-            if probability is None and not held:
-                reason = (
-                    ungrounded.skip_reason
-                    if ungrounded is not None and ungrounded.skip_reason
-                    else "no_probability"
-                )
-            _log_screen(
-                screen_log_path,
-                {
-                    "ts": _stamp(moment),
-                    "ticker": view["ticker"],
-                    "series": view["series"],
-                    "decision": "ground" if passed else "skip",
-                    "reason": reason,
-                    "ungrounded_probability": None if probability is None else str(probability),
-                    "yes_edge_cents": yes_edge,
-                    "no_edge_cents": no_edge,
-                    "yes_ask": view.get("yes_ask"),
-                    "no_ask": view.get("no_ask"),
-                    "post_id": fingerprint,
-                },
-            )
-            if passed:
-                pending.append({"view": view, "ungrounded": ungrounded, "market": market})
-            else:
-                if reason in _FAIL_CLOSED:
-                    _skip(
-                        view,
-                        reason,
-                        prompt_hash="" if ungrounded is None else ungrounded.prompt_hash,
-                    )
-                else:
-                    counts["skipped"] += 1
-                counts["screen_skipped"] += 1
+            counts["screen_skipped"] += 1
         if counts["examined"] >= max_markets:
             break
     grouped: dict[str, list[dict[str, Any]]] = {}

@@ -13,6 +13,7 @@ from utils.event_news_research import (
     event_news_crossed_asks,
     event_news_exposure_prefix,
     event_news_favorite_side,
+    event_news_gate_chain_reason,
     event_news_horizon_days,
     event_news_illiquid,
     event_news_in_allowed_ask_band,
@@ -1239,6 +1240,34 @@ def test_executed_side_excluded_band_skips_t4_shaped_no_and_admits_favorites():
         )
         is None
     )
+    assert (
+        event_news_gate_chain_reason(
+            t4, side="no", edge=0.65, config=politics
+        )
+        == "executed_ask_in_excluded_band"
+    )
+    assert event_news_gate_chain_reason(t8, side="no", edge=0.16, config=politics) is None
+    assert event_news_gate_chain_reason(ts_no, side="no", edge=0.24, config=politics) is None
+    paper_series = SimpleNamespace(
+        ticker="KXHORMUZWEEKLY-26OCT-A",
+        series_ticker="KXHORMUZWEEKLY",
+        yes_ask_cents=70,
+        no_ask_cents=35,
+        yes_ask=70,
+        no_ask=35,
+        yes_ask_size=20.0,
+        no_ask_size=20.0,
+        open_interest_fp=40.0,
+        volume_24h_fp=20.0,
+        last_price_cents=70,
+    )
+    assert (
+        event_news_gate_chain_reason(paper_series, side="yes", config=politics)
+        == "not_reserve_series"
+    )
+    assert event_news_gate_chain_reason(
+        paper_series, side="yes", config=politics, purpose="score"
+    ) is None
     assert event_news_dossier_is_stale(
         "2026-08-28T18:17:34Z",
         now=datetime(2026, 8, 29, 14, 22, tzinfo=timezone.utc),
