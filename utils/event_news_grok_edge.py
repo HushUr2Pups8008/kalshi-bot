@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 from numbers import Real
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable, Mapping, Sequence
 
 import requests
@@ -32,9 +33,15 @@ from utils.event_news_desk_flags import (
 )
 from utils.event_news_grok_flags import EVENT_NEWS_BAND_FLOOR_CENTS
 from utils.event_news_grok_veto import GROK_MODEL, XAI_API_KEY_ENV
-from utils.event_news_research import event_news_series_ticker, snapshot_ask_cents
+from utils.event_news_research import (
+    EVENT_NEWS_COHORT_ID,
+    event_news_paper_score_decision,
+    event_news_series_ticker,
+    snapshot_ask_cents,
+)
 from utils.series_universe import (
-    live_series_tickers,
+    effective_mode,
+    get_universe,
     series_ticker_matches,
     x_search_series,
 )
@@ -63,10 +70,15 @@ STRONG_CONTRARY_CONFIDENCE = Decimal("0.70")
 MAX_MARKETS_PER_CYCLE = 1
 SCAN_TOP_N = 3
 SCAN_CLOSE_WINDOW = timedelta(hours=72)
+PAPER_CLOSE_WINDOW = timedelta(days=30)
 SCAN_ASK_MAX_CENTS = 94
 SCREEN_EDGE_CENTS = 5
 ASK_MOVE_CENTS = 5
-GROUNDED_CACHE_TTL = timedelta(hours=3)
+_PAPER_SCORE_ENV = {
+    "EVENT_NEWS_YES_FLOOR_CENTS": "55",
+    "EVENT_NEWS_EXCLUDE_EXACT_35": "true",
+}
+_FAIL_CLOSED = frozenset({"timeout", "malformed", "spend_cap", "missing_key", "request_error", "http", "no_probability"})
 GROK_MAX_SEARCH_RESULTS = "GROK_MAX_SEARCH_RESULTS"
 DEFAULT_MAX_SEARCH_RESULTS = 8
 MAX_SEARCH_RESULTS_CAP = 20
@@ -272,18 +284,16 @@ def verdicts_agree(left: Decimal, right: Decimal) -> bool:
 
 
 def politics_scan_series(extra: Sequence[str] = ()) -> tuple[str, ...]:
-    """Live yaml series the sidecar may scan.
-
-    An extra name is kept only when it is already in that live set. A
-    position on a series the file does not mark live is not scanned. A
-    failed universe returns nothing.
-    """
-    live = live_series_tickers()
-    allowed = set(live)
+    """Non-off yaml series. An extra name stays only when it is already in that set."""
+    universe = get_universe()
+    if universe.failed:
+        return ()
+    allowed = [entry.series for entry in universe.entries if entry.mode != "off"]
+    allowed_set = set(allowed)
     seen: list[str] = []
-    for raw in (*live, *extra):
+    for raw in (*allowed, *extra):
         series = str(raw or "").strip().upper()
-        if not series or series in seen or series not in allowed:
+        if not series or series in seen or series not in allowed_set:
             continue
         seen.append(series)
     return tuple(seen)
@@ -362,14 +372,15 @@ def rank_politics_markets(
     *,
     now: datetime,
     series: Sequence[str] | None = None,
+    close_window: timedelta | None = None,
 ) -> list[Any]:
-    """Open politics markets that close within 72h and have an ask from 36c to 94c.
+    """Open markets inside the close window with an ask from 36c to 94c.
 
-    Higher liquidity (then volume) ranks first. An earlier close breaks a tie.
-    Response status ``open`` is not tradeable. KXDJI is not eligible.
+    Higher liquidity ranks first. An earlier close breaks a tie. The default
+    window is 72h. Response status ``open`` is not tradeable.
     """
     allowed = {item.strip().upper() for item in (series or politics_scan_series()) if item.strip()}
-    window_end = now + SCAN_CLOSE_WINDOW
+    window_end = now + (SCAN_CLOSE_WINDOW if close_window is None else close_window)
     ranked: list[tuple[Decimal, datetime, str, Any]] = []
     for market in markets:
         ticker, market_series, status, close = _market_identity(market)
@@ -710,7 +721,7 @@ def _cache_fresh(
     if not row:
         return False
     cached_at = _parse_utc(row.get("ts"))
-    if cached_at is None or now - cached_at >= GROUNDED_CACHE_TTL:
+    if cached_at is None or _day(cached_at) != _day(now):
         return False
     sources = row.get("sources")
     if not isinstance(sources, list) or not sources:
@@ -818,6 +829,16 @@ def _remember_grounded(
     )
 
 
+def _ground_miss(reason: str, prompt_hash: str = "") -> dict[str, Any]:
+    return {
+        "skip_reason": reason,
+        "sources": [],
+        "markets": [],
+        "summary": "",
+        "prompt_hash": prompt_hash,
+    }
+
+
 def _ground_series(
     views: Sequence[Mapping[str, Any]],
     *,
@@ -849,17 +870,20 @@ def _ground_series(
         expected_tickers=tuple(str(view.get("ticker") or "") for view in views),
     )
     if result is None or result.skip_reason or not result.detail:
-        return None
+        reason = "malformed" if result is None else (result.skip_reason or "malformed")
+        return _ground_miss(reason, "" if result is None else result.prompt_hash)
     try:
         parsed = json.loads(result.detail)
     except json.JSONDecodeError:
-        return None
+        return _ground_miss("malformed", result.prompt_hash)
     if not isinstance(parsed, dict):
-        return None
+        return _ground_miss("malformed", result.prompt_hash)
     sources = parsed.get("sources")
     markets = parsed.get("markets")
     if not isinstance(sources, list) or not sources or not isinstance(markets, list):
-        return None
+        return _ground_miss("malformed", result.prompt_hash)
+    parsed["skip_reason"] = None
+    parsed["prompt_hash"] = result.prompt_hash
     return parsed
 
 
@@ -888,7 +912,7 @@ def run_paper_edge_scan(
     The cheap ungrounded call runs first. A grounded series call runs only
     when that edge is at least 5c on either side, or the ticker is open.
     One grounded call covers every ticker in the series that still needs it.
-    A fresh 3h cache is reused unless the ask moved by 5c or a new Truth
+    A same-UTC-day cache is reused unless the ask moved by 5c or a new Truth
     Social post was seen. Ungrounded probabilities never queue.
     """
     counts = {
@@ -912,11 +936,25 @@ def run_paper_edge_scan(
     fingerprint = latest_truth_social_fingerprint() if post_lookup is None else post_lookup()
     open_set = {str(ticker).strip() for ticker in open_tickers if str(ticker).strip()}
     pending: list[dict[str, Any]] = []
+
+    def _skip(view, reason, *, prompt_hash="", probability=None, sources=()):
+        _store_decision(
+            view, reason=reason, candidate_log_path=candidate_log_path, db_path=db_path,
+            now=moment, probability=probability, prompt_hash=prompt_hash, sources=sources,
+        )
+        counts["skipped"] += 1
+
     for market in markets:
         view = _market_view(market)
         if view is None or view["series"] not in allowed or view["status"] != "active":
             continue
         counts["examined"] += 1
+        quote_block = _paper_gate_reason(market, view, None)
+        if quote_block:
+            _skip(view, quote_block)
+            if counts["examined"] >= max_markets:
+                break
+            continue
         cached = _cache_get(cache_path, view["ticker"])
         if _cache_fresh(cached, view, fingerprint, moment):
             counts["cache_hits"] += 1
@@ -935,7 +973,18 @@ def run_paper_edge_scan(
                 },
             )
             reused = _cached_call(view, cached or {})
-            if reused is not None and _queue_best_side(
+            cached_block = None
+            if reused is not None and reused.probability is not None:
+                cached_block = _paper_gate_reason(market, view, float(reused.probability))
+            if cached_block:
+                _skip(
+                    view,
+                    cached_block,
+                    prompt_hash="cache",
+                    probability=None if reused is None else reused.probability,
+                    sources=() if reused is None else reused.sources,
+                )
+            elif reused is not None and _queue_best_side(
                 view,
                 reused,
                 edge_min=edge_min,
@@ -973,7 +1022,11 @@ def run_paper_edge_scan(
             passed = held or (probability is not None and _screen_passes(yes_edge, no_edge))
             reason = "open_position" if held else ("edge" if passed else "below_screen")
             if probability is None and not held:
-                reason = "ungrounded_failed"
+                reason = (
+                    ungrounded.skip_reason
+                    if ungrounded is not None and ungrounded.skip_reason
+                    else "no_probability"
+                )
             _log_screen(
                 screen_log_path,
                 {
@@ -991,9 +1044,16 @@ def run_paper_edge_scan(
                 },
             )
             if passed:
-                pending.append({"view": view, "ungrounded": ungrounded})
+                pending.append({"view": view, "ungrounded": ungrounded, "market": market})
             else:
-                counts["skipped"] += 1
+                if reason in _FAIL_CLOSED:
+                    _skip(
+                        view,
+                        reason,
+                        prompt_hash="" if ungrounded is None else ungrounded.prompt_hash,
+                    )
+                else:
+                    counts["skipped"] += 1
                 counts["screen_skipped"] += 1
         if counts["examined"] >= max_markets:
             break
@@ -1017,20 +1077,36 @@ def run_paper_edge_scan(
             now=moment,
         )
         counts["grounded_calls"] += 1
-        by_ticker = {} if parsed is None else {
+        failed = not isinstance(parsed, dict) or bool(parsed.get("skip_reason"))
+        if failed:
+            reason = "malformed"
+            prompt_hash = ""
+            if isinstance(parsed, dict):
+                reason = str(parsed.get("skip_reason") or "malformed")
+                prompt_hash = str(parsed.get("prompt_hash") or "")
+            for item in items:
+                _skip(item["view"], reason, prompt_hash=prompt_hash)
+            continue
+        by_ticker = {
             str(row.get("ticker") or ""): row
             for row in parsed.get("markets") or []
             if isinstance(row, dict)
         }
-        sources = () if parsed is None else tuple(parsed.get("sources") or ())
-        summary = "" if parsed is None else str(parsed.get("summary") or "")
+        sources = tuple(parsed.get("sources") or ())
+        summary = str(parsed.get("summary") or "")
+        prompt_hash = str(parsed.get("prompt_hash") or "")
         for item in items:
             view = item["view"]
             row = by_ticker.get(view["ticker"])
             probability = None if row is None else _decimal(row.get("prob"))
             ungrounded = item["ungrounded"]
             if probability is None or not sources:
-                counts["skipped"] += 1
+                _skip(
+                    view,
+                    "malformed" if probability is None else "no_probability",
+                    prompt_hash=prompt_hash,
+                    sources=sources,
+                )
                 continue
             confidence = None if row is None else _decimal(row.get("confidence"))
             grounded = GrokEdgeCall(
@@ -1041,7 +1117,7 @@ def run_paper_edge_scan(
                 verdict="YES" if probability >= Decimal("0.5") else "NO",
                 sources=sources,
                 tools=_SCAN_TOOLS,
-                prompt_hash="series",
+                prompt_hash=prompt_hash or "series",
                 latency_ms=0,
                 cost_usd=Decimal("0"),
                 skip_reason=None,
@@ -1072,6 +1148,16 @@ def run_paper_edge_scan(
                 summary,
                 moment,
             )
+            blocked = _paper_gate_reason(item.get("market"), view, float(probability))
+            if blocked:
+                _skip(
+                    view,
+                    blocked,
+                    probability=probability,
+                    prompt_hash=prompt_hash,
+                    sources=sources,
+                )
+                continue
             if _queue_best_side(
                 view,
                 grounded,
@@ -1458,6 +1544,222 @@ def write_daily_edge_report(
     return text
 
 
+def contract_fee_net_dollars(side: str, ask_cents: int, result_yes: bool) -> Decimal | None:
+    fee = taker_fee_cents(ask_cents, 1)
+    if fee is None or side not in {"yes", "no"}:
+        return None
+    won = (side == "yes") == result_yes
+    cents = (100 - ask_cents - fee) if won else (-ask_cents - fee)
+    return Decimal(cents) / Decimal(100)
+
+
+def scorecard_interval(values: Sequence[Decimal]) -> dict[str, Decimal | int | None]:
+    """Mean and normal 95% interval. Fewer than two values have no interval."""
+    count = len(values)
+    mean = None if count == 0 else sum(values, Decimal(0)) / Decimal(count)
+    if count < 2 or mean is None:
+        return {"n": count, "mean": mean, "ci95_low": None, "ci95_high": None}
+    variance = sum((item - mean) ** 2 for item in values) / Decimal(count - 1)
+    half = Decimal("1.96") * variance.sqrt() / Decimal(count).sqrt()
+    return {"n": count, "mean": mean, "ci95_low": mean - half, "ci95_high": mean + half}
+
+
+def promotion_label(*, mode: str, effective: str, n: int, low: Decimal | None, high: Decimal | None) -> str:
+    """Report-only. This does not edit the universe file."""
+    if n < 15 or low is None or high is None:
+        return ""
+    if effective == "live" and high < 0:
+        return "recommend off"
+    if mode == "paper" and effective != "live" and low > 0:
+        return "eligible for live"
+    return ""
+
+
+def _cell(value: Decimal | None) -> str:
+    return "" if value is None else format(value, "f")
+
+
+def _scorecard_modes() -> dict[str, tuple[str, str]]:
+    universe = get_universe()
+    if universe.failed:
+        return {}
+    return {entry.series: (entry.mode, effective_mode(entry)) for entry in universe.entries}
+
+
+def _queued_candidate_rows(db_path: Path) -> list[tuple]:
+    if not db_path.is_file():
+        return []
+    uri = f"file:{db_path.resolve()}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    try:
+        conn.execute("PRAGMA query_only=ON")
+        names = {row[1] for row in conn.execute("PRAGMA table_info(paper_candidates)")}
+        if "ticker" not in names:
+            return []
+        series_sql = "series" if "series" in names else "''"
+        return conn.execute(
+            "SELECT ticker, series, side, ask_cents FROM (SELECT ticker, " + series_sql
+            + " AS series, side, ask_cents, ROW_NUMBER() OVER (PARTITION BY ticker "
+            "ORDER BY ts DESC, rowid DESC) rn FROM paper_candidates WHERE queued = 1 "
+            "AND side IS NOT NULL AND ask_cents IS NOT NULL AND grok_probability IS NOT NULL) WHERE rn = 1"
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
+
+
+def write_paper_scorecard(
+    *,
+    db_path: Path,
+    market_lookup: Callable[[str], Any],
+    report_path: Path,
+    now: datetime | None = None,
+) -> str:
+    """Per-series fee-net scorecard. Promotion text does not change modes."""
+    moment = now or datetime.now(timezone.utc)
+    modes = _scorecard_modes()
+    grouped: dict[str, list[tuple[bool, Decimal]]] = {}
+    for ticker, series, side, ask in _queued_candidate_rows(db_path):
+        name = str(series or "") or str(ticker or "").split("-", 1)[0]
+        try:
+            result = _settlement_result(market_lookup(str(ticker)))
+        except Exception:
+            continue
+        if result is None or isinstance(ask, bool) or not isinstance(ask, int):
+            continue
+        pnl = contract_fee_net_dollars(str(side or ""), ask, result == "yes")
+        if pnl is None:
+            continue
+        grouped.setdefault(name, []).append(((str(side) == "yes") == (result == "yes"), pnl))
+    lines = [
+        f"# Paper scorecard {moment.strftime('%Y-%m-%d')}",
+        "",
+        "Report only. Eligible for live: paper, n>=15, fee-net EV CI low > 0.",
+        "Recommend off: effective live, n>=15, CI high < 0. Modes do not change.",
+        "EV is per-contract taker-fee-net. One settled row per ticker. CI is mean +/- 1.96 sample stdev / sqrt(n). n<2 has none.",
+        "",
+        "| series | mode | n | hits | hit_rate | ev_per_contract | ci95_low | ci95_high | promotion |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---|",
+    ]
+    if not grouped:
+        lines.append("| | | 0 | | | | | | no settled fee-net rows |")
+    for series in sorted(grouped):
+        samples = grouped[series]
+        values = [pnl for _hit, pnl in samples]
+        hits = sum(hit for hit, _pnl in samples)
+        stats = scorecard_interval(values)
+        n = int(stats["n"] or 0)
+        mode, effective = modes.get(series, ("", ""))
+        low = stats["ci95_low"] if isinstance(stats["ci95_low"], Decimal) else None
+        high = stats["ci95_high"] if isinstance(stats["ci95_high"], Decimal) else None
+        mean = stats["mean"] if isinstance(stats["mean"], Decimal) else None
+        rate = None if n == 0 else Decimal(hits) / Decimal(n)
+        label = promotion_label(mode=mode, effective=effective, n=n, low=low, high=high)
+        lines.append(
+            f"| {series} | {effective or mode} | {n} | {hits} | {_cell(rate)} | "
+            f"{_cell(mean)} | {_cell(low)} | {_cell(high)} | {label} |"
+        )
+    text = "\n".join(lines) + "\n"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(text, encoding="utf-8")
+    return text
+
+
+def _paper_only_series(series: str) -> bool:
+    universe = get_universe()
+    if universe.failed:
+        return False
+    return any(
+        entry.series == series and entry.mode == "paper" and effective_mode(entry) != "live"
+        for entry in universe.entries
+    )
+
+
+def _book_field(market: Any, *names: str) -> Any:
+    for name in names:
+        present = name in market if isinstance(market, Mapping) else hasattr(market, name)
+        if present:
+            return market[name] if isinstance(market, Mapping) else getattr(market, name)
+    return None
+
+
+def _paper_gate_reason(market: Any, view: Mapping[str, Any], probability: float | None) -> str | None:
+    series = str(view.get("series") or "")
+    if not _paper_only_series(series):
+        return None
+    scored = SimpleNamespace(
+        ticker=view.get("ticker") or "",
+        series_ticker=series,
+        yes_ask=view.get("yes_ask"),
+        no_ask=view.get("no_ask"),
+        yes_ask_cents=view.get("yes_ask"),
+        no_ask_cents=view.get("no_ask"),
+        yes_ask_size=_book_field(market, "yes_ask_size", "yes_ask_size_fp"),
+        no_ask_size=_book_field(market, "no_ask_size", "no_ask_size_fp"),
+        open_interest_fp=_book_field(market, "open_interest_fp", "open_interest"),
+        volume_24h_fp=_book_field(market, "volume_24h_fp", "volume_24h", "volume"),
+        status=view.get("status") or "",
+    )
+    decision = event_news_paper_score_decision(
+        scored,
+        probability=probability,
+        config=SimpleNamespace(
+            paper_cohort_id=EVENT_NEWS_COHORT_ID,
+            llm_excluded_price_bands=[(0.0, 0.35)],
+            llm_allowed_price_bands=[(0.55, 0.99)],
+        ),
+        environ=_PAPER_SCORE_ENV,
+    )
+    if decision["decision"] != "skip":
+        return None
+    ignored = {"edge_not_evaluated", "transcript_skip_bypassed_for_paper_score"}
+    return next((str(reason) for reason in decision["reasons"] if reason not in ignored), None)
+
+
+def _store_decision(
+    view: Mapping[str, Any],
+    *,
+    reason: str,
+    candidate_log_path: Path,
+    db_path: Path | None,
+    now: datetime | None,
+    probability: Decimal | None = None,
+    side: str | None = None,
+    ask: int | None = None,
+    edge: int | None = None,
+    fee: int | None = None,
+    queued: bool = False,
+    prompt_hash: str = "",
+    sources: Sequence[str] = (),
+    yes_ask: Any = None,
+    sizing_proposal: int | None = None,
+) -> None:
+    record: dict[str, Any] = {
+        "ts": _stamp(now),
+        "series": str(view.get("series") or ""),
+        "ticker": view.get("ticker"),
+        "side": side,
+        "ask_cents": ask,
+        "yes_ask_cents": view.get("yes_ask") if yes_ask is None else yes_ask,
+        "grok_probability": None if probability is None else str(probability),
+        "edge_cents": edge,
+        "fee_cents": fee,
+        "sources": list(sources),
+        "contracts": PAPER_QUEUE_CONTRACTS,
+        "sizing_proposal_enabled": False,
+        "queued": queued,
+        "skip_reason": None if queued else reason,
+        "reason_code": reason,
+        "prompt_hash": prompt_hash,
+        "model": GROK_MODEL,
+    }
+    if sizing_proposal is not None:
+        record["sizing_proposal_contracts"] = sizing_proposal
+    _append_jsonl(candidate_log_path, record)
+    _insert_paper_row(db_path, "paper_candidates", record)
+
+
 def _queue_best_side(
     view: Mapping[str, Any],
     call: GrokEdgeCall,
@@ -1486,31 +1788,34 @@ def _queue_best_side(
             continue
         if best is None or edge > best[1]:
             best = (side, edge, ask)
-    record: dict[str, Any] = {
-        "ts": _stamp(now),
-        "ticker": view["ticker"],
-        "grok_probability": str(call.probability),
-        "yes_ask_cents": view.get("yes_ask"),
-        "sources": list(call.sources),
-        "contracts": PAPER_QUEUE_CONTRACTS,
-        "sizing_proposal_enabled": False,
-        "queued": False,
-        "skip_reason": best_reason,
-    }
+    record_side = None
+    record_ask = None
+    record_edge = None
+    record_fee = None
+    queued = False
+    reason = best_reason
     if best is not None:
-        side, edge, ask = best
-        record.update(
-            {
-                "side": side,
-                "ask_cents": ask,
-                "edge_cents": edge,
-                "queued": True,
-                "skip_reason": None,
-                "sizing_proposal_contracts": proposed_contracts_for_edge(edge),
-            }
-        )
-    _append_jsonl(candidate_log_path, record)
-    _insert_paper_row(db_path, "paper_candidates", record)
+        record_side, record_edge, record_ask = best
+        record_fee = taker_fee_cents(record_ask, PAPER_QUEUE_CONTRACTS)
+        queued = True
+        reason = "queue"
+    _store_decision(
+        view,
+        probability=call.probability,
+        side=record_side,
+        ask=record_ask,
+        edge=record_edge,
+        fee=record_fee,
+        queued=queued,
+        reason=reason,
+        prompt_hash=call.prompt_hash,
+        sources=call.sources,
+        candidate_log_path=candidate_log_path,
+        db_path=db_path,
+        now=now,
+        yes_ask=view.get("yes_ask"),
+        sizing_proposal=proposed_contracts_for_edge(record_edge) if record_edge is not None else None,
+    )
     return best is not None
 
 
@@ -2303,12 +2608,23 @@ def _insert_paper_row(db_path: Path | None, table: str, record: Mapping[str, Any
             )
             sources = json.dumps(list(record.get("sources") or []), ensure_ascii=True)
             if table == "paper_candidates":
+                have = {row[1] for row in conn.execute("PRAGMA table_info(paper_candidates)")}
+                for name, kind in (
+                    ("series", "TEXT"),
+                    ("fee_cents", "INTEGER"),
+                    ("prompt_hash", "TEXT"),
+                    ("model", "TEXT"),
+                    ("reason_code", "TEXT"),
+                ):
+                    if name not in have:
+                        conn.execute(f"ALTER TABLE paper_candidates ADD COLUMN {name} {kind}")
                 conn.execute(
                     """
                     INSERT INTO paper_candidates (
                         ts, ticker, side, ask_cents, yes_ask_cents, grok_probability,
-                        edge_cents, sources_json, queued, skip_reason
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        edge_cents, sources_json, queued, skip_reason,
+                        series, fee_cents, prompt_hash, model, reason_code
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         str(record.get("ts") or ""),
@@ -2321,6 +2637,11 @@ def _insert_paper_row(db_path: Path | None, table: str, record: Mapping[str, Any
                         sources,
                         1 if record.get("queued") is True else 0,
                         record.get("skip_reason"),
+                        record.get("series"),
+                        _int_or_none(record.get("fee_cents")),
+                        record.get("prompt_hash"),
+                        record.get("model"),
+                        record.get("reason_code"),
                     ),
                 )
             else:
