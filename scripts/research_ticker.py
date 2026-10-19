@@ -24,6 +24,7 @@ import sys
 import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Iterator
@@ -47,14 +48,15 @@ from tasks.research_dossier import (
 )
 from utils.event_news_research import (
     EVENT_NEWS_COHORT_ID,
-    _TAKER_FEE_COEFFICIENT,
     event_news_favorite_side,
-    event_news_min_edge,
+    event_news_fee_net_edge,
+    event_news_fresh_ask_cents,
     event_news_official_research_kwargs,
     event_news_prewarm_skip_reason,
     is_event_news_paper_cohort,
     snapshot_ask_cents,
 )
+from utils.series_universe import market_edge_min
 
 _DEFAULT_COHORT = EVENT_NEWS_COHORT_ID
 
@@ -227,16 +229,8 @@ def both_sides_edges(
     no_raw = (1.0 - p_yes) - float(no_ask) if no_ok else None
     yes_net = yes_raw - _SPREAD_BUFFER if yes_raw is not None else None
     no_net = no_raw - _SPREAD_BUFFER if no_raw is not None else None
-    fee_yes = (
-        _TAKER_FEE_COEFFICIENT * float(yes_ask) * (1.0 - float(yes_ask))
-        if yes_ok
-        else None
-    )
-    fee_no = (
-        _TAKER_FEE_COEFFICIENT * float(no_ask) * (1.0 - float(no_ask))
-        if no_ok
-        else None
-    )
+    fee_yes = _quoted_taker_fee(yes_ask) if yes_ok else None
+    fee_no = _quoted_taker_fee(no_ask) if no_ok else None
 
     def _safe(ask: float | None) -> bool:
         if ask is None:
@@ -273,18 +267,29 @@ def both_sides_edges(
     }
 
 
+def _quoted_taker_fee(ask: float | None) -> float | None:
+    """Exact one-contract Kalshi taker fee for a 0-1 ask. Display only."""
+    cents, invalid = event_news_fresh_ask_cents(ask)
+    if invalid or type(cents) is not int:
+        return None
+    scored = event_news_fee_net_edge(Decimal("0.5"), cents, 1)
+    if scored is None:
+        return None
+    return float(scored[1])
+
+
 def routing_snapshot(market: Any, *, config: Any = None) -> dict[str, Any]:
     yes_cents, no_cents = snapshot_ask_cents(market)
     favorite_side, favorite_cents = event_news_favorite_side(market, config=config)
     skip_reason = event_news_prewarm_skip_reason(market, config=config)
-    min_edge = event_news_min_edge(_GATE_PAPER_MIN_EDGE, market, config=config)
+    minimum = market_edge_min(market)
     return {
         "yes_ask_cents": yes_cents,
         "no_ask_cents": no_cents,
         "favorite_side": favorite_side,
         "favorite_cents": favorite_cents,
         "prewarm_skip_reason": skip_reason,
-        "fee_adjusted_min_edge": min_edge,
+        "fee_adjusted_min_edge": None if minimum is None else float(minimum),
         "score_both_sides": is_event_news_paper_cohort(config),
     }
 

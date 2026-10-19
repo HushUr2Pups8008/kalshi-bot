@@ -2,8 +2,8 @@
 
 ``live=True`` returns before any call, even when the flag is the string
 true. This module never submits, cancels, or reprices an order. A missing,
-late, or malformed Grok answer queues nothing. The sizing buckets are a
-proposal stored on the candidate. The queued contract count stays at 4.
+late, or malformed Grok answer queues nothing. The queued contract count
+stays at 4. Fee-net edge is ``event_news_fee_net_edge``.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import sqlite3
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
+from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from numbers import Real
 from pathlib import Path
 from types import SimpleNamespace
@@ -35,6 +35,8 @@ from utils.event_news_grok_flags import EVENT_NEWS_BAND_FLOOR_CENTS
 from utils.event_news_grok_veto import GROK_MODEL, XAI_API_KEY_ENV
 from utils.event_news_research import (
     EVENT_NEWS_COHORT_ID,
+    event_news_fee_net_cents,
+    event_news_fee_net_edge,
     event_news_paper_score_decision,
     event_news_series_ticker,
     snapshot_ask_cents,
@@ -42,6 +44,7 @@ from utils.event_news_research import (
 from utils.series_universe import (
     effective_mode,
     get_universe,
+    market_edge_min,
     series_ticker_matches,
     x_search_series,
 )
@@ -54,14 +57,11 @@ XAI_RESPONSES_URL = "https://api.x.ai/v1/responses"
 GROK_EDGE_TIMEOUT_SECONDS = 20.0
 GROK_DAILY_USD_CAP = "GROK_DAILY_USD_CAP"
 DEFAULT_DAILY_USD_CAP = Decimal("3")
-DEFAULT_EDGE_MIN_CENTS = 8
-EVENT_NEWS_GROK_EDGE_MIN_CENTS = "EVENT_NEWS_GROK_EDGE_MIN_CENTS"
 EVENT_NEWS_GROK_EDGE_SCAN_MINUTES = "EVENT_NEWS_GROK_EDGE_SCAN_MINUTES"
 DEFAULT_SCAN_MINUTES = 180
 MEASURED_CYCLE_COST_USD = Decimal("0.30324255")
 MIN_SCAN_MINUTES = 5
 PAPER_QUEUE_CONTRACTS = 4
-TAKER_FEE_COEFFICIENT = Decimal("0.07")
 MIN_CALL_RESERVE_USD = Decimal("0.05")
 RESERVE_P90_MULTIPLIER = Decimal("1.5")
 COST_TICKS_PER_USD = Decimal("10000000000")
@@ -190,57 +190,12 @@ class GrokEdgeCall:
     detail: str = ""
 
 
-def taker_fee_cents(ask_cents: int, contracts: int) -> int | None:
-    """Ceil of the general Kalshi taker fee, in cents, for this size.
-
-    Fee dollars are ``0.07 * contracts * p * (1-p)`` with ``p`` the ask.
-    The cent ceiling matches the exchange round-up. A bad ask or size
-    returns None so the caller skips instead of inventing a fee.
-    """
-    if isinstance(ask_cents, bool) or not isinstance(ask_cents, int):
-        return None
-    if isinstance(contracts, bool) or not isinstance(contracts, int):
-        return None
-    if ask_cents < 1 or ask_cents > 99 or contracts < 1:
-        return None
-    price = Decimal(ask_cents) / Decimal(100)
-    raw = TAKER_FEE_COEFFICIENT * Decimal(contracts) * price * (Decimal(1) - price)
-    cents = (raw * Decimal(100)).to_integral_value(rounding=ROUND_CEILING)
-    return int(cents)
+def _yaml_edge_min(series: str) -> Decimal | None:
+    return market_edge_min(SimpleNamespace(series_ticker=series, ticker=series))
 
 
-def fee_net_edge_cents(probability: Decimal, ask_cents: int, contracts: int) -> int | None:
-    """Floored per-contract cents of probability minus ask minus the fee."""
-    if not isinstance(probability, Decimal) or not probability.is_finite():
-        return None
-    if probability < 0 or probability > 1:
-        return None
-    fee = taker_fee_cents(ask_cents, contracts)
-    if fee is None:
-        return None
-    gross = (probability * Decimal(100) - Decimal(ask_cents)) * Decimal(contracts)
-    gross -= Decimal(fee)
-    per_contract = gross / Decimal(contracts)
-    return int(per_contract.to_integral_value(rounding=ROUND_FLOOR))
-
-
-def proposed_contracts_for_edge(edge_cents: int) -> int | None:
-    """Disabled sizing proposal. Nothing in the order path calls this.
-
-    8c-11c would be 4, 12c-19c would be 6, and 20c or more would be 8.
-    The result never exceeds the 8-contract cap. Below 8c proposes nothing.
-    """
-    if isinstance(edge_cents, bool) or not isinstance(edge_cents, int):
-        return None
-    if edge_cents < DEFAULT_EDGE_MIN_CENTS:
-        return None
-    if edge_cents < 12:
-        return 4
-    if edge_cents < 20:
-        return 6
-    if HARD_MAX_CONTRACTS != 8:
-        return None
-    return HARD_MAX_CONTRACTS
+def _floored_cents(dollars: Decimal) -> int:
+    return int((dollars * Decimal(100)).to_integral_value(rounding=ROUND_FLOOR))
 
 
 def paper_queue_decision(
@@ -249,13 +204,14 @@ def paper_queue_decision(
     ask_cents: int | None,
     side: str,
     contracts: int = PAPER_QUEUE_CONTRACTS,
-    edge_min_cents: int = DEFAULT_EDGE_MIN_CENTS,
+    edge_min: Decimal | None = None,
     yes_floor_cents: int = 55,
 ) -> tuple[str, int | None]:
     """Return ``(queue, edge)`` or ``(skip_reason, edge)``.
 
     YES needs the floor. Every side needs an ask above the 0-35c band.
-    Size above 8 is a skip, not a clamp that still queues.
+    Size above 8 is a skip, not a clamp that still queues. The gate is
+    fee-net dollars versus yaml edge_min. The returned edge is floored cents.
     """
     if probability is None:
         return "no_probability", None
@@ -272,10 +228,12 @@ def paper_queue_decision(
         or contracts > HARD_MAX_CONTRACTS
     ):
         return "size_cap", None
-    edge = fee_net_edge_cents(probability, ask_cents, contracts)
-    if edge is None:
-        return "bad_edge", None
-    if edge < edge_min_cents:
+    scored = event_news_fee_net_edge(probability, ask_cents, contracts)
+    if scored is None or edge_min is None:
+        edge = None if scored is None else _floored_cents(scored[2])
+        return "bad_edge", edge
+    edge = _floored_cents(scored[2])
+    if scored[2] < edge_min:
         return "edge", edge
     return "queue", edge
 
@@ -568,20 +526,28 @@ def exit_versus_hold(
     """
     if side not in {"yes", "no"}:
         return None
+    if isinstance(contracts, bool) or not isinstance(contracts, int):
+        return None
     if contracts < 1 or contracts > HARD_MAX_CONTRACTS:
         return None
-    entry_fee = taker_fee_cents(entry_ask_cents, contracts)
-    exit_fee = taker_fee_cents(bid_cents, contracts)
-    if entry_fee is None or exit_fee is None:
+    entry = event_news_fee_net_edge(Decimal("0.5"), entry_ask_cents, contracts)
+    exited = event_news_fee_net_edge(Decimal("0.5"), bid_cents, contracts)
+    if entry is None or exited is None:
         return None
-    entry_cost = contracts * entry_ask_cents + entry_fee
-    exit_proceeds = contracts * bid_cents - exit_fee
-    yes_wins = 1 if settlement_yes else 0
-    held_pays = yes_wins if side == "yes" else 1 - yes_wins
-    hold_proceeds = contracts * 100 * held_pays
+    entry_fee = entry[1]
+    exit_fee = exited[1]
+    quantity = Decimal(contracts)
+    entry_cost = quantity * Decimal(entry_ask_cents) / Decimal(100) + entry_fee
+    exit_proceeds = quantity * Decimal(bid_cents) / Decimal(100) - exit_fee
+    held_pays = Decimal(1 if (side == "yes") == settlement_yes else 0)
+    hold_proceeds = quantity * held_pays
+
+    def _cents(dollars: Decimal) -> int:
+        return int((dollars * Decimal(100)).to_integral_value(rounding=ROUND_HALF_UP))
+
     return {
-        "exit_cents": exit_proceeds - entry_cost,
-        "hold_cents": hold_proceeds - entry_cost,
+        "exit_cents": _cents(exit_proceeds - entry_cost),
+        "hold_cents": _cents(hold_proceeds - entry_cost),
     }
 
 
@@ -736,22 +702,24 @@ def _cache_fresh(
     return _decimal(row.get("prob")) is not None
 
 
+def _screen_side(probability: Decimal, ask: int | None) -> int | None:
+    if type(ask) is not int:
+        return None
+    scored = event_news_fee_net_edge(probability, ask, PAPER_QUEUE_CONTRACTS)
+    if scored is None:
+        return None
+    return _floored_cents(scored[2])
+
+
 def _screen_edges(
     probability: Decimal,
     yes_ask: int | None,
     no_ask: int | None,
 ) -> tuple[int | None, int | None]:
-    yes_edge = (
-        fee_net_edge_cents(probability, yes_ask, PAPER_QUEUE_CONTRACTS)
-        if isinstance(yes_ask, int)
-        else None
+    return (
+        _screen_side(probability, yes_ask),
+        _screen_side(Decimal(1) - probability, no_ask),
     )
-    no_edge = (
-        fee_net_edge_cents(Decimal(1) - probability, no_ask, PAPER_QUEUE_CONTRACTS)
-        if isinstance(no_ask, int)
-        else None
-    )
-    return yes_edge, no_edge
 
 
 def _screen_passes(yes_edge: int | None, no_edge: int | None) -> bool:
@@ -932,7 +900,6 @@ def run_paper_edge_scan(
         return {"examined": 0, "queued": 0, "skipped": 0}
     allowed = {str(series).strip().upper() for series in allowlist if str(series).strip()}
     floor = event_news_yes_floor_cents(environ)
-    edge_min = _edge_min(environ)
     moment = now or datetime.now(timezone.utc)
     fingerprint = latest_truth_social_fingerprint() if post_lookup is None else post_lookup()
     open_set = {str(ticker).strip() for ticker in open_tickers if str(ticker).strip()}
@@ -985,7 +952,6 @@ def run_paper_edge_scan(
             elif reused is not None and _queue_best_side(
                 view,
                 reused,
-                edge_min=edge_min,
                 yes_floor=floor,
                 candidate_log_path=candidate_log_path,
                 db_path=db_path,
@@ -1158,7 +1124,6 @@ def run_paper_edge_scan(
             if _queue_best_side(
                 view,
                 grounded,
-                edge_min=edge_min,
                 yes_floor=floor,
                 candidate_log_path=candidate_log_path,
                 db_path=db_path,
@@ -1303,7 +1268,6 @@ def _score_record(
     probability: Decimal | None,
     sources: Sequence[str],
     skip_reason: str | None,
-    edge_min: int,
     floor: int,
     now: datetime | None,
 ) -> dict[str, Any]:
@@ -1327,7 +1291,7 @@ def _score_record(
         ask_cents=ask,
         side=side,
         contracts=PAPER_QUEUE_CONTRACTS,
-        edge_min_cents=edge_min,
+        edge_min=_yaml_edge_min(ticker.split("-", 1)[0]),
         yes_floor_cents=floor,
     )
     record.update(
@@ -1375,7 +1339,6 @@ def score_open_positions(
     ):
         return {"scored": 0, "skipped": 0}
     floor = event_news_yes_floor_cents(environ)
-    edge_min = _edge_min(environ)
     moment = now or datetime.now(timezone.utc)
     fingerprint = latest_truth_social_fingerprint() if post_lookup is None else post_lookup()
     pending: list[dict[str, Any]] = []
@@ -1401,7 +1364,6 @@ def score_open_positions(
                 probability=probability,
                 sources=sources,
                 skip_reason=None if probability is not None else "cache_empty",
-                edge_min=edge_min,
                 floor=floor,
                 now=moment,
             )
@@ -1490,7 +1452,6 @@ def score_open_positions(
                 probability=probability,
                 sources=sources,
                 skip_reason=None if probability is not None and sources else "malformed",
-                edge_min=edge_min,
                 floor=floor,
                 now=moment,
             )
@@ -1542,12 +1503,18 @@ def write_daily_edge_report(
 
 
 def contract_fee_net_dollars(side: str, ask_cents: int, result_yes: bool) -> Decimal | None:
-    fee = taker_fee_cents(ask_cents, 1)
-    if fee is None or side not in {"yes", "no"}:
+    """Settlement dollars for one contract after the exact Kalshi taker fee."""
+    if side not in {"yes", "no"}:
         return None
+    scored = event_news_fee_net_edge(Decimal("0.5"), ask_cents, 1)
+    if scored is None:
+        return None
+    fee = scored[1]
+    price = Decimal(ask_cents) / Decimal(100)
     won = (side == "yes") == result_yes
-    cents = (100 - ask_cents - fee) if won else (-ask_cents - fee)
-    return Decimal(cents) / Decimal(100)
+    if won:
+        return Decimal(1) - price - fee
+    return -price - fee
 
 
 def scorecard_interval(values: Sequence[Decimal]) -> dict[str, Decimal | int | None]:
@@ -1707,6 +1674,7 @@ def _paper_gate_reason(market: Any, view: Mapping[str, Any], probability: float 
             llm_allowed_price_bands=[(0.55, 0.99)],
         ),
         environ=_PAPER_SCORE_ENV,
+        contracts=PAPER_QUEUE_CONTRACTS,
     )
     if decision["decision"] != "skip":
         return None
@@ -1730,7 +1698,6 @@ def _store_decision(
     prompt_hash: str = "",
     sources: Sequence[str] = (),
     yes_ask: Any = None,
-    sizing_proposal: int | None = None,
 ) -> None:
     record: dict[str, Any] = {
         "ts": _stamp(now),
@@ -1744,15 +1711,12 @@ def _store_decision(
         "fee_cents": fee,
         "sources": list(sources),
         "contracts": PAPER_QUEUE_CONTRACTS,
-        "sizing_proposal_enabled": False,
         "queued": queued,
         "skip_reason": None if queued else reason,
         "reason_code": reason,
         "prompt_hash": prompt_hash,
         "model": GROK_MODEL,
     }
-    if sizing_proposal is not None:
-        record["sizing_proposal_contracts"] = sizing_proposal
     _append_jsonl(candidate_log_path, record)
     _insert_paper_row(db_path, "paper_candidates", record)
 
@@ -1761,13 +1725,13 @@ def _queue_best_side(
     view: Mapping[str, Any],
     call: GrokEdgeCall,
     *,
-    edge_min: int,
     yes_floor: int,
     candidate_log_path: Path,
     db_path: Path | None = None,
     now: datetime | None = None,
 ) -> bool:
     assert call.probability is not None
+    edge_min = _yaml_edge_min(str(view.get("series") or ""))
     best: tuple[str, int, int] | None = None
     best_reason = "no_side"
     for side, ask in (("yes", view["yes_ask"]), ("no", view["no_ask"])):
@@ -1777,7 +1741,7 @@ def _queue_best_side(
             ask_cents=ask,
             side=side,
             contracts=PAPER_QUEUE_CONTRACTS,
-            edge_min_cents=edge_min,
+            edge_min=edge_min,
             yes_floor_cents=yes_floor,
         )
         if reason != "queue" or edge is None or ask is None:
@@ -1793,7 +1757,9 @@ def _queue_best_side(
     reason = best_reason
     if best is not None:
         record_side, record_edge, record_ask = best
-        record_fee = taker_fee_cents(record_ask, PAPER_QUEUE_CONTRACTS)
+        sided = call.probability if record_side == "yes" else Decimal(1) - call.probability
+        quoted = event_news_fee_net_cents(sided, record_ask, PAPER_QUEUE_CONTRACTS)
+        record_fee = None if quoted is None else quoted[0]
         queued = True
         reason = "queue"
     _store_decision(
@@ -1811,7 +1777,6 @@ def _queue_best_side(
         db_path=db_path,
         now=now,
         yes_ask=view.get("yes_ask"),
-        sizing_proposal=proposed_contracts_for_edge(record_edge) if record_edge is not None else None,
     )
     return best is not None
 
@@ -2526,14 +2491,6 @@ def _daily_cap(env: Mapping[str, str]) -> Decimal:
     if not cap.is_finite() or cap < 0:
         return DEFAULT_DAILY_USD_CAP
     return cap
-
-
-def _edge_min(environ: Mapping[str, str] | None) -> int:
-    env = os.environ if environ is None else environ
-    raw = str(env.get(EVENT_NEWS_GROK_EDGE_MIN_CENTS) or "").strip()
-    if raw.isdigit() and int(raw) > 0:
-        return int(raw)
-    return DEFAULT_EDGE_MIN_CENTS
 
 
 def _append_jsonl(path: Path, record: Mapping[str, Any]) -> None:

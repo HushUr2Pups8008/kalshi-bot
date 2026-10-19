@@ -1062,10 +1062,13 @@ class TradeExecutor:
             )
         if skip_reason is None and self._is_paper:
             assert execution_plan is not None
-            skip_reason = self._paper_fee_admission_skip_reason(
-                analysis,
-                execution_plan,
-            )
+            from utils.event_news_research import is_event_news_paper_cohort
+
+            if not is_event_news_paper_cohort():
+                skip_reason = self._paper_fee_admission_skip_reason(
+                    analysis,
+                    execution_plan,
+                )
         if skip_reason:
             effective_min_edge = self._min_edge_threshold(analysis)
             method = (
@@ -1335,7 +1338,6 @@ class TradeExecutor:
         from utils.event_news_desk_flags import event_news_exposure_skip_reason
         from utils.event_news_research import (
             event_news_exposure_prefix,
-            event_news_min_edge,
             event_news_open_prefix_cap,
             is_event_news_paper_cohort,
         )
@@ -1372,13 +1374,6 @@ class TradeExecutor:
                     ticker,
                 )
                 return None
-        try:
-            edge_value = float(analysis.edge)
-        except (TypeError, ValueError):
-            return None
-        min_edge = event_news_min_edge(PAPER_MIN_EDGE, analysis.market)
-        if abs(edge_value) < min_edge:
-            return None
         plan = self._paper_shadow_terms(analysis)
         if plan is None:
             return None
@@ -1436,11 +1431,23 @@ class TradeExecutor:
             )
             return None
         self._event_news_log_paper_maker(analysis, plan, paper_shadow=True)
-        fee_reason = self._paper_fee_admission_skip_reason(analysis, plan)
-        if fee_reason is not None:
+        try:
+            edge_value = float(analysis.edge)
+        except (TypeError, ValueError):
+            return None
+        edge_skip = self._event_news_edge_skip(
+            analysis,
+            ask_cents=plan.price_cents if type(plan.price_cents) is int else None,
+            gross_edge=edge_value,
+            old_take=abs(edge_value) >= PAPER_MIN_EDGE,
+            contracts=plan.contracts if type(plan.contracts) is int else 0,
+            use_new=True,
+            shadow=False,
+        )
+        if edge_skip:
             log.info(
                 "[EVENT_NEWS_PAPER_SHADOW] skip=%s source=%s ticker=%s",
-                fee_reason,
+                edge_skip,
                 source,
                 ticker,
             )
@@ -1603,7 +1610,26 @@ class TradeExecutor:
         if analysis.capped_dollars <= 0:
             return "capped_dollars=0 (below minimum bet size)"
 
-        if abs(analysis.edge) < effective_min_edge:
+        from utils.event_news_research import is_event_news_paper_cohort
+
+        if is_event_news_paper_cohort():
+            edge_skip = self._event_news_edge_skip(
+                analysis,
+                ask_cents=(
+                    analysis.executed_price_cents
+                    if type(analysis.executed_price_cents) is int
+                    else None
+                ),
+                gross_edge=float(analysis.edge),
+                old_take=abs(analysis.edge) >= effective_min_edge,
+                contracts=1,
+                shadow=not self._is_paper,
+            )
+            if edge_skip == "old_skip":
+                return f"edge {analysis.edge:+.4f} below min_edge {effective_min_edge}"
+            if edge_skip:
+                return edge_skip
+        elif abs(analysis.edge) < effective_min_edge:
             return f"edge {analysis.edge:+.4f} below min_edge {effective_min_edge}"
 
         if analysis.market.status not in ("open", "active"):
@@ -2172,12 +2198,64 @@ class TradeExecutor:
             raise TypeError("signal_meta must be a dict when provided")
         return dict(signal_meta)
 
+    def _event_news_edge_skip(
+        self,
+        analysis: SignalAnalysis,
+        *,
+        ask_cents: int | None,
+        gross_edge: float,
+        old_take: bool,
+        contracts: int = 1,
+        use_new: bool | None = None,
+        shadow: bool = True,
+    ) -> str | None:
+        """Skip reason for one politics edge check.
+
+        Flag off on a live process keeps the caller's flat comparison and
+        returns ``old_skip`` so that caller can keep its existing log.
+        Paper, and live with EVENT_NEWS_UNIFIED_EDGE, use fee-net versus
+        the yaml edge_min. A live disagreement is shadow-logged.
+        """
+        from utils.event_news_research import (
+            event_news_score_edge,
+            event_news_shadow_edge,
+            event_news_unified_edge_enabled,
+        )
+
+        if use_new is None:
+            use_new = self._is_paper or event_news_unified_edge_enabled()
+        side = str(getattr(analysis, "side", "") or "").strip().lower()
+        try:
+            yes_probability = float(analysis.estimated_probability)
+        except (TypeError, ValueError):
+            yes_probability = 0.0
+        posted = ask_cents if type(ask_cents) is int else None
+        scored = event_news_score_edge(
+            analysis.market,
+            yes_probability=yes_probability,
+            side=side,
+            ask_cents=posted,
+            contracts=contracts,
+        )
+        if shadow:
+            event_news_shadow_edge(
+                analysis.market,
+                side,
+                posted,
+                scored,
+                old_edge=gross_edge,
+                old_take=old_take,
+            )
+        if not use_new:
+            return None if old_take else "old_skip"
+        if scored is None or not scored["readable"]:
+            return "unified_edge_unreadable"
+        if not scored["new_take"]:
+            return "below_fee_net_min_edge"
+        return None
+
     def _min_edge_threshold(self, analysis: SignalAnalysis) -> float:
         base_threshold = PAPER_MIN_EDGE if self._is_paper else cfg.min_edge
-        if self._is_paper:
-            from utils.event_news_research import event_news_min_edge
-
-            base_threshold = event_news_min_edge(base_threshold, analysis.market)
         signal_meta = self._signal_meta(analysis)
         override = signal_meta.get("readiness_gate_min_edge_override")
         if override is None:
@@ -3246,12 +3324,29 @@ class TradeExecutor:
         estimated = float(getattr(analysis, "estimated_probability", 0.0) or 0.0)
         market_p = fresh / 100.0
         edge = (estimated - market_p) if side == "yes" else ((1.0 - estimated) - market_p)
-        if edge <= self._min_edge_threshold(analysis):
+        edge_skip = self._event_news_edge_skip(
+            analysis,
+            ask_cents=fresh,
+            gross_edge=edge,
+            old_take=edge > self._min_edge_threshold(analysis),
+            contracts=1,
+            shadow=True,
+        )
+        if edge_skip == "old_skip":
             log.info(
                 "[EVENT_NEWS_MAKER] edge_gone ticker=%s edge=%s ask=%s",
                 analysis.market.ticker,
                 edge,
                 fresh,
+            )
+            return maker_order_id if filled_count > 0 else None
+        if edge_skip:
+            log.info(
+                "[EVENT_NEWS_MAKER] edge_gone ticker=%s edge=%s ask=%s reason=%s",
+                analysis.market.ticker,
+                edge,
+                fresh,
+                edge_skip,
             )
             return maker_order_id if filled_count > 0 else None
         taker_plan = FinalExecutionTerms(

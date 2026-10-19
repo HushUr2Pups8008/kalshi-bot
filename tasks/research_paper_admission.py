@@ -513,6 +513,7 @@ class ResearchPaperAdmissionBridge:
                 edge=current_signal.estimated_edge,
                 force_side=current_signal.side,
                 open_tickers=open_tickers,
+                probability=current_signal.estimated_probability,
             )
             if gate_reason:
                 return ResearchPaperAdmissionResult(

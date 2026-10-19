@@ -216,6 +216,20 @@ def match_market(market: Any) -> SeriesEntry | None:
     return None
 
 
+def market_edge_min(market: Any) -> Decimal | None:
+    """Yaml edge_min. None when the file or the row cannot be read."""
+    entry = match_market(market)
+    if entry is None:
+        return None
+    try:
+        number = Decimal(entry.edge_min)
+    except Exception:
+        return None
+    if not number.is_finite() or number < 0 or number > 1:
+        return None
+    return number
+
+
 def market_transcript_skip(market: Any) -> bool:
     entry = match_market(market)
     return bool(entry and entry.transcript_skip)
@@ -393,7 +407,7 @@ def _max_contracts(value: Any) -> int:
 
 
 def _edge_min(value: Any) -> str:
-    """A decimal string. Category and this field do not change a live gate."""
+    """A decimal string. Paper and the flag-on gate read it. Flag-off live does not."""
     if not isinstance(value, str):
         raise ValueError("bad_edge_min")
     text = value.strip()

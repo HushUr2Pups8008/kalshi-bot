@@ -275,7 +275,7 @@ def test_truth_and_act_bands_stay_on_the_old_prices():
     assert event_news_favorite_side(act, config=politics) == ("yes", 38)
 
 
-def test_mention_live_skip_stays_and_paper_score_does_not_call_veto():
+def test_mention_live_skip_stays_and_paper_score_does_not_call_veto(caplog):
     politics = _politics()
     market = SimpleNamespace(
         ticker="KXTRUMPMENTION-26AUG30-MAGA",
@@ -290,18 +290,20 @@ def test_mention_live_skip_stays_and_paper_score_does_not_call_veto():
     assert event_news_prewarm_skip_reason(market, config=politics) == (
         "mention_requires_transcript"
     )
-    decision = event_news_paper_score_decision(
-        market,
-        probability=None,
-        config=politics,
-        environ={"EVENT_NEWS_YES_FLOOR_CENTS": "55", "EVENT_NEWS_EXCLUDE_EXACT_35": "true"},
-    )
+    with caplog.at_level(logging.INFO, logger="event_news_research"):
+        decision = event_news_paper_score_decision(
+            market,
+            probability=None,
+            config=politics,
+            environ={"EVENT_NEWS_YES_FLOOR_CENTS": "55", "EVENT_NEWS_EXCLUDE_EXACT_35": "true"},
+        )
     assert decision["would_post"] is False
-    assert decision["veto"] == "veto_not_called"
+    assert decision["decision"] == "pending"
+    assert decision["veto"] == "pending"
     assert "transcript_skip_bypassed_for_paper_score" in decision["reasons"]
     assert "mention_requires_transcript" not in decision["reasons"]
-    assert "edge_not_evaluated" in decision["reasons"]
-    assert decision["decision"] == "incomplete_no_probability"
+    assert "edge_not_evaluated" not in decision["reasons"]
+    assert "EVENT_NEWS_PAPER_SCORE" not in caplog.text
 
 
 def _act_yes_38():

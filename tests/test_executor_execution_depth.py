@@ -347,6 +347,8 @@ async def test_paper_politics_research_uses_rest_top_size_when_orderbook_unavail
     analysis.market.yes_ask_cents = 60
     analysis.market.last_price_cents = 60
     analysis.executed_price_cents = 60
+    # 0.60 at 60c is below the exact fee. 0.90 clears yaml edge_min so depth runs.
+    analysis.estimated_probability = 0.90
     rest.get_market_orderbook.side_effect = RuntimeError("orderbook unavailable")
 
     result = await executor.execute(analysis)

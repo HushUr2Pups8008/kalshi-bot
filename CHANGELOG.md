@@ -19,6 +19,14 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.36.7] - 2026-10-19
+
+### Changed
+
+- **One fee-net edge.** `event_news_fee_net_edge` is p(side) minus the ask minus the exact Kalshi taker fee from `quote_fee`. Admission, live, paper, the sidecar, and the scorecard use it. The minimum is yaml `edge_min`. `EVENT_NEWS_UNIFIED_EDGE` defaults off. Off keeps the live flat 0.04 check and shadow-logs a disagreement. On uses the fee-net check. The sidecar 8c gate, the whole-cent fee ceiling, and the admission 0.02-plus-fee floor are gone. The 5c screen stays.
+
+- **A paper quote-gate pass is no longer a silent row.** No probability stays pending and is not logged. A probability gets a local fee-net veto, or an explicit skip for the contract cap, the yaml minimum, or an unreadable book. The sidecar start script sets `PYTHONPATH` to the repo root instead of prepending it.
+
 ## [0.36.6] - 2026-10-19
 
 ### Changed
