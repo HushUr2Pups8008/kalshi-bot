@@ -8,13 +8,23 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP
 from types import SimpleNamespace
 from typing import Any, Mapping
 
 from analysis.research_gate import ResearchStatus, run_research_gate
 from config import cfg
 from tasks.research_dossier import default_store as default_research_dossier_store
+from trading.fees import (
+    DIRECT_ACCOUNT_PRECISION,
+    INITIAL_ORDER_FEE_ACCUMULATOR,
+    FeeContext,
+    FeeRole,
+    fee_coefficient_for,
+    fee_schedule_at,
+    quote_fee,
+)
+from trading.venue import Venue
 from utils.event_news_grok_flags import (
     event_news_exclude_exact_35_enabled,
     event_news_requote_band_check_enabled,
@@ -22,6 +32,7 @@ from utils.event_news_grok_flags import (
 from utils.logger import get_logger
 from utils.series_universe import (
     live_series_tickers,
+    market_edge_min,
     market_transcript_skip,
     match_market,
     paper_score_entries,
@@ -56,9 +67,6 @@ _FAVORITE_ASK_HIGH = 0.99
 # fees and currently burn every research cycle. Do not treat them as the
 # money path; keep 0.55-0.90 as the tradeable favorite band.
 _FAVORITE_ASK_CERTAIN_CENTS = 91
-# Kalshi general taker fee is 0.07 * p * (1-p). Buffer keeps min-edge above fee.
-_TAKER_FEE_COEFFICIENT = 0.07
-_MIN_EDGE_FEE_BUFFER = 0.005
 # T4 bought 22 lots at 33c and lost $7.60. Dollar cap held; contract count did not.
 # Clamp AFTER Kelly conversion. Do not change kelly_bet math.
 EVENT_NEWS_MAX_CONTRACTS = 8
@@ -610,23 +618,6 @@ def event_news_blocked_final_ask(
     return None
 
 
-def event_news_requote_skip_reason(
-    best_price: Any,
-    *,
-    config: Any = None,
-    environ: Mapping[str, str] | None = None,
-) -> str | None:
-    """Skip when a fresh book would take an excluded ask."""
-    cents, invalid = event_news_fresh_ask_cents(best_price)
-    if invalid:
-        return "executed_ask_in_excluded_band"
-    if cents is None:
-        return None
-    if event_news_cents_in_excluded_band(cents, config=config, environ=environ):
-        return "executed_ask_in_excluded_band"
-    return None
-
-
 def event_news_executed_side_skip_reason(
     market: Any,
     side: str | None,
@@ -676,29 +667,154 @@ def event_news_crossed_asks(market: Any, *, config: Any = None) -> str | None:
     return "crossed_asks"
 
 
-def event_news_min_edge(base: float, market: Any, *, config: Any = None) -> float:
-    """Raise paper min-edge to taker-fee + buffer so admission matches keep-rule."""
+def event_news_unified_edge_enabled(
+    environ: Mapping[str, str] | None = None,
+) -> bool:
+    """Exact true or 1. Unset, false, and 0 keep the flat live edge check."""
+    source = os.environ if environ is None else environ
+    return str(source.get("EVENT_NEWS_UNIFIED_EDGE", "")).strip().lower() in {"true", "1"}
+
+
+def event_news_fee_net_edge(
+    probability: float | Decimal | str,
+    ask_cents: int,
+    contracts: int = 1,
+) -> tuple[Decimal, Decimal, Decimal] | None:
+    """Return (gross, fee, fee_net). None fails closed.
+
+    fee_net is p(side) minus the ask minus quote_fee.net_fee / contracts.
+    Kalshi ceils the raw taker fee to a centicent, then rounds the direct account.
+    """
+    if isinstance(ask_cents, bool) or type(ask_cents) is not int:
+        return None
+    if isinstance(contracts, bool) or type(contracts) is not int or contracts < 1:
+        return None
+    if ask_cents < 1 or ask_cents > 99:
+        return None
+    try:
+        p_side = Decimal(str(probability))
+    except Exception:
+        return None
+    if not p_side.is_finite() or p_side <= 0 or p_side >= 1:
+        return None
+    price = Decimal(ask_cents) / Decimal(100)
+    quantity = Decimal(contracts)
+    try:
+        timestamp = datetime.now(timezone.utc)
+        schedule = fee_schedule_at(venue=Venue.KALSHI, timestamp=timestamp)
+        fee = quote_fee(
+            FeeContext(
+                schedule_id=schedule,
+                role=FeeRole.TAKER,
+                quantity=quantity,
+                price=price,
+                signed_revenue=-(quantity * price),
+                order_id="paper-admission",
+                accumulator=INITIAL_ORDER_FEE_ACCUMULATOR,
+                multiplier=Decimal("1"),
+                coefficient=fee_coefficient_for(schedule, FeeRole.TAKER),
+                account_precision=DIRECT_ACCOUNT_PRECISION,
+                timestamp=timestamp,
+            )
+        ).net_fee
+    except Exception:
+        return None
+    if not isinstance(fee, Decimal) or not fee.is_finite() or fee < 0:
+        return None
+    gross = p_side - price
+    return gross, fee, gross - (fee / quantity)
+
+
+def event_news_fee_net_cents(
+    probability: float | Decimal | str,
+    ask_cents: int,
+    contracts: int = 1,
+) -> tuple[int, int] | None:
+    """Whole cents (fee ceiled, fee-net floored) from the exact quote."""
+    scored = event_news_fee_net_edge(probability, ask_cents, contracts)
+    if scored is None:
+        return None
+    _gross, fee, fee_net = scored
+    fee_cents = int((fee * Decimal(100)).to_integral_value(rounding=ROUND_CEILING))
+    edge_cents = int((fee_net * Decimal(100)).to_integral_value(rounding=ROUND_FLOOR))
+    return fee_cents, edge_cents
+
+
+def event_news_score_edge(
+    market: Any,
+    *,
+    yes_probability: float,
+    side: str,
+    ask_cents: int | None,
+    contracts: int = 1,
+    config: Any = None,
+) -> dict[str, Any] | None:
+    """Fee-net versus yaml edge_min. None means this cohort does not apply."""
     if not is_event_news_paper_cohort(config):
-        return base
-    _side, cents = event_news_favorite_side(market, config=config)
-    if cents is not None:
-        price = cents / 100.0
-    else:
-        price, _source = routing_yes_probability(market, config=config)
-    p = min(max(float(price), 0.01), 0.99)
-    fee = _TAKER_FEE_COEFFICIENT * p * (1.0 - p)
-    required = fee + _MIN_EDGE_FEE_BUFFER
-    if required <= base:
-        return base
-    log.info(
-        "[EVENT_NEWS_EDGE] ticker=%s p=%.3f fee=%.4f base=%.4f required=%.4f",
-        getattr(market, "ticker", ""),
-        p,
-        fee,
-        base,
-        required,
+        return None
+    name = str(side or "").strip().lower()
+    try:
+        yes = Decimal(str(yes_probability))
+    except Exception:
+        yes = None
+    p_side = None
+    if yes is not None and yes.is_finite() and Decimal(0) < yes < Decimal(1):
+        if name == "yes":
+            p_side = yes
+        elif name == "no":
+            p_side = Decimal(1) - yes
+    minimum = market_edge_min(market)
+    scored = (
+        event_news_fee_net_edge(p_side, ask_cents, contracts)
+        if p_side is not None and type(ask_cents) is int
+        else None
     )
-    return required
+    fee_net = None if scored is None else scored[2]
+    return {
+        "new_take": fee_net is not None and minimum is not None and fee_net >= minimum,
+        "gross": None if scored is None else scored[0],
+        "fee": None if scored is None else scored[1],
+        "fee_net": fee_net,
+        "minimum": minimum,
+        "probability": p_side,
+        "readable": fee_net is not None and minimum is not None,
+    }
+
+
+def event_news_shadow_edge(
+    market: Any,
+    side: str,
+    ask: int | None,
+    scored: Mapping[str, Any] | None,
+    *,
+    old_edge: float,
+    old_take: bool,
+) -> None:
+    """Log one line when the flat live check and the fee-net check disagree."""
+    new_take = False if scored is None else bool(scored.get("new_take"))
+    if bool(old_take) == new_take:
+        return
+
+    def _fmt(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, Decimal):
+            return format(value, "f")
+        return str(value)
+
+    log.info(
+        "[EVENT_NEWS_UNIFIED_EDGE] shadow ticker=%s side=%s ask=%s p=%s fee=%s "
+        "old_edge=%s new_edge=%s old=%s new=%s",
+        getattr(market, "ticker", ""),
+        side,
+        "" if ask is None else ask,
+        "" if scored is None else _fmt(scored.get("probability")),
+        "" if scored is None else _fmt(scored.get("fee")),
+        old_edge,
+        "" if scored is None else _fmt(scored.get("fee_net")),
+        "take" if old_take else "skip",
+        "take" if new_take else "skip",
+    )
 
 
 def event_news_series_ticker(market: Any) -> str:
@@ -887,10 +1003,7 @@ def event_news_gate_chain_reason(
         )
         if desk:
             return desk
-    if edge is not None and float(edge) + 1e-12 < event_news_min_edge(
-        min_edge_base, market, config=config
-    ):
-        return "below_fee_net_min_edge"
+    del edge, min_edge_base
     if veto_reason:
         return str(veto_reason)
     if halt_reason:
@@ -947,13 +1060,14 @@ def event_news_paper_score_decision(
     probability: float | None = None,
     config: Any = None,
     environ: Mapping[str, str] | None = None,
+    contracts: int = 1,
 ) -> dict[str, Any]:
-    """Run one paper-score book through the live filters. Never POST or call Grok.
+    """Run one paper-score book through the quote gate. Never POST or call Grok.
 
-    A missing probability records edge_not_evaluated and veto_not_called.
+    A quote-gate pass with no probability is pending and is not logged.
+    A logged row has a local fee-net veto, or an explicit skip reason.
     """
     reasons: list[str] = []
-    veto = "veto_not_called"
     entry = None if universe_failed() else match_market(market)
     if entry is not None and entry.transcript_skip and entry.paper_score:
         reasons.append("transcript_skip_bypassed_for_paper_score")
@@ -969,28 +1083,38 @@ def event_news_paper_score_decision(
     )
     if chain_reason:
         reasons.append(chain_reason)
-    if chain_reason not in {"universe_unavailable", "not_paper_series", "series_off"}:
-        edge_reason = _paper_edge_reason(market, probability, config=config)
-        if edge_reason and edge_reason not in reasons:
-            reasons.append(edge_reason)
     informational = {"transcript_skip_bypassed_for_paper_score"}
-    blocking = [reason for reason in reasons if reason not in informational]
-    if any(reason != "edge_not_evaluated" for reason in blocking):
-        decision = "skip"
-    elif "edge_not_evaluated" in blocking:
-        decision = "incomplete_no_probability"
-    else:
-        decision = "quote_pass_veto_not_called"
-    log.info(
-        "[EVENT_NEWS_PAPER_SCORE] series=%s ticker=%s decision=%s reasons=%s "
-        "veto=%s contract_cap=%s would_post=false",
-        entry.series if entry is not None else "",
-        getattr(market, "ticker", ""),
-        decision,
-        ",".join(reasons),
-        veto,
-        EVENT_NEWS_MAX_CONTRACTS,
-    )
+    structural = [reason for reason in reasons if reason not in informational]
+    if probability is None and not structural:
+        return _paper_score_row(entry, market, "pending", reasons, "pending")
+    veto = "skipped"
+    decision = "skip"
+    shown = ""
+    if not structural:
+        if type(contracts) is not int or contracts < 1 or contracts > EVENT_NEWS_MAX_CONTRACTS:
+            reasons.append("size_cap")
+            veto = "skipped"
+        else:
+            decision, veto, shown = _paper_fee_veto(
+                market, probability, contracts, config=config
+            )
+            if decision == "skip" and veto == "no":
+                reasons.append(
+                    "edge_not_evaluated"
+                    if shown == ""
+                    else "below_fee_net_min_edge"
+                )
+    _log_paper_score(entry, market, decision, reasons, veto, shown)
+    return _paper_score_row(entry, market, decision, reasons, veto)
+
+
+def _paper_score_row(
+    entry: Any,
+    market: Any,
+    decision: str,
+    reasons: list[str],
+    veto: str,
+) -> dict[str, Any]:
     return {
         "series": entry.series if entry is not None else "",
         "ticker": str(getattr(market, "ticker", "") or ""),
@@ -1002,34 +1126,61 @@ def event_news_paper_score_decision(
     }
 
 
-def _paper_edge_reason(
+def _log_paper_score(
+    entry: Any,
+    market: Any,
+    decision: str,
+    reasons: list[str],
+    veto: str,
+    probability: str,
+) -> None:
+    log.info(
+        "[EVENT_NEWS_PAPER_SCORE] series=%s ticker=%s decision=%s reasons=%s "
+        "veto=%s probability=%s contract_cap=%s would_post=false",
+        entry.series if entry is not None else "",
+        getattr(market, "ticker", ""),
+        decision,
+        ",".join(reasons),
+        veto,
+        probability,
+        EVENT_NEWS_MAX_CONTRACTS,
+    )
+
+
+def _paper_fee_veto(
     market: Any,
     probability: float | None,
+    contracts: int,
     *,
     config: Any,
-) -> str | None:
-    """Live min-edge base is 0.04, then the fee floor. No probability, no edge."""
-    if probability is None:
-        return "edge_not_evaluated"
+) -> tuple[str, str, str]:
+    """Local yes/no from fee-net versus yaml edge_min. No Grok call."""
     try:
-        estimated = float(probability)
-    except (TypeError, ValueError):
-        return "edge_not_evaluated"
-    if not 0.0 < estimated < 1.0:
-        return "edge_not_evaluated"
+        estimated = Decimal(str(probability))
+    except Exception:
+        return "skip", "no", ""
+    if not estimated.is_finite() or estimated <= 0 or estimated >= 1:
+        return "skip", "no", ""
     yes_ask, no_ask = snapshot_ask_cents(market)
-    required = event_news_min_edge(0.04, market, config=config)
-    best: float | None = None
-    if yes_ask is not None:
-        best = estimated - (yes_ask / 100.0)
-    if no_ask is not None:
-        no_edge = (1.0 - estimated) - (no_ask / 100.0)
-        best = no_edge if best is None else max(best, no_edge)
-    if best is None:
-        return "edge_not_evaluated"
-    if best + 1e-12 < required:
-        return "below_fee_net_min_edge"
-    return None
+    best: Decimal | None = None
+    for ask, p_side in (
+        (yes_ask, estimated),
+        (no_ask, Decimal(1) - estimated),
+    ):
+        if type(ask) is not int:
+            continue
+        scored = event_news_fee_net_edge(p_side, ask, contracts)
+        if scored is None:
+            continue
+        fee_net = scored[2]
+        best = fee_net if best is None else max(best, fee_net)
+    minimum = market_edge_min(market)
+    shown = format(estimated, "f")
+    if best is None or minimum is None:
+        return "skip", "no", ""
+    if best < minimum:
+        return "skip", "no", shown
+    return "quote_pass", "yes", shown
 
 
 def event_news_one_market_per_event(
@@ -1374,29 +1525,6 @@ def _event_news_favorite_ask_in_trade_band(
     return False
 
 
-def _event_news_has_official_settlement_evidence(evidence: list[Any] | None) -> bool:
-    official = {
-        "official",
-        "official_primary",
-        "official_source",
-        "resolution_source",
-        "rules_source",
-    }
-    claims = {
-        "contract_terms",
-        "official_resolution",
-        "resolution",
-        "settlement",
-        "settlement_source",
-    }
-    for item in evidence or ():
-        source = str(getattr(item, "source_class", "") or "").strip().lower()
-        claim = str(getattr(item, "claim_type", "") or "").strip().lower()
-        if source in official and claim in claims:
-            return True
-    return False
-
-
 def event_news_official_p_ready(
     *,
     estimated_probability: float | None,
@@ -1433,9 +1561,14 @@ def event_news_admission_gate_reason(
     config: Any = None,
     environ: Mapping[str, str] | None = None,
     live: bool = True,
+    probability: float | None = None,
 ) -> str | None:
-    """Admission is the gate chain. Family runs only when open tickers are passed."""
-    return event_news_gate_chain_reason(
+    """Admission is the gate chain. Family runs only when open tickers are passed.
+
+    Flag off does not apply a second edge formula. Flag on requires fee-net
+    at or above the yaml edge_min and shadow-logs a disagreement with flat 0.04.
+    """
+    reason = event_news_gate_chain_reason(
         market,
         side=force_side,
         edge=edge,
@@ -1444,6 +1577,33 @@ def event_news_admission_gate_reason(
         environ=environ,
         live=live,
     )
+    if reason or not event_news_unified_edge_enabled(environ):
+        return reason
+    yes_ask, no_ask = snapshot_ask_cents(market)
+    side_name = str(force_side or "").strip().lower()
+    ask = yes_ask if side_name == "yes" else no_ask if side_name == "no" else None
+    scored = event_news_score_edge(
+        market,
+        yes_probability=float(probability) if probability is not None else 0.0,
+        side=side_name,
+        ask_cents=ask if type(ask) is int else None,
+        contracts=1,
+        config=config,
+    )
+    try:
+        old_edge = float(edge) if edge is not None else 0.0
+    except (TypeError, ValueError):
+        old_edge = 0.0
+    old_take = edge is not None and abs(old_edge) >= 0.04
+    event_news_shadow_edge(
+        market, side_name, ask if type(ask) is int else None, scored,
+        old_edge=old_edge, old_take=old_take,
+    )
+    if scored is not None and scored["new_take"]:
+        return None
+    if scored is None or not scored["readable"]:
+        return "unified_edge_unreadable"
+    return "below_fee_net_min_edge"
 
 
 def event_news_dossier_is_stale(

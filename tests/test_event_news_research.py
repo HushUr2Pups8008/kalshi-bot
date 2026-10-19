@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, timezone
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -21,7 +22,11 @@ from utils.event_news_research import (
     event_news_executed_side_skip_reason,
     event_news_dossier_is_stale,
     event_news_google_counter_not_required,
-    event_news_min_edge,
+    event_news_fee_net_edge,
+    event_news_paper_score_decision,
+    event_news_score_edge,
+    event_news_shadow_edge,
+    event_news_unified_edge_enabled,
     event_news_official_p_ready,
     event_news_missing_snapshot_ask,
     event_news_non_politics_series,
@@ -676,10 +681,9 @@ def test_favorite_no_side_and_wide_spread_politics_only():
         "ask_outside_favorite_band"
     )
     assert event_news_favorite_side(both, config=politics) == ("no", 56)
-    near_no = SimpleNamespace(yes_ask_cents=45, no_ask_cents=56, yes_ask=45, no_ask=56)
-    assert event_news_min_edge(0.02, near_no, config=politics) == pytest.approx(
-        0.07 * 0.56 * 0.44 + 0.005
-    )
+    scored = event_news_fee_net_edge("0.70", 56, 1)
+    assert scored is not None
+    assert scored[1] == Decimal("0.0173")
 
 
 def test_llm_routing_allows_favorite_no_and_blocks_lottery(monkeypatch):
@@ -841,28 +845,105 @@ def test_crossed_asks_politics_only():
     assert event_news_crossed_asks(healthy, config=politics) is None
 
 
-def test_min_edge_rises_to_taker_fee_on_politics_only():
+def test_fee_net_edge_is_quote_fee_and_yaml_minimum_is_politics_only():
+    """Freeze does not score. Politics fee-net uses quote_fee against yaml 0.04."""
     freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
     politics = _politics_config()
-    near_even = SimpleNamespace(
-        ticker="KXNEAR-1",
-        yes_prob=0.56,
-        yes_price=56,
-        yes_ask_cents=56,
-        yes_ask=56,
+    book = SimpleNamespace(
+        ticker="KXTRUTHSOCIAL-26AUG22-B230",
+        series_ticker="KXTRUTHSOCIAL",
+        yes_ask_cents=55,
+        no_ask_cents=46,
     )
-    deep_favorite = SimpleNamespace(
-        ticker="KXFAV-1",
-        yes_prob=0.90,
-        yes_price=90,
-        yes_ask_cents=90,
-        yes_ask=90,
+    assert event_news_score_edge(
+        book, yes_probability=0.70, side="yes", ask_cents=55, config=freeze,
+    ) is None
+    scored = event_news_score_edge(
+        book, yes_probability=0.70, side="yes", ask_cents=55, config=politics,
     )
-    assert event_news_min_edge(0.02, near_even, config=freeze) == pytest.approx(0.02)
-    near_even_required = event_news_min_edge(0.02, near_even, config=politics)
-    assert near_even_required == pytest.approx(0.07 * 0.56 * 0.44 + 0.005)
-    assert near_even_required > 0.02
-    assert event_news_min_edge(0.02, deep_favorite, config=politics) == pytest.approx(0.02)
+    assert scored is not None
+    assert scored["fee"] == Decimal("0.0174")
+    assert scored["fee_net"] == Decimal("0.1326")
+    assert scored["minimum"] == Decimal("0.04")
+    assert scored["new_take"] is True
+    thin = event_news_score_edge(
+        book, yes_probability=0.58, side="yes", ask_cents=55, config=politics,
+    )
+    assert thin is not None
+    assert thin["new_take"] is False
+    assert event_news_unified_edge_enabled({}) is False
+    assert event_news_unified_edge_enabled({"EVENT_NEWS_UNIFIED_EDGE": "false"}) is False
+    assert event_news_unified_edge_enabled({"EVENT_NEWS_UNIFIED_EDGE": "0"}) is False
+    assert event_news_unified_edge_enabled({"EVENT_NEWS_UNIFIED_EDGE": "true"}) is True
+    assert event_news_unified_edge_enabled({"EVENT_NEWS_UNIFIED_EDGE": "1"}) is True
+
+
+def test_shadow_logs_only_when_the_flat_check_disagrees(caplog):
+    politics = _politics_config()
+    market = SimpleNamespace(
+        ticker="KXTRUTHSOCIAL-26AUG22-B230",
+        series_ticker="KXTRUTHSOCIAL",
+    )
+    scored = event_news_score_edge(
+        market, yes_probability=0.60, side="yes", ask_cents=55, config=politics,
+    )
+    assert scored is not None and scored["new_take"] is False
+    with caplog.at_level(logging.INFO, logger="event_news_research"):
+        event_news_shadow_edge(
+            market, "yes", 55, scored, old_edge=0.05, old_take=True,
+        )
+        event_news_shadow_edge(
+            market, "yes", 55, scored, old_edge=0.02, old_take=False,
+        )
+    lines = [record.message for record in caplog.records if "EVENT_NEWS_UNIFIED_EDGE" in record.message]
+    assert len(lines) == 1
+    assert "ticker=KXTRUTHSOCIAL-26AUG22-B230" in lines[0]
+    assert "side=yes" in lines[0]
+    assert "ask=55" in lines[0]
+    assert "old=take" in lines[0]
+    assert "new=skip" in lines[0]
+
+
+def test_paper_score_logs_a_veto_or_stays_pending(caplog):
+    """A quote-gate pass with no probability is not a final row."""
+    politics = _politics_config()
+    market = SimpleNamespace(
+        ticker="KXHORMUZWEEKLY-26OCT25-T30",
+        series_ticker="KXHORMUZWEEKLY",
+        yes_ask_cents=60,
+        no_ask_cents=45,
+        yes_ask=60,
+        no_ask=45,
+        yes_ask_size=100.0,
+        no_ask_size=100.0,
+        open_interest_fp=500.0,
+        volume_24h_fp=500.0,
+    )
+    env = {"EVENT_NEWS_YES_FLOOR_CENTS": "55", "EVENT_NEWS_EXCLUDE_EXACT_35": "true"}
+    with caplog.at_level(logging.INFO, logger="event_news_research"):
+        pending = event_news_paper_score_decision(
+            market, probability=None, config=politics, environ=env, contracts=4,
+        )
+    assert pending["decision"] == "pending"
+    assert pending["veto"] == "pending"
+    assert pending["would_post"] is False
+    assert "EVENT_NEWS_PAPER_SCORE" not in caplog.text
+    passed = event_news_paper_score_decision(
+        market, probability=0.80, config=politics, environ=env, contracts=4,
+    )
+    assert passed["decision"] == "quote_pass"
+    assert passed["veto"] == "yes"
+    missed = event_news_paper_score_decision(
+        market, probability=0.62, config=politics, environ=env, contracts=4,
+    )
+    assert missed["decision"] == "skip"
+    assert missed["veto"] == "no"
+    assert "below_fee_net_min_edge" in missed["reasons"]
+    capped = event_news_paper_score_decision(
+        market, probability=0.80, config=politics, environ=env, contracts=9,
+    )
+    assert "size_cap" in capped["reasons"]
+    assert capped["veto"] == "skipped"
 
 
 def test_official_research_kwargs_politics_only():

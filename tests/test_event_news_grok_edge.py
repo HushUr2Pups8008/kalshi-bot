@@ -8,7 +8,7 @@ import json
 import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_FLOOR
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -43,25 +43,25 @@ from utils.event_news_grok_edge import (
     edge_scan_interval_seconds,
     ev_by_edge_bucket,
     exit_versus_hold,
-    fee_net_edge_cents,
     grok_max_search_results,
     paper_position_rows,
     paper_queue_decision,
     politics_scan_series,
     promotion_label,
-    proposed_contracts_for_edge,
     rank_politics_markets,
     run_paper_edge_scan,
     run_paper_exit_watch,
     scorecard_interval,
-    taker_fee_cents,
     write_paper_scorecard,
+)
+from utils.event_news_research import (
+    EVENT_NEWS_COHORT_ID,
+    event_news_fee_net_cents,
+    event_news_fee_net_edge,
 )
 from utils.series_universe import event_news_live_post_block_reason
 from utils.event_news_grok_flags import event_news_grok_grounding_for_mode
 from utils.event_news_grok_veto import GROK_MODEL, XAI_API_KEY_ENV
-from utils.event_news_research import EVENT_NEWS_COHORT_ID
-
 NOW = datetime(2026, 10, 17, 12, 0, tzinfo=timezone.utc)
 ALLOW = ("KXTRUMPSAY",)
 
@@ -158,35 +158,57 @@ def _scan(tmp_path: Path, markets, post, environ, **extra) -> dict:
     return run_paper_edge_scan(markets, **payload)
 
 
-def test_taker_fee_ceils_the_half_cent_case() -> None:
-    """0.07 * 1 * 0.50 * 0.50 is 1.75 cents. Kalshi rounds that fee up to 2."""
-    assert taker_fee_cents(50, 1) == 2
-    assert taker_fee_cents(55, 1) == 2
-    assert taker_fee_cents(True, 1) is None
-    assert taker_fee_cents(0, 1) is None
-    assert taker_fee_cents(100, 1) is None
+def _fee(probability: str, ask: int, contracts: int = 1):
+    scored = event_news_fee_net_edge(Decimal(probability), ask, contracts)
+    assert scored is not None
+    return scored
 
 
-def test_fee_net_edge_floors_below_the_8c_gate() -> None:
-    """0.70 at a 55c ask clears 8c after the 2c fee. 0.64 does not."""
-    assert fee_net_edge_cents(Decimal("0.70"), 55, 1) == 13
-    assert fee_net_edge_cents(Decimal("0.64"), 55, 1) == 7
+def test_quote_fee_is_exact_not_a_whole_cent_ceiling() -> None:
+    """50c is 0.0175 exactly. 55c ceils 0.017325 to a centicent, 0.0174."""
+    assert _fee("0.50", 50)[1] == Decimal("0.0175")
+    assert _fee("0.50", 55)[1] == Decimal("0.0174")
+    assert event_news_fee_net_edge(True, 55, 1) is None
+    assert event_news_fee_net_edge(Decimal("0.50"), 0, 1) is None
+    assert event_news_fee_net_edge(Decimal("0.50"), 100, 1) is None
+
+
+def test_fee_net_edge_uses_yaml_minimum_not_an_8c_gate() -> None:
+    """0.64 at 55c clears 0.04 after the exact fee. 0.58 does not."""
+    high = _fee("0.70", 55)
+    mid = _fee("0.64", 55)
+    low = _fee("0.58", 55)
+    assert high[2] == Decimal("0.70") - Decimal("0.55") - Decimal("0.0174")
+    assert mid[2] == Decimal("0.0726")
+    assert low[2] == Decimal("0.0126")
+    minimum = Decimal("0.04")
     queued, edge = paper_queue_decision(
         probability=Decimal("0.70"),
         ask_cents=55,
         side="yes",
         contracts=1,
+        edge_min=minimum,
     )
-    skipped, small = paper_queue_decision(
+    also, mid_cents = paper_queue_decision(
         probability=Decimal("0.64"),
         ask_cents=55,
         side="yes",
         contracts=1,
+        edge_min=minimum,
+    )
+    skipped, small = paper_queue_decision(
+        probability=Decimal("0.58"),
+        ask_cents=55,
+        side="yes",
+        contracts=1,
+        edge_min=minimum,
     )
     assert queued == "queue"
     assert edge == 13
+    assert also == "queue"
+    assert mid_cents == 7
     assert skipped == "edge"
-    assert small == 7
+    assert small == 1
 
 
 def test_yes_floor_and_band_block_before_a_large_probability() -> None:
@@ -216,6 +238,7 @@ def test_yes_floor_and_band_block_before_a_large_probability() -> None:
         ask_cents=36,
         side="no",
         contracts=1,
+        edge_min=Decimal("0.04"),
     )
     assert no_queue == "queue"
     assert no_edge is not None and no_edge >= 8
@@ -237,25 +260,20 @@ def test_size_above_8_is_a_skip_not_a_clamp() -> None:
     )
     assert reason == "size_cap"
     assert edge is None
-    assert proposed_contracts_for_edge(8) == 4
-    assert proposed_contracts_for_edge(12) == 6
-    assert proposed_contracts_for_edge(20) == 8
-    assert proposed_contracts_for_edge(100) == 8
-    assert proposed_contracts_for_edge(7) is None
 
 
-def test_edge_min_env_raises_the_gate(tmp_path: Path) -> None:
-    """A 9c edge queues at the default 8c minimum and skips when the env says 10."""
+def test_yaml_edge_min_skips_after_the_screen(tmp_path: Path) -> None:
+    """0.70 clears the 5c screen. Grounded 0.58 is under the yaml 0.04 fee-net."""
     calls: list[dict] = []
-    environ = {XAI_API_KEY_ENV: "test-key", "EVENT_NEWS_GROK_EDGE_MIN_CENTS": "10"}
     counts = _scan(
         tmp_path,
         [_market()],
-        _poster(calls, grounded_prob="0.66", ungrounded_prob="0.66"),
-        environ,
+        _poster(calls, grounded_prob="0.58", ungrounded_prob="0.70"),
+        {XAI_API_KEY_ENV: "test-key"},
     )
     assert counts["queued"] == 0
     assert counts["skipped"] == 1
+    assert counts["grounded_calls"] == 1
     candidate = _rows(tmp_path / "candidates.jsonl")[0]
     assert candidate["queued"] is False
     assert candidate["skip_reason"] == "edge"
@@ -301,9 +319,9 @@ def test_grounded_scan_queues_four_and_records_the_disabled_proposal(tmp_path: P
     candidate = _rows(tmp_path / "candidates.jsonl")[0]
     assert candidate["queued"] is True
     assert candidate["contracts"] == 4
-    assert candidate["sizing_proposal_enabled"] is False
-    assert candidate["sizing_proposal_contracts"] == 6
-    assert candidate["edge_cents"] >= 8
+    assert "sizing_proposal_enabled" not in candidate
+    assert "sizing_proposal_contracts" not in candidate
+    assert candidate["edge_cents"] == 13
     assert candidate["sources"] == ["https://example.test/source"]
     assert "test-key" not in (tmp_path / "calls.jsonl").read_text(encoding="utf-8")
     comparison = _rows(tmp_path / "comparisons.jsonl")[0]
@@ -793,7 +811,7 @@ def test_exit_logs_a_sourced_contrary_read_and_does_not_order(tmp_path: Path) ->
         contracts=1,
         entry_ask_cents=55,
     )
-    assert compared == {"exit_cents": 1, "hold_cents": 43}
+    assert compared == {"exit_cents": 2, "hold_cents": 43}
     held_loss = exit_versus_hold(
         side="yes",
         bid_cents=60,
@@ -801,7 +819,7 @@ def test_exit_logs_a_sourced_contrary_read_and_does_not_order(tmp_path: Path) ->
         contracts=1,
         entry_ask_cents=55,
     )
-    assert held_loss == {"exit_cents": 1, "hold_cents": -57}
+    assert held_loss == {"exit_cents": 2, "hold_cents": -57}
 
 
 def json_dumps_contrary(contrary: bool) -> str:
@@ -875,7 +893,11 @@ def test_new_flags_do_not_arm_the_live_order_path_or_the_plist() -> None:
         assert "EVENT_NEWS_GROK_GROUNDING" not in text
         assert "KALSHI_GROK_PAPER_SIDECAR" not in text
         assert "GROK_DAILY_USD_CAP" not in text
+        assert "EVENT_NEWS_UNIFIED_EDGE" not in text
     sidecar_script = Path("scripts/start_grok_paper.sh").read_text(encoding="utf-8")
+    assert 'export PYTHONPATH="$ROOT"' in sidecar_script
+    assert "PYTHONPATH:+" not in sidecar_script
+    assert "EVENT_NEWS_UNIFIED_EDGE" not in sidecar_script
     assert "LIVE_TRADING_ENABLED=false" in sidecar_script
     assert "KALSHI_GROK_PAPER_SIDECAR=true" in sidecar_script
     assert "EVENT_NEWS_GROK_EDGE_SCAN=true" in sidecar_script
@@ -1081,8 +1103,8 @@ def test_search_budget_defaults_to_8_and_clamps() -> None:
 def test_below_5c_screen_does_not_pay_for_grounding(tmp_path: Path) -> None:
     """0.56 at 55c/46c is under 5c on both sides, so the grounded call is not posted."""
     calls: list[dict] = []
-    yes_edge = fee_net_edge_cents(Decimal("0.56"), 55, PAPER_QUEUE_CONTRACTS)
-    no_edge = fee_net_edge_cents(Decimal("0.44"), 46, PAPER_QUEUE_CONTRACTS)
+    yes_edge = int((_fee("0.56", 55, PAPER_QUEUE_CONTRACTS)[2] * 100).to_integral_value(rounding=ROUND_FLOOR))
+    no_edge = int((_fee("0.44", 46, PAPER_QUEUE_CONTRACTS)[2] * 100).to_integral_value(rounding=ROUND_FLOOR))
     assert yes_edge is not None and yes_edge < 5
     assert no_edge is not None and no_edge < 5
     counts = _scan(
@@ -1438,8 +1460,11 @@ def test_paper_series_records_a_grounded_prob_and_cannot_post(tmp_path: Path) ->
     assert candidate["side"] == "yes"
     assert candidate["ask_cents"] == 60
     assert Decimal(candidate["grok_probability"]) == Decimal("0.80")
-    assert candidate["fee_cents"] == taker_fee_cents(60, PAPER_QUEUE_CONTRACTS) == 7
-    assert candidate["edge_cents"] == 18
+    quoted = event_news_fee_net_edge(Decimal("0.80"), 60, PAPER_QUEUE_CONTRACTS)
+    assert quoted is not None and quoted[1] == Decimal("0.0672")
+    fee_cents, edge_cents = event_news_fee_net_cents(Decimal("0.80"), 60, PAPER_QUEUE_CONTRACTS)
+    assert candidate["fee_cents"] == fee_cents == 7
+    assert candidate["edge_cents"] == edge_cents == 18
     assert candidate["reason_code"] == "queue"
     assert candidate["skip_reason"] is None
     assert candidate["queued"] is True
@@ -1530,13 +1555,17 @@ def test_scorecard_matches_the_hand_interval_and_promotion(tmp_path: Path) -> No
     """n=2 fee-net EV and CI match the hand values. n=15 labels stay report-only."""
     win = contract_fee_net_dollars("yes", 50, True)
     loss = contract_fee_net_dollars("yes", 50, False)
-    assert win == Decimal("0.48")
-    assert loss == Decimal("-0.52")
+    assert win == Decimal("0.4825")
+    assert loss == Decimal("-0.5175")
     stats = scorecard_interval([win, loss])
     assert stats["n"] == 2
-    assert stats["mean"] == Decimal("-0.02")
-    assert stats["ci95_low"] == Decimal("-1.000000000000000000000000000")
-    assert stats["ci95_high"] == Decimal("0.9600000000000000000000000003")
+    assert stats["mean"] == Decimal("-0.0175")
+    variance = ((win - stats["mean"]) ** 2 + (loss - stats["mean"]) ** 2) / Decimal(1)
+    half = Decimal("1.96") * variance.sqrt() / Decimal(2).sqrt()
+    # Residuals are exactly +/- 0.5, so variance is 0.5. Decimal.sqrt leaves a 1-ulp tail.
+    assert half == Decimal("0.9800000000000000000000000003")
+    assert stats["ci95_low"] == Decimal("-0.9975000000000000000000000003")
+    assert stats["ci95_high"] == Decimal("0.9625000000000000000000000003")
     flat_win = scorecard_interval([Decimal("0.10")] * 15)
     flat_loss = scorecard_interval([Decimal("-0.10")] * 15)
     assert flat_win["ci95_low"] == Decimal("0.10")
@@ -1568,9 +1597,9 @@ def test_scorecard_matches_the_hand_interval_and_promotion(tmp_path: Path) -> No
         report_path=tmp_path / "card.md",
         now=NOW,
     )
-    assert "| KXHORMUZWEEKLY | paper | 2 | 1 | 0.5 | -0.02 | " in text
-    assert "-1.000000000000000000000000000" in text
-    assert "0.9600000000000000000000000003" in text
+    assert "| KXHORMUZWEEKLY | paper | 2 | 1 | 0.5 | -0.0175 | " in text
+    assert "-0.9975000000000000000000000003" in text
+    assert "0.9625000000000000000000000003" in text
     assert "eligible for live" not in text
     assert "recommend off" not in text
 
@@ -1627,4 +1656,5 @@ def test_scorecard_matches_the_hand_interval_and_promotion(tmp_path: Path) -> No
     )
     assert "| KXHORMUZWEEKLY | paper | 1 | 1 |" in dup
     assert "eligible for live" not in dup
-    assert "| 0.38 |" in dup or "| 0.38 | " in dup
+    # Latest 60c ask wins. Exact taker fee is $0.0168, so a YES settlement is $0.3832.
+    assert "| 0.3832 |" in dup

@@ -57,7 +57,8 @@ def _analysis(side: str, price: int) -> SimpleNamespace:
         executed_price_cents=price,
         capped_dollars=10.0,
         confidence=0.9,
-        estimated_probability=0.7,
+        # YES probability. NO at 60c needs p(no) well above the ask plus fee.
+        estimated_probability=0.20 if side == "no" else 0.96,
         signal_meta={},
         llm_direction=None,
         llm_magnitude=None,

@@ -39,8 +39,8 @@ from utils.event_news_research import (
     EVENT_NEWS_MAX_CONTRACTS,
     event_news_cents_in_excluded_band,
     event_news_executed_side_skip_reason,
+    event_news_blocked_final_ask,
     event_news_family_lock_ticker,
-    event_news_requote_skip_reason,
 )
 
 
@@ -108,14 +108,19 @@ def test_exact_35c_is_excluded_unless_the_flag_is_false(monkeypatch):
         )
         is True
     )
-    assert event_news_requote_skip_reason(Decimal("0.20"), config=band) == (
-        "executed_ask_in_excluded_band"
-    )
-    assert event_news_requote_skip_reason(Decimal("0.35"), config=band) == (
-        "executed_ask_in_excluded_band"
-    )
-    assert event_news_requote_skip_reason(Decimal("0.36"), config=band) is None
-    assert event_news_requote_skip_reason(Decimal("0.89"), config=band) is None
+    band.paper_cohort_id = EVENT_NEWS_COHORT_ID
+    assert event_news_blocked_final_ask(
+        limit_cents=None, fresh_ask_cents=20, fresh_ask_invalid=False, config=band,
+    ) == 20
+    assert event_news_blocked_final_ask(
+        limit_cents=None, fresh_ask_cents=35, fresh_ask_invalid=False, config=band,
+    ) == 35
+    assert event_news_blocked_final_ask(
+        limit_cents=None, fresh_ask_cents=36, fresh_ask_invalid=False, config=band,
+    ) is None
+    assert event_news_blocked_final_ask(
+        limit_cents=None, fresh_ask_cents=89, fresh_ask_invalid=False, config=band,
+    ) is None
 
 
 def test_flag_off_veto_packet_omits_grounding_fields_and_tools():

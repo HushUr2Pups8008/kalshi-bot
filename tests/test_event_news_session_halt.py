@@ -530,8 +530,12 @@ def test_unset_session_halt_is_paper_on_and_live_off(monkeypatch, tmp_path):
 
 
 def _paper_analysis():
-    """Ask and last agree. An unset MagicMock last price floats to 1.0 on 3.14."""
-    analysis = _desk_analysis(capped_dollars=2.0)
+    """Ask and last agree. An unset MagicMock last price floats to 1.0 on 3.14.
+
+    Paper uses fee-net versus yaml edge_min. 0.60 at a 60c ask is below the
+    fee, so the halt checks would never run.
+    """
+    analysis = _desk_analysis(capped_dollars=2.0, estimated_prob=0.90)
     ask = analysis.market.yes_ask_cents
     analysis.market.last_price_cents = ask
     analysis.market.last_price = ask
