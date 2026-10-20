@@ -1,10 +1,4 @@
-"""Paper-only Grok edge scan, exit watch, and calibration.
-
-``live=True`` returns before any call, even when the flag is the string
-true. This module never submits, cancels, or reprices an order. A missing,
-late, or malformed Grok answer queues nothing. The queued contract count
-stays at 4. Fee-net edge is ``event_news_fee_net_edge``.
-"""
+"""Paper-only Grok edge scan. ``live=True`` returns before any call and never submits an order."""
 
 from __future__ import annotations
 
@@ -79,7 +73,6 @@ _PAPER_SCORE_ENV = {
     "EVENT_NEWS_YES_FLOOR_CENTS": "55",
     "EVENT_NEWS_EXCLUDE_EXACT_35": "true",
 }
-_FAIL_CLOSED = frozenset({"timeout", "malformed", "spend_cap", "missing_key", "request_error", "http", "no_probability"})
 GROK_MAX_SEARCH_RESULTS = "GROK_MAX_SEARCH_RESULTS"
 DEFAULT_MAX_SEARCH_RESULTS = 8
 MAX_SEARCH_RESULTS_CAP = 20
@@ -333,11 +326,7 @@ def rank_politics_markets(
     series: Sequence[str] | None = None,
     close_window: timedelta | None = None,
 ) -> list[Any]:
-    """Open markets inside the close window with an ask from 36c to 94c.
-
-    Higher liquidity ranks first. An earlier close breaks a tie. The default
-    window is 72h. Response status ``open`` is not tradeable.
-    """
+    """36c-94c asks inside the close window. Response status ``open`` is not tradeable."""
     allowed = {item.strip().upper() for item in (series or politics_scan_series()) if item.strip()}
     window_end = now + (SCAN_CLOSE_WINDOW if close_window is None else close_window)
     ranked: list[tuple[Decimal, datetime, str, Any]] = []
@@ -363,192 +352,110 @@ def rank_politics_markets(
 
 
 def comparison_summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """Agree rate, plus which call was closer on rows that have an outcome."""
     usable = [row for row in rows if _pair(row) is not None]
+    empty = {
+        "n": 0, "agree_pct": None, "settled_n": 0,
+        "grounded_hits": None, "ungrounded_hits": None, "status": "not_enough_data",
+    }
     if not usable:
-        return {
-            "n": 0,
-            "agree_pct": None,
-            "settled_n": 0,
-            "grounded_hits": None,
-            "ungrounded_hits": None,
-            "status": "not_enough_data",
-        }
-    agreements = 0
-    settled = 0
-    grounded_hits = 0
-    ungrounded_hits = 0
+        return empty
+    agreements = settled = grounded_hits = ungrounded_hits = 0
     for row in usable:
         pair = _pair(row)
         assert pair is not None
         grounded, ungrounded = pair
-        if verdicts_agree(grounded, ungrounded):
-            agreements += 1
+        agreements += int(verdicts_agree(grounded, ungrounded))
         outcome = _outcome(row.get("outcome"))
         if outcome is None:
             continue
         settled += 1
-        grounded_error = abs(grounded - outcome)
-        ungrounded_error = abs(ungrounded - outcome)
-        if grounded_error < ungrounded_error:
-            grounded_hits += 1
-        elif ungrounded_error < grounded_error:
-            ungrounded_hits += 1
-        else:
-            grounded_hits += 1
-            ungrounded_hits += 1
-    report: dict[str, Any] = {
+        left, right = abs(grounded - outcome), abs(ungrounded - outcome)
+        grounded_hits += int(left <= right)
+        ungrounded_hits += int(right <= left)
+    return {
         "n": len(usable),
-        "agree_pct": (Decimal(agreements) / Decimal(len(usable)) * Decimal(100)),
+        "agree_pct": Decimal(agreements) / Decimal(len(usable)) * Decimal(100),
         "settled_n": settled,
-        "grounded_hits": None,
-        "ungrounded_hits": None,
+        "grounded_hits": grounded_hits if settled else None,
+        "ungrounded_hits": ungrounded_hits if settled else None,
         "status": "ok" if settled else "not_enough_data",
     }
-    if settled:
-        report["grounded_hits"] = grounded_hits
-        report["ungrounded_hits"] = ungrounded_hits
-    return report
 
 
 def brier_report(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """Brier score and five probability buckets. Empty input is not enough."""
-    scored: list[tuple[Decimal, Decimal]] = []
-    for row in rows:
-        probability = _decimal(row.get("probability"))
-        outcome = _outcome(row.get("outcome"))
-        if probability is None or outcome is None:
-            continue
-        scored.append((probability, outcome))
+    scored = [
+        (probability, outcome)
+        for row in rows
+        if (probability := _decimal(row.get("probability"))) is not None
+        and (outcome := _outcome(row.get("outcome"))) is not None
+    ]
     if not scored:
         return {"status": "not_enough_data", "n": 0, "brier": None, "buckets": []}
-    total = sum((probability - outcome) ** 2 for probability, outcome in scored)
-    brier = total / Decimal(len(scored))
-    buckets = []
+    brier = sum((p - o) ** 2 for p, o in scored) / Decimal(len(scored))
     edges = (
-        (Decimal("0"), Decimal("0.2"), "0.0-0.2"),
+        (Decimal(0), Decimal("0.2"), "0.0-0.2"),
         (Decimal("0.2"), Decimal("0.4"), "0.2-0.4"),
         (Decimal("0.4"), Decimal("0.6"), "0.4-0.6"),
         (Decimal("0.6"), Decimal("0.8"), "0.6-0.8"),
         (Decimal("0.8"), Decimal("1.0000001"), "0.8-1.0"),
     )
+    buckets = []
     for low, high, name in edges:
-        members = [
-            (probability, outcome)
-            for probability, outcome in scored
-            if low <= probability < high
-        ]
-        if not members:
-            buckets.append({"bucket": name, "n": 0, "mean_probability": None, "outcome_rate": None})
-            continue
-        count = Decimal(len(members))
-        buckets.append(
-            {
-                "bucket": name,
-                "n": len(members),
-                "mean_probability": sum(item[0] for item in members) / count,
-                "outcome_rate": sum(item[1] for item in members) / count,
-            }
-        )
+        members = [(p, o) for p, o in scored if low <= p < high]
+        count = len(members)
+        buckets.append({
+            "bucket": name,
+            "n": count,
+            "mean_probability": None if not count else sum(p for p, _o in members) / Decimal(count),
+            "outcome_rate": None if not count else sum(o for _p, o in members) / Decimal(count),
+        })
     return {"status": "ok", "n": len(scored), "brier": brier, "buckets": buckets}
 
 
 def ev_by_edge_bucket(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """Mean fee-net dollars per trade and a normal 95% interval.
-
-    A bucket with fewer than two settled pnl values has no interval.
-    """
-    groups = {
-        "below_8": [],
-        "8_11": [],
-        "12_19": [],
-        "20_plus": [],
-    }
+    groups: dict[str, list[Decimal]] = {"below_8": [], "8_11": [], "12_19": [], "20_plus": []}
     for row in rows:
-        edge = row.get("edge_cents")
-        pnl = _decimal(row.get("pnl_dollars"))
+        edge, pnl = row.get("edge_cents"), _decimal(row.get("pnl_dollars"))
         if isinstance(edge, bool) or not isinstance(edge, int) or pnl is None:
             continue
-        if edge < 8:
-            groups["below_8"].append(pnl)
-        elif edge < 12:
-            groups["8_11"].append(pnl)
-        elif edge < 20:
-            groups["12_19"].append(pnl)
-        else:
-            groups["20_plus"].append(pnl)
+        key = "below_8" if edge < 8 else "8_11" if edge < 12 else "12_19" if edge < 20 else "20_plus"
+        groups[key].append(pnl)
     if not any(groups.values()):
         return {"status": "not_enough_data", "buckets": []}
     buckets = []
     for name, values in groups.items():
-        if len(values) < 2:
-            buckets.append(
-                {
-                    "bucket": name,
-                    "n": len(values),
-                    "mean_ev": None,
-                    "ci95_low": None,
-                    "ci95_high": None,
-                    "status": "not_enough_data",
-                }
-            )
-            continue
-        count = Decimal(len(values))
-        mean = sum(values) / count
-        variance = sum((value - mean) ** 2 for value in values) / (count - 1)
-        std = variance.sqrt()
-        half = Decimal("1.96") * std / count.sqrt()
-        buckets.append(
-            {
-                "bucket": name,
-                "n": len(values),
-                "mean_ev": mean,
-                "ci95_low": mean - half,
-                "ci95_high": mean + half,
-                "status": "ok",
-            }
-        )
+        item: dict[str, Any] = {
+            "bucket": name, "n": len(values), "mean_ev": None,
+            "ci95_low": None, "ci95_high": None, "status": "not_enough_data",
+        }
+        if len(values) >= 2:
+            count = Decimal(len(values))
+            mean = sum(values) / count
+            half = Decimal("1.96") * (sum((v - mean) ** 2 for v in values) / (count - 1)).sqrt() / count.sqrt()
+            item.update(mean_ev=mean, ci95_low=mean - half, ci95_high=mean + half, status="ok")
+        buckets.append(item)
     return {"status": "ok", "buckets": buckets}
 
 
 def exit_versus_hold(
-    *,
-    side: str,
-    bid_cents: int,
-    settlement_yes: bool,
-    contracts: int,
-    entry_ask_cents: int,
+    *, side: str, bid_cents: int, settlement_yes: bool, contracts: int, entry_ask_cents: int,
 ) -> dict[str, int] | None:
-    """Paper cents for selling at the bid now versus holding to settlement.
-
-    Both numbers subtract the entry taker fee. The exit also pays the fee
-    on the bid. This does not send an order.
-    """
-    if side not in {"yes", "no"}:
-        return None
-    if isinstance(contracts, bool) or not isinstance(contracts, int):
-        return None
-    if contracts < 1 or contracts > HARD_MAX_CONTRACTS:
+    bad_count = isinstance(contracts, bool) or not isinstance(contracts, int)
+    if side not in {"yes", "no"} or bad_count or not 1 <= contracts <= HARD_MAX_CONTRACTS:
         return None
     entry = event_news_fee_net_edge(Decimal("0.5"), entry_ask_cents, contracts)
     exited = event_news_fee_net_edge(Decimal("0.5"), bid_cents, contracts)
     if entry is None or exited is None:
         return None
-    entry_fee = entry[1]
-    exit_fee = exited[1]
     quantity = Decimal(contracts)
-    entry_cost = quantity * Decimal(entry_ask_cents) / Decimal(100) + entry_fee
-    exit_proceeds = quantity * Decimal(bid_cents) / Decimal(100) - exit_fee
-    held_pays = Decimal(1 if (side == "yes") == settlement_yes else 0)
-    hold_proceeds = quantity * held_pays
+    entry_cost = quantity * Decimal(entry_ask_cents) / Decimal(100) + entry[1]
+    exit_proceeds = quantity * Decimal(bid_cents) / Decimal(100) - exited[1]
+    held = quantity * Decimal(1 if (side == "yes") == settlement_yes else 0)
 
     def _cents(dollars: Decimal) -> int:
         return int((dollars * Decimal(100)).to_integral_value(rounding=ROUND_HALF_UP))
 
-    return {
-        "exit_cents": _cents(exit_proceeds - entry_cost),
-        "hold_cents": _cents(hold_proceeds - entry_cost),
-    }
+    return {"exit_cents": _cents(exit_proceeds - entry_cost), "hold_cents": _cents(held - entry_cost)}
 
 
 def grok_max_search_results(environ: Mapping[str, str] | None = None) -> int:
@@ -578,13 +485,7 @@ def _grounded_tool_payload(
     now: datetime | None,
     limit: int,
 ) -> tuple[list[dict[str, Any]], int]:
-    """Web plus X search. The current Responses tools have no max_search_results.
-
-    Live Search's max_search_results is not on web_search or x_search. The
-    documented controls are max_turns, allowed_x_handles, and from_date /
-    to_date. The prompt tells the model to set num_results and limit to
-    ``limit``. to_date is exclusive, so the window runs through the UTC day.
-    """
+    """web_search and x_search have no max_search_results field. to_date is exclusive."""
     moment = now or datetime.now(timezone.utc)
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
@@ -606,11 +507,7 @@ def _search_limit_sentence(limit: int) -> str:
 
 
 def latest_truth_social_fingerprint(timeout: float = 8.0) -> str | None:
-    """Newest Factbase Truth Social post in the last 72h, or None when unseen.
-
-    A failure returns None so the caller keeps the 3h cache. ``none`` means
-    the feed answered and the newest row is older than 72h.
-    """
+    """Newest Truth Social post in 72h. None on failure. ``none`` when the newest row is older."""
     try:
         import urllib.parse
 
@@ -699,7 +596,69 @@ def _cache_fresh(
         return False
     if _ask_moved(row.get("no_ask"), view.get("no_ask")):
         return False
+    scans = row.get("scans")
+    count = len(scans) if isinstance(scans, list) else 0
+    if count < 2:
+        return False
+    # Two scans that disagree stay cached so the next cycle does not pay again.
+    if stable_scan_probability(scans) is None:
+        return True
     return _decimal(row.get("prob")) is not None
+
+
+def stable_scan_probability(scans: Sequence[Mapping[str, Any]]) -> Decimal | None:
+    """Median of the last 2-3 grounded scans when the last two are within 0.10."""
+    probs: list[Decimal] = []
+    for row in scans:
+        if not isinstance(row, Mapping):
+            continue
+        value = _decimal(row.get("prob"))
+        if value is None:
+            continue
+        probs.append(value)
+    if len(probs) < 2:
+        return None
+    probs = probs[-3:]
+    if abs(probs[-1] - probs[-2]) > Decimal("0.10"):
+        return None
+    ordered = sorted(probs)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / Decimal(2)
+
+
+def _prior_scans(row: Mapping[str, Any] | None, now: datetime) -> list[dict[str, Any]]:
+    """Same-day grounded samples. A legacy cache row counts as one sample."""
+    if not row:
+        return []
+    cached_at = _parse_utc(row.get("ts"))
+    if cached_at is None or _day(cached_at) != _day(now):
+        return []
+    scans = row.get("scans")
+    if isinstance(scans, list):
+        kept = [
+            {"prob": format(value, "f"), "post_id": str(item.get("post_id") or "")}
+            for item in scans
+            if isinstance(item, dict) and (value := _decimal(item.get("prob"))) is not None
+        ]
+        return kept[-3:]
+    legacy = _decimal(row.get("prob"))
+    if legacy is None:
+        return []
+    return [{"prob": format(legacy, "f"), "post_id": str(row.get("post_id") or "")}]
+
+
+def _next_scans(
+    path: Path,
+    view: Mapping[str, Any],
+    probability: Decimal,
+    fingerprint: str | None,
+    moment: datetime,
+) -> list[dict[str, Any]]:
+    prior = _prior_scans(_cache_get(path, str(view["ticker"])), moment)
+    sample = {"prob": format(probability, "f"), "post_id": fingerprint or ""}
+    return [*prior, sample][-3:]
 
 
 def _screen_side(probability: Decimal, ask: int | None) -> int | None:
@@ -780,13 +739,17 @@ def _remember_grounded(
     fingerprint: str | None,
     summary: str,
     now: datetime | None,
+    scans: Sequence[Mapping[str, Any]],
 ) -> None:
+    decision = stable_scan_probability(scans)
     _cache_put(
         path,
         str(view["ticker"]),
         {
             "ts": _stamp(now),
-            "prob": format(probability, "f"),
+            "prob": None if decision is None else format(decision, "f"),
+            "raw_prob": format(probability, "f"),
+            "scans": [dict(item) for item in scans],
             "confidence": None if confidence is None else format(confidence, "f"),
             "sources": list(sources),
             "yes_ask": view.get("yes_ask"),
@@ -876,13 +839,9 @@ def run_paper_edge_scan(
     screen_log_path: Path = SCREEN_LOG_PATH,
     post_lookup: Callable[[], str | None] | None = None,
 ) -> dict[str, int]:
-    """Queue at most ``max_markets`` paper candidates. Live and a failed Grok call queue none.
+    """Queue at most ``max_markets`` paper rows. Two same-day scans within 0.10, or skip prob_unstable.
 
-    The cheap ungrounded call runs first. A grounded series call runs only
-    when that edge is at least 5c on either side, or the ticker is open.
-    One grounded call covers every ticker in the series that still needs it.
-    A same-UTC-day cache is reused unless the ask moved by 5c or a new Truth
-    Social post was seen. Ungrounded probabilities never queue.
+    A changed post id does not waive that gap. Ungrounded probabilities never queue.
     """
     counts = {
         "examined": 0,
@@ -923,6 +882,8 @@ def run_paper_edge_scan(
         cached = _cache_get(cache_path, view["ticker"])
         if _cache_fresh(cached, view, fingerprint, moment):
             counts["cache_hits"] += 1
+            cached_scans = cached.get("scans") if isinstance(cached, Mapping) else None
+            decision = stable_scan_probability(cached_scans if isinstance(cached_scans, list) else [])
             _log_screen(
                 screen_log_path,
                 {
@@ -937,6 +898,10 @@ def run_paper_edge_scan(
                     "post_id": fingerprint,
                 },
             )
+            if decision is None:
+                raw = _decimal(cached.get("raw_prob")) if isinstance(cached, Mapping) else None
+                _skip(view, "prob_unstable", prompt_hash="cache", probability=raw)
+                continue
             reused = _cached_call(view, cached or {})
             cached_block = None
             if reused is not None and reused.probability is not None:
@@ -1072,19 +1037,6 @@ def run_paper_edge_scan(
                 )
                 continue
             confidence = None if row is None else _decimal(row.get("confidence"))
-            grounded = GrokEdgeCall(
-                ticker=view["ticker"],
-                grounded=True,
-                probability=probability,
-                confidence=confidence,
-                verdict="YES" if probability >= Decimal("0.5") else "NO",
-                sources=sources,
-                tools=_SCAN_TOOLS,
-                prompt_hash=prompt_hash or "series",
-                latency_ms=0,
-                cost_usd=Decimal("0"),
-                skip_reason=None,
-            )
             if (
                 ungrounded is not None
                 and ungrounded.probability is not None
@@ -1101,6 +1053,8 @@ def run_paper_edge_scan(
                         "outcome": None,
                     },
                 )
+            scans = _next_scans(cache_path, view, probability, fingerprint, moment)
+            decision = stable_scan_probability(scans)
             _remember_grounded(
                 cache_path,
                 view,
@@ -1110,13 +1064,36 @@ def run_paper_edge_scan(
                 fingerprint,
                 summary,
                 moment,
+                scans,
             )
-            blocked = _paper_gate_reason(item.get("market"), view, float(probability))
+            if decision is None:
+                _skip(
+                    view,
+                    "prob_unstable",
+                    probability=probability,
+                    prompt_hash=prompt_hash,
+                    sources=sources,
+                )
+                continue
+            grounded = GrokEdgeCall(
+                ticker=view["ticker"],
+                grounded=True,
+                probability=decision,
+                confidence=confidence,
+                verdict="YES" if decision >= Decimal("0.5") else "NO",
+                sources=sources,
+                tools=_SCAN_TOOLS,
+                prompt_hash=prompt_hash or "series",
+                latency_ms=0,
+                cost_usd=Decimal("0"),
+                skip_reason=None,
+            )
+            blocked = _paper_gate_reason(item.get("market"), view, float(decision))
             if blocked:
                 _skip(
                     view,
                     blocked,
-                    probability=probability,
+                    probability=decision,
                     prompt_hash=prompt_hash,
                     sources=sources,
                 )
@@ -1323,14 +1300,7 @@ def score_open_positions(
     screen_log_path: Path = SCREEN_LOG_PATH,
     post_lookup: Callable[[], str | None] | None = None,
 ) -> dict[str, int]:
-    """Score open positions. Does not order.
-
-    Each position gets the cheap ungrounded call first. Open positions then
-    share one grounded series call, unless a 3h cache is still fresh.
-    ``take`` means the grounded probability would queue that side. ``veto``
-    means the call returned and the side would not queue. A skipped call
-    is ``not_scored`` and is not treated as a veto.
-    """
+    """Score open positions. Does not order. A skipped call is not_scored, not a veto."""
     counts = {"scored": 0, "skipped": 0, "cache_hits": 0, "grounded_calls": 0}
     if live or not event_news_desk_flag_enabled(
         EVENT_NEWS_GROK_EDGE_SCAN,
@@ -1465,6 +1435,7 @@ def score_open_positions(
                     fingerprint,
                     summary,
                     moment,
+                    _next_scans(cache_path, item["view"], probability, fingerprint, moment),
                 )
                 counts["scored"] += 1
             else:
@@ -1483,11 +1454,7 @@ def write_daily_edge_report(
     report_path: Path = DAILY_REPORT_PATH,
     now: datetime | None = None,
 ) -> str:
-    """Join settled market GETs to logged Grok probabilities and write the report.
-
-    Empty or unsettled input says not enough data. This does not read or
-    write orders.
-    """
+    """Join settled GETs to logged probabilities. Does not read or write orders."""
     candidates = _read_jsonl(candidate_log_path)
     comparisons = _read_jsonl(comparison_log_path)
     spend_line = _spend_line(spend_path)
@@ -1562,10 +1529,12 @@ def _queued_candidate_rows(db_path: Path) -> list[tuple]:
             return []
         series_sql = "series" if "series" in names else "''"
         return conn.execute(
-            "SELECT ticker, series, side, ask_cents FROM (SELECT ticker, " + series_sql
-            + " AS series, side, ask_cents, ROW_NUMBER() OVER (PARTITION BY ticker "
-            "ORDER BY ts DESC, rowid DESC) rn FROM paper_candidates WHERE queued = 1 "
-            "AND side IS NOT NULL AND ask_cents IS NOT NULL AND grok_probability IS NOT NULL) WHERE rn = 1"
+            "SELECT ticker, series, side, ask_cents, grok_probability FROM ("
+            "SELECT ticker, " + series_sql
+            + " AS series, side, ask_cents, grok_probability, ROW_NUMBER() OVER ("
+            "PARTITION BY ticker ORDER BY ts DESC, rowid DESC) rn FROM paper_candidates "
+            "WHERE queued = 1 AND side IS NOT NULL AND ask_cents IS NOT NULL "
+            "AND grok_probability IS NOT NULL) WHERE rn = 1"
         ).fetchall()
     except sqlite3.Error:
         return []
@@ -1583,35 +1552,54 @@ def write_paper_scorecard(
     """Per-series fee-net scorecard. Promotion text does not change modes."""
     moment = now or datetime.now(timezone.utc)
     modes = _scorecard_modes()
-    grouped: dict[str, list[tuple[bool, Decimal]]] = {}
-    for ticker, series, side, ask in _queued_candidate_rows(db_path):
+    grouped: dict[str, list[tuple[bool, Decimal, Decimal, Decimal]]] = {}
+    calibration: list[dict[str, Any]] = []
+    for ticker, series, side, ask, probability_text in _queued_candidate_rows(db_path):
         name = str(series or "") or str(ticker or "").split("-", 1)[0]
+        p_yes = _decimal(probability_text)
         try:
             result = _settlement_result(market_lookup(str(ticker)))
         except Exception:
             continue
-        if result is None or isinstance(ask, bool) or not isinstance(ask, int):
+        if (
+            result is None
+            or p_yes is None
+            or isinstance(ask, bool)
+            or not isinstance(ask, int)
+        ):
             continue
         pnl = contract_fee_net_dollars(str(side or ""), ask, result == "yes")
         if pnl is None:
             continue
-        grouped.setdefault(name, []).append(((str(side) == "yes") == (result == "yes"), pnl))
+        outcome = Decimal(1 if result == "yes" else 0)
+        grouped.setdefault(name, []).append(
+            ((str(side) == "yes") == (result == "yes"), pnl, p_yes, outcome)
+        )
+        calibration.append(
+            {
+                "ticker": str(ticker or ""),
+                "series": name,
+                "p": format(p_yes, "f"),
+                "outcome": int(outcome),
+            }
+        )
     lines = [
         f"# Paper scorecard {moment.strftime('%Y-%m-%d')}",
         "",
         "Report only. Eligible for live: paper, n>=15, fee-net EV CI low > 0.",
         "Recommend off: effective live, n>=15, CI high < 0. Modes do not change.",
         "EV is per-contract taker-fee-net. One settled row per ticker. CI is mean +/- 1.96 sample stdev / sqrt(n). n<2 has none.",
+        "Brier is the mean squared error of the YES probability against the settlement.",
         "",
-        "| series | mode | n | hits | hit_rate | ev_per_contract | ci95_low | ci95_high | promotion |",
-        "|---|---|---:|---:|---:|---:|---:|---:|---|",
+        "| series | mode | n | hits | hit_rate | ev_per_contract | ci95_low | ci95_high | brier | promotion |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     if not grouped:
-        lines.append("| | | 0 | | | | | | no settled fee-net rows |")
+        lines.append("| | | 0 | | | | | | | no settled fee-net rows |")
     for series in sorted(grouped):
         samples = grouped[series]
-        values = [pnl for _hit, pnl in samples]
-        hits = sum(hit for hit, _pnl in samples)
+        values = [pnl for _hit, pnl, _p, _outcome in samples]
+        hits = sum(hit for hit, _pnl, _p, _outcome in samples)
         stats = scorecard_interval(values)
         n = int(stats["n"] or 0)
         mode, effective = modes.get(series, ("", ""))
@@ -1620,13 +1608,20 @@ def write_paper_scorecard(
         mean = stats["mean"] if isinstance(stats["mean"], Decimal) else None
         rate = None if n == 0 else Decimal(hits) / Decimal(n)
         label = promotion_label(mode=mode, effective=effective, n=n, low=low, high=high)
+        squared = sum((p - outcome) ** 2 for _hit, _pnl, p, outcome in samples)
+        brier = None if n == 0 else squared / Decimal(n)
+        brier_cell = "" if brier is None else format(brier.normalize(), "f")
         lines.append(
             f"| {series} | {effective or mode} | {n} | {hits} | {_cell(rate)} | "
-            f"{_cell(mean)} | {_cell(low)} | {_cell(high)} | {label} |"
+            f"{_cell(mean)} | {_cell(low)} | {_cell(high)} | {brier_cell} | {label} |"
         )
     text = "\n".join(lines) + "\n"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(text, encoding="utf-8")
+    report_path.with_suffix(".calibration.jsonl").write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in calibration),
+        encoding="utf-8",
+    )
     return text
 
 
@@ -2218,18 +2213,25 @@ def _market_view(market: Any) -> dict[str, Any] | None:
         "status": status,
         "yes_ask": _int_or_none(yes_ask),
         "no_ask": _int_or_none(no_ask),
-        "title": title[:300],
-        "rules": rules[:500],
-        "close_time": close[:40],
+        "title": title,
+        "rules": rules,
+        "close_time": close,
     }
+
+
+def _strike_text(ticker: str) -> str:
+    """T20 and E38.9 name the strike. Anything else stays blank."""
+    suffix = ticker.rsplit("-", 1)[-1]
+    if len(suffix) >= 2 and suffix[0] in "TE" and suffix[1].isdigit():
+        return suffix[1:]
+    return ""
 
 
 def _market_prompt(view: Mapping[str, Any]) -> str:
     return (
-        "Estimate the probability this Kalshi market resolves YES. "
-        "Consider recent Trump posts, the public schedule, speeches, and news. "
-        f"ticker={view['ticker']} title={view['title']} "
-        f"rules={view['rules']} close={view['close_time']}"
+        "Estimate the YES probability. "
+        f"ticker={view['ticker']} strike={_strike_text(str(view['ticker']))} "
+        f"title={view['title']} rules={view['rules']} close={view['close_time']}"
     )
 
 
@@ -2315,12 +2317,7 @@ def _http_sources(body: Mapping[str, Any], obj: Mapping[str, Any]) -> tuple[str,
 
 
 def _select_json_object(content: str, *, kind: str) -> dict[str, Any] | None:
-    """Use the last object that has the schema fields. Ignore a trailing tool payload.
-
-    A series reply nests one object per ticker, and those rows also contain
-    prob. The envelope is the last object whose markets value is a list.
-    A one-ticker flat body has no markets list, so it stays on the prob object.
-    """
+    """Last object with the schema fields. A series envelope is the object whose markets value is a list."""
     if kind == "exit":
         wanted = ("contrary",)
     elif kind == "series":
@@ -2400,11 +2397,7 @@ def _reconcile_spend(
     cap: Decimal,
     now: datetime | None,
 ) -> None:
-    """Replace this call's reserve with the provider cost.
-
-    A smaller actual cost is credited back. A larger one is debited until the
-    cap, and the ledger is pinned when the extra does not fit.
-    """
+    """Replace the reserve with provider cost. Pin the ledger when a larger cost does not fit."""
     if actual < 0 or reserved < 0:
         return
     delta = actual - reserved
