@@ -19,6 +19,12 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.36.11] - 2026-10-19
+
+### Fixed
+
+- **Paper Grok probabilities need two agreeing scans.** A paper queue uses the median of the last 2-3 same-day grounded scans, and only when the last two are within 0.10. Otherwise the skip reason is `prob_unstable`. A Truth Social post id change does not waive that gap. The prompt carries the full rules text, the strike, and the close time. Temperature stays 0. The scorecard adds a Brier score per series and writes `p` and the settlement beside the report. The daily cap stays $3. Live decisions are unchanged. Paper series still cannot POST.
+
 ## [0.36.10] - 2026-10-19
 
 ### Removed

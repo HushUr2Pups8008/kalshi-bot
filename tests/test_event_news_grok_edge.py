@@ -52,7 +52,9 @@ from utils.event_news_grok_edge import (
     run_paper_edge_scan,
     run_paper_exit_watch,
     scorecard_interval,
+    stable_scan_probability,
     write_paper_scorecard,
+    _strike_text,
 )
 from utils.event_news_research import (
     EVENT_NEWS_COHORT_ID,
@@ -143,7 +145,8 @@ def _rows(path: Path) -> list[dict]:
     ]
 
 
-def _scan(tmp_path: Path, markets, post, environ, **extra) -> dict:
+def _scan(tmp_path: Path, markets, post, environ, prior_prob: str | None = "0.70", **extra) -> dict:
+    """One same-day sample is not a queue. The default prior is that first sample."""
     payload = {
         "live": False,
         "allowlist": ALLOW,
@@ -155,6 +158,29 @@ def _scan(tmp_path: Path, markets, post, environ, **extra) -> dict:
     }
     payload.update(_paths(tmp_path))
     payload.update(extra)
+    cache = payload["cache_path"]
+    if prior_prob is not None and not cache.exists():
+        tickers = {}
+        for market in markets:
+            if not isinstance(market, dict):
+                continue
+            ticker = str(market.get("ticker") or "")
+            if not ticker:
+                continue
+            tickers[ticker] = {
+                "ts": "2026-10-17T11:00:00Z",
+                "prob": prior_prob,
+                "confidence": "0.80",
+                "sources": ["https://example.test/prior"],
+                "yes_ask": market.get("yes_ask"),
+                "no_ask": market.get("no_ask"),
+                "post_id": "post-1",
+                "series": market.get("series") or "",
+                "summary": "prior",
+            }
+        if tickers:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text(json.dumps({"tickers": tickers}) + "\n", encoding="utf-8")
     return run_paper_edge_scan(markets, **payload)
 
 
@@ -270,6 +296,7 @@ def test_yaml_edge_min_skips_after_the_screen(tmp_path: Path) -> None:
         [_market()],
         _poster(calls, grounded_prob="0.58", ungrounded_prob="0.70"),
         {XAI_API_KEY_ENV: "test-key"},
+        prior_prob="0.58",
     )
     assert counts["queued"] == 0
     assert counts["skipped"] == 1
@@ -315,7 +342,12 @@ def test_grounded_scan_queues_four_and_records_the_disabled_proposal(tmp_path: P
     assert grounded["payload"]["model"] == GROK_MODEL
     assert grounded["timeout"] == GROK_EDGE_TIMEOUT_SECONDS == 20.0
     assert ungrounded["timeout"] == 20.0
+    assert grounded["payload"]["temperature"] == 0
     assert "Use at most 8 sources." in grounded["payload"]["input"][0]["content"]
+    user_prompt = grounded["payload"]["input"][1]["content"]
+    assert "strike=" in user_prompt
+    assert "rules=Official transcript" in user_prompt
+    assert "close=2026-10-20T23:00:00Z" in user_prompt
     candidate = _rows(tmp_path / "candidates.jsonl")[0]
     assert candidate["queued"] is True
     assert candidate["contracts"] == 4
@@ -1074,6 +1106,14 @@ def _seed_cache(path: Path, ticker: str, **overrides) -> None:
         "summary": "cached",
     }
     row.update(overrides)
+    row.setdefault(
+        "scans",
+        [
+            {"prob": row["prob"], "post_id": str(row.get("post_id") or "")},
+            {"prob": row["prob"], "post_id": str(row.get("post_id") or "")},
+        ],
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"tickers": {ticker: row}}) + "\n", encoding="utf-8")
 
 
@@ -1152,6 +1192,105 @@ def test_open_position_is_grounded_below_the_screen(tmp_path: Path) -> None:
     assert Decimal(_rows(tmp_path / "candidates.jsonl")[0]["grok_probability"]) == Decimal("0.70")
 
 
+def test_strike_names_and_a_post_change_does_not_waive_the_gap() -> None:
+    """T20 is 20 and E38.9 is 38.9. A new post id does not make 0.48 and 0.28 one probability."""
+    assert _strike_text("KXHORMUZWEEKLY-26OCT18-T20") == "20"
+    assert _strike_text("KXTRUMPAPPROVE-26OCT19-E38.9") == "38.9"
+    assert _strike_text("KXTRUMPSAY-26OCT20-TEST") == ""
+    jumped = (
+        {"prob": "0.48", "post_id": "one"},
+        {"prob": "0.28", "post_id": "two"},
+    )
+    assert stable_scan_probability(jumped) is None
+    held = (
+        {"prob": "0.28", "post_id": "one"},
+        {"prob": "0.28", "post_id": "two"},
+    )
+    assert stable_scan_probability(held) == Decimal("0.28")
+    three = (
+        {"prob": "0.04", "post_id": "a"},
+        {"prob": "0.06", "post_id": "b"},
+        {"prob": "0.04", "post_id": "c"},
+    )
+    assert stable_scan_probability(three) == Decimal("0.04")
+
+
+def test_one_grounded_scan_does_not_queue(tmp_path: Path) -> None:
+    """The first grounded sample is recorded and skipped. The agreeing scan queues the median."""
+    calls: list[dict] = []
+    first = _scan(
+        tmp_path,
+        [_market()],
+        _poster(calls),
+        {XAI_API_KEY_ENV: "test-key"},
+        prior_prob=None,
+    )
+    assert first["queued"] == 0
+    assert first["grounded_calls"] == 1
+    assert len(calls) == 2
+    skipped = _rows(tmp_path / "candidates.jsonl")[0]
+    assert skipped["skip_reason"] == "prob_unstable"
+    assert Decimal(skipped["grok_probability"]) == Decimal("0.70")
+    second_calls: list[dict] = []
+    second = _scan(
+        tmp_path,
+        [_market()],
+        _poster(second_calls),
+        {XAI_API_KEY_ENV: "test-key"},
+        prior_prob=None,
+    )
+    assert second["queued"] == 1
+    assert second["grounded_calls"] == 1
+    assert len(second_calls) == 2
+    queued = _rows(tmp_path / "candidates.jsonl")[-1]
+    assert queued["queued"] is True
+    assert Decimal(queued["grok_probability"]) == Decimal("0.70")
+
+
+def test_wide_gap_stays_unstable_and_does_not_pay_again(tmp_path: Path) -> None:
+    """0.20 then 0.70 is not a decision. The same asks and post do not buy a third call."""
+    calls: list[dict] = []
+    first = _scan(
+        tmp_path,
+        [_market()],
+        _poster(calls),
+        {XAI_API_KEY_ENV: "test-key"},
+        prior_prob="0.20",
+    )
+    assert first["queued"] == 0
+    assert first["grounded_calls"] == 1
+    skipped = _rows(tmp_path / "candidates.jsonl")[0]
+    assert skipped["skip_reason"] == "prob_unstable"
+    assert Decimal(skipped["grok_probability"]) == Decimal("0.70")
+    later: list[dict] = []
+    second = _scan(
+        tmp_path,
+        [_market()],
+        _poster(later),
+        {XAI_API_KEY_ENV: "test-key"},
+        prior_prob=None,
+    )
+    assert later == []
+    assert second["cache_hits"] == 1
+    assert second["queued"] == 0
+    assert second["grounded_calls"] == 0
+    assert _rows(tmp_path / "candidates.jsonl")[-1]["skip_reason"] == "prob_unstable"
+
+
+def test_two_scans_queue_their_median(tmp_path: Path) -> None:
+    """0.60 and 0.70 are within 0.10, so the queued probability is 0.65."""
+    calls: list[dict] = []
+    counts = _scan(
+        tmp_path,
+        [_market()],
+        _poster(calls),
+        {XAI_API_KEY_ENV: "test-key"},
+        prior_prob="0.60",
+    )
+    assert counts["queued"] == 1
+    assert Decimal(_rows(tmp_path / "candidates.jsonl")[0]["grok_probability"]) == Decimal("0.65")
+
+
 def test_cache_hits_do_not_consume_paid_slots(tmp_path: Path) -> None:
     """Three fresh cache rows leave the paid slots for the uncached book behind them."""
     tickers: dict[str, dict] = {}
@@ -1169,6 +1308,10 @@ def test_cache_hits_do_not_consume_paid_slots(tmp_path: Path) -> None:
             "post_id": "post-1",
             "series": "KXTRUMPSAY",
             "summary": "cached",
+            "scans": [
+                {"prob": "0.70", "post_id": "post-1"},
+                {"prob": "0.70", "post_id": "post-1"},
+            ],
         }
     fresh = _market(ticker="KXTRUMPSAY-26OCT20-FRESH")
     (tmp_path / "cache.json").write_text(
@@ -1286,6 +1429,34 @@ def test_one_grounded_call_covers_a_truth_social_series(tmp_path: Path) -> None:
         )
         return _Response({"output_text": text, "citations": ["https://example.test/source"]})
 
+    (tmp_path / "cache.json").write_text(
+        json.dumps(
+            {
+                "tickers": {
+                    first["ticker"]: {
+                        "ts": "2026-10-17T11:00:00Z",
+                        "prob": "0.12",
+                        "sources": ["https://example.test/prior"],
+                        "yes_ask": 55,
+                        "no_ask": 46,
+                        "post_id": "post-1",
+                        "series": "KXTRUTHSOCIAL",
+                    },
+                    second["ticker"]: {
+                        "ts": "2026-10-17T11:00:00Z",
+                        "prob": "0.80",
+                        "sources": ["https://example.test/prior"],
+                        "yes_ask": 55,
+                        "no_ask": 46,
+                        "post_id": "post-1",
+                        "series": "KXTRUTHSOCIAL",
+                    },
+                }
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     counts = _scan(
         tmp_path,
         [first, second],
@@ -1293,6 +1464,7 @@ def test_one_grounded_call_covers_a_truth_social_series(tmp_path: Path) -> None:
         {XAI_API_KEY_ENV: "test-key"},
         allowlist=("KXTRUTHSOCIAL",),
         max_markets=2,
+        prior_prob=None,
     )
     grounded_posts = [payload for payload in calls if "tools" in payload]
     assert len(grounded_posts) == 1
@@ -1451,6 +1623,7 @@ def test_paper_series_records_a_grounded_prob_and_cannot_post(tmp_path: Path) ->
         {XAI_API_KEY_ENV: "test-key"},
         allowlist=("KXHORMUZWEEKLY",),
         db_path=db_path,
+        prior_prob="0.80",
     )
     assert counts["queued"] == 1
     assert all("/portfolio/orders" not in str(call["url"]) for call in calls)
@@ -1598,6 +1771,12 @@ def test_scorecard_matches_the_hand_interval_and_promotion(tmp_path: Path) -> No
         now=NOW,
     )
     assert "| KXHORMUZWEEKLY | paper | 2 | 1 | 0.5 | -0.0175 | " in text
+    assert "| 0.34 |" in text
+    calibration = (tmp_path / "card.calibration.jsonl").read_text(encoding="utf-8")
+    assert "sources" not in calibration
+    logged = [json.loads(line) for line in calibration.splitlines()]
+    assert {row["p"] for row in logged} == {"0.80"}
+    assert {row["outcome"] for row in logged} == {0, 1}
     assert "-0.9975000000000000000000000003" in text
     assert "0.9625000000000000000000000003" in text
     assert "eligible for live" not in text
