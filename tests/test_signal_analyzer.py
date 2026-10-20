@@ -938,6 +938,12 @@ class TestEstimateProbability:
     async def test_routing_filter_skips_llm_and_logs_keyword_fallback(self, monkeypatch):
         news = _make_news("Missile strike prompts fears of wider conflict")
         market = _make_full_market(yes_price=50.0)
+        # No executable ask. Politics routing then uses the mid, which is
+        # outside both allowed bands, so the LLM must not run.
+        market.yes_ask_cents = None
+        market.no_ask_cents = None
+        market.yes_ask = None
+        market.no_ask = None
         monkeypatch.setattr(signal_analyzer.cfg, "enable_llm_routing_filter", True)
         monkeypatch.setattr(signal_analyzer.cfg, "llm_allowed_price_bands", [(0.0, 0.35), (0.65, 1.0)])
         monkeypatch.setattr(signal_analyzer.cfg, "llm_excluded_price_bands", [])
