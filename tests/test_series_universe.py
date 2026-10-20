@@ -190,7 +190,7 @@ def test_prefix_block_stays_on_a_non_politics_cohort(monkeypatch):
     from utils.series_universe import event_news_prefix_blocked
 
     monkeypatch.setattr("config.cfg.paper_cohort_id", "legacy")
-    assert event_news_prefix_blocked("KXTRUMPSAY", ("KXTRUMPSAY",)) is True
+    assert event_news_prefix_blocked("KXTRUMPSAY", ("KXTRUMPSAY",)) is False
     assert event_news_prefix_blocked("KXTRUMPSAYMONTH", ("KXTRUMPSAY",)) is True
 
 
@@ -555,7 +555,9 @@ def test_paper_series_is_not_in_the_live_reserve_tuple(tmp_path):
         "paper_series_no_post"
     )
     assert event_news_live_post_block_reason(live, config=politics) is None
-    assert event_news_live_post_block_reason(paper, config=freeze) is None
+    assert event_news_live_post_block_reason(paper, config=freeze) == (
+        "paper_series_no_post"
+    )
 
 
 @pytest.mark.asyncio

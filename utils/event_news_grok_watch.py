@@ -35,7 +35,6 @@ from utils.event_news_grok_veto import (
     event_news_grok_grounded_verdict,
     event_news_grok_trace_log,
 )
-from utils.event_news_research import is_event_news_paper_cohort
 from utils.logger import get_logger
 
 log = get_logger("event_news_grok_watch")
@@ -238,8 +237,6 @@ def run_event_news_grok_watch_once(
     post: Callable[..., Any] | None = None,
 ) -> list[EventNewsGrokWatchResult]:
     """Check each open row at most once per UTC day. Read-only besides xAI."""
-    if not is_event_news_paper_cohort():
-        return []
     clock = now or datetime.now(timezone.utc)
     if clock.tzinfo is None:
         clock = clock.replace(tzinfo=timezone.utc)

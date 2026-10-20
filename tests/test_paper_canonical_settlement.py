@@ -356,7 +356,7 @@ def test_false_mode_keeps_gross_entry_and_leaves_accounting_table_empty(
     trade_id = _record_trade(trader, market_ref, trade_id="acctfalse001")
 
     assert trade_id == "acctfalse001"
-    assert trader.get_notional_bankroll() == pytest.approx(490.0)
+    assert trader.get_notional_bankroll() == pytest.approx(496.8)
     assert trader._conn.execute(
         "SELECT COUNT(*) FROM paper_trade_accounting"
     ).fetchone()[0] == 0
@@ -1579,8 +1579,8 @@ def test_fee_net_runtime_resolve_observation_synthesizes_modeled_binary_zero_evi
     assert accounting["settlement_observation_sha256"] == observation.observation_sha256
     assert Decimal(accounting["settlement_fee_dollars"]) == Decimal("0")
     assert Decimal(accounting["settlement_refund_dollars"]) == Decimal("0")
-    assert Decimal(accounting["gross_settlement_payout_dollars"]) == Decimal("30")
-    assert Decimal(accounting["net_settlement_payout_dollars"]) == Decimal("30")
+    assert Decimal(accounting["gross_settlement_payout_dollars"]) == Decimal("8")
+    assert Decimal(accounting["net_settlement_payout_dollars"]) == Decimal("8")
     outbox = trader._conn.execute(
         """
         SELECT event_kind, payload_json
@@ -2504,7 +2504,7 @@ def test_schema_absent_existing_database_keeps_legacy_record_trade_insert(
         None,
         None,
     )
-    assert _bankroll_cents(trader) == Decimal("49000")
+    assert _bankroll_cents(trader) == Decimal("49680")
     paper_inserts = [
         " ".join(statement.upper().split())
         for statement in statements
@@ -2590,7 +2590,7 @@ def test_alias_drift_closes_exact_canonical_portfolio_position(trader_factory):
         wrong_id_trade: 0,
         cross_venue_trade: 0,
     }
-    assert _bankroll_cents(trader) == Decimal("49500")
+    assert _bankroll_cents(trader) == Decimal("49840")
     assert {position.trade_id for position in trader.portfolio.open_positions()} == {
         wrong_id_trade,
         cross_venue_trade,
@@ -2648,7 +2648,7 @@ def test_alias_drift_skips_unrelated_invalid_legacy_portfolio_venue(trader_facto
     ).fetchone()
     assert row["resolved"] == 1
     assert row["settlement_observation_sha256"] == observation.observation_sha256
-    assert _bankroll_cents(trader) == Decimal("51500")
+    assert _bankroll_cents(trader) == Decimal("50480")
     assert trader.portfolio.open_positions() == [invalid_position]
 
     after_first = _financial_snapshot(trader)
@@ -2686,16 +2686,16 @@ def test_resolution_uses_one_immediate_transaction_direct_bankroll_update_and_pe
         statement.startswith("UPDATE BOT_STATE") and "NOTIONAL_BANKROLL" in statement
         for statement in normalized
     ) == 1
-    assert _bankroll_cents(trader) == Decimal("53000")
+    assert _bankroll_cents(trader) == Decimal("50960")
 
 
 @pytest.mark.parametrize(
     ("side", "outcome", "expected_payout", "expected_pnl", "expected_bankroll"),
     [
-        ("yes", MarketOutcome.YES, Decimal("2500"), Decimal("1500"), Decimal("51500")),
-        ("no", MarketOutcome.NO, Decimal("2500"), Decimal("1500"), Decimal("51500")),
-        ("yes", MarketOutcome.NO, Decimal("0"), Decimal("-1000"), Decimal("49000")),
-        ("no", MarketOutcome.YES, Decimal("0"), Decimal("-1000"), Decimal("49000")),
+        ("yes", MarketOutcome.YES, Decimal("800"), Decimal("480"), Decimal("50480")),
+        ("no", MarketOutcome.NO, Decimal("800"), Decimal("480"), Decimal("50480")),
+        ("yes", MarketOutcome.NO, Decimal("0"), Decimal("-320"), Decimal("49680")),
+        ("no", MarketOutcome.YES, Decimal("0"), Decimal("-320"), Decimal("49680")),
     ],
 )
 def test_yes_no_gross_settlement_parity(
@@ -2791,9 +2791,9 @@ def test_void_credits_exact_refund_and_emits_no_directional_feedback_requirement
     assert row["resolved"] == 1
     assert row["resolved_yes"] is None
     assert row["terminal_state"] == "void"
-    assert Decimal(row["gross_payout_cents"]) == Decimal("1250")
-    assert Decimal(row["gross_pnl_cents"]) == Decimal("250")
-    assert _bankroll_cents(trader) == Decimal("50250")
+    assert Decimal(row["gross_payout_cents"]) == Decimal("400")
+    assert Decimal(row["gross_pnl_cents"]) == Decimal("80")
+    assert _bankroll_cents(trader) == Decimal("50080")
     outbox = trader._conn.execute(
         """
         SELECT outbox_id, event_version, event_kind, observation_sha256,
@@ -2838,7 +2838,7 @@ def test_void_credits_exact_refund_and_emits_no_directional_feedback_requirement
     assert payload["entry_ts"] == trade["ts"]
     assert payload["estimated_prob"] == pytest.approx(0.61)
     assert payload["entry_price_cents"] == pytest.approx(40.0)
-    assert payload["cost_dollars"] == pytest.approx(10.0)
+    assert payload["cost_dollars"] == pytest.approx(3.2)
     assert payload["llm_magnitude"] == "small"
     assert payload["llm_confidence"] == pytest.approx(0.73)
     assert payload["keyword_outcomes"] == [
@@ -2850,8 +2850,8 @@ def test_void_credits_exact_refund_and_emits_no_directional_feedback_requirement
         "accumulation": pytest.approx(0.66),
         "structural": pytest.approx(0.61),
     }
-    assert payload["gross_payout_cents"] == "1250"
-    assert payload["gross_pnl_cents"] == "250"
+    assert payload["gross_payout_cents"] == "400"
+    assert payload["gross_pnl_cents"] == "80"
 
 
 def test_duplicate_observation_is_a_financial_and_outbox_noop(trader_factory):
@@ -3012,7 +3012,7 @@ def test_different_alias_unmapped_canonical_collision_rolls_back_and_quarantines
     trader.portfolio = portfolio
     observation = _observation(market_ref, MarketOutcome.YES)
     before = _financial_snapshot(trader)
-    assert before["bankroll_cents"] == Decimal("48000")
+    assert before["bankroll_cents"] == Decimal("49360")
 
     _attempt_resolution(trader, observation)
 
@@ -3137,8 +3137,8 @@ def test_observation_and_outbox_ids_are_deterministic_across_databases(trader_fa
             True,
             "won",
             True,
-            "2500",
-            "1500",
+            "800",
+            "480",
         ),
         (
             MarketOutcome.NO,
@@ -3148,8 +3148,8 @@ def test_observation_and_outbox_ids_are_deterministic_across_databases(trader_fa
             False,
             "won",
             True,
-            "2500",
-            "1500",
+            "800",
+            "480",
         ),
         (
             MarketOutcome.YES,
@@ -3160,7 +3160,7 @@ def test_observation_and_outbox_ids_are_deterministic_across_databases(trader_fa
             "lost",
             False,
             "0",
-            "-1000",
+            "-320",
         ),
     ],
 )
@@ -3270,7 +3270,7 @@ def test_directional_outbox_v1_is_complete_immutable_and_exactly_routed(
     assert payload["entry_ts"] == trade["ts"]
     assert payload["estimated_prob"] == pytest.approx(0.67)
     assert payload["entry_price_cents"] == pytest.approx(40.0)
-    assert payload["cost_dollars"] == pytest.approx(10.0)
+    assert payload["cost_dollars"] == pytest.approx(3.2)
     assert payload["llm_magnitude"] == "moderate"
     assert payload["llm_confidence"] == pytest.approx(0.81)
     assert payload["keyword_outcomes"] == [

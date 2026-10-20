@@ -677,10 +677,6 @@ async def test_politics_official_p_bypasses_blend_task(monkeypatch) -> None:
 
     monkeypatch.setattr(config_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
     monkeypatch.setattr("utils.event_news_research.cfg", config_module.cfg)
-    monkeypatch.setattr(
-        "tasks.research_paper_admission.is_event_news_paper_cohort",
-        lambda _config=None: True,
-    )
     ticker = "KXTRUTHSOCIAL-26AUG29-T240"
     queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
     routed: list[object] = []
@@ -750,10 +746,6 @@ async def test_politics_official_p_blocks_sibling_when_event_already_open(
 
     monkeypatch.setattr(config_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
     monkeypatch.setattr("utils.event_news_research.cfg", config_module.cfg)
-    monkeypatch.setattr(
-        "tasks.research_paper_admission.is_event_news_paper_cohort",
-        lambda _config=None: True,
-    )
     ticker = "KXTRUMPACT-26AUG30-T6"
     queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
     market = _politics_in_band_market()
@@ -820,10 +812,6 @@ async def test_politics_excluded_band_does_not_queue_a_paper_shadow(monkeypatch)
 
     monkeypatch.setattr(config_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
     monkeypatch.setattr("utils.event_news_research.cfg", config_module.cfg)
-    monkeypatch.setattr(
-        "tasks.research_paper_admission.is_event_news_paper_cohort",
-        lambda _config=None: True,
-    )
     ticker = "KXTRUTHSOCIAL-26AUG29-T240"
     queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
     shadowed: list[str] = []
@@ -880,10 +868,6 @@ async def test_politics_official_p_family_lock_second_truth_social_week(
 
     monkeypatch.setattr(config_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
     monkeypatch.setattr("utils.event_news_research.cfg", config_module.cfg)
-    monkeypatch.setattr(
-        "tasks.research_paper_admission.is_event_news_paper_cohort",
-        lambda _config=None: True,
-    )
     ticker = "KXTRUTHSOCIAL-26OCT10-B200"
     queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
     market = _politics_in_band_market()
@@ -946,10 +930,6 @@ async def test_politics_p05_url_only_does_not_bypass_blend(monkeypatch) -> None:
 
     monkeypatch.setattr(config_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
     monkeypatch.setattr("utils.event_news_research.cfg", config_module.cfg)
-    monkeypatch.setattr(
-        "tasks.research_paper_admission.is_event_news_paper_cohort",
-        lambda _config=None: True,
-    )
     ticker = "KXSBUDGETRES-26JUN-27JAN01"
     routed: list[object] = []
 
@@ -1020,10 +1000,6 @@ async def test_politics_official_source_p_admits_without_google_counter(monkeypa
     monkeypatch.setattr(config_module.cfg, "llm_allowed_price_bands", [(0.55, 0.99)])
     monkeypatch.setattr(config_module.cfg, "llm_excluded_price_bands", [(0.00, 0.35)])
     monkeypatch.setattr("utils.event_news_research.cfg", config_module.cfg)
-    monkeypatch.setattr(
-        "tasks.research_paper_admission.is_event_news_paper_cohort",
-        lambda _config=None: True,
-    )
     ticker = "KXFISAEXTEND-26JUN-27"
     queue: asyncio.Queue[TradeCandidate] = asyncio.Queue()
     market = KalshiMarket(
@@ -1618,7 +1594,7 @@ async def test_generic_trade_candidate_does_not_enter_paper_review() -> None:
     )
 
     assert result.admitted is False
-    assert result.reason == "not_decision_grade_candidate"
+    assert result.reason == "research_result_snapshot_mismatch"
     assert queue.empty()
 
 
@@ -2047,10 +2023,6 @@ async def test_invalid_ancillary_evidence_does_not_block_valid_paper_signal() ->
 @pytest.mark.asyncio
 async def test_official_p_admits_cheap_yes_when_labeled_the_other_side(monkeypatch) -> None:
     """B209: p=0.39 labeled NO, trade YES. Paper admission must not park."""
-    monkeypatch.setattr(
-        "tasks.research_paper_admission.is_event_news_paper_cohort",
-        lambda _config=None: True,
-    )
     ticker = "KXTRUTHSOCIAL-26AUG29-B209"
     question = (
         "Will Donald Trump make between 200 and 219 Truth Social posts "
@@ -2105,10 +2077,6 @@ async def test_white_house_remaining_time_p_admits_without_counter_query(
     monkeypatch,
 ) -> None:
     """T6 remaining-time p is both-sides. Missing Google counter must not park."""
-    monkeypatch.setattr(
-        "tasks.research_paper_admission.is_event_news_paper_cohort",
-        lambda _config=None: True,
-    )
     ticker = "KXTRUMPACT-26AUG23-T6"
     question = "Will there be at least 6 presidential actions in the week of Aug 23, 2026?"
     provider = ResearchPaperSignalProvider(

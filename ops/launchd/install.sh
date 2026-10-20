@@ -34,14 +34,15 @@ GOVERNANCE_LLM_MODEL="${GOVERNANCE_LLM_MODEL:-qwen2.5:7b}"
 
 # Templates we manage. Keep this list in sync with the *.plist.template files.
 TEMPLATES=(
-    "com.jake.kalshi-bot"
     "com.jake.kalshi-bothealth"
     "com.jake.kalshi-match-feedback-aggregator"
     "com.kalshi.db-backup"
     "com.kalshi.governance.fast"
     "com.kalshi.governance.deep"
 )
+# Retired freeze desk. Install removes a leftover plist. It never bootstraps it.
 LEGACY_LABELS=(
+    "com.jake.kalshi-bot"
     "com.jake.kalshi-daily-review"
 )
 
@@ -158,8 +159,7 @@ case "$MODE" in
         done
         echo
         echo "Done. Plists are generated but NOT loaded into launchctl."
-        echo "To bootstrap a service, run e.g.:"
-        echo "  launchctl bootstrap gui/\$(id -u) $INSTALL_DIR/com.jake.kalshi-bot.plist"
+        echo "Plists are not loaded. Do not bootstrap com.jake.kalshi-bot."
         ;;
     uninstall)
         for label in "${TEMPLATES[@]}" "${LEGACY_LABELS[@]}"; do

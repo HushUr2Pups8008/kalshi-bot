@@ -1,6 +1,6 @@
 # kalshi-bot
 
-[![Version](https://img.shields.io/badge/version-0.36.7-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.36.8-blue)](CHANGELOG.md)
 [![Mode](https://img.shields.io/badge/default-paper%20trading-orange)](.env.example)
 
 Automated Kalshi paper-trading research bot for geopolitical and US-political
@@ -176,7 +176,8 @@ a shortcut around operator approval.
 
 ## macOS LaunchAgent Operation
 
-The production paper runtime is managed by `launchd`.
+The politics desk is `com.jake.kalshi-bot-politics`. The retired label
+`com.jake.kalshi-bot` is not installed and must not be bootstrapped.
 
 Install or refresh LaunchAgents:
 
@@ -184,17 +185,14 @@ Install or refresh LaunchAgents:
 scripts/setup_launchd.sh
 ```
 
-Main bot controls:
+Politics desk controls:
 
 ```bash
-# Start or restart after code changes
-launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.jake.kalshi-bot.plist
-
-# Stop and hold down for maintenance
-launchctl bootout gui/501 ~/Library/LaunchAgents/com.jake.kalshi-bot.plist
+# Restart after a code deploy
+launchctl kickstart -k gui/$(id -u)/com.jake.kalshi-bot-politics
 
 # Inspect
-launchctl print gui/501/com.jake.kalshi-bot
+launchctl print gui/$(id -u)/com.jake.kalshi-bot-politics
 ```
 
 Common helper checks:

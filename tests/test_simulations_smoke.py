@@ -154,20 +154,16 @@ def test_executor_independent_pass_returns_one_result_per_event():
         assert r.effective_min_edge >= 0.02 - 1e-9
 
 
-def test_executor_sequential_pass_suppresses_kxtrumpiran_second_event():
-    """Event 5 (KXTRUMPIRAN talks-stall, side=no) fires after Event 3
-    (KXTRUMPIRAN dispatch, side=yes). Within the 4 h cooldown, the second
-    event MUST be suppressed by E5/E6 (cooldown or opposing-position).
-    This is the bot's core flip-flop guard."""
+def test_executor_sequential_pass_rejects_kxtrumpiran_before_cooldown():
+    """KXTRUMPIRAN is not in the politics universe. Both canonical events
+    die at unified_edge_unreadable, so the 4h cooldown never binds. A None
+    skip here would mean a non-desk series was accepted."""
     results = executor_validate.run_sequential()
     by_name = {r.event_name: r for r in results}
     third = by_name["Event 3: KXTRUMPIRAN (Trump dispatching)"]
     fifth = by_name["Event 5: KXTRUMPIRAN (talks stall)"]
-    assert third.skip_reason is None, "Event 3 should pass on a fresh executor"
-    assert fifth.skip_reason is not None, (
-        "Event 5 must be suppressed within the 4 h cooldown of Event 3 — "
-        "either by paper_ticker_cooldown OR opposing-position guard"
-    )
+    assert third.skip_reason == "unified_edge_unreadable"
+    assert fifth.skip_reason == "unified_edge_unreadable"
 
 
 def test_executor_main_runs_clean(capsys):
@@ -338,14 +334,15 @@ def test_baseline_vs_multilane_main_runs_clean(capsys):
 # ── paper_trade_roundtrip ------------------------------------------------------
 
 def test_roundtrip_inserts_one_row_per_accepted_event(tmp_path):
-    """A4 #1: every accepted event produces exactly one paper_trades row."""
+    """Canonical 50c books are outside the favorite band or are not reserve
+    series. The politics desk must not insert a paper row."""
     reports = paper_trade_roundtrip.run(db_root=tmp_path)
-    accepted = [r for r in reports if r.accepted]
-    assert accepted, "expected at least one accepted event in the round-trip sim"
-    for r in accepted:
-        assert r.inserted_trade_id, f"{r.event_name}: accepted but no trade_id"
-        assert r.inserted_row is not None, f"{r.event_name}: row missing from DB"
-        assert r.inserted_row["ticker"] == r.ticker
+    assert reports
+    assert [r for r in reports if r.accepted] == []
+    for r in reports:
+        assert r.skip_reason, f"{r.event_name}: expected a desk skip"
+        assert r.inserted_trade_id is None
+        assert r.inserted_row is None
 
 
 def test_roundtrip_bankroll_debit_matches_recorded_cost(tmp_path):
@@ -367,20 +364,15 @@ def test_roundtrip_bankroll_debit_matches_recorded_cost(tmp_path):
 
 
 def test_roundtrip_source_multiplier_persists_to_row(tmp_path):
-    """A4 #3 (substituted): source_multiplier (read from SourceCredibility)
-    is persisted to every accepted row. Source-stats orchestration lives in
-    main.py and isn't exercised by record_trade — but ``record_trade`` does
-    query SourceCredibility and write the result, so that contract is the
-    one this harness can pin."""
+    """Source multiplier is written only after a paper insert. These
+    canonical 50c books are desk rejects, so no multiplier is persisted."""
     reports = paper_trade_roundtrip.run(db_root=tmp_path)
-    accepted = [r for r in reports if r.accepted]
-    assert accepted
-    for r in accepted:
-        assert r.source_multiplier_persisted is not None, (
-            f"{r.event_name}: source_multiplier missing from inserted row"
+    assert reports
+    assert [r for r in reports if r.accepted] == []
+    for r in reports:
+        assert r.source_multiplier_persisted is None, (
+            f"{r.event_name}: rejected book must not persist a source multiplier"
         )
-        # Fresh DB → no prior credibility → neutral 1.0 multiplier.
-        assert r.source_multiplier_persisted == pytest.approx(1.0)
 
 
 # ── polymarket_feedback_roundtrip ---------------------------------------------
@@ -389,33 +381,11 @@ def test_polymarket_feedback_roundtrip_closes_shared_loop(tmp_path):
     report = polymarket_feedback_roundtrip.run(db_root=tmp_path)
     assert report.routed_count == 1
     assert report.blend_enqueued is True
-    assert report.trade_id
-    assert report.paper_row["venue"] == "polymarket_us"
-    # PROFIT-VENUE-PARITY V03: per-family series_ticker (ticker
-    # "ewc-usgub-ks-2026-11-03-dem" -> pm_domain_key "polymarket_us:ewc-usgub-ks").
-    assert report.paper_row["series_ticker"] == "polymarket_us:ewc-usgub-ks"
-    assert json.loads(report.paper_row["keywords_matched"]) == [
-        "election",
-        "governor",
-        "kansas",
-        "race",
-    ]
-    assert report.settlement_checked == 1
-    assert report.settlement_resolved == 1
-    assert report.resolved_row["resolved"] == 1
-    assert report.keyword_outcomes["election"]["series_ticker"] == "polymarket_us:ewc-usgub-ks"
-    assert report.source_stats == {"posts_seen": 1, "signals": 1}
-    assert report.source_credibility["total"] == 1
-    assert report.calibration_samples["fast"] == 1
-    # V21 NOTE: the pipeline feedback report groups market-mix by the EVENT's
-    # market_prefix field (_market_prefix), which this sim emits at venue level
-    # ('polymarket_us') -- distinct from the DB series_ticker layer that V03 made
-    # per-family. Report-grouping per-family is a separate (lower-priority) item;
-    # the substantive V03 fix (per-family series_ticker / calibration / keyword
-    # buckets) is pinned by the assertions above.
-    assert report.feedback_report["market_mix"]["by_prefix"]["polymarket_us"][
-        "PAPER_TRADE"
-    ] == 1
+    # The candidate is not a politics reserve series. Routing may enqueue
+    # a blend, and the executor must not record a paper fill.
+    assert report.trade_id is None
+    assert report.paper_row == {}
+    assert report.settlement_resolved == 0
 
 
 def test_polymarket_feedback_roundtrip_main_runs_clean(capsys, tmp_path):
@@ -425,7 +395,9 @@ def test_polymarket_feedback_roundtrip_main_runs_clean(capsys, tmp_path):
     assert "settlement" in out
     assert polymarket_feedback_roundtrip.main(["--db-root", str(tmp_path), "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["paper_row"]["venue"] == "polymarket_us"
+    assert payload["trade_id"] is None
+    assert payload["paper_row"] == {}
+    assert payload["routed_count"] == 1
 
 
 # ── trading_queue_handoff ------------------------------------------------------

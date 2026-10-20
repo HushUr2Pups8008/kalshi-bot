@@ -16,7 +16,6 @@ generated `*.plist` files are per-machine artifacts ignored by git.
 
 | label | purpose | trigger |
 |---|---|---|
-| `com.jake.kalshi-bot` | main paper-trading bot via `caffeinate -dimsu @VENV_PYTHON@ main.py` | `RunAtLoad`, restart on non-success exit |
 | `com.jake.kalshi-bothealth` | bot health report wrapper | local 05:00 America/Denver daily |
 | `com.kalshi.db-backup` | online-safe SQLite snapshot backup | local 06:00 daily plus `RunAtLoad` |
 | `com.kalshi.governance.fast` | governance fast cadence | every 2 hours |
@@ -26,8 +25,8 @@ generated `*.plist` files are per-machine artifacts ignored by git.
 `install.sh` and not in the equivalence audit's default labels, because it
 is not installed until the operator copies the rendered plist and bootstraps
 that label alone. Do not add it to the default audit list before that copy
-exists. Do not bootstrap `com.jake.kalshi-bot` or `com.jake.kalshi-bot-politics`
-as part of installing this label.
+exists. Do not bootstrap `com.jake.kalshi-bot-politics` as part of installing
+this label. `com.jake.kalshi-bot` is retired and must not be bootstrapped.
 
 ## Generate
 
@@ -45,12 +44,8 @@ bash ops/launchd/install.sh
 ```
 
 The installer writes rendered plists to `~/Library/LaunchAgents/` and validates
-each generated plist with `plutil -lint`. It does not bootstrap jobs. Load only
-the jobs called for by the active runbook, for example:
-
-```bash
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jake.kalshi-bot.plist
-```
+each generated plist with `plutil -lint`. It does not bootstrap jobs. It removes
+a leftover `com.jake.kalshi-bot` plist. Do not bootstrap that label.
 
 ### Drift gate (IC §15 Rule 5)
 

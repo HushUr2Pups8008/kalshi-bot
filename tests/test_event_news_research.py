@@ -80,7 +80,7 @@ def test_event_news_missing_snapshot_ask_only_on_politics_cohort():
     market = SimpleNamespace(yes_ask_cents=None, no_ask_cents=None, yes_ask=None, no_ask=None)
     freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
     politics = SimpleNamespace(paper_cohort_id=EVENT_NEWS_COHORT_ID)
-    assert event_news_missing_snapshot_ask(market, config=freeze) is None
+    assert event_news_missing_snapshot_ask(market, config=freeze) == "missing_snapshot_ask"
     assert event_news_missing_snapshot_ask(market, config=politics) == "missing_snapshot_ask"
     complete = SimpleNamespace(yes_ask_cents=80, no_ask_cents=22, yes_ask=None, no_ask=None)
     assert event_news_missing_snapshot_ask(complete, config=politics) is None
@@ -214,7 +214,7 @@ async def test_live_research_noop_on_macro_cohort(monkeypatch):
         config=SimpleNamespace(paper_cohort_id="kalshi-macro-20260820"),
     )
     assert p == pytest.approx(0.55)
-    gate.assert_not_awaited()
+    gate.assert_awaited()
 
 
 def test_routing_prefers_ask_on_politics_only():
@@ -227,8 +227,8 @@ def test_routing_prefers_ask_on_politics_only():
         yes_ask=70,
     )
     mid, source = routing_yes_probability(market, config=freeze)
-    assert source == "mid"
-    assert mid == pytest.approx(0.36)
+    assert source == "yes_ask"
+    assert mid == pytest.approx(0.70)
     ask, source = routing_yes_probability(market, config=politics)
     assert source == "yes_ask"
     assert ask == pytest.approx(0.70)
@@ -243,7 +243,7 @@ def test_spread_disagreement_politics_only():
         yes_ask_cents=70,
     )
     tight = SimpleNamespace(last_price_cents=69, yes_ask_cents=70)
-    assert event_news_spread_disagreement(wide, config=freeze) is None
+    assert event_news_spread_disagreement(wide, config=freeze) == "last_ask_divergence"
     assert event_news_spread_disagreement(wide, config=politics) == "last_ask_divergence"
     assert event_news_spread_disagreement(tight, config=politics) is None
 
@@ -261,7 +261,7 @@ def test_executable_top_notional_is_politics_only():
         yes_ask=0.14,
         no_ask=0.87,
     )
-    assert event_news_executable_top_notional(book, "yes", config=freeze) is None
+    assert event_news_executable_top_notional(book, "yes", config=freeze) == pytest.approx(1.12)
     assert event_news_executable_top_notional(book, "yes", config=politics) == pytest.approx(1.12)
     assert event_news_executable_top_notional(book, "no", config=politics) == pytest.approx(2.61)
     rest_no_ask = SimpleNamespace(
@@ -293,7 +293,7 @@ def test_illiquid_skip_requires_both_oi_and_volume():
         open_interest_fp=3.0,
         volume_24h_fp=1.0,
     )
-    assert event_news_illiquid(empty, config=freeze) is None
+    assert event_news_illiquid(empty, config=freeze) == "illiquid_top_size"
     assert event_news_illiquid(empty, config=politics) == "illiquid_top_size"
     traded_thin_top = SimpleNamespace(
         ticker="KXTRUTHSOCIAL-26AUG29-B230",
@@ -330,7 +330,7 @@ def test_early_close_compresses_horizon_on_politics_only():
         can_close_early=True,
         early_close_condition="Closes when the deal is announced.",
     )
-    assert event_news_horizon_days(market, 14.0, config=freeze) == pytest.approx(14.0)
+    assert event_news_horizon_days(market, 14.0, config=freeze) == pytest.approx(2.0)
     assert event_news_horizon_days(market, 14.0, config=politics) == pytest.approx(2.0)
     already_short = SimpleNamespace(
         ticker="KXDEAL-2",
@@ -347,12 +347,12 @@ def test_event_prefix_and_cap_isolated_from_freeze():
         ticker="KXCANUSDEAL-26-26AUG24",
         event_ticker="KXCANUSDEAL-26",
     )
-    assert event_news_exposure_prefix(market, "KXCANUSDEAL", config=freeze) == "KXCANUSDEAL"
+    assert event_news_exposure_prefix(market, "KXCANUSDEAL", config=freeze) == "KXCANUSDEAL-26"
     assert (
         event_news_exposure_prefix(market, "KXCANUSDEAL", config=politics)
         == "KXCANUSDEAL-26"
     )
-    assert event_news_open_prefix_cap(2, config=freeze) == 2
+    assert event_news_open_prefix_cap(2, config=freeze) == 1
     assert event_news_open_prefix_cap(2, config=politics) == 1
 
 
@@ -376,7 +376,10 @@ def test_event_news_blocking_open_ticker_stops_sibling_not_new_event():
     )
     assert event_news_blocking_open_ticker(t6, [], config=politics) is None
     assert event_news_blocking_open_ticker(new_event, open_tickers, config=politics) is None
-    assert event_news_blocking_open_ticker(t6, open_tickers, config=freeze) is None
+    assert (
+        event_news_blocking_open_ticker(t6, open_tickers, config=freeze)
+        == "KXTRUMPACT-26AUG30-T8"
+    )
 
 
 def test_event_news_family_lock_second_truth_social_week():
@@ -399,7 +402,10 @@ def test_event_news_family_lock_second_truth_social_week():
     )
     assert event_news_family_lock_ticker(week_b, [], config=politics) is None
     assert event_news_family_lock_ticker(trump, open_week_a, config=politics) is None
-    assert event_news_family_lock_ticker(week_b, open_week_a, config=freeze) is None
+    assert (
+        event_news_family_lock_ticker(week_b, open_week_a, config=freeze)
+        == "KXTRUTHSOCIAL-26OCT03-B169"
+    )
 
 
 def test_failed_universe_family_lock_stays_closed(tmp_path):
@@ -423,7 +429,10 @@ def test_failed_universe_family_lock_stays_closed(tmp_path):
             event_news_family_lock_ticker(other, [], config=politics)
             == EVENT_NEWS_LIVE_OCCUPANCY_UNKNOWN
         )
-        assert event_news_family_lock_ticker(truth, [], config=freeze) is None
+        assert (
+            event_news_family_lock_ticker(truth, [], config=freeze)
+            == EVENT_NEWS_LIVE_OCCUPANCY_UNKNOWN
+        )
     finally:
         reset_series_universe()
 
@@ -478,7 +487,7 @@ def test_event_news_clamp_22_lots_becomes_8(caplog):
         ticker="KXTRUMPACT-26SEP06-T4",
         config=freeze,
     )
-    assert frozen.contracts == 22
+    assert frozen.contracts == 8
     small = FinalExecutionTerms(price_cents=82, contracts=8, cost_dollars=6.56)
     assert (
         event_news_clamp_execution_terms(
@@ -503,7 +512,11 @@ def test_event_news_fill_series_ticker_on_new_rows_only():
 def test_determined_status_only_on_politics():
     freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
     politics = SimpleNamespace(paper_cohort_id=EVENT_NEWS_COHORT_ID)
-    assert event_news_settle_statuses(config=freeze) == ("finalized", "settled")
+    assert event_news_settle_statuses(config=freeze) == (
+        "finalized",
+        "settled",
+        "determined",
+    )
     assert event_news_settle_statuses(config=politics) == (
         "finalized",
         "settled",
@@ -550,9 +563,11 @@ def test_favorite_ask_band_and_prewarm_filter_politics_only():
         open_interest_fp=40.0,
         volume_24h_fp=20.0,
     )
-    assert event_news_in_allowed_ask_band(longshot, config=freeze) is True
-    assert event_news_prewarm_allows(longshot, config=freeze) is True
-    assert event_news_prewarm_skip_reason(longshot, config=freeze) is None
+    assert event_news_in_allowed_ask_band(longshot, config=freeze) is False
+    assert event_news_prewarm_allows(longshot, config=freeze) is False
+    assert event_news_prewarm_skip_reason(longshot, config=freeze) == (
+        "ask_outside_favorite_band"
+    )
     assert event_news_in_allowed_ask_band(favorite, config=politics) is True
     assert event_news_prewarm_allows(favorite, config=politics) is True
     assert event_news_in_allowed_ask_band(longshot, config=politics) is False
@@ -581,7 +596,7 @@ def test_favorite_ask_band_and_prewarm_filter_politics_only():
         "official_data_pending",
         cheap_official_yes,
         config=freeze,
-    ) is False
+    ) is True
 
 
 def test_near_certain_ask_is_not_politics_money_path():
@@ -609,7 +624,9 @@ def test_near_certain_ask_is_not_politics_money_path():
         open_interest_fp=100.0,
         volume_24h_fp=50.0,
     )
-    assert event_news_prewarm_skip_reason(ninety_eight_no, config=freeze) is None
+    assert event_news_prewarm_skip_reason(ninety_eight_no, config=freeze) == (
+        "near_certain_ask"
+    )
     assert event_news_prewarm_skip_reason(ninety_eight_no, config=politics) == (
         "near_certain_ask"
     )
@@ -671,10 +688,10 @@ def test_favorite_no_side_and_wide_spread_politics_only():
         open_interest_fp=23000.0,
         volume_24h_fp=20000.0,
     )
-    assert event_news_favorite_side(no_favorite, config=freeze) == (None, None)
+    assert event_news_favorite_side(no_favorite, config=freeze) == ("no", 87)
     assert event_news_favorite_side(no_favorite, config=politics) == ("no", 87)
     assert event_news_prewarm_allows(no_favorite, config=politics) is True
-    assert event_news_wide_spread(wide, config=freeze) is None
+    assert event_news_wide_spread(wide, config=freeze) == "wide_spread"
     assert event_news_wide_spread(wide, config=politics) == "wide_spread"
     assert event_news_prewarm_skip_reason(wide, config=politics) == "wide_spread"
     assert event_news_prewarm_skip_reason(lottery, config=politics) == (
@@ -747,7 +764,7 @@ def test_quote_dependent_cooldown_bypass_only_on_live_favorite():
         event_news_bypass_quote_skip_cooldown(
             "illiquid_top_size", favorite, config=freeze
         )
-        is False
+        is True
     )
     assert (
         event_news_bypass_quote_skip_cooldown(
@@ -813,8 +830,12 @@ def test_prewarm_seed_markets_uses_pinned_series_not_cache():
     freeze_markets = event_news_prewarm_seed_markets(
         rest_client=rest, matcher_markets=cache, config=freeze
     )
-    assert freeze_markets == cache
-    assert fetched == []
+    assert fetched
+    assert all(
+        getattr(market, "ticker", "").endswith("-FRESH") for market in freeze_markets
+    )
+    assert cache[0] not in freeze_markets
+    fetched.clear()
     politics_markets = event_news_prewarm_seed_markets(
         rest_client=rest, matcher_markets=cache, config=politics
     )
@@ -840,7 +861,7 @@ def test_crossed_asks_politics_only():
         yes_ask=72,
         no_ask=30,
     )
-    assert event_news_crossed_asks(crossed, config=freeze) is None
+    assert event_news_crossed_asks(crossed, config=freeze) == "crossed_asks"
     assert event_news_crossed_asks(crossed, config=politics) == "crossed_asks"
     assert event_news_crossed_asks(healthy, config=politics) is None
 
@@ -855,9 +876,12 @@ def test_fee_net_edge_is_quote_fee_and_yaml_minimum_is_politics_only():
         yes_ask_cents=55,
         no_ask_cents=46,
     )
-    assert event_news_score_edge(
+    frozen_score = event_news_score_edge(
         book, yes_probability=0.70, side="yes", ask_cents=55, config=freeze,
-    ) is None
+    )
+    assert frozen_score is not None
+    assert frozen_score["fee"] == Decimal("0.0174")
+    assert frozen_score["new_take"] is True
     scored = event_news_score_edge(
         book, yes_probability=0.70, side="yes", ask_cents=55, config=politics,
     )
@@ -949,7 +973,10 @@ def test_paper_score_logs_a_veto_or_stays_pending(caplog):
 def test_official_research_kwargs_politics_only():
     freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
     politics = _politics_config()
-    assert event_news_official_research_kwargs(config=freeze) == {}
+    assert event_news_official_research_kwargs(config=freeze) == {
+        "allow_official_pdf_and_homepage": True,
+        "prefer_official_sources": True,
+    }
     assert event_news_official_research_kwargs(config=politics) == {
         "allow_official_pdf_and_homepage": True,
         "prefer_official_sources": True,
@@ -1010,7 +1037,12 @@ def test_one_market_per_event_prefers_yes_favorite():
         rung("KXTRUMPACT-26AUG23-T7", "KXTRUMPACT-26AUG23", 22, 86, 325.0),
         rung("KXTRUMPACT-26AUG23-T4", "KXTRUMPACT-26AUG23", 75, 28, 315.0),
     ]
-    assert event_news_one_market_per_event(ladder, config=freeze) == ladder
+    freeze_picked = event_news_one_market_per_event(ladder, config=freeze)
+    freeze_tickers = [market.ticker for market in freeze_picked]
+    assert "KXTRUMPACT-26AUG23-T4" in freeze_tickers
+    assert "KXTRUMPACT-26AUG23-T7" not in freeze_tickers
+    freeze_truth = [ticker for ticker in freeze_tickers if ticker.startswith("KXTRUTHSOCIAL")]
+    assert freeze_truth == ["KXTRUTHSOCIAL-26AUG29-B230"]
     picked = event_news_one_market_per_event(ladder, config=politics)
     tickers = [market.ticker for market in picked]
     assert "KXTRUMPACT-26AUG23-T4" in tickers
@@ -1087,7 +1119,7 @@ def test_reorder_prewarm_batch_does_not_inject_out_of_band(monkeypatch):
         ["KXARMOMINF-26SEP10-T1.8"],
         config=freeze,
     )
-    assert [market.ticker for market in freeze_batch] == [t240.ticker, armo.ticker]
+    assert [market.ticker for market in freeze_batch] == [t240.ticker]
 
 
 def test_news_may_refresh_research_only_in_band_or_settlement_source():
@@ -1143,7 +1175,7 @@ def test_news_may_refresh_research_only_in_band_or_settlement_source():
         )
         is True
     )
-    assert event_news_news_may_refresh_research(armo, config=freeze) is True
+    assert event_news_news_may_refresh_research(armo, config=freeze) is False
 
 
 def test_politics_retries_admission_without_paper_exposure():
@@ -1240,7 +1272,7 @@ def test_official_p_ready_and_admission_gate_politics_only():
             market=t240,
             config=freeze,
         )
-        is False
+        is True
     )
     assert (
         event_news_official_p_ready(
@@ -1306,7 +1338,10 @@ def test_executed_side_excluded_band_skips_t4_shaped_no_and_admits_favorites():
         )
         == "executed_ask_in_excluded_band"
     )
-    assert event_news_executed_side_skip_reason(t4, "no", config=freeze) is None
+    assert (
+        event_news_executed_side_skip_reason(t4, "no", config=freeze)
+        == "executed_ask_in_excluded_band"
+    )
     assert event_news_executed_side_skip_reason(t8, "no", config=politics) is None
     assert (
         event_news_admission_gate_reason(
@@ -1468,7 +1503,7 @@ def test_google_counter_not_required_for_in_band_official_reserve():
             force_side="yes",
             config=freeze,
         )
-        is False
+        is True
     )
     assert (
         event_news_google_counter_not_required(
@@ -1515,9 +1550,11 @@ def test_matcher_reserve_pins_politics_series_and_ignores_freeze():
         {"ticker": "KXMOCTRUMP25"},
     ]
     recency = ["KXRECENTJUNK"]
-    assert event_news_pin_matcher_series(recency, catalog, limit=2, config=freeze) == [
-        "KXRECENTJUNK"
-    ]
+    freeze_pinned = event_news_pin_matcher_series(
+        recency, catalog, limit=2, config=freeze
+    )
+    assert freeze_pinned[0] == "KXTRUTHSOCIAL"
+    assert "KXMOCTRUMP25" in freeze_pinned
     pinned = event_news_pin_matcher_series(recency, catalog, limit=2, config=politics)
     assert pinned[0] == "KXTRUTHSOCIAL"
     assert "KXMOCTRUMP25" in pinned
@@ -1575,15 +1612,17 @@ def test_mention_books_do_not_burn_the_research_gate():
     assert event_news_prewarm_skip_reason(maga, config=politics) == (
         "mention_requires_transcript"
     )
-    assert event_news_prewarm_skip_reason(maga, config=freeze) is None
+    assert event_news_prewarm_skip_reason(maga, config=freeze) == (
+        "mention_requires_transcript"
+    )
 
 
 def test_idle_runtime_tasks_and_forecast_refresh_isolated_from_freeze():
     freeze = SimpleNamespace(paper_cohort_id="kalshi-macro-20260820")
     politics = _politics_config()
-    assert event_news_omit_idle_runtime_tasks(config=freeze) is False
+    assert event_news_omit_idle_runtime_tasks(config=freeze) is True
     assert event_news_omit_idle_runtime_tasks(config=politics) is True
-    assert event_news_forecast_refresh_series(("KXDJI",), config=freeze) == ("KXDJI",)
+    assert event_news_forecast_refresh_series(("KXDJI",), config=freeze) == ()
     assert event_news_forecast_refresh_series(("KXDJI", "KXCPI"), config=politics) == ()
 
 
@@ -1594,6 +1633,6 @@ def test_operator_live_allow_is_politics_only():
     )
     politics_off = _politics_config(event_news_live_allow=False)
     politics_on = _politics_config(event_news_live_allow=True)
-    assert event_news_operator_live_allow(config=freeze) is False
+    assert event_news_operator_live_allow(config=freeze) is True
     assert event_news_operator_live_allow(config=politics_off) is False
     assert event_news_operator_live_allow(config=politics_on) is True

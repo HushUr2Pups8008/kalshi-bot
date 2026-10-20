@@ -34,7 +34,6 @@ from utils.event_news_research import (
     event_news_blocking_open_ticker,
     event_news_google_counter_not_required,
     event_news_official_p_ready,
-    is_event_news_paper_cohort,
 )
 from tasks.research_dossier import _evidence_has_both_sides_probability
 from utils.logger import get_logger, trade_log
@@ -177,16 +176,10 @@ class ResearchPaperSignalProvider:
         snapshot = await self.store.get_dossier_snapshot(market_ticker)
         if snapshot is None:
             return None, "missing_dossier"
-        if is_event_news_paper_cohort():
-            if snapshot.last_verdict_status not in {
-                DECISION_GRADE_STATUS,
-                TRADE_CANDIDATE_STATUS,
-            }:
-                return None, "not_decision_grade_candidate"
-        elif (
-            snapshot.last_verdict_status != DECISION_GRADE_STATUS
-            or snapshot.last_decision_grade_status != DECISION_GRADE_STATUS
-        ):
+        if snapshot.last_verdict_status not in {
+            DECISION_GRADE_STATUS,
+            TRADE_CANDIDATE_STATUS,
+        }:
             return None, "not_decision_grade_candidate"
         if not snapshot.last_research_run_id:
             return None, "missing_research_run"
@@ -254,12 +247,9 @@ class ResearchPaperSignalProvider:
             for item in evidence
         )
         relevant_evidence = tuple(item for item in validated_evidence if _evidence_is_relevant(item, relevance_spec))
-        both_sides_p = (
-            is_event_news_paper_cohort()
-            and _evidence_has_both_sides_probability(list(validated_evidence))
-        )
+        both_sides_p = _evidence_has_both_sides_probability(list(validated_evidence))
         official_without_google = False
-        if is_event_news_paper_cohort() and not both_sides_p:
+        if not both_sides_p:
             from utils.event_news_research import event_news_google_counter_not_required
 
             official_without_google = event_news_google_counter_not_required(
@@ -478,8 +468,7 @@ class ResearchPaperAdmissionBridge:
             market.regime_weights = compute_regime_weights(market)
         analysis = _signal_analysis_from_research(market, current_signal)
         bypass_blend = (
-            is_event_news_paper_cohort()
-            and event_news_official_p_ready(
+            event_news_official_p_ready(
                 estimated_probability=current_signal.estimated_probability,
                 force_side=current_signal.side,
                 market=market,
@@ -556,7 +545,7 @@ class ResearchPaperAdmissionBridge:
             current_signal.research_run_id,
             current_signal.contract_fingerprint,
         )
-        if not claimed and is_event_news_paper_cohort():
+        if not claimed:
             has_exposure = True
             if callable(self._paper_exposure_checker):
                 try:
@@ -687,8 +676,6 @@ def _is_decision_grade_prewarm_result(result: ResearchPrewarmResult) -> bool:
 
 
 def _is_official_p_prewarm_result(result: ResearchPrewarmResult) -> bool:
-    if not is_event_news_paper_cohort():
-        return False
     status = str(result.status or "").strip()
     if status in {DECISION_GRADE_STATUS, TRADE_CANDIDATE_STATUS}:
         return True

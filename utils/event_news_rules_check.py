@@ -29,7 +29,6 @@ from utils.event_news_grok_veto import (
     XAI_API_KEY_ENV,
     XAI_CHAT_URL,
 )
-from utils.event_news_research import is_event_news_paper_cohort
 from utils.logger import get_logger
 
 log = get_logger("event_news_rules_check")
@@ -195,8 +194,6 @@ def event_news_rules_check_skip(
     timeout, or a missing key also skips. A finished answer whose
     mismatch is not true does not skip.
     """
-    if not is_event_news_paper_cohort():
-        return False
     if not event_news_desk_flag_enabled(
         EVENT_NEWS_GROK_RULES_CHECK,
         live=live,

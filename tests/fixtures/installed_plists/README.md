@@ -7,7 +7,6 @@ normalizations applied (`@REPO_ROOT@`, `@VENV_PYTHON@`, `@GOVERNANCE_LLM_MODEL@`
 
 ## Fixtures present
 
-- `com.jake.kalshi-bot.plist`
 - `com.jake.kalshi-bothealth.plist`
 - `com.jake.kalshi-soak-check.plist`
 - `com.kalshi.db-backup.plist`

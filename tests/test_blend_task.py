@@ -522,7 +522,9 @@ async def test_event_news_research_uses_rest_top_size_when_orderbook_fails(
 
 
 @pytest.mark.asyncio
-async def test_freeze_research_orderbook_failure_stays_g7_fail_closed(monkeypatch) -> None:
+async def test_research_orderbook_failure_uses_rest_top_size_for_any_cohort(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr(
         "utils.event_news_research.is_event_news_paper_cohort",
         lambda _config=None: False,
@@ -546,12 +548,15 @@ async def test_freeze_research_orderbook_failure_stays_g7_fail_closed(monkeypatc
 
     result = await task.process_fast_lane_result(analysis)
 
-    assert result.ready is False
-    assert result.trade_blocked_reason == "G7_zero_liquidity"
-    assert logger.skipped_records[0]["signal_meta"]["g7_execution_liquidity"] == {
-        "source": "kalshi_orderbook",
-        "status": "unavailable",
-        "reason": "RuntimeError",
+    assert result.ready is True
+    assert result.enqueued is True
+    assert result.trade_blocked_reason is None
+    assert result.candidate is not None
+    assert result.candidate.signal_meta["g7_execution_liquidity"] == {
+        "source": "rest_top_size",
+        "status": "fallback",
+        "executable_notional": pytest.approx(4.08),
+        "reason": "orderbook_unavailable",
     }
 
 

@@ -36,7 +36,6 @@ from utils.event_news_research import (
     event_news_executed_side_skip_reason,
     event_news_favorite_side,
     event_news_has_structured_official_metric,
-    is_event_news_paper_cohort,
 )
 from utils.logger import get_logger
 
@@ -78,8 +77,6 @@ def event_news_grok_source_skip_reason(
     urls = tuple(str(url).strip() for url in bad_urls if str(url).strip())
     if not urls:
         return "no_bad_url"
-    if not is_event_news_paper_cohort():
-        return "not_politics_cohort"
     if str(skip_reason or "").strip() in _NO_EDGE_SKIPS:
         return str(skip_reason).strip()
     side, _cents = event_news_favorite_side(market)

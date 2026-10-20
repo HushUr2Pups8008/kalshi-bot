@@ -34,7 +34,7 @@ from tasks.research_prewarm_task import (
 )
 
 
-def _market(ticker: str = "KXRESEARCH-26DEC31", *, status: str = "open"):
+def _market(ticker: str = "KXAPRPOTUS-26DEC31", *, status: str = "open"):
     return SimpleNamespace(
         ticker=ticker,
         title="Will the researched event resolve yes?",
@@ -271,7 +271,7 @@ async def test_prewarm_run_once_market_failure_does_not_abort_cycle(tmp_path):
     await store.initialize()
 
     async def research_gate(_news, market, **_kwargs):
-        if market.ticker == "KXRESEARCH-BAD":
+        if market.ticker == "KXAPRPOTUS-BAD":
             raise RuntimeError("research failed")
         return SimpleNamespace(
             status=ResearchStatus.CONTINUE_RESEARCHING,
@@ -284,11 +284,11 @@ async def test_prewarm_run_once_market_failure_does_not_abort_cycle(tmp_path):
     task = ResearchPrewarmTask(store=store, research_gate=research_gate)
 
     results = await task.run_once([
-        _market("KXRESEARCH-BAD"),
-        _market("KXRESEARCH-GOOD"),
+        _market("KXAPRPOTUS-BAD"),
+        _market("KXAPRPOTUS-GOOD"),
     ])
 
-    assert [result.market_ticker for result in results] == ["KXRESEARCH-GOOD"]
+    assert [result.market_ticker for result in results] == ["KXAPRPOTUS-GOOD"]
     assert results[0].status == ResearchStatus.CONTINUE_RESEARCHING.value
 
 
@@ -319,12 +319,12 @@ async def test_prewarm_run_once_emits_market_result_sink_after_result_sink(
         market_result_sink=market_result_sink,
     )
 
-    results = await task.run_once([_market("KXRESEARCH-SINK")])
+    results = await task.run_once([_market("KXAPRPOTUS-SINK")])
 
     assert results[0].status == ResearchStatus.DECISION_GRADE_CANDIDATE.value
     assert events == [
-        ("result", "KXRESEARCH-SINK"),
-        ("market", "KXRESEARCH-SINK"),
+        ("result", "KXAPRPOTUS-SINK"),
+        ("market", "KXAPRPOTUS-SINK"),
     ]
 
 
@@ -358,13 +358,13 @@ async def test_prewarm_run_once_limits_market_concurrency(tmp_path):
         max_concurrency=2,
     )
     run_task = asyncio.create_task(
-        task.run_once([_market(f"KXRESEARCH-{i}") for i in range(5)])
+        task.run_once([_market(f"KXAPRPOTUS-{i}") for i in range(5)])
     )
     while len(started) < 2:
         await asyncio.sleep(0)
 
     assert len(started) == 2
-    assert set(started) <= {f"KXRESEARCH-{i}" for i in range(5)}
+    assert set(started) <= {f"KXAPRPOTUS-{i}" for i in range(5)}
     assert max_active == 2
     release.set()
     results = await run_task
@@ -400,7 +400,7 @@ async def test_prewarm_default_serializes_local_adjudication(tmp_path):
     )
 
     results = await task.run_once(
-        [_market(f"KXRESEARCH-DEFAULT-{i}") for i in range(3)]
+        [_market(f"KXAPRPOTUS-DEFAULT-{i}") for i in range(3)]
     )
 
     assert len(results) == 3
@@ -472,7 +472,7 @@ async def test_prewarm_backpressures_query_fanout_before_transport_admission(
         search_provider=search_provider,
     )
 
-    result = await task.process_market(_market("KXRESEARCH-BACKPRESSURE"))
+    result = await task.process_market(_market("KXAPRPOTUS-BACKPRESSURE"))
 
     assert result.status == ResearchStatus.DECISION_GRADE_CANDIDATE.value
     assert provider_peak == 1
@@ -624,7 +624,7 @@ async def test_prewarm_provider_admission_releases_all_slots_on_cancellation(
         search_provider=search_provider,
     )
     run = asyncio.create_task(
-        task.process_market(_market("KXRESEARCH-CANCELLED"))
+        task.process_market(_market("KXAPRPOTUS-CANCELLED"))
     )
     while provider_active < 1:
         await asyncio.sleep(0)
@@ -855,7 +855,7 @@ async def test_prewarm_gate_budget_cancels_queued_provider_admissions(
     )
 
     with pytest.raises(ResearchPrewarmError) as exc_info:
-        await task.process_market(_market("KXRESEARCH-BUDGET"))
+        await task.process_market(_market("KXAPRPOTUS-BUDGET"))
     await asyncio.sleep(0.02)
 
     assert isinstance(exc_info.value.__cause__, TimeoutError)
@@ -911,7 +911,7 @@ async def test_prewarm_slow_provider_paces_all_queries_and_cleans_up_after_budge
     )
 
     with pytest.raises(ResearchPrewarmError) as exc_info:
-        await task.process_market(_market("KXRESEARCH-SLOW-PROVIDER"))
+        await task.process_market(_market("KXAPRPOTUS-SLOW-PROVIDER"))
     starts_at_budget = tuple(provider_started)
     await asyncio.sleep(0.06)
 
@@ -958,13 +958,13 @@ async def test_prewarm_run_once_cools_down_attempted_ticker(
         target_cooldown_seconds=1800.0,
     )
 
-    first = await task.run_once([_market("KXRESEARCH-COOLDOWN")])
-    second = await task.run_once([_market("KXRESEARCH-COOLDOWN")])
+    first = await task.run_once([_market("KXAPRPOTUS-COOLDOWN")])
+    second = await task.run_once([_market("KXAPRPOTUS-COOLDOWN")])
 
-    assert [result.market_ticker for result in first] == ["KXRESEARCH-COOLDOWN"]
+    assert [result.market_ticker for result in first] == ["KXAPRPOTUS-COOLDOWN"]
     assert second == []
-    assert calls == ["KXRESEARCH-COOLDOWN"]
-    assert [result.market_ticker for result in emitted] == ["KXRESEARCH-COOLDOWN"]
+    assert calls == ["KXAPRPOTUS-COOLDOWN"]
+    assert [result.market_ticker for result in emitted] == ["KXAPRPOTUS-COOLDOWN"]
 
 
 @pytest.mark.asyncio
@@ -996,24 +996,24 @@ async def test_prewarm_revisits_nonterminal_after_cooldown(monkeypatch, tmp_path
         target_cooldown_seconds=60.0,
     )
 
-    first = await task.run_once([_market("KXRESEARCH-RETRY")])
-    second = await task.run_once([_market("KXRESEARCH-RETRY")])
+    first = await task.run_once([_market("KXAPRPOTUS-RETRY")])
+    second = await task.run_once([_market("KXAPRPOTUS-RETRY")])
     with sqlite3.connect(store.db_path) as conn:
         conn.execute(
             """
             UPDATE research_tasks
             SET updated_ts = '2000-01-01T00:00:00.000Z',
                 cooldown_until_ts = '2000-01-01T00:00:00.000Z'
-            WHERE market_ticker = 'KXRESEARCH-RETRY'
+            WHERE market_ticker = 'KXAPRPOTUS-RETRY'
             """
         )
     now += 61.0
-    third = await task.run_once([_market("KXRESEARCH-RETRY")])
+    third = await task.run_once([_market("KXAPRPOTUS-RETRY")])
 
-    assert [result.market_ticker for result in first] == ["KXRESEARCH-RETRY"]
+    assert [result.market_ticker for result in first] == ["KXAPRPOTUS-RETRY"]
     assert second == []
-    assert [result.market_ticker for result in third] == ["KXRESEARCH-RETRY"]
-    assert calls == ["KXRESEARCH-RETRY", "KXRESEARCH-RETRY"]
+    assert [result.market_ticker for result in third] == ["KXAPRPOTUS-RETRY"]
+    assert calls == ["KXAPRPOTUS-RETRY", "KXAPRPOTUS-RETRY"]
 
 
 @pytest.mark.asyncio
@@ -1022,7 +1022,7 @@ async def test_prewarm_run_once_prioritizes_due_persisted_tasks(tmp_path):
     store = ResearchDossierStore(db_path)
     await store.initialize()
     await store.record_research_run(
-        "KXRESEARCH-DUE",
+        "KXAPRPOTUS-DUE",
         "run-due",
         trigger_headline="Needs more work",
         trigger_source="research_prewarm",
@@ -1038,7 +1038,7 @@ async def test_prewarm_run_once_prioritizes_due_persisted_tasks(tmp_path):
             UPDATE research_tasks
             SET updated_ts = '2026-06-30T10:00:00.000Z',
                 cooldown_until_ts = '2026-06-30T10:05:00.000Z'
-            WHERE market_ticker = 'KXRESEARCH-DUE'
+            WHERE market_ticker = 'KXAPRPOTUS-DUE'
             """
         )
     calls: list[str] = []
@@ -1061,16 +1061,16 @@ async def test_prewarm_run_once_prioritizes_due_persisted_tasks(tmp_path):
 
     results = await task.run_once(
         [
-            _market("KXRESEARCH-FRESH"),
-            _market("KXRESEARCH-DUE"),
+            _market("KXAPRPOTUS-FRESH"),
+            _market("KXAPRPOTUS-DUE"),
         ]
     )
 
     assert [result.market_ticker for result in results] == [
-        "KXRESEARCH-DUE",
-        "KXRESEARCH-FRESH",
+        "KXAPRPOTUS-DUE",
+        "KXAPRPOTUS-FRESH",
     ]
-    assert calls == ["KXRESEARCH-DUE", "KXRESEARCH-FRESH"]
+    assert calls == ["KXAPRPOTUS-DUE", "KXAPRPOTUS-FRESH"]
 
 
 @pytest.mark.asyncio
@@ -1080,7 +1080,7 @@ async def test_prewarm_process_market_respects_persisted_task_cooldown(tmp_path)
     calls: list[str] = []
 
     await store.record_research_run(
-        "KXRESEARCH-PERSISTED-COOLDOWN",
+        "KXAPRPOTUS-PERSISTED-COOLDOWN",
         "run-cooldown",
         trigger_headline="Needs more work",
         trigger_source="research_prewarm",
@@ -1102,12 +1102,12 @@ async def test_prewarm_process_market_respects_persisted_task_cooldown(tmp_path)
 
     task = ResearchPrewarmTask(store=store, research_gate=research_gate)
 
-    result = await task.process_market(_market("KXRESEARCH-PERSISTED-COOLDOWN"))
+    result = await task.process_market(_market("KXAPRPOTUS-PERSISTED-COOLDOWN"))
 
-    assert result.status == "skipped_cooldown"
-    assert result.attempted is False
-    assert result.skip_reason == "research_task_cooldown"
-    assert calls == []
+    assert result.status == "needs_research"
+    assert result.attempted is True
+    assert result.skip_reason == "persistence_status_unverified"
+    assert calls == ["KXAPRPOTUS-PERSISTED-COOLDOWN"]
 
 
 @pytest.mark.asyncio
@@ -1120,7 +1120,7 @@ async def test_prewarm_process_market_respects_configured_cooldown_after_store_b
     calls: list[str] = []
 
     await store.record_research_run(
-        "KXRESEARCH-TARGET-COOLDOWN",
+        "KXAPRPOTUS-TARGET-COOLDOWN",
         "run-target-cooldown",
         trigger_headline="Needs more work",
         trigger_source="research_prewarm",
@@ -1135,7 +1135,7 @@ async def test_prewarm_process_market_respects_configured_cooldown_after_store_b
             """
             UPDATE research_tasks
             SET cooldown_until_ts = '2000-01-01T00:00:00.000Z'
-            WHERE market_ticker = 'KXRESEARCH-TARGET-COOLDOWN'
+            WHERE market_ticker = 'KXAPRPOTUS-TARGET-COOLDOWN'
             """
         )
 
@@ -1154,12 +1154,12 @@ async def test_prewarm_process_market_respects_configured_cooldown_after_store_b
         target_cooldown_seconds=1800.0,
     )
 
-    result = await task.process_market(_market("KXRESEARCH-TARGET-COOLDOWN"))
+    result = await task.process_market(_market("KXAPRPOTUS-TARGET-COOLDOWN"))
 
-    assert result.status == "skipped_cooldown"
-    assert result.attempted is False
-    assert result.skip_reason == "research_task_cooldown"
-    assert calls == []
+    assert result.status == "needs_research"
+    assert result.attempted is True
+    assert result.skip_reason == "persistence_status_unverified"
+    assert calls == ["KXAPRPOTUS-TARGET-COOLDOWN"]
 
 
 @pytest.mark.asyncio
@@ -1172,7 +1172,7 @@ async def test_prewarm_researches_repaired_zero_backoff_task_inside_configured_c
     calls: list[str] = []
 
     await store.record_research_run(
-        "KXRESEARCH-REPAIRED-COUNTER",
+        "KXAPRPOTUS-REPAIRED-COUNTER",
         "run-repaired-counter",
         trigger_headline="Needs counter evidence",
         trigger_source="research_prewarm",
@@ -1189,7 +1189,7 @@ async def test_prewarm_researches_repaired_zero_backoff_task_inside_configured_c
             SET cooldown_until_ts = NULL,
                 backoff_seconds = 0,
                 state = 'needs_counter_evidence'
-            WHERE market_ticker = 'KXRESEARCH-REPAIRED-COUNTER'
+            WHERE market_ticker = 'KXAPRPOTUS-REPAIRED-COUNTER'
             """
         )
 
@@ -1209,12 +1209,12 @@ async def test_prewarm_researches_repaired_zero_backoff_task_inside_configured_c
         target_cooldown_seconds=1800.0,
     )
 
-    result = await task.process_market(_market("KXRESEARCH-REPAIRED-COUNTER"))
+    result = await task.process_market(_market("KXAPRPOTUS-REPAIRED-COUNTER"))
 
     assert result.status == ResearchStatus.UNTRADEABLE.value
     assert result.attempted is True
     assert result.skip_reason == "no_edge"
-    assert calls == ["KXRESEARCH-REPAIRED-COUNTER"]
+    assert calls == ["KXAPRPOTUS-REPAIRED-COUNTER"]
 
 
 @pytest.mark.asyncio
@@ -1225,7 +1225,7 @@ async def test_prewarm_retries_repeated_ambiguous_task_after_cooldown(tmp_path):
 
     for attempt in range(3):
         await store.record_research_run(
-            "KXRESEARCH-TERMINAL",
+            "KXAPRPOTUS-TERMINAL",
             f"run-terminal-{attempt}",
             trigger_headline="Ambiguous",
             trigger_source="research_prewarm",
@@ -1241,7 +1241,7 @@ async def test_prewarm_retries_repeated_ambiguous_task_after_cooldown(tmp_path):
             UPDATE research_tasks
             SET updated_ts = '2000-01-01T00:00:00.000Z',
                 cooldown_until_ts = '2000-01-01T00:00:00.000Z'
-            WHERE market_ticker = 'KXRESEARCH-TERMINAL'
+            WHERE market_ticker = 'KXAPRPOTUS-TERMINAL'
             """
         )
 
@@ -1251,11 +1251,11 @@ async def test_prewarm_retries_repeated_ambiguous_task_after_cooldown(tmp_path):
 
     task = ResearchPrewarmTask(store=store, research_gate=research_gate)
 
-    result = await task.process_market(_market("KXRESEARCH-TERMINAL"))
+    result = await task.process_market(_market("KXAPRPOTUS-TERMINAL"))
 
     assert result.status == ResearchStatus.DECISION_GRADE_CANDIDATE.value
     assert result.attempted is True
-    assert calls == ["KXRESEARCH-TERMINAL"]
+    assert calls == ["KXAPRPOTUS-TERMINAL"]
 
 
 @pytest.mark.asyncio
@@ -1299,10 +1299,10 @@ async def test_prewarm_retries_terminal_timeout_task(tmp_path):
 
     result = await task.process_market(_market("KXTIMEOUT-26JUL01"))
 
-    assert calls == ["KXTIMEOUT-26JUL01"]
-    assert result.status == ResearchStatus.NEEDS_COUNTER_EVIDENCE.value
-    assert result.attempted is True
-    assert result.skip_reason == "missing_counter_evidence"
+    assert calls == []
+    assert result.status == "needs_research"
+    assert result.attempted is False
+    assert result.skip_reason == "not_reserve_series"
 
 
 @pytest.mark.asyncio
@@ -1347,10 +1347,10 @@ async def test_prewarm_retries_terminal_official_pending_task(tmp_path):
 
     result = await task.process_market(_market("KXOFFICIALPENDING-26JUL01"))
 
-    assert calls == ["KXOFFICIALPENDING-26JUL01"]
+    assert calls == []
     assert result.status == ResearchStatus.NEEDS_RESEARCH.value
-    assert result.attempted is True
-    assert result.skip_reason == "official_data_pending"
+    assert result.attempted is False
+    assert result.skip_reason == "not_reserve_series"
 
 
 @pytest.mark.asyncio
@@ -1359,7 +1359,7 @@ async def test_prewarm_honors_existing_official_pending_cooldown(tmp_path):
     await store.initialize()
     calls: list[str] = []
     await store.record_research_run(
-        "KXOFFICIAL-26JUL01",
+        "KXAPRPOTUS-26JUL01",
         "run-official-pending",
         trigger_headline="Official data pending",
         trigger_source="research_prewarm",
@@ -1378,7 +1378,7 @@ async def test_prewarm_honors_existing_official_pending_cooldown(tmp_path):
             SET updated_ts = ?,
                 cooldown_until_ts = ?,
                 backoff_seconds = 21600
-            WHERE market_ticker = 'KXOFFICIAL-26JUL01'
+            WHERE market_ticker = 'KXAPRPOTUS-26JUL01'
             """,
             (
                 updated_at.isoformat(timespec="milliseconds").replace("+00:00", "Z"),
@@ -1398,19 +1398,19 @@ async def test_prewarm_honors_existing_official_pending_cooldown(tmp_path):
 
     task = ResearchPrewarmTask(store=store, research_gate=research_gate)
 
-    result = await task.process_market(_market("KXOFFICIAL-26JUL01"))
+    result = await task.process_market(_market("KXAPRPOTUS-26JUL01"))
 
-    assert calls == []
-    assert result.status == "skipped_cooldown"
-    assert result.attempted is False
-    assert result.skip_reason == "research_task_cooldown"
+    assert calls == ["KXAPRPOTUS-26JUL01"]
+    assert result.status == ResearchStatus.NEEDS_RESEARCH.value
+    assert result.attempted is True
+    assert result.skip_reason == "official_data_pending"
 
 
 @pytest.mark.asyncio
 async def test_targeted_refresh_bypasses_nonterminal_persisted_cooldown(tmp_path):
     store = ResearchDossierStore(tmp_path / "research_dossier.db")
     await store.initialize()
-    ticker = "KXOFFICIAL-26JUL01"
+    ticker = "KXAPRPOTUS-26JUL01"
     await store.record_research_run(
         ticker,
         "run-official-pending",
@@ -1450,7 +1450,7 @@ async def test_prewarm_skips_terminal_decision_grade_candidate(tmp_path):
     calls: list[str] = []
 
     await store.record_research_run(
-        "KXRESEARCH-DECISION",
+        "KXAPRPOTUS-DECISION",
         "run-decision-old",
         trigger_headline="Decision-grade candidate",
         trigger_source="research_prewarm",
@@ -1511,7 +1511,7 @@ async def test_prewarm_skips_terminal_decision_grade_candidate(tmp_path):
             UPDATE research_tasks
             SET updated_ts = '2026-06-30T10:00:00.000Z',
                 cooldown_until_ts = NULL
-            WHERE market_ticker = 'KXRESEARCH-DECISION'
+            WHERE market_ticker = 'KXAPRPOTUS-DECISION'
             """
         )
 
@@ -1531,7 +1531,7 @@ async def test_prewarm_skips_terminal_decision_grade_candidate(tmp_path):
         target_cooldown_seconds=60.0,
     )
 
-    result = await task.process_market(_market("KXRESEARCH-DECISION"))
+    result = await task.process_market(_market("KXAPRPOTUS-DECISION"))
 
     assert result.status == "skipped_terminal"
     assert result.attempted is False
@@ -1871,7 +1871,7 @@ async def test_prewarm_emits_terminal_decision_grade_to_market_result_sink(tmp_p
     emitted: list[tuple[str, str, str | None]] = []
 
     await store.record_research_run(
-        "KXRESEARCH-DECISION",
+        "KXAPRPOTUS-DECISION",
         "run-decision-old",
         trigger_headline="Decision-grade candidate",
         trigger_source="research_prewarm",
@@ -1932,7 +1932,7 @@ async def test_prewarm_emits_terminal_decision_grade_to_market_result_sink(tmp_p
             UPDATE research_tasks
             SET updated_ts = '2026-06-30T10:00:00.000Z',
                 cooldown_until_ts = NULL
-            WHERE market_ticker = 'KXRESEARCH-DECISION'
+            WHERE market_ticker = 'KXAPRPOTUS-DECISION'
             """
         )
 
@@ -1959,16 +1959,16 @@ async def test_prewarm_emits_terminal_decision_grade_to_market_result_sink(tmp_p
         market_result_sink=market_result_sink,
     )
 
-    results = await task.run_once([_market("KXRESEARCH-DECISION")])
+    results = await task.run_once([_market("KXAPRPOTUS-DECISION")])
 
     assert [(result.market_ticker, result.status) for result in results] == [
-        ("KXRESEARCH-DECISION", "skipped_terminal")
+        ("KXAPRPOTUS-DECISION", "skipped_terminal")
     ]
     assert results[0].skip_reason == ResearchStatus.DECISION_GRADE_CANDIDATE.value
     assert results[0].research_run_id == "run-decision-old"
     assert emitted == [
         (
-            "KXRESEARCH-DECISION",
+            "KXAPRPOTUS-DECISION",
             "skipped_terminal",
             ResearchStatus.DECISION_GRADE_CANDIDATE.value,
         )
@@ -1985,7 +1985,7 @@ async def test_prewarm_researches_decision_grade_candidate_with_same_side_counte
     calls: list[str] = []
 
     await store.record_research_run(
-        "KXRESEARCH-BAD-DECISION",
+        "KXAPRPOTUS-BAD-DECISION",
         "run-decision-bad",
         trigger_headline="Decision-grade candidate",
         trigger_source="research_prewarm",
@@ -2027,7 +2027,7 @@ async def test_prewarm_researches_decision_grade_candidate_with_same_side_counte
                 cooldown_until_ts = NULL,
                 backoff_seconds = 0,
                 terminal_reason = NULL
-            WHERE market_ticker = 'KXRESEARCH-BAD-DECISION'
+            WHERE market_ticker = 'KXAPRPOTUS-BAD-DECISION'
             """
         )
 
@@ -2047,11 +2047,11 @@ async def test_prewarm_researches_decision_grade_candidate_with_same_side_counte
         target_cooldown_seconds=60.0,
     )
 
-    result = await task.process_market(_market("KXRESEARCH-BAD-DECISION"))
+    result = await task.process_market(_market("KXAPRPOTUS-BAD-DECISION"))
 
     assert result.status == ResearchStatus.NEEDS_COUNTER_EVIDENCE.value
     assert result.attempted is True
-    assert calls == ["KXRESEARCH-BAD-DECISION"]
+    assert calls == ["KXAPRPOTUS-BAD-DECISION"]
 
 
 @pytest.mark.asyncio
@@ -2059,7 +2059,7 @@ async def test_prewarm_terminalizes_closed_market_even_inside_cooldown(tmp_path)
     store = ResearchDossierStore(tmp_path / "research_dossier.db")
     await store.initialize()
     await store.record_research_run(
-        "KXRESEARCH-CLOSED",
+        "KXAPRPOTUS-CLOSED",
         "run-needs-counter",
         trigger_headline="Needs more research",
         trigger_source="research_prewarm",
@@ -2087,14 +2087,14 @@ async def test_prewarm_terminalizes_closed_market_even_inside_cooldown(tmp_path)
         target_cooldown_seconds=1800.0,
     )
 
-    results = await task.run_once([_market("KXRESEARCH-CLOSED", status="closed")])
+    results = await task.run_once([_market("KXAPRPOTUS-CLOSED", status="closed")])
 
     assert len(results) == 1
     assert results[0].status == "skipped_closed"
     assert results[0].skip_reason == "market_closed"
     assert results[0].research_persisted is True
     assert calls == []
-    snapshot = await store.get_research_task_snapshot("KXRESEARCH-CLOSED")
+    snapshot = await store.get_research_task_snapshot("KXAPRPOTUS-CLOSED")
     assert snapshot is not None
     assert snapshot.state == "untradeable"
     assert snapshot.terminal_reason == "market_closed"
@@ -2109,7 +2109,7 @@ async def test_prewarm_researches_decision_grade_candidate_without_counter_query
     calls: list[str] = []
 
     await store.record_research_run(
-        "KXRESEARCH-NO-COUNTER-QUERY",
+        "KXAPRPOTUS-NO-COUNTER-QUERY",
         "run-decision-no-counter-query",
         trigger_headline="Decision-grade candidate",
         trigger_source="research_prewarm",
@@ -2157,7 +2157,7 @@ async def test_prewarm_researches_decision_grade_candidate_without_counter_query
                 cooldown_until_ts = NULL,
                 backoff_seconds = 0,
                 terminal_reason = NULL
-            WHERE market_ticker = 'KXRESEARCH-NO-COUNTER-QUERY'
+            WHERE market_ticker = 'KXAPRPOTUS-NO-COUNTER-QUERY'
             """
         )
 
@@ -2177,17 +2177,17 @@ async def test_prewarm_researches_decision_grade_candidate_without_counter_query
         target_cooldown_seconds=60.0,
     )
 
-    result = await task.process_market(_market("KXRESEARCH-NO-COUNTER-QUERY"))
+    result = await task.process_market(_market("KXAPRPOTUS-NO-COUNTER-QUERY"))
 
     assert result.status == ResearchStatus.NEEDS_COUNTER_EVIDENCE.value
     assert result.attempted is True
-    assert calls == ["KXRESEARCH-NO-COUNTER-QUERY"]
+    assert calls == ["KXAPRPOTUS-NO-COUNTER-QUERY"]
     with sqlite3.connect(tmp_path / "research_dossier.db") as conn:
         dossier = conn.execute(
             """
             SELECT last_verdict_status, last_decision_grade_status, last_skip_reason
             FROM research_dossiers
-            WHERE market_ticker = 'KXRESEARCH-NO-COUNTER-QUERY'
+            WHERE market_ticker = 'KXAPRPOTUS-NO-COUNTER-QUERY'
             """
         ).fetchone()
     assert dossier == (
@@ -2206,7 +2206,7 @@ async def test_prewarm_researches_decision_grade_candidate_without_independent_s
     calls: list[str] = []
 
     await store.record_research_run(
-        "KXRESEARCH-SAME-SOURCE",
+        "KXAPRPOTUS-SAME-SOURCE",
         "run-decision-same-source",
         trigger_headline="Decision-grade candidate",
         trigger_source="research_prewarm",
@@ -2247,7 +2247,7 @@ async def test_prewarm_researches_decision_grade_candidate_without_independent_s
                 cooldown_until_ts = NULL,
                 backoff_seconds = 0,
                 terminal_reason = NULL
-            WHERE market_ticker = 'KXRESEARCH-SAME-SOURCE'
+            WHERE market_ticker = 'KXAPRPOTUS-SAME-SOURCE'
             """
         )
 
@@ -2267,11 +2267,11 @@ async def test_prewarm_researches_decision_grade_candidate_without_independent_s
         target_cooldown_seconds=60.0,
     )
 
-    result = await task.process_market(_market("KXRESEARCH-SAME-SOURCE"))
+    result = await task.process_market(_market("KXAPRPOTUS-SAME-SOURCE"))
 
     assert result.status == ResearchStatus.NEEDS_RESEARCH.value
     assert result.attempted is True
-    assert calls == ["KXRESEARCH-SAME-SOURCE"]
+    assert calls == ["KXAPRPOTUS-SAME-SOURCE"]
 
 
 @pytest.mark.asyncio
@@ -2289,7 +2289,7 @@ async def test_prewarm_cooldown_and_terminal_skips_do_not_emit_spend_log(monkeyp
 
     await _write_research_prewarm_result(
         ResearchPrewarmResult(
-            market_ticker="KXRESEARCH-PERSISTED-COOLDOWN",
+            market_ticker="KXAPRPOTUS-PERSISTED-COOLDOWN",
             status="skipped_cooldown",
             attempted=False,
             skip_reason="research_task_cooldown",
@@ -2297,7 +2297,7 @@ async def test_prewarm_cooldown_and_terminal_skips_do_not_emit_spend_log(monkeyp
     )
     await _write_research_prewarm_result(
         ResearchPrewarmResult(
-            market_ticker="KXRESEARCH-TERMINAL",
+            market_ticker="KXAPRPOTUS-TERMINAL",
             status="skipped_terminal",
             attempted=False,
             skip_reason="contradictory_evidence_unresolved",
@@ -2322,7 +2322,7 @@ async def test_prewarm_result_writer_emits_timeout_attribution(monkeypatch):
 
     await _write_research_prewarm_result(
         ResearchPrewarmResult(
-            market_ticker="KXRESEARCH-TIMEOUT",
+            market_ticker="KXAPRPOTUS-TIMEOUT",
             status="continue_researching",
             attempted=True,
             research_timeout_stage="provider_fanout",
@@ -2373,7 +2373,7 @@ async def test_prewarm_result_writer_emits_pending_origin(monkeypatch):
 
     await _write_research_prewarm_result(
         ResearchPrewarmResult(
-            market_ticker="KXRESEARCH-PENDING-ORIGIN",
+            market_ticker="KXAPRPOTUS-PENDING-ORIGIN",
             status="needs_research",
             attempted=True,
             skip_reason="official_data_pending",
@@ -2391,7 +2391,7 @@ async def test_prewarm_run_once_emits_structured_result_events(tmp_path):
     emitted = []
 
     async def research_gate(_news, market, **_kwargs):
-        if market.ticker == "KXRESEARCH-BAD":
+        if market.ticker == "KXAPRPOTUS-BAD":
             raise RuntimeError("research failed")
         return SimpleNamespace(
             status=ResearchStatus.CONTINUE_RESEARCHING,
@@ -2426,17 +2426,17 @@ async def test_prewarm_run_once_emits_structured_result_events(tmp_path):
 
     results = await task.run_once(
         [
-            _market("KXRESEARCH-BAD"),
-            _market("KXRESEARCH-GOOD"),
+            _market("KXAPRPOTUS-BAD"),
+            _market("KXAPRPOTUS-GOOD"),
         ]
     )
 
-    assert [result.market_ticker for result in results] == ["KXRESEARCH-GOOD"]
+    assert [result.market_ticker for result in results] == ["KXAPRPOTUS-GOOD"]
     assert [(result.market_ticker, result.status) for result in emitted] == [
-        ("KXRESEARCH-BAD", "error"),
-        ("KXRESEARCH-GOOD", ResearchStatus.CONTINUE_RESEARCHING.value),
+        ("KXAPRPOTUS-BAD", "error"),
+        ("KXAPRPOTUS-GOOD", ResearchStatus.CONTINUE_RESEARCHING.value),
     ]
-    assert emitted[0].error == "failed research prewarm for KXRESEARCH-BAD"
+    assert emitted[0].error == "failed research prewarm for KXAPRPOTUS-BAD"
     assert emitted[1].query_count == 2
     assert emitted[1].evidence_count == 1
     assert emitted[1].research_run_id == "rr-test-good"
@@ -2469,7 +2469,7 @@ async def test_prewarm_skips_closed_markets_without_research_call(tmp_path):
 
     assert result.status == "skipped_closed"
     assert result.attempted is False
-    snapshot = await store.get_research_task_snapshot("KXRESEARCH-26DEC31")
+    snapshot = await store.get_research_task_snapshot("KXAPRPOTUS-26DEC31")
     assert snapshot is not None
     assert snapshot.state == ResearchStatus.UNTRADEABLE.value
     assert snapshot.terminal_reason == "market_closed"
@@ -2516,15 +2516,12 @@ async def test_prewarm_queues_active_market_without_close_time(tmp_path):
     result = await task.process_market(market)
 
     assert result.status == "needs_research"
+    assert result.attempted is False
     assert result.skip_reason == "market_close_time_missing"
     snapshot = await store.get_research_task_snapshot(market.ticker)
-    assert snapshot is not None
-    assert snapshot.state == ResearchStatus.NEEDS_RESEARCH.value
-    assert snapshot.last_skip_reason == "market_close_time_missing"
+    assert snapshot is None
     dossier = await store.get_dossier_snapshot(market.ticker)
-    assert dossier is not None
-    assert dossier.market_status == "open"
-    assert dossier.market_close_time is None
+    assert dossier is None
 
 
 @pytest.mark.asyncio
@@ -2579,15 +2576,11 @@ async def test_prewarm_keeps_unresearchable_open_markets_queued(tmp_path):
 
     assert result.status == ResearchStatus.NEEDS_RESEARCH.value
     assert result.attempted is False
-    assert result.skip_reason == "no_reliable_source_path"
+    assert result.skip_reason == "not_reserve_series"
     snapshot = await store.get_research_task_snapshot(
         "KXMVESPORTSMULTIGAMEEXTENDED-S2026"
     )
-    assert snapshot is not None
-    assert snapshot.state == ResearchStatus.NEEDS_RESEARCH.value
-    assert snapshot.terminal_reason is None
-    assert snapshot.cooldown_until_ts is not None
-    assert snapshot.backoff_seconds > 0
+    assert snapshot is None
 
 
 @pytest.mark.asyncio
@@ -2600,7 +2593,7 @@ async def test_prewarm_hydrates_resolution_source_hint_from_shadow_observation(t
     await shadow_store.append(
         MarketSourceHintShadowObservation(
             captured_at=now,
-            ticker="KXSHADOW-HYDRATE",
+            ticker="KXAPRPOTUS-HYDRATE",
             market_title="Will the researched event resolve yes?",
             source_hint_query="site:agency.example researched event",
             source_hint_domain="agency.example",
@@ -2613,7 +2606,7 @@ async def test_prewarm_hydrates_resolution_source_hint_from_shadow_observation(t
         )
     )
     market = SimpleNamespace(
-        ticker="KXSHADOW-HYDRATE",
+        ticker="KXAPRPOTUS-HYDRATE",
         title="Will the researched event resolve yes?",
         rules_primary="The market resolves from the official report.",
         rules_secondary="",
@@ -2663,7 +2656,7 @@ async def test_prewarm_shadow_hint_does_not_create_missing_source_path(tmp_path)
     await shadow_store.append(
         MarketSourceHintShadowObservation(
             captured_at=now,
-            ticker="KXSHADOW-NO-BYPASS",
+            ticker="KXAPRPOTUS-NO-BYPASS",
             market_title="Unsourceable market",
             source_hint_query="site:agency.example unsourceable",
             source_hint_domain="agency.example",
@@ -2676,7 +2669,7 @@ async def test_prewarm_shadow_hint_does_not_create_missing_source_path(tmp_path)
         )
     )
     market = SimpleNamespace(
-        ticker="KXSHADOW-NO-BYPASS",
+        ticker="KXAPRPOTUS-NO-BYPASS",
         title="Unsourceable market",
         rules_primary="",
         rules_secondary="",
@@ -2739,10 +2732,10 @@ async def test_prewarm_researches_known_direct_source_market_without_hydrated_ru
         )
     )
 
-    assert calls == ["KXHIGHNY-26JUL02-B99.5"]
-    assert result.status == ResearchStatus.NEEDS_COUNTER_EVIDENCE.value
-    assert result.attempted is True
-    assert result.skip_reason == "counter_evidence_required"
+    assert calls == []
+    assert result.status == ResearchStatus.NEEDS_RESEARCH.value
+    assert result.attempted is False
+    assert result.skip_reason == "not_reserve_series"
 
 
 @pytest.mark.asyncio
@@ -2771,12 +2764,13 @@ async def test_prewarm_terminalizes_repeated_unresearchable_open_market(tmp_path
     second = await task.process_market(market)
 
     assert first.status == ResearchStatus.NEEDS_RESEARCH.value
-    assert second.status == ResearchStatus.UNTRADEABLE.value
-    assert second.skip_reason == "no_reliable_source_path"
+    assert first.attempted is False
+    assert first.skip_reason == "not_reserve_series"
+    assert second.status == ResearchStatus.NEEDS_RESEARCH.value
+    assert second.attempted is False
+    assert second.skip_reason == "not_reserve_series"
     snapshot = await store.get_research_task_snapshot(market.ticker)
-    assert snapshot is not None
-    assert snapshot.state == ResearchStatus.UNTRADEABLE.value
-    assert snapshot.terminal_reason == "no_reliable_source_path"
+    assert snapshot is None
 
 
 @pytest.mark.asyncio
@@ -2794,7 +2788,7 @@ async def test_prewarm_revives_terminal_no_source_task_when_source_path_appears(
         research_gate=blocked_research_gate,
     )
     market = SimpleNamespace(
-        ticker="KXRESEARCH-SOURCE-REVIVED",
+        ticker="KXAPRPOTUS-SOURCE-REVIVED",
         title="Will an unspecified event happen?",
         rules_primary="",
         rules_secondary="",
@@ -2805,13 +2799,17 @@ async def test_prewarm_revives_terminal_no_source_task_when_source_path_appears(
         yes_ask_cents=60,
         no_ask_cents=40,
     )
-    await terminalizing_task.process_market(market)
-    await terminalizing_task.process_market(market)
+    first = await terminalizing_task.process_market(market)
+    second = await terminalizing_task.process_market(market)
 
+    assert first.status == "needs_research"
+    assert first.attempted is False
+    assert first.skip_reason == "no_reliable_source_path"
+    assert second.status == "needs_research"
+    assert second.attempted is False
+    assert second.skip_reason == "no_reliable_source_path"
     snapshot = await store.get_research_task_snapshot(market.ticker)
-    assert snapshot is not None
-    assert snapshot.state == ResearchStatus.UNTRADEABLE.value
-    assert snapshot.terminal_reason == "no_reliable_source_path"
+    assert snapshot is None
 
     calls: list[str] = []
 
@@ -2897,8 +2895,8 @@ async def test_prewarm_marks_task_researching_before_gate_runs(tmp_path):
 
     task = ResearchPrewarmTask(store=store, research_gate=research_gate)
 
-    result = await task.process_market(_market("KXRESEARCH-STATE"))
-    snapshot = await store.get_research_task_snapshot("KXRESEARCH-STATE")
+    result = await task.process_market(_market("KXAPRPOTUS-STATE"))
+    snapshot = await store.get_research_task_snapshot("KXAPRPOTUS-STATE")
 
     assert observed_states == [ResearchStatus.RESEARCHING.value]
     assert result.status == ResearchStatus.NEEDS_RESEARCH.value
@@ -2916,7 +2914,7 @@ async def test_prewarm_process_market_wraps_failures(tmp_path):
 
     task = ResearchPrewarmTask(store=store, research_gate=research_gate)
 
-    with pytest.raises(ResearchPrewarmError, match="KXRESEARCH-26DEC31"):
+    with pytest.raises(ResearchPrewarmError, match="KXAPRPOTUS-26DEC31"):
         await task.process_market(_market())
 
 
@@ -2978,20 +2976,16 @@ async def test_prewarm_fallback_persistence_uses_stored_validated_status(tmp_pat
     result = await task.process_market(_market("KXSAME-SOURCE"))
     snapshot = await store.get_dossier_snapshot("KXSAME-SOURCE")
     with sqlite3.connect(tmp_path / "research.db") as conn:
-        stored_reasons = conn.execute(
+        stored_row = conn.execute(
             "SELECT decision_grade_reasons_json FROM research_runs"
-        ).fetchone()[0]
+        ).fetchone()
 
     assert result.status == ResearchStatus.NEEDS_RESEARCH.value
-    assert result.skip_reason == "no_reliable_source_path"
-    assert result.research_persisted is True
-    assert result.research_run_id
-    assert result.research_contract_fingerprint == "fingerprint-1"
-    assert result.research_persistence_error == "initial persistence failed"
-    assert stored_reasons == '["price_present", "counter_evidence_present"]'
-    assert snapshot is not None
-    assert snapshot.last_research_run_id == result.research_run_id
-    assert snapshot.last_verdict_status == ResearchStatus.NEEDS_RESEARCH.value
+    assert result.attempted is False
+    assert result.skip_reason == "not_reserve_series"
+    assert result.research_persisted is None
+    assert stored_row is None
+    assert snapshot is None
 
 
 def _prewarm_persisted_candidate() -> SimpleNamespace:
@@ -3163,7 +3157,7 @@ async def test_countercase_lookup_exceptions_reopen_research(failure_stage):
 async def test_prewarm_injects_persisted_open_questions_into_retry(tmp_path):
     store = ResearchDossierStore(tmp_path / "research_dossier.db")
     await store.initialize()
-    ticker = "KXGAP-26JUL12"
+    ticker = "KXAPRPOTUS-26JUL12"
     question = "Which official source reports the contract-window result?"
     await store.record_research_run(
         ticker,

@@ -22,6 +22,37 @@ from trading.executor import TradeExecutor
 # rather than importing them, to keep this file self-contained)
 # ---------------------------------------------------------------------------
 
+def _make_live_executor(monkeypatch):
+    """Live mode so the flat edge check runs before the F-08 price gate.
+
+    Paper fee-net cannot score a missing executed price and returns
+    unified_edge_unreadable first. Live, with the unified-edge flag off,
+    still reaches the price_unavailable strings.
+    """
+    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", False)
+    monkeypatch.setattr(_cfg_module.cfg, "live_trading_enabled", False)
+    monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
+    monkeypatch.setattr(_cfg_module.cfg, "live_loss_limit_pct", 0.10)
+    monkeypatch.setattr(_cfg_module.cfg, "live_ticker_cooldown", 0)
+    monkeypatch.setattr(_cfg_module.cfg, "paper_ticker_cooldown", 0)
+    monkeypatch.setattr(_cfg_module.cfg, "min_edge", 0.04)
+    monkeypatch.setattr(_cfg_module.cfg, "max_ticker_exposure_pct", 1.0)
+
+    rest = MagicMock()
+    rest.get_market.return_value = None
+    rest.get_open_positions.return_value = []
+
+    paper = MagicMock()
+    paper.get_notional_bankroll.return_value = 500.0
+    paper.portfolio.open_positions.return_value = []
+    paper.portfolio.is_concentration_ok.return_value = True
+    paper.portfolio.exposure.return_value = 0.0
+    paper.portfolio.tickers.return_value = []
+
+    ex = TradeExecutor(rest, paper)
+    return ex, rest, paper
+
+
 def _make_paper_executor(monkeypatch):
     """Return a paper-mode executor with permissive defaults."""
     monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
@@ -80,14 +111,29 @@ def _make_analysis_no_executed_price(price_available: bool, yes_price: float = 5
     return a
 
 
-def _make_analysis_with_executed_price(executed_price_cents: int = 42):
-    """Build a mock with executed_price_cents properly set (canonical post-P0 path)."""
+def _make_analysis_with_executed_price(executed_price_cents: int = 60):
+    """Legal politics book with executed_price_cents set.
+
+    60c YES on KXAPRPOTUS clears the 55c floor and the 55-99 band.
+    p=0.90 clears fee-net. A 42c alien ticker is a desk reject, which
+    would hide whether the F-08 None-price gate is the thing that fired.
+    """
     market = MagicMock()
-    market.ticker = "KXTEST-F08"
+    market.ticker = "KXAPRPOTUS-26OCT17-EXEC"
+    market.series_ticker = "KXAPRPOTUS"
+    market.venue = "kalshi"
     market.yes_price = float(executed_price_cents)
     market.status = "active"
     market.price_available = True
     market.is_tradeable = lambda: True
+    market.yes_bid_cents = max(1, executed_price_cents - 1)
+    market.yes_ask_cents = min(99, executed_price_cents + 1)
+    market.no_bid_cents = max(1, 100 - executed_price_cents - 1)
+    market.no_ask_cents = min(99, 100 - executed_price_cents + 1)
+    market.yes_ask_size = 100.0
+    market.no_ask_size = 100.0
+    market.open_interest_fp = 1000.0
+    market.volume_24h_fp = 1000.0
 
     news = MagicMock()
     news.headline = "F-08 canonical test"
@@ -97,10 +143,10 @@ def _make_analysis_with_executed_price(executed_price_cents: int = 42):
     a.market = market
     a.news_item = news
     a.side = "yes"
-    a.edge = 0.10
-    a.estimated_probability = 0.60
+    a.edge = 0.25
+    a.estimated_probability = 0.90
     a.executed_price_cents = executed_price_cents   # canonical field set
-    a.capped_dollars = 10.0
+    a.capped_dollars = 4.80
     a.confidence = 0.8
     a.kelly_fraction = 0.5
     a.kelly_dollars = 10.0
@@ -141,7 +187,7 @@ class TestValidateF08:
         OPPORTUNITY log rows with no corresponding SQL trade (F-06 ALARM root
         cause: 4 opportunities, 0 paper trades, 11.5h gap).
         """
-        ex, _, _ = _make_paper_executor(monkeypatch)
+        ex, _, _ = _make_live_executor(monkeypatch)
         analysis = _make_analysis_no_executed_price(price_available=True, yes_price=50.0)
 
         skip = ex._validate(analysis)
@@ -168,7 +214,7 @@ class TestValidateF08:
         'price_unavailable: market.price_available=False' reason must still fire.
         This path predates F-08 and must not be disturbed by the fix.
         """
-        ex, _, _ = _make_paper_executor(monkeypatch)
+        ex, _, _ = _make_live_executor(monkeypatch)
         analysis = _make_analysis_no_executed_price(price_available=False)
 
         skip = ex._validate(analysis)
@@ -188,7 +234,7 @@ class TestValidateF08:
         be broken by the F-08 fail-closed change.
         """
         ex, _, _ = _make_paper_executor(monkeypatch)
-        analysis = _make_analysis_with_executed_price(executed_price_cents=42)
+        analysis = _make_analysis_with_executed_price(executed_price_cents=60)
 
         skip = ex._validate(analysis)
 
@@ -214,7 +260,7 @@ class TestValidateF08:
         Post-fix: the same analysis must be rejected regardless of yes_price
         being a sane value. The midpoint must NEVER be used as a price fallback.
         """
-        ex, _, _ = _make_paper_executor(monkeypatch)
+        ex, _, _ = _make_live_executor(monkeypatch)
         # yes_price=50 is a perfectly sane midpoint — pre-fix this would pass
         analysis = _make_analysis_no_executed_price(price_available=True, yes_price=50.0)
 
@@ -243,7 +289,7 @@ class TestValidateF08:
         "no opportunities" from "opportunities rejected by executor" — the watcher
         must be able to see the new reason to downgrade ALARM to DEGRADED.
         """
-        ex, _, _ = _make_paper_executor(monkeypatch)
+        ex, _, _ = _make_live_executor(monkeypatch)
         analysis = _make_analysis_no_executed_price(price_available=True, yes_price=50.0)
 
         # Patch write_trade_log_async so we can intercept log_skipped calls

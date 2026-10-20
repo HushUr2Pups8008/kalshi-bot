@@ -249,16 +249,18 @@ def test_live_unset_and_other_cohort_do_not_call(monkeypatch, tmp_path) -> None:
     fetch.assert_not_called()
 
     _cohort(monkeypatch, "other-cohort")
+    paper_post = MagicMock(return_value=_response(_answer(mismatch=False)))
+    paper_fetch = MagicMock(return_value="source page")
     other = event_news_rules_check_skip(
         _analysis(_market()),
         live=False,
         environ={"XAI_API_KEY": "secret-key"},
-        post=post,
-        fetch=fetch,
+        post=paper_post,
+        fetch=paper_fetch,
         log_path=tmp_path / "rules.jsonl",
     )
     assert other is False
-    post.assert_not_called()
+    paper_post.assert_called_once()
 
 
 def test_fetch_error_does_not_skip_when_rules_exist(monkeypatch, tmp_path) -> None:

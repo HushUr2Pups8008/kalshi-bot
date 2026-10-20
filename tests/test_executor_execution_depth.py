@@ -32,25 +32,45 @@ def _book(
 
 
 def _analysis(*, side: str = "yes", venue: str = "kalshi") -> SimpleNamespace:
-    ticker = "KXDEPTH-EXEC" if venue == "kalshi" else "pm-depth-exec"
+    """A 60c KXAPRPOTUS book clears the politics gate. Eight contracts is the cap."""
+    price = 60
+    opposite = 40
+    if venue == "kalshi":
+        ticker = "KXAPRPOTUS-26OCT17-DEPTH"
+        series = "KXAPRPOTUS"
+    else:
+        ticker = "pm-depth-exec"
+        series = ""
+    yes_ask = price if side == "yes" else opposite
+    no_ask = opposite if side == "yes" else price
     market = SimpleNamespace(
         ticker=ticker,
+        series_ticker=series,
         venue=venue,
-        yes_price=50.0,
+        yes_price=float(yes_ask),
         status="active",
         price_available=True,
+        yes_ask_cents=yes_ask,
+        no_ask_cents=no_ask,
+        yes_ask=yes_ask,
+        no_ask=no_ask,
+        last_price_cents=yes_ask,
+        yes_ask_size=100.0,
+        no_ask_size=100.0,
+        open_interest_fp=1000.0,
+        volume_24h_fp=1000.0,
     )
     return SimpleNamespace(
         market=market,
         news_item=SimpleNamespace(headline="Depth guard test", source="test"),
         side=side,
-        edge=0.10,
-        estimated_probability=0.60,
-        executed_price_cents=50,
-        capped_dollars=10.0,
+        edge=0.25,
+        estimated_probability=0.90 if side == "yes" else 0.10,
+        executed_price_cents=price,
+        capped_dollars=4.80,
         confidence=0.80,
         kelly_fraction=0.50,
-        kelly_dollars=10.0,
+        kelly_dollars=4.80,
         llm_direction=None,
         llm_magnitude=None,
         llm_confidence=None,
@@ -66,6 +86,20 @@ def _executor(monkeypatch: pytest.MonkeyPatch, *, paper_mode: bool) -> tuple[Tra
     monkeypatch.setattr(config_module.cfg, "bankroll", 500.0)
     rest = MagicMock()
     rest.get_balance.return_value = 500.0
+    rest.get_open_positions.return_value = []
+
+    def _balance_request(_method, endpoint, *_args, **_kwargs):
+        if str(endpoint).endswith("/portfolio/balance"):
+            return {"balance": 50000, "portfolio_value": 0}
+        if str(endpoint).endswith("/portfolio/positions"):
+            return {"market_positions": []}
+        return {}
+
+    rest._request.side_effect = _balance_request
+    monkeypatch.setattr(
+        "utils.event_news_grok_veto.event_news_paper_grounding_skip",
+        lambda *_args, **_kwargs: False,
+    )
     paper = MagicMock()
     paper.get_notional_bankroll.return_value = 500.0
     paper.portfolio.open_positions.return_value = []
@@ -81,7 +115,7 @@ async def test_paper_execution_requires_full_yes_depth_for_rounded_contract_coun
     analysis = _analysis(side="yes")
     rest.get_market_orderbook.return_value = _book(
         analysis.market.ticker,
-        no_bids=(BookLevel(Decimal("0.50"), Decimal("20")),),
+        no_bids=(BookLevel(Decimal("0.40"), Decimal("8")),),
     )
 
     result = await executor.execute(analysis)
@@ -91,19 +125,19 @@ async def test_paper_execution_requires_full_yes_depth_for_rounded_contract_coun
     paper.record_trade.assert_called_once_with(
         analysis,
         execution_terms=FinalExecutionTerms(
-            price_cents=50,
-            contracts=20,
-            cost_dollars=10.0,
+            price_cents=60,
+            contracts=8,
+            cost_dollars=4.8,
         ),
     )
     assert analysis.signal_meta["final_execution_depth"] == {
         "source": "kalshi_orderbook",
         "status": "sufficient",
         "side": "yes",
-        "limit_price": 0.5,
-        "requested_contracts": 20,
-        "available_contracts": 20.0,
-        "available_notional": 10.0,
+        "limit_price": 0.6,
+        "requested_contracts": 8,
+        "available_contracts": 8.0,
+        "available_notional": 4.8,
         "as_of": "2026-07-29T16:30:00+00:00",
         "raw_payload_hash": "e" * 64,
     }
@@ -115,7 +149,7 @@ async def test_paper_execution_fails_closed_one_contract_short(monkeypatch):
     analysis = _analysis(side="yes")
     rest.get_market_orderbook.return_value = _book(
         analysis.market.ticker,
-        no_bids=(BookLevel(Decimal("0.50"), Decimal("19")),),
+        no_bids=(BookLevel(Decimal("0.40"), Decimal("7")),),
     )
 
     result = await executor.execute(analysis)
@@ -126,10 +160,10 @@ async def test_paper_execution_fails_closed_one_contract_short(monkeypatch):
         "source": "kalshi_orderbook",
         "status": "insufficient",
         "side": "yes",
-        "limit_price": 0.5,
-        "requested_contracts": 20,
-        "available_contracts": 19.0,
-        "available_notional": 9.5,
+        "limit_price": 0.6,
+        "requested_contracts": 8,
+        "available_contracts": 7.0,
+        "available_notional": 4.2,
         "as_of": "2026-07-29T16:30:00+00:00",
         "raw_payload_hash": "e" * 64,
     }
@@ -141,19 +175,19 @@ async def test_paper_execution_uses_yes_bids_for_final_no_depth(monkeypatch):
     analysis = _analysis(side="no")
     rest.get_market_orderbook.return_value = _book(
         analysis.market.ticker,
-        yes_bids=(BookLevel(Decimal("0.50"), Decimal("20")),),
+        yes_bids=(BookLevel(Decimal("0.40"), Decimal("8")),),
     )
 
     result = await executor.execute(analysis)
 
     assert result == "paper-depth-1"
     assert paper.record_trade.call_args.kwargs["execution_terms"] == FinalExecutionTerms(
-        price_cents=50,
-        contracts=20,
-        cost_dollars=10.0,
+        price_cents=60,
+        contracts=8,
+        cost_dollars=4.8,
     )
     assert analysis.signal_meta["final_execution_depth"]["side"] == "no"
-    assert analysis.signal_meta["final_execution_depth"]["available_contracts"] == 20.0
+    assert analysis.signal_meta["final_execution_depth"]["available_contracts"] == 8.0
 
 
 @pytest.mark.asyncio
@@ -161,6 +195,7 @@ async def test_invalid_candidate_skips_before_final_orderbook_fetch(monkeypatch)
     executor, rest, paper = _executor(monkeypatch, paper_mode=True)
     analysis = _analysis()
     analysis.edge = 0.0
+    analysis.estimated_probability = 0.60
 
     result = await executor.execute(analysis)
 
@@ -197,7 +232,7 @@ async def test_wrong_final_orderbook_identity_fails_closed(monkeypatch):
     analysis = _analysis()
     rest.get_market_orderbook.return_value = _book(
         "KXOTHER-DEPTH",
-        no_bids=(BookLevel(Decimal("0.50"), Decimal("20")),),
+        no_bids=(BookLevel(Decimal("0.40"), Decimal("8")),),
     )
 
     result = await executor.execute(analysis)
@@ -208,7 +243,7 @@ async def test_wrong_final_orderbook_identity_fails_closed(monkeypatch):
         "source": "kalshi_orderbook",
         "status": "unavailable",
         "reason": "ValueError",
-        "requested_contracts": 20,
+        "requested_contracts": 8,
     }
 
 
@@ -234,25 +269,28 @@ def _kalshi_market(*, ticker: str, yes_ask: int, yes_bid: int) -> KalshiMarket:
 @pytest.mark.asyncio
 async def test_blended_candidate_depth_uses_refreshed_side_price(monkeypatch):
     executor, rest, paper = _executor(monkeypatch, paper_mode=True)
-    ticker = "KXDEPTH-REFRESH"
+    ticker = "KXAPRPOTUS-26OCT17-BLEND"
     original = _analysis()
     original.market = SimpleNamespace(
         ticker=ticker,
+        series_ticker="KXAPRPOTUS",
         venue="kalshi",
-        yes_price=50.0,
+        yes_price=60.0,
         status="active",
         price_available=True,
+        yes_ask_cents=60,
+        no_ask_cents=40,
     )
-    fresh = _kalshi_market(ticker=ticker, yes_bid=38, yes_ask=40)
+    fresh = _kalshi_market(ticker=ticker, yes_bid=58, yes_ask=60)
     rest.get_market.return_value = fresh
     rest.get_market_orderbook.return_value = _book(
         ticker,
-        no_bids=(BookLevel(Decimal("0.60"), Decimal("25")),),
+        no_bids=(BookLevel(Decimal("0.40"), Decimal("8")),),
     )
     candidate = SimpleNamespace(
         fast_lane_analysis=original,
         market=original.market,
-        blended_probability=0.60,
+        blended_probability=0.90,
         signal_meta={},
     )
 
@@ -260,13 +298,13 @@ async def test_blended_candidate_depth_uses_refreshed_side_price(monkeypatch):
 
     assert result == "paper-depth-1"
     assert paper.record_trade.call_args.kwargs["execution_terms"] == FinalExecutionTerms(
-        price_cents=40,
-        contracts=25,
-        cost_dollars=10.0,
+        price_cents=60,
+        contracts=8,
+        cost_dollars=4.8,
     )
     routed_analysis = paper.record_trade.call_args.args[0]
-    assert routed_analysis.signal_meta["final_execution_depth"]["limit_price"] == 0.4
-    assert routed_analysis.signal_meta["final_execution_depth"]["requested_contracts"] == 25
+    assert routed_analysis.signal_meta["final_execution_depth"]["limit_price"] == 0.6
+    assert routed_analysis.signal_meta["final_execution_depth"]["requested_contracts"] == 8
 
 
 @pytest.mark.asyncio
@@ -284,7 +322,7 @@ async def test_live_execution_does_not_submit_when_final_depth_is_unavailable(mo
         "source": "kalshi_orderbook",
         "status": "unavailable",
         "reason": "RuntimeError",
-        "requested_contracts": 20,
+        "requested_contracts": 8,
     }
 
 
@@ -397,7 +435,11 @@ async def test_live_execution_uses_final_depth_plan_and_journals_it(monkeypatch,
     analysis = _analysis(side="yes")
     rest.get_market_orderbook.return_value = _book(
         analysis.market.ticker,
-        no_bids=(BookLevel(Decimal("0.50"), Decimal("20")),),
+        no_bids=(BookLevel(Decimal("0.40"), Decimal("8")),),
+    )
+    monkeypatch.setattr(
+        "utils.event_news_grok_veto.event_news_grok_veto_allows_live_post",
+        lambda *_args, **_kwargs: True,
     )
     rest.place_limit_order.return_value = SimpleNamespace(
         error=None,
@@ -417,8 +459,8 @@ async def test_live_execution_uses_final_depth_plan_and_journals_it(monkeypatch,
     live_kwargs = rest.place_limit_order.call_args.kwargs
     assert live_kwargs["ticker"] == analysis.market.ticker
     assert live_kwargs["side"] == "yes"
-    assert live_kwargs["count"] == 20
-    assert live_kwargs["limit_price"] == 50
+    assert live_kwargs["count"] == 8
+    assert live_kwargs["limit_price"] == 60
     assert live_kwargs["client_order_id"]
     intent_kwargs = next(
         call.kwargs
@@ -435,10 +477,10 @@ async def test_live_execution_uses_final_depth_plan_and_journals_it(monkeypatch,
         "source": "kalshi_orderbook",
         "status": "sufficient",
         "side": "yes",
-        "limit_price": 0.5,
-        "requested_contracts": 20,
-        "available_contracts": 20.0,
-        "available_notional": 10.0,
+        "limit_price": 0.6,
+        "requested_contracts": 8,
+        "available_contracts": 8.0,
+        "available_notional": 4.8,
         "as_of": "2026-07-29T16:30:00+00:00",
         "raw_payload_hash": "e" * 64,
     }
@@ -467,7 +509,7 @@ async def test_malformed_final_depth_response_fails_closed(monkeypatch):
             "source": "kalshi_orderbook",
             "status": "unavailable",
             "reason": "AttributeError",
-            "requested_contracts": 20,
+            "requested_contracts": 8,
         }
     }
 
@@ -479,13 +521,6 @@ async def test_no_execution_depth_request_for_polymarket(monkeypatch):
 
     result = await executor.execute(analysis)
 
-    assert result == "paper-depth-1"
+    assert result is None
     rest.get_market_orderbook.assert_not_called()
-    paper.record_trade.assert_called_once_with(
-        analysis,
-        execution_terms=FinalExecutionTerms(
-            price_cents=50,
-            contracts=20,
-            cost_dollars=10.0,
-        ),
-    )
+    paper.record_trade.assert_not_called()

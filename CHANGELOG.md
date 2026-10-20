@@ -19,6 +19,14 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.36.8] - 2026-10-19
+
+### Changed
+
+- **The politics desk is the only desk.** Cohort branches that skipped the politics gates on the legacy cohort are gone from the order path, prewarm, and admission. `com.jake.kalshi-bot` is no longer an install template. `ops/launchd/install.sh` only boots out a leftover freeze plist. It does not bootstrap that label. No freeze-only environment variable was removed.
+
+- **Paper fee-net is the only paper edge gate.** The legacy second quote, which compared `analysis.edge` to `quote_fee` outside the event-news cohort, is gone. An unreadable fee-net quote still does not record. Paper series still cannot POST. The 0–35c block, 55c YES floor, 91c gate, and 8-contract cap stay.
+
 ## [0.36.7] - 2026-10-19
 
 ### Changed

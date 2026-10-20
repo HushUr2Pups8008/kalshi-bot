@@ -18,7 +18,6 @@ from utils.output_paths import REPO_ROOT
 
 TEMPLATE_DIR = REPO_ROOT / "ops" / "launchd"
 LABELS = (
-    "com.jake.kalshi-bot",
     "com.jake.kalshi-bothealth",
     "com.jake.kalshi-daily-review",
     "com.jake.kalshi-match-feedback-aggregator",

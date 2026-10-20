@@ -188,8 +188,6 @@ from utils.research_prewarm_targets import (
     RESEARCH_PREWARM_EVENT_TYPES,
     record_targets_kalshi_research_prewarm,
 )
-from utils.research_priority import research_market_priority_key
-from utils.research_market_eligibility import research_market_eligibility
 from utils.trade_log_reader import iter_trade_records
 from tasks.runtime_overrides_task import run_runtime_overrides_poll
 
@@ -1609,24 +1607,20 @@ class TradingBot:
         return market
 
     def _research_prewarm_market_provider(self) -> list[object]:
-        from utils.event_news_research import (
-            is_event_news_paper_cohort,
-        )
 
         max_markets = max(0, int(getattr(cfg, "research_prewarm_max_markets", 25)))
         markets: list[object] = []
-        if is_event_news_paper_cohort():
-            from utils.event_news_research import event_news_prewarm_seed_markets
+        from utils.event_news_research import event_news_prewarm_seed_markets
 
-            cache_markets: list[object] = []
-            try:
-                cache_markets = list(self.matcher._cache._markets or [])
-            except Exception:
-                cache_markets = []
-            markets = event_news_prewarm_seed_markets(
-                rest_client=self.rest,
-                matcher_markets=cache_markets,
-            )
+        cache_markets: list[object] = []
+        try:
+            cache_markets = list(self.matcher._cache._markets or [])
+        except Exception:
+            cache_markets = []
+        markets = event_news_prewarm_seed_markets(
+            rest_client=self.rest,
+            matcher_markets=cache_markets,
+        )
         if not markets:
             try:
                 markets = self.rest.get_all_open_markets(
@@ -1637,395 +1631,57 @@ class TradingBot:
                 return []
         market_list = list(markets or [])
 
-        if is_event_news_paper_cohort():
-            from collections import Counter
-            from utils.event_news_research import (
-                event_news_one_market_per_event,
-                event_news_prewarm_skip_reason,
-            )
+        from collections import Counter
+        from utils.event_news_research import (
+            event_news_one_market_per_event,
+            event_news_prewarm_skip_reason,
+        )
 
-            before = len(market_list)
-            rejected: Counter[str] = Counter()
-            kept: list[object] = []
-            for market in market_list:
-                reason = event_news_prewarm_skip_reason(market)
-                if reason:
-                    rejected[reason] += 1
-                else:
-                    kept.append(market)
-            market_list = event_news_one_market_per_event(kept)
-            log.info(
-                "[EVENT_NEWS_PREWARM] favorite_band_filter fetched=%d in_band=%d rejected=%s tickers=%s",
-                before,
-                len(market_list),
-                dict(rejected),
-                [str(getattr(market, "ticker", "") or "") for market in market_list],
-            )
-            from utils.event_news_research import event_news_reorder_prewarm_batch
+        before = len(market_list)
+        rejected: Counter[str] = Counter()
+        kept: list[object] = []
+        for market in market_list:
+            reason = event_news_prewarm_skip_reason(market)
+            if reason:
+                rejected[reason] += 1
+            else:
+                kept.append(market)
+        market_list = event_news_one_market_per_event(kept)
+        log.info(
+            "[EVENT_NEWS_PREWARM] favorite_band_filter fetched=%d in_band=%d rejected=%s tickers=%s",
+            before,
+            len(market_list),
+            dict(rejected),
+            [str(getattr(market, "ticker", "") or "") for market in market_list],
+        )
+        from utils.event_news_research import event_news_reorder_prewarm_batch
 
-            due_tickers = [
-                task.market_ticker
-                for task in self._research_prewarm_due_tasks(
-                    limit=max(len(market_list), 1),
-                    cooldown_seconds=self._research_prewarm_target_cooldown_seconds(),
-                )
-                if not _research_prewarm_ticker_blocked(task.market_ticker)
-            ]
-            reordered = event_news_reorder_prewarm_batch(market_list, due_tickers)
-            for market in reordered:
-                self._enrich_research_prewarm_market_source_path(market)
-            log.info(
-                "[EVENT_NEWS_PREWARM] runtime_batch markets=%d tickers=%s due_in_band=%s",
-                len(reordered),
-                [str(getattr(market, "ticker", "") or "") for market in reordered],
-                [
-                    ticker
-                    for ticker in due_tickers
-                    if ticker
-                    in {
-                        str(getattr(market, "ticker", "") or "")
-                        for market in reordered
-                    }
-                ],
-            )
-            return reordered
-        now_monotonic = time.monotonic()
-        cooldown = self._research_prewarm_target_cooldown_seconds()
-        due_tasks = [
-            task
+        due_tickers = [
+            task.market_ticker
             for task in self._research_prewarm_due_tasks(
-                limit=max(max_markets * 5, max_markets),
-                cooldown_seconds=cooldown,
+                limit=max(len(market_list), 1),
+                cooldown_seconds=self._research_prewarm_target_cooldown_seconds(),
             )
             if not _research_prewarm_ticker_blocked(task.market_ticker)
         ]
-        bounded_official_pending_tasks = [
-            task
-            for task in due_tasks
-            if "official_data_pending"
-            in (task.last_skip_reason, task.terminal_reason)
-        ]
-        all_due_official_pending_tasks = (
-            self._research_prewarm_due_official_pending_tasks(
-                cooldown_seconds=cooldown
-            )
-        )
-        official_pending_lookup_available = all_due_official_pending_tasks is not None
-        if all_due_official_pending_tasks is None:
-            all_due_official_pending_tasks = bounded_official_pending_tasks
-        else:
-            all_due_official_pending_tasks = [
-                task
-                for task in all_due_official_pending_tasks
-                if not _research_prewarm_ticker_blocked(task.market_ticker)
-            ]
-            known_pending_tickers = {
-                task.market_ticker for task in all_due_official_pending_tasks
-            }
-            all_due_official_pending_tasks.extend(
-                task
-                for task in bounded_official_pending_tasks
-                if task.market_ticker not in known_pending_tickers
-            )
-        all_due_official_pending_tickers = {
-            task.market_ticker for task in all_due_official_pending_tasks
-        }
-        allowed_official_pending_tasks = all_due_official_pending_tasks[
-            : self._research_prewarm_official_pending_limit(
-                max_markets=max_markets
-            )
-        ]
-        allowed_official_pending_tickers = {
-            task.market_ticker
-            for task in allowed_official_pending_tasks
-        }
-        allowed_official_pending_order = {
-            task.market_ticker: index
-            for index, task in enumerate(allowed_official_pending_tasks)
-        }
-        deferred_official_pending_tickers = {
-            ticker
-            for ticker in all_due_official_pending_tickers
-            if ticker not in allowed_official_pending_tickers
-        }
-        target_sequence: list[str] = []
-        seen_targets: set[str] = set()
-        repeated_source_tickers = {
-            task.market_ticker
-            for task in due_tasks
-            if task.market_ticker not in all_due_official_pending_tickers
-            and str(getattr(task, "last_skip_reason", "") or "")
-            == "missing_resolution_source"
-            and int(getattr(task, "same_reason_count", 0) or 0) >= 2
-        }
-        due_task_tickers = [
-            task.market_ticker
-            for task in [*allowed_official_pending_tasks, *due_tasks]
-            if task.market_ticker not in deferred_official_pending_tickers
-            and task.market_ticker not in repeated_source_tickers
-        ]
-        due_task_ticker_set = set(due_task_tickers)
-        nonpending_due_tickers = {
-            task.market_ticker
-            for task in due_tasks
-            if task.market_ticker not in all_due_official_pending_tickers
-        }
-        runtime_target_tickers = (
+        reordered = event_news_reorder_prewarm_batch(market_list, due_tickers)
+        for market in reordered:
+            self._enrich_research_prewarm_market_source_path(market)
+        log.info(
+            "[EVENT_NEWS_PREWARM] runtime_batch markets=%d tickers=%s due_in_band=%s",
+            len(reordered),
+            [str(getattr(market, "ticker", "") or "") for market in reordered],
             [
                 ticker
-                for ticker in _recent_runtime_research_prewarm_tickers()
-                if ticker not in deferred_official_pending_tickers
-                and ticker not in repeated_source_tickers
-            ]
-            if official_pending_lookup_available
-            else []
-        )
-        for ticker in due_task_tickers + runtime_target_tickers:
-            if ticker in seen_targets:
-                continue
-            seen_targets.add(ticker)
-            target_sequence.append(ticker)
-        initial_target_order = {
-            ticker: index for index, ticker in enumerate(target_sequence)
-        }
-        open_by_ticker = {
-            str(getattr(market, "ticker", "") or "").strip(): market
-            for market in market_list
-        }
-        for ticker in due_task_tickers:
-            if ticker in open_by_ticker or not hasattr(self.rest, "get_market"):
-                continue
-            try:
-                market = self.rest.get_market(ticker)
-            except Exception as exc:
-                log.warning(
-                    "[RESEARCH_PREWARM] due market metadata fetch failed ticker=%s: %s",
-                    ticker,
-                    exc,
-                )
-                continue
-            if market is None:
-                continue
-            setattr(market, "_research_market_detail_fetched", True)
-            market_list.append(market)
-            open_by_ticker[ticker] = market
-        target_sequence.sort(
-            key=lambda ticker: (
-                0
-                if ticker in allowed_official_pending_tickers
-                else 1
-                if ticker in nonpending_due_tickers
-                else 2,
-                allowed_official_pending_order.get(
-                    ticker,
-                    len(allowed_official_pending_tasks),
-                ),
-                research_market_priority_key(open_by_ticker[ticker])
-                if ticker in open_by_ticker
-                else (2, 4),
-                initial_target_order[ticker],
-            )
-        )
-        target_order = {
-            ticker: index
-            for index, ticker in enumerate(target_sequence)
-        }
-
-        def market_ticker(market: object) -> str:
-            return str(getattr(market, "ticker", "") or "").strip()
-
-        def ticker_available(ticker: str) -> bool:
-            if _research_prewarm_ticker_blocked(ticker):
-                return False
-            return self._research_prewarm_ticker_available(
-                ticker,
-                now_monotonic=now_monotonic,
-                cooldown_seconds=cooldown,
-            )
-
-        def mark_selected(selected: list[object]) -> list[object]:
-            for market in selected:
-                if not market_has_research_source_path(market):
-                    continue
-                ticker = market_ticker(market)
-                if ticker:
-                    self._mark_research_prewarm_started(
-                        ticker,
-                        now_monotonic=now_monotonic,
-                    )
-            return selected
-
-        def is_open_market(market: object) -> bool:
-            return research_market_eligibility(market).eligible
-
-        def is_terminal_market(market: object) -> bool:
-            status = str(getattr(market, "status", "") or "").lower()
-            return status in {"closed", "finalized", "settled", "resolved"}
-
-        def is_sourceable_open_market(market: object) -> bool:
-            if not is_open_market(market):
-                return False
-            self._enrich_research_prewarm_market_source_path(market)
-            return market_has_research_source_path(market)
-
-        def open_markets_by_price(markets: Iterable[object]) -> list[object]:
-            return sorted(
-                [
-                    market
-                    for market in markets
-                    if is_open_market(market)
-                    and market_ticker(market)
-                    not in deferred_official_pending_tickers
-                ],
-                key=research_market_priority_key,
-            )
-
-        def sourceable_series_fallback(selected_tickers: set[str] | None = None) -> list[object]:
-            if not hasattr(self.rest, "get_markets"):
-                return []
-            selected_tickers = selected_tickers if selected_tickers is not None else set()
-            candidates: dict[str, object] = {}
-            for raw_series in getattr(
-                cfg, "research_prewarm_sourceable_series_fallback", ()
-            ) or ():
-                series_ticker = str(raw_series or "").strip()
-                if not series_ticker:
-                    continue
-                if _research_prewarm_ticker_blocked(series_ticker):
-                    continue
-                try:
-                    page, _cursor = self.rest.get_markets(
-                        series_ticker=series_ticker,
-                        limit=max_markets,
-                    )
-                except Exception as exc:
-                    log.warning(
-                        "[RESEARCH_PREWARM] sourceable fallback fetch failed "
-                        "series=%s: %s",
-                        series_ticker,
-                        exc,
-                    )
-                    continue
-                for market in page or ():
-                    ticker = market_ticker(market)
-                    if (
-                        not ticker
-                        or ticker in selected_tickers
-                        or ticker in candidates
-                        or ticker in deferred_official_pending_tickers
-                        or not ticker_available(ticker)
-                    ):
-                        continue
-                    if not is_sourceable_open_market(market):
-                        continue
-                    candidates[ticker] = market
-            selected = sorted(
-                candidates.values(),
-                key=research_market_priority_key,
-            )[:max_markets]
-            selected_tickers.update(market_ticker(market) for market in selected)
-            return selected
-
-        if target_order:
-            selected_by_ticker = {
-                market_ticker(market): market
-                for market in market_list
-                if market_ticker(market) in target_order
-            }
-            selected_tickers: set[str] = set()
-            selected: list[object] = []
-            unsourceable_targets: list[object] = []
-            direct_fetch_attempts = 0
-
-            for ticker in target_order:
-                if not ticker_available(ticker):
-                    continue
-                market = selected_by_ticker.get(ticker)
-                if (
-                    market is None
-                    and hasattr(self.rest, "get_market")
-                    and direct_fetch_attempts < max_markets
-                ):
-                    direct_fetch_attempts += 1
-                    try:
-                        market = self.rest.get_market(ticker)
-                    except Exception as exc:
-                        log.warning(
-                            "[RESEARCH_PREWARM] targeted market fetch failed ticker=%s: %s",
-                            ticker,
-                            exc,
-                        )
-                        market = None
-                if market is not None:
-                    if is_sourceable_open_market(market):
-                        selected.append(market)
-                        selected_tickers.add(market_ticker(market))
-                    elif is_open_market(market):
-                        unsourceable_targets.append(market)
-                        selected_tickers.add(market_ticker(market))
-                    elif ticker in due_task_ticker_set and is_terminal_market(market):
-                        # Closed due tasks must reach process_market so the
-                        # research task can terminalize instead of consuming
-                        # direct-fetch budget on every prewarm cycle.
-                        selected.append(market)
-                        selected_tickers.add(market_ticker(market))
-                if len(selected) >= max_markets:
-                    break
-            for market in open_markets_by_price(market_list):
-                if len(selected) >= max_markets:
-                    break
-                ticker = market_ticker(market)
-                if (
-                    ticker in selected_tickers
-                    or not ticker_available(ticker)
-                    or not is_sourceable_open_market(market)
-                ):
-                    continue
-                selected.append(market)
-            if selected:
-                if len(selected) < max_markets:
-                    selected.extend(
-                        sourceable_series_fallback(selected_tickers)[
-                            : max_markets - len(selected)
-                        ]
-                    )
-                if len(selected) < max_markets:
-                    selected.extend(
-                        unsourceable_targets[
-                            : max_markets - len(selected)
-                        ]
-                    )
-                return mark_selected(selected[:max_markets])
-            fallback = sourceable_series_fallback(selected_tickers)
-            if fallback:
-                if len(fallback) < max_markets:
-                    fallback.extend(
-                        unsourceable_targets[: max_markets - len(fallback)]
-                    )
-                return mark_selected(fallback)
-            if unsourceable_targets:
-                return unsourceable_targets[:max_markets]
-            return open_markets_by_price(market_list)[:max_markets]
-        sourceable = sorted(
-            [
-                market
-                for market in market_list
-                if is_open_market(market)
-                and market_ticker(market)
-                not in deferred_official_pending_tickers
-                and ticker_available(market_ticker(market))
-                and market_has_research_source_path(
-                    self._enrich_research_prewarm_market_source_path(market)
-                )
+                for ticker in due_tickers
+                if ticker
+                in {
+                    str(getattr(market, "ticker", "") or "")
+                    for market in reordered
+                }
             ],
-            key=research_market_priority_key,
-        )[:max_markets]
-        if sourceable:
-            return mark_selected(sourceable)
-        fallback = sourceable_series_fallback()
-        if fallback:
-            return mark_selected(fallback)
-        return open_markets_by_price(market_list)[:max_markets]
+        )
+        return reordered
 
     def _research_prewarm_runtime_markets(self) -> list[object]:
         """Politics prewarm is the live favorite-band set only."""
@@ -2065,10 +1721,7 @@ class TradingBot:
 
     def _create_event_news_grok_watch_task(self) -> asyncio.Task | None:
         """Politics open-row watch. Freeze does not start it. It does not order."""
-        from utils.event_news_research import is_event_news_paper_cohort
 
-        if not is_event_news_paper_cohort():
-            return None
         return asyncio.create_task(
             self._event_news_grok_watch_loop(),
             name="event_news_grok_watch",
@@ -2108,10 +1761,7 @@ class TradingBot:
 
     def _grok_edge_paper_allowed(self) -> bool:
         """The politics process is live. These loops stay off there."""
-        from utils.event_news_research import is_event_news_paper_cohort
 
-        if not is_event_news_paper_cohort():
-            return False
         if bool(getattr(cfg, "live_trading_enabled", False)):
             return False
         if not bool(getattr(cfg, "is_paper_trading", False)):
@@ -2366,9 +2016,8 @@ class TradingBot:
             bypass_persisted_cooldown=True,
         )
         await prewarm.emit_result(result)
-        from utils.event_news_research import is_event_news_paper_cohort
 
-        if result.attempted and is_event_news_paper_cohort():
+        if result.attempted:
             self._mark_research_prewarm_started(
                 str(getattr(market, "ticker", "") or ""),
                 now_monotonic=time.monotonic(),
@@ -2425,22 +2074,18 @@ class TradingBot:
     ) -> bool:
         from utils.event_news_research import (
             event_news_news_may_refresh_research,
-            is_event_news_paper_cohort,
         )
 
         reason = str(skip_reason or "").strip()
-        if is_event_news_paper_cohort():
-            if not event_news_news_may_refresh_research(
-                market,
-                settlement_source_match=settlement_source_match,
-            ):
-                return False
-            if (
-                reason not in self._RETRYABLE_RESEARCH_PREWARM_REASONS
-                and reason != "settlement_source_refresh"
-            ):
-                return False
-        elif reason not in self._RETRYABLE_RESEARCH_PREWARM_REASONS:
+        if not event_news_news_may_refresh_research(
+            market,
+            settlement_source_match=settlement_source_match,
+        ):
+            return False
+        if (
+            reason not in self._RETRYABLE_RESEARCH_PREWARM_REASONS
+            and reason != "settlement_source_refresh"
+        ):
             return False
         research_mode = str(getattr(cfg, "real_web_research_mode", "off") or "off").lower()
         if research_mode not in {"production", "shadow"}:
@@ -2450,13 +2095,12 @@ class TradingBot:
             return False
         if not hasattr(self, "_targeted_research_prewarm_tasks"):
             self._targeted_research_prewarm_tasks = set()
-        if is_event_news_paper_cohort():
-            target_name = f"research_prewarm_target:{ticker}"
-            if any(
-                not task.done() and task.get_name() == target_name
-                for task in self._targeted_research_prewarm_tasks
-            ):
-                return False
+        target_name = f"research_prewarm_target:{ticker}"
+        if any(
+            not task.done() and task.get_name() == target_name
+            for task in self._targeted_research_prewarm_tasks
+        ):
+            return False
         now_monotonic = time.monotonic()
         cooldown = self._research_prewarm_target_cooldown_seconds()
         if not self._research_prewarm_ticker_available(
@@ -2465,8 +2109,6 @@ class TradingBot:
             cooldown_seconds=cooldown,
         ):
             return False
-        if not is_event_news_paper_cohort():
-            self._mark_research_prewarm_started(ticker, now_monotonic=now_monotonic)
         task = asyncio.create_task(
             self._run_targeted_research_prewarm(market, reason),
             name=f"research_prewarm_target:{ticker}",
@@ -3156,7 +2798,6 @@ class TradingBot:
         from utils.event_news_research import (
             event_news_illiquid,
             event_news_prewarm_skip_reason,
-            is_event_news_paper_cohort,
         )
 
         illiquid = event_news_illiquid(market)
@@ -3168,23 +2809,22 @@ class TradingBot:
                 illiquid,
             )
             return
-        if is_event_news_paper_cohort():
-            skip_reason = event_news_prewarm_skip_reason(market)
-            if skip_reason:
-                settlement_match = _settlement_source_match(news, market)
-                if settlement_match:
-                    self._schedule_targeted_research_prewarm(
-                        market,
-                        "settlement_source_refresh",
-                        settlement_source_match=True,
-                    )
-                log.info(
-                    "[EVENT_NEWS_NEWS] skip ticker=%s source=%s reason=%s",
-                    market.ticker,
-                    news.source,
-                    skip_reason,
+        skip_reason = event_news_prewarm_skip_reason(market)
+        if skip_reason:
+            settlement_match = _settlement_source_match(news, market)
+            if settlement_match:
+                self._schedule_targeted_research_prewarm(
+                    market,
+                    "settlement_source_refresh",
+                    settlement_source_match=True,
                 )
-                return
+            log.info(
+                "[EVENT_NEWS_NEWS] skip ticker=%s source=%s reason=%s",
+                market.ticker,
+                news.source,
+                skip_reason,
+            )
+            return
         # Staleness check: skip if the article is too old when we process it.
         # With a queue, items can sit for several minutes; old news is already
         # priced in.
@@ -5302,11 +4942,9 @@ class TradingBot:
             else:
                 log.info("Kalshi account balance: $%.2f", balance)
                 if not cfg.is_paper_trading:
-                    from utils.event_news_research import is_event_news_paper_cohort
                     from utils.event_news_session_halt import record_cash_cents
 
-                    if is_event_news_paper_cohort():
-                        record_cash_cents(balance)
+                    record_cash_cents(balance)
         except Exception as exc:
             log.warning("Could not fetch Kalshi balance: %s; cash=not_measured", exc)
         if polymarket_disabled is None:
@@ -6220,11 +5858,8 @@ def _handle_go_live(paper: PaperTrader) -> None:
 
 def _record_politics_handled_stop() -> None:
     """A SIGTERM stop stays down on purpose. Health reads this alert."""
-    from utils.event_news_research import is_event_news_paper_cohort
     from utils.event_news_session_halt import write_operator_alert
 
-    if not is_event_news_paper_cohort():
-        return
     write_operator_alert("handled_stop")
 
 

@@ -10,7 +10,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 INSTALL_SH = REPO_ROOT / "ops/launchd/install.sh"
 
 EXPECTED_LABELS = {
-    "com.jake.kalshi-bot",
     "com.jake.kalshi-bothealth",
     "com.jake.kalshi-match-feedback-aggregator",
     "com.kalshi.db-backup",
