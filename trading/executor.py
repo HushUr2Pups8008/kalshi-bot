@@ -24,7 +24,7 @@ from typing import Any, Callable, Mapping, Optional
 
 from analysis import SignalAnalysis
 from analysis.kelly import contracts_from_dollars, kelly_bet
-from config import cfg, PAPER_MIN_EDGE, PAPER_BLOCK_SAME_SIDE_DUPLICATE
+from config import cfg
 from kalshi import OrderResult
 from kalshi.rest_client import KalshiRestClient
 from polymarket.domain_key import pm_domain_key
@@ -548,7 +548,7 @@ class TradeExecutor:
         call.loop.call_soon_threadsafe(callback)
 
     def _session_halt_enabled(self) -> bool:
-        """Event-news cohort. Unset is on for paper and off for live."""
+        """Unset is off. Exact true or 1 arms the same halt on paper and live."""
         from utils.event_news_desk_flags import (
             EVENT_NEWS_SESSION_HALT,
             event_news_desk_flag_enabled,
@@ -556,7 +556,7 @@ class TradeExecutor:
 
         return event_news_desk_flag_enabled(
             EVENT_NEWS_SESSION_HALT,
-            live=not self._is_paper,
+            live=True,
         )
 
     def _arm_persisted_session_halt(self) -> None:
@@ -647,53 +647,6 @@ class TradeExecutor:
         line = session_halt_loss_line(self._session_start_balance, cfg.live_loss_limit_pct)
         return loss >= line
 
-    def _paper_session_equity_dollars(self) -> float | None:
-        """Notional cash plus open cost. A failed read is not zero."""
-        getter = getattr(self._paper, "get_notional_bankroll", None)
-        if not callable(getter):
-            return None
-        try:
-            bankroll = getter()
-        except Exception:
-            log.warning("[SESSION_HALT] paper bankroll unreadable", exc_info=True)
-            return None
-        usable = _positive_dollars(bankroll)
-        if usable is None:
-            return None
-        try:
-            positions = self._paper.portfolio.open_positions()
-        except Exception:
-            log.warning("[SESSION_HALT] paper open cost unreadable", exc_info=True)
-            return None
-        if not isinstance(positions, list):
-            return None
-        total = usable
-        for position in positions:
-            try:
-                dollars = float(position.cost_dollars)
-            except (AttributeError, TypeError, ValueError):
-                return None
-            if dollars != dollars or dollars < 0 or dollars == float("inf"):
-                return None
-            total += dollars
-        return total
-
-    def _paper_session_halt_reason(self) -> str | None:
-        """Paper admit gate. Unreadable bankroll does not seed and does not admit."""
-        if not self._session_halt_enabled():
-            return None
-        if self._live_halted:
-            return "PAPER HALTED: session loss limit reached -- all trading suspended"
-        equity = self._paper_session_equity_dollars()
-        if equity is None:
-            log.warning(
-                "[SESSION_HALT] paper bankroll unreadable; skip and do not seed"
-            )
-            return "paper bankroll unreadable"
-        if self._check_session_equity_halt(equity):
-            return self._trip_session_halt(equity, mode="PAPER")
-        return None
-
     def _trip_session_halt(self, equity: float, *, mode: str = "LIVE") -> str:
         """Hold the process. Do not call shutdown: exit 0 leaves launchd down."""
         if not self._offloop_current():
@@ -719,11 +672,9 @@ class TradeExecutor:
         """
         Track session-start Kalshi balance and return True if the loss limit is breached.
         First call seeds the baseline; subsequent calls compare against it.
-        Paper-mode executors: always returns False (no live balance to track).
         None, bool, and <= 0 do not seed. The politics flag uses equity instead.
+        Paper and live both track the same cash reading.
         """
-        if self._is_paper:
-            return False
         usable = _positive_dollars(balance)
         if usable is None:
             return False
@@ -743,11 +694,9 @@ class TradeExecutor:
         return loss >= limit
 
     def _equity_loss_halt_enabled(self) -> bool:
-        """Politics live only. Unset is off for paper and for live."""
+        """Unset is off. Exact true or 1 arms the same equity halt on paper and live."""
         from utils.event_news_desk_flags import event_news_equity_loss_halt_enabled
 
-        if self._is_paper:
-            return False
         return event_news_equity_loss_halt_enabled()
 
     def _read_mtm_equity_dollars(self) -> float | None:
@@ -881,7 +830,7 @@ class TradeExecutor:
             if trade_ts.tzinfo is None:
                 trade_ts = trade_ts.replace(tzinfo=timezone.utc)
             age_secs = (now_wall - trade_ts).total_seconds()
-            if age_secs < cfg.paper_ticker_cooldown:
+            if age_secs < cfg.live_ticker_cooldown:
                 self._last_traded[ticker] = now_mono - age_secs
                 log.debug(
                     "Cooldown seeded for %s from portfolio (%.1fh ago)",
@@ -1223,7 +1172,7 @@ class TradeExecutor:
         capped = event_news_risk_capped_contracts(
             plan.contracts,
             plan.price_cents,
-            live=False,
+            live=True,
         )
         if capped <= 0:
             log.info(
@@ -1332,7 +1281,7 @@ class TradeExecutor:
         )
         if chain_reason:
             return None
-        window = int(getattr(cfg, "paper_ticker_cooldown", 0) or 0)
+        window = int(getattr(cfg, "live_ticker_cooldown", 0) or 0)
         if window > 0 and ticker:
             last_entry = self._paper_shadow_entry_mono.get(ticker)
             if last_entry is not None and (time.monotonic() - last_entry) < window:
@@ -1379,7 +1328,7 @@ class TradeExecutor:
             _open_cost,
             order_cost,
             _equity,
-            live=False,
+            live=True,
         )
         if exposure_reason is not None:
             log.info(
@@ -1407,9 +1356,8 @@ class TradeExecutor:
             analysis,
             ask_cents=plan.price_cents if type(plan.price_cents) is int else None,
             gross_edge=edge_value,
-            old_take=abs(edge_value) >= PAPER_MIN_EDGE,
+            old_take=abs(edge_value) >= cfg.min_edge,
             contracts=plan.contracts if type(plan.contracts) is int else 0,
-            use_new=True,
             shadow=False,
         )
         if edge_skip:
@@ -1479,7 +1427,7 @@ class TradeExecutor:
         days_to_close = event_news_horizon_days(
             analysis.market, _days_to_close(analysis.market.close_time) or 14.0
         )
-        min_edge = PAPER_MIN_EDGE if self._is_paper else cfg.min_edge
+        min_edge = cfg.min_edge
         _frac, kelly_dollars, capped_dollars = kelly_bet(
             estimated_probability=side_probability,
             market_price_cents=float(executed),
@@ -1498,10 +1446,10 @@ class TradeExecutor:
         analysis.capped_dollars = capped_dollars
 
     def _sizing_bankroll(self) -> float:
-        if not self._is_paper:
-            starting = self._configured_starting_bankroll()
-            if starting is not None:
-                return starting
+        """Configured starting bankroll. A shadow debit does not change the stake."""
+        starting = self._configured_starting_bankroll()
+        if starting is not None:
+            return starting
         return self._paper_effective_bankroll()
 
     def _configured_starting_bankroll(self) -> float | None:
@@ -1525,8 +1473,6 @@ class TradeExecutor:
         """Paper rows the live order may see. Shadow rows stay on the paper book."""
         if not isinstance(positions, list):
             return []
-        if self._is_paper:
-            return positions
         return [pos for pos in positions if getattr(pos, "paper_shadow", False) is not True]
 
     def _event_news_open_exposure_tickers(self) -> list[str]:
@@ -1537,10 +1483,7 @@ class TradeExecutor:
             open_positions = getattr(self._paper.portfolio, "open_positions", None)
             positions = open_positions() if callable(open_positions) else []
             for position in positions or []:
-                if (
-                    not self._is_paper
-                    and getattr(position, "paper_shadow", False) is True
-                ):
+                if getattr(position, "paper_shadow", False) is True:
                     continue
                 ticker = str(getattr(position, "ticker", "") or "").strip()
                 if ticker and ticker not in seen:
@@ -1572,7 +1515,6 @@ class TradeExecutor:
     def _validate(self, analysis: SignalAnalysis) -> Optional[str]:
         """Return skip reason, or None if the trade should proceed."""
         self._live_position_cache = _LIVE_POSITIONS_UNSET
-        # Use relaxed edge threshold during paper trading
         effective_min_edge = self._min_edge_threshold(analysis)
 
         if analysis.capped_dollars <= 0:
@@ -1599,7 +1541,7 @@ class TradeExecutor:
         if analysis.market.status not in ("open", "active"):
             return f"market status={analysis.market.status}"
 
-        # Price sanity: during paper trading allow slightly wider range.
+        # Price sanity is the live band for paper and live.
         # P-5 LD-10: prefer the executed-side ask cents (canonical post-P0).
         # F-08: fail-closed when executed_price_cents is None — the side selector
         # must always populate this field for any tradeable candidate. Falling back
@@ -1614,8 +1556,8 @@ class TradeExecutor:
                 "price_unavailable: executed_price_cents is None despite "
                 "price_available=True (side selector did not set canonical price)"
             )
-        price_floor = 2 if self._is_paper else 3
-        price_ceil = 98 if self._is_paper else 97
+        price_floor = 3
+        price_ceil = 97
         if yes_price < price_floor or yes_price > price_ceil:
             return f"price {yes_price:.1f}c is near limit (too illiquid)"
 
@@ -1631,17 +1573,6 @@ class TradeExecutor:
         )
         if chain_reason:
             return chain_reason
-
-        # Paper ticker cooldown (4h): prevents same ticker being spammed by a burst
-        # of headlines on the same topic (e.g. 30 Iran-war articles in one poll cycle).
-        if self._is_paper:
-            last = self._last_traded.get(analysis.market.ticker, float("-inf"))
-            elapsed = time.monotonic() - last
-            if elapsed < cfg.paper_ticker_cooldown:
-                return (
-                    f"paper cooldown: last trade {elapsed / 3600:.1f}h ago "
-                    f"(cooldown={cfg.paper_ticker_cooldown // 3600}h)"
-                )
 
         # PROFIT-ALIGN-004 (2026-05-25): per-market-prefix open-position cap.
         # The matcher can produce multiple outcome-contract matches in the same
@@ -1663,32 +1594,18 @@ class TradeExecutor:
                 _correlated_exposure_prefix(analysis.market),
             )
             if prefix:
-                # Live politics uses the same open list as the admit gate.
-                # Paper keeps the paper book so live rows do not block a shadow.
-                if not self._is_paper:
-                    from utils.event_news_research import event_news_blocking_open_ticker
+                from utils.event_news_research import event_news_blocking_open_ticker
 
-                    blocked = event_news_blocking_open_ticker(
-                        analysis.market,
-                        self._event_news_open_exposure_tickers(),
+                blocked = event_news_blocking_open_ticker(
+                    analysis.market,
+                    self._event_news_open_exposure_tickers(),
+                )
+                if blocked:
+                    return (
+                        f"per-prefix cap: 1 open in {prefix} "
+                        f"(cap={prefix_cap}, "
+                        f"open=[{blocked}])"
                     )
-                    if blocked:
-                        return (
-                            f"per-prefix cap: 1 open in {prefix} "
-                            f"(cap={prefix_cap}, "
-                            f"open=[{blocked}])"
-                        )
-                else:
-                    open_in_prefix = self._positions_for_live_gates(
-                        self._paper.portfolio.open_positions_by_prefix(prefix)
-                    )
-                    if len(open_in_prefix) >= prefix_cap:
-                        open_tickers = sorted({p.ticker for p in open_in_prefix})
-                        return (
-                            f"per-prefix cap: {len(open_in_prefix)} open in {prefix} "
-                            f"(cap={prefix_cap}, "
-                            f"open={open_tickers})"
-                        )
 
         # Multi-position guard: block opposing trades (no hedges) and duplicate
         # signals (same side, same probability estimate, same market price).
@@ -1700,20 +1617,7 @@ class TradeExecutor:
                 return (
                     f"opposing position exists: open {pos.side.upper()} at est={pos.estimated_prob:.3f} -- no hedging"
                 )
-            # Paper phase: allow same-side re-entry only if the estimated probability
-            # has shifted significantly (>=0.07) OR market price has moved (>=5c).
-            # This replaces the former flat block (PAPER_BLOCK_SAME_SIDE_DUPLICATE)
-            # which suppressed 11 valid follow-on signals over the first 30 days.
             analysis_price = float(analysis.executed_price_cents) if analysis.executed_price_cents is not None else 0.0
-            if self._is_paper and PAPER_BLOCK_SAME_SIDE_DUPLICATE:
-                prob_delta_paper = abs(pos.estimated_prob - analysis.estimated_probability)
-                price_delta_paper = abs(pos.entry_price_cents - analysis_price)
-                if prob_delta_paper < 0.07 and price_delta_paper < 5.0:
-                    return (
-                        f"paper duplicate skip: open {pos.side.upper()} at "
-                        f"est={pos.estimated_prob:.3f} (delta={prob_delta_paper:.3f}) "
-                        f"-- prob shift too small to add position"
-                    )
             prob_delta = abs(pos.estimated_prob - analysis.estimated_probability)
             price_delta = abs(pos.entry_price_cents - analysis_price)
             if prob_delta < 0.02 and price_delta < 2.0:
@@ -1758,15 +1662,7 @@ class TradeExecutor:
             final_terms,
             ticker=str(analysis.market.ticker),
         )
-        if self._is_paper:
-            # PROFIT-SIZING-001b: paper sizes by Kelly now (mirrors live, matches
-            # paper_trader). Concentration pre-check uses the actual Kelly
-            # contract cost rather than the retired flat-5 estimate.
-            trade_cost = final_terms.cost_dollars
-        else:
-            trade_cost = analysis.capped_dollars
-        if self._is_paper and trade_cost > notional:
-            return f"paper contract cost ${trade_cost:.2f} exceeds notional bankroll ${notional:.2f}"
+        trade_cost = analysis.capped_dollars
         open_cost = 0.0
         for pos in gate_positions:
             try:
@@ -1788,72 +1684,64 @@ class TradeExecutor:
                 f"{cfg.max_ticker_exposure_pct:.0%} cap (${cap:.2f})"
             )
 
-        # Live ticker cooldown + balance check + session loss limit
-        if not self._is_paper:
-            # Halt check: if a previous call already triggered the limit, reject all trades
-            if self._live_halted:
+        # Same cooldown, balance, and loss limit. Paper still does not POST.
+        if self._live_halted:
+            return "LIVE HALTED: session loss limit reached -- all trading suspended"
+
+        last = self._last_traded.get(analysis.market.ticker, float("-inf"))
+        elapsed = time.monotonic() - last
+        if elapsed < cfg.live_ticker_cooldown:
+            return f"cooldown: last trade {elapsed:.0f}s ago (cooldown={cfg.live_ticker_cooldown}s)"
+        balance = self._rest.get_balance()
+        if not self._offloop_current():
+            log.warning(
+                "[SESSION_HALT] balance unreadable; reason=abandoned; skip and do not seed"
+            )
+            return "live balance unreadable"
+        usable = _positive_dollars(balance)
+        if usable is None:
+            log.warning(
+                "[SESSION_HALT] balance unreadable; cash=not_measured; skip and do not seed"
+            )
+            return "live balance unreadable"
+        self._maybe_record_cash_cents(usable)
+        if self._session_halt_enabled():
+            equity = None
+            open_cost_dollars = self._session_open_cost_dollars()
+            if open_cost_dollars is not None:
+                equity = usable + open_cost_dollars
+            if equity is None:
+                log.warning(
+                    "[SESSION_HALT] equity unreadable; skip and do not seed"
+                )
+                return "live equity unreadable"
+            if self._check_session_equity_halt(equity):
+                return self._trip_session_halt(equity)
+        elif self._equity_loss_halt_enabled():
+            equity_reason = self._equity_loss_halt_reason()
+            if equity_reason is not None:
+                return equity_reason
+        else:
+            cash_halted = self._check_live_loss_limit(usable)
+            self._shadow_equity_loss_halt(cash_halted=cash_halted)
+            if cash_halted:
+                if not self._offloop_current():
+                    return "live balance unreadable"
+                self._live_halted = True
+                loss = self._session_start_balance - usable
+                log.critical(
+                    "LIVE LOSS LIMIT BREACHED -- halting all trading. "
+                    "Session loss $%.2f >= limit $%.2f (%.0f%% of $%.2f bankroll). "
+                    "Restart bot to reset.",
+                    loss,
+                    cfg.bankroll * cfg.live_loss_limit_pct,
+                    cfg.live_loss_limit_pct * 100,
+                    cfg.bankroll,
+                )
+                self._invoke_shutdown_callback()
                 return "LIVE HALTED: session loss limit reached -- all trading suspended"
-
-            last = self._last_traded.get(analysis.market.ticker, float("-inf"))
-            elapsed = time.monotonic() - last
-            if elapsed < cfg.live_ticker_cooldown:
-                return f"cooldown: last trade {elapsed:.0f}s ago (cooldown={cfg.live_ticker_cooldown}s)"
-            # Live balance check + session loss limit (single API call covers both)
-            balance = self._rest.get_balance()
-            if not self._offloop_current():
-                log.warning(
-                    "[SESSION_HALT] balance unreadable; reason=abandoned; skip and do not seed"
-                )
-                return "live balance unreadable"
-            usable = _positive_dollars(balance)
-            if usable is None:
-                log.warning(
-                    "[SESSION_HALT] balance unreadable; cash=not_measured; skip and do not seed"
-                )
-                return "live balance unreadable"
-            self._maybe_record_cash_cents(usable)
-            if self._session_halt_enabled():
-                equity = None
-                open_cost_dollars = self._session_open_cost_dollars()
-                if open_cost_dollars is not None:
-                    equity = usable + open_cost_dollars
-                if equity is None:
-                    log.warning(
-                        "[SESSION_HALT] equity unreadable; skip and do not seed"
-                    )
-                    return "live equity unreadable"
-                if self._check_session_equity_halt(equity):
-                    return self._trip_session_halt(equity)
-            elif self._equity_loss_halt_enabled():
-                equity_reason = self._equity_loss_halt_reason()
-                if equity_reason is not None:
-                    return equity_reason
-            else:
-                cash_halted = self._check_live_loss_limit(usable)
-                self._shadow_equity_loss_halt(cash_halted=cash_halted)
-                if cash_halted:
-                    if not self._offloop_current():
-                        return "live balance unreadable"
-                    self._live_halted = True
-                    loss = self._session_start_balance - usable
-                    log.critical(
-                        "LIVE LOSS LIMIT BREACHED -- halting all trading. "
-                        "Session loss $%.2f >= limit $%.2f (%.0f%% of $%.2f bankroll). "
-                        "Restart bot to reset.",
-                        loss,
-                        cfg.bankroll * cfg.live_loss_limit_pct,
-                        cfg.live_loss_limit_pct * 100,
-                        cfg.bankroll,
-                    )
-                    self._invoke_shutdown_callback()
-                    return "LIVE HALTED: session loss limit reached -- all trading suspended"
-            if analysis.capped_dollars > usable * 0.9:
-                return f"insufficient live balance (${usable:.2f})"
-
-        if self._is_paper:
-            paper_halt = self._paper_session_halt_reason()
-            if paper_halt is not None:
-                return paper_halt
+        if analysis.capped_dollars > usable * 0.9:
+            return f"insufficient live balance (${usable:.2f})"
 
         return None
 
@@ -1909,14 +1797,6 @@ class TradeExecutor:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            fallback_plan, fallback_reason = self._event_news_research_rest_execution_plan(
-                analysis,
-                plan,
-            )
-            if fallback_plan is not None:
-                return fallback_plan, None
-            if fallback_reason is not None:
-                return None, fallback_reason
             self._set_final_execution_depth_meta(
                 analysis,
                 {
@@ -1955,49 +1835,6 @@ class TradeExecutor:
             fresh_cents, fresh_invalid = event_news_fresh_ask_cents(liquidity.best_price)
             analysis._event_news_final_ask_cents = fresh_cents
             analysis._event_news_final_ask_invalid = fresh_invalid
-        return plan, None
-
-    def _event_news_research_rest_execution_plan(
-        self,
-        analysis: SignalAnalysis,
-        plan: FinalExecutionTerms,
-    ) -> tuple[FinalExecutionTerms | None, str | None]:
-        """Paper politics official-p only. Freeze and live stay fail-closed."""
-        if not self._is_paper:
-            return None, None
-        if str(getattr(analysis, "signal_type", "") or "") != "research_decision_grade":
-            return None, None
-        from utils.event_news_research import event_news_executable_top_size
-
-        available = event_news_executable_top_size(
-            analysis.market,
-            str(getattr(analysis, "side", "") or ""),
-        )
-        if available is None:
-            return None, None
-        available_contracts = Decimal(str(available))
-        if available_contracts < Decimal(plan.contracts):
-            self._set_final_execution_depth_meta(
-                analysis,
-                {
-                    "source": "rest_top_size",
-                    "status": "insufficient",
-                    "reason": "orderbook_unavailable",
-                    "requested_contracts": plan.contracts,
-                    "available_contracts": float(available_contracts),
-                },
-            )
-            return None, "G8_execution_depth_insufficient"
-        self._set_final_execution_depth_meta(
-            analysis,
-            {
-                "source": "rest_top_size",
-                "status": "fallback",
-                "reason": "orderbook_unavailable",
-                "requested_contracts": plan.contracts,
-                "available_contracts": float(available_contracts),
-            },
-        )
         return plan, None
 
     def _set_final_execution_depth_meta(
@@ -2155,10 +1992,10 @@ class TradeExecutor:
     ) -> str | None:
         """Skip reason for one politics edge check.
 
-        Flag off on a live process keeps the caller's flat comparison and
-        returns ``old_skip`` so that caller can keep its existing log.
-        Paper, and live with EVENT_NEWS_UNIFIED_EDGE, use fee-net versus
-        the yaml edge_min. A live disagreement is shadow-logged.
+        With EVENT_NEWS_UNIFIED_EDGE off, paper and live both keep the
+        caller's flat comparison and return ``old_skip``. The flag is the
+        only switch onto fee-net versus the yaml edge_min. A disagreement
+        is shadow-logged when the caller asks for it.
         """
         from utils.event_news_research import (
             event_news_score_edge,
@@ -2167,7 +2004,7 @@ class TradeExecutor:
         )
 
         if use_new is None:
-            use_new = self._is_paper or event_news_unified_edge_enabled()
+            use_new = event_news_unified_edge_enabled()
         side = str(getattr(analysis, "side", "") or "").strip().lower()
         try:
             yes_probability = float(analysis.estimated_probability)
@@ -2199,7 +2036,7 @@ class TradeExecutor:
         return None
 
     def _min_edge_threshold(self, analysis: SignalAnalysis) -> float:
-        base_threshold = PAPER_MIN_EDGE if self._is_paper else cfg.min_edge
+        base_threshold = cfg.min_edge
         signal_meta = self._signal_meta(analysis)
         override = signal_meta.get("readiness_gate_min_edge_override")
         if override is None:
@@ -2276,7 +2113,7 @@ class TradeExecutor:
         analysis: SignalAnalysis,
         execution_plan: FinalExecutionTerms,
     ) -> str | None:
-        """Politics desk skips. Paper defaults on. Live stays off until the env is set."""
+        """Gate-chain skips keep paper desk defaults. Exposure matches live."""
 
         reason = self._event_news_chain_reason(
             analysis,
@@ -2352,7 +2189,7 @@ class TradeExecutor:
             event_news_exposure_skip_reason,
         )
 
-        live = not self._is_paper
+        live = True
         if not event_news_desk_flag_enabled(EVENT_NEWS_MAX_EXPOSURE_PCT, live=live):
             return None
         ticker = str(getattr(getattr(analysis, "market", None), "ticker", "") or "")
@@ -2393,7 +2230,7 @@ class TradeExecutor:
             event_news_risk_capped_contracts,
         )
 
-        live = not self._is_paper
+        live = True
         if not event_news_desk_flag_enabled(EVENT_NEWS_MAX_RISK, live=live):
             return execution_plan, None
         capped = event_news_risk_capped_contracts(
@@ -2501,7 +2338,7 @@ class TradeExecutor:
                 functools.partial(
                     event_news_rules_check_skip,
                     analysis,
-                    live=False,
+                    live=True,
                 ),
                 timeout=_rules_hard_timeout_s(),
             )

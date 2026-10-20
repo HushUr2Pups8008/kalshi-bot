@@ -19,6 +19,12 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.36.13] - 2026-10-20
+
+### Changed
+
+- **Paper uses the live fee, size, and edge.** After the gate chain, paper and live both compare flat edge with `cfg.min_edge`, size from the configured starting bankroll, and use the 3c/97c band, the shared same-signal window, the live cooldown, and the cash balance check. `EVENT_NEWS_UNIFIED_EDGE` stays off. The 0-35c block, 55c YES floor, 91c gate, and 8-contract cap stay. A paper executor still never POSTs, and a paper series still stops at `paper_series_no_post`.
+
 ## [0.36.12] - 2026-10-19
 
 ### Changed

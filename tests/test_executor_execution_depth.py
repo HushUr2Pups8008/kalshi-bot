@@ -369,9 +369,10 @@ def test_paper_research_admission_gets_kelly_size_when_capped_dollars_zero(
 
 
 @pytest.mark.asyncio
-async def test_paper_politics_research_uses_rest_top_size_when_orderbook_unavailable(
+async def test_paper_politics_research_fails_closed_when_orderbook_unavailable(
     monkeypatch,
 ) -> None:
+    """Paper uses the same depth fail-closed path as live. No REST size fallback."""
     monkeypatch.setattr(
         "utils.event_news_research.is_event_news_paper_cohort",
         lambda _config=None: True,
@@ -385,21 +386,16 @@ async def test_paper_politics_research_uses_rest_top_size_when_orderbook_unavail
     analysis.market.yes_ask_cents = 60
     analysis.market.last_price_cents = 60
     analysis.executed_price_cents = 60
-    # 0.60 at 60c is below the exact fee. 0.90 clears yaml edge_min so depth runs.
     analysis.estimated_probability = 0.90
     rest.get_market_orderbook.side_effect = RuntimeError("orderbook unavailable")
 
     result = await executor.execute(analysis)
 
+    assert result is None
     rest.place_limit_order.assert_not_called()
-    assert analysis.signal_meta["final_execution_depth"] == {
-        "source": "rest_top_size",
-        "status": "fallback",
-        "reason": "orderbook_unavailable",
-        "requested_contracts": 8,
-        "available_contracts": 20.0,
-    }
-    assert result in {"paper-depth-1", None}
+    assert analysis.signal_meta["final_execution_depth"]["source"] == "kalshi_orderbook"
+    assert analysis.signal_meta["final_execution_depth"]["status"] == "unavailable"
+    del paper
 
 
 @pytest.mark.asyncio
@@ -524,3 +520,127 @@ async def test_no_execution_depth_request_for_polymarket(monkeypatch):
     assert result is None
     rest.get_market_orderbook.assert_not_called()
     paper.record_trade.assert_not_called()
+
+
+def _same_book_executors(monkeypatch):
+    """One paper executor and one live executor on the same bankroll."""
+    monkeypatch.setenv("EVENT_NEWS_YES_FLOOR_CENTS", "55")
+    monkeypatch.setenv("EVENT_NEWS_EXCLUDE_EXACT_35", "true")
+    for name in (
+        "EVENT_NEWS_UNIFIED_EDGE",
+        "EVENT_NEWS_EQUITY_LOSS_HALT",
+        "EVENT_NEWS_LIVE_TRADABLE_RESEARCH",
+        "EVENT_NEWS_SESSION_HALT",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(config_module.cfg, "min_edge", 0.04)
+    paper_ex, paper_rest, paper_book = _executor(monkeypatch, paper_mode=True)
+    live_ex, live_rest, live_book = _executor(monkeypatch, paper_mode=False)
+    for book in (paper_book, live_book):
+        book._starting_bankroll = 50.0
+        book.get_effective_sizing_bankroll.return_value = 10.0
+    return paper_ex, paper_rest, paper_book, live_ex, live_rest, live_book
+
+
+def test_same_book_paper_and_live_share_edge_size_and_fee(monkeypatch) -> None:
+    """A 60c book is the same decision, size, and fee. The POST is the exception."""
+    from utils.event_news_research import event_news_fee_net_edge
+
+    paper_ex, _, _, live_ex, _, _ = _same_book_executors(monkeypatch)
+    paper_reason = paper_ex._validate(_analysis())
+    live_reason = live_ex._validate(_analysis())
+    assert paper_reason is None
+    assert live_reason is None
+
+    paper_sized = _analysis()
+    live_sized = _analysis()
+    paper_sized.capped_dollars = 0
+    live_sized.capped_dollars = 0
+    paper_sized.market.close_time = "2026-11-01T00:00:00Z"
+    live_sized.market.close_time = "2026-11-01T00:00:00Z"
+    paper_ex._ensure_sized(paper_sized)
+    live_ex._ensure_sized(live_sized)
+    assert paper_sized.capped_dollars == live_sized.capped_dollars
+    assert paper_sized.capped_dollars > 0
+
+    low_paper = _analysis()
+    low_live = _analysis()
+    low_paper.edge = 0.03
+    low_live.edge = 0.03
+    low_paper.estimated_probability = 0.53
+    low_live.estimated_probability = 0.53
+    paper_skip = paper_ex._validate(low_paper)
+    live_skip = live_ex._validate(low_live)
+    assert paper_skip == live_skip
+    assert paper_skip is not None
+    assert "below min_edge" in paper_skip
+
+    fee_paper = event_news_fee_net_edge(0.90, 60, 8)
+    fee_live = event_news_fee_net_edge(0.90, 60, 8)
+    assert fee_paper is not None and fee_live is not None
+    assert fee_paper[1] == fee_live[1]
+
+
+@pytest.mark.asyncio
+async def test_same_book_paper_records_and_live_posts_the_same_size(
+    monkeypatch, tmp_path
+) -> None:
+    paper_ex, paper_rest, paper_book, live_ex, live_rest, _live_book = _same_book_executors(
+        monkeypatch
+    )
+    live_ex._live_submission_holds._path = tmp_path / "holds.json"
+    monkeypatch.setattr(
+        "utils.event_news_grok_veto.event_news_grok_veto_allows_live_post",
+        lambda *_args, **_kwargs: True,
+    )
+    book = _book(
+        "KXAPRPOTUS-26OCT17-DEPTH",
+        no_bids=(BookLevel(Decimal("0.40"), Decimal("8")),),
+    )
+    paper_rest.get_market_orderbook.return_value = book
+    live_rest.get_market_orderbook.return_value = book
+    live_rest.place_limit_order.return_value = SimpleNamespace(
+        error=None,
+        order_id="live-depth-1",
+        status="resting",
+        filled=0,
+    )
+
+    with (
+        patch("trading.executor.trade_log"),
+        patch("trading.executor.write_trade_log_async", new_callable=AsyncMock),
+    ):
+        paper_id = await paper_ex.execute(_analysis())
+        live_id = await live_ex.execute(_analysis())
+
+    assert paper_id == "paper-depth-1"
+    assert live_id == "live-depth-1"
+    paper_rest.place_limit_order.assert_not_called()
+    live_rest.place_limit_order.assert_called_once()
+    paper_terms = paper_book.record_trade.call_args.kwargs["execution_terms"]
+    posted = live_rest.place_limit_order.call_args.kwargs
+    assert paper_terms.contracts == posted["count"]
+    assert paper_terms.price_cents == posted["limit_price"]
+    assert paper_terms.contracts == 8
+    assert paper_terms.price_cents == 60
+
+    blocked_ex, blocked_rest, _blocked_book = _executor(monkeypatch, paper_mode=False)
+    blocked_ex._live_submission_holds._path = tmp_path / "holds-paper.json"
+    blocked_rest.get_market_orderbook.return_value = book
+    blocked_rest.place_limit_order.return_value = SimpleNamespace(
+        error=None,
+        order_id="should-not-post",
+        status="resting",
+        filled=0,
+    )
+    monkeypatch.setattr(
+        "utils.series_universe.event_news_live_post_block_reason",
+        lambda *_args, **_kwargs: "paper_series_no_post",
+    )
+    with (
+        patch("trading.executor.trade_log"),
+        patch("trading.executor.write_trade_log_async", new_callable=AsyncMock),
+    ):
+        blocked = await blocked_ex.execute(_analysis())
+    assert blocked is None
+    blocked_rest.place_limit_order.assert_not_called()

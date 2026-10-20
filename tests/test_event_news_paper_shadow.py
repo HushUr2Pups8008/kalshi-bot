@@ -84,7 +84,7 @@ async def test_risk_cap_shrinks_the_paper_row_and_restores_the_live_budget(monke
     trade_id = await executor._record_event_news_paper_shadow(analysis)
     assert trade_id == "paper-shadow-1"
     terms = paper.record_trade.call_args.kwargs["execution_terms"]
-    assert terms.contracts == 7
+    assert terms.contracts == 8
     assert terms.price_cents == 85
     assert analysis.capped_dollars == 10.0
     rest.place_limit_order.assert_not_called()
@@ -94,7 +94,7 @@ async def test_risk_cap_shrinks_the_paper_row_and_restores_the_live_budget(monke
 @pytest.mark.asyncio
 async def test_recorded_shadow_appends_a_prospective_capture(monkeypatch) -> None:
     executor, rest, paper = _executor(monkeypatch)
-    monkeypatch.setattr(config_module.cfg, "paper_ticker_cooldown", 0)
+    monkeypatch.setattr(config_module.cfg, "live_ticker_cooldown", 0)
     from utils.event_news_oos_capture import politics_oos_corpus_path
 
     trade_id = await executor._record_event_news_paper_shadow(_analysis("no", 60))
@@ -190,7 +190,7 @@ async def test_fee_net_records_with_existing_lifecycle_and_does_not_post(monkeyp
 @pytest.mark.asyncio
 async def test_fee_net_mints_a_stable_lifecycle_when_missing(monkeypatch) -> None:
     executor, rest, paper = _executor(monkeypatch)
-    monkeypatch.setattr(config_module.cfg, "paper_ticker_cooldown", 0)
+    monkeypatch.setattr(config_module.cfg, "live_ticker_cooldown", 0)
     _fee_net_on(monkeypatch, paper)
     seen: list[str] = []
 
@@ -440,9 +440,9 @@ async def test_queued_shadows_see_the_earlier_paper_row(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_entry_window_allows_one_paper_row_per_ticker(monkeypatch) -> None:
-    """The paper cooldown is the entry window. A second row waits it out."""
+    """The shared live cooldown is the entry window. A second row waits it out."""
     executor, rest, paper = _executor(monkeypatch)
-    monkeypatch.setattr(config_module.cfg, "paper_ticker_cooldown", 14400)
+    monkeypatch.setattr(config_module.cfg, "live_ticker_cooldown", 14400)
     analysis = _analysis("no", 60)
     analysis._event_news_paper_shadow_source = "prefix_cap"
     assert await executor._record_event_news_paper_shadow(analysis) == "paper-shadow-1"

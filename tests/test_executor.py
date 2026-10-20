@@ -63,6 +63,7 @@ def test_mela_fill_detail_fee_cents_are_not_the_premium():
 
 def test_classify_skip_category_groups_controllable_executor_reasons():
     assert classify_skip_category("paper cooldown: last trade 1.0h ago") == "cooldown"
+    assert classify_skip_category("cooldown: last trade 30s ago (cooldown=600s)") == "cooldown"
     assert classify_skip_category("same-signal skip: open YES -- no new information") == "duplicate"
     assert classify_skip_category("paper duplicate skip: open YES") == "duplicate"
     assert classify_skip_category("per-prefix cap: 2 open in polymarket_us:abc") == "concentration"
@@ -1041,10 +1042,11 @@ class TestValidateSkipReasons:
         ex = TradeExecutor(rest, paper)
         ex._last_traded[_POLITICS_TICKER] = 1000.0
         analysis = _make_analysis()
+        monkeypatch.setattr(_cfg_module.cfg, "live_ticker_cooldown", 600)
         with patch("trading.executor.time.monotonic", return_value=1000.0 + 60):
             reason = ex._validate(analysis)
         assert reason is not None
-        assert "paper cooldown:" in reason
+        assert reason.startswith("cooldown:")
 
     def test_opposing_position_skips(self, monkeypatch):
         ex, _, paper = _make_executor(monkeypatch)
@@ -1085,15 +1087,15 @@ class TestValidateSkipReasons:
     @pytest.mark.parametrize(
         ("yes_price", "is_paper", "expected_skip"),
         [
-            # Paper fee-net runs before the price check. 1c still clears
-            # fee-net at p=0.90 and dies on the paper floor. 2c clears the
-            # floor; the complementary NO ask is 99c, so the desk returns
-            # near_certain_ask. 98c and 99c cannot clear yaml edge_min.
-            # Live keeps the flat edge check, then the same book shape.
-            (2.0, True, "near_certain_ask"),
+            # Paper and live share the 3c/97c band. Inside it, 3c and 97c
+            # die on the 91c near-certain gate. Outside it, the price check
+            # returns before that gate.
+            (3.0, True, "near_certain_ask"),
+            (2.0, True, "price 2.0c is near limit (too illiquid)"),
+            (97.0, True, "near_certain_ask"),
+            (98.0, True, "price 98.0c is near limit (too illiquid)"),
             (1.0, True, "price 1.0c is near limit (too illiquid)"),
-            (98.0, True, "below_fee_net_min_edge"),
-            (99.0, True, "below_fee_net_min_edge"),
+            (99.0, True, "price 99.0c is near limit (too illiquid)"),
             (3.0, False, "near_certain_ask"),
             (2.0, False, "price 2.0c is near limit (too illiquid)"),
             (97.0, False, "near_certain_ask"),
@@ -1114,17 +1116,14 @@ class TestValidateSkipReasons:
         reason = ex._validate(_make_analysis(yes_price=yes_price))
         assert reason == expected_skip
 
+    @pytest.mark.parametrize("is_paper", [True, False])
     @pytest.mark.parametrize(
-        ("edge", "is_paper", "should_skip"),
+        ("edge", "should_skip"),
         [
-            (0.02, True, False),
-            (0.0199, True, True),
-            (0.04, False, False),
-            (0.039, False, True),
-            (-0.02, True, False),
-            (-0.0199, True, True),
-            (-0.04, False, False),
-            (-0.039, False, True),
+            (0.04, False),
+            (0.039, True),
+            (-0.04, False),
+            (-0.039, True),
         ],
     )
     def test_edge_threshold_boundary(self, monkeypatch, edge, is_paper, should_skip):
@@ -1137,41 +1136,28 @@ class TestValidateSkipReasons:
         paper.portfolio.is_concentration_ok.return_value = True
         paper.portfolio.exposure.return_value = 0.0
         ex = TradeExecutor(rest, paper)
-        if not is_paper:
-            rest.get_balance.return_value = 100.0
-        # Paper no longer uses the flat edge. A 60c book takes only when
-        # fee-net clears yaml edge_min. Live still uses the flat check.
-        if is_paper:
-            analysis = _make_analysis(
-                edge=edge,
-                estimated_prob=0.90 if not should_skip else 0.60,
-                yes_price=60.0,
-                capped_dollars=4.80,
-            )
-        else:
-            analysis = _make_analysis(
-                edge=edge,
-                estimated_prob=0.50 + edge,
-                yes_price=60.0,
-                capped_dollars=4.80,
-            )
+        rest.get_balance.return_value = 100.0
+        analysis = _make_analysis(
+            edge=edge,
+            estimated_prob=0.50 + edge,
+            yes_price=60.0,
+            capped_dollars=4.80,
+        )
         reason = ex._validate(analysis)
         if should_skip:
             assert reason is not None
-            if is_paper:
-                assert reason == "below_fee_net_min_edge"
-            else:
-                assert "below min_edge" in reason
+            assert "below min_edge" in reason
         else:
             assert reason is None
 
-    def test_paper_duplicate_skip_reason_is_distinct_from_live_same_signal(self, monkeypatch):
+    def test_paper_same_signal_skip_matches_the_live_guard(self, monkeypatch):
         monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
         rest = MagicMock()
         paper = MagicMock()
         paper.get_notional_bankroll.return_value = 500.0
         pos = MagicMock()
         pos.side = "yes"
+        pos.paper_shadow = False
         pos.estimated_prob = 0.90
         pos.entry_price_cents = 60.0
         paper.portfolio.open_positions.return_value = [pos]
@@ -1181,7 +1167,7 @@ class TestValidateSkipReasons:
 
         reason = ex._validate(_make_analysis(side="yes", estimated_prob=0.91, yes_price=60.0))
         assert reason is not None
-        assert "paper duplicate skip" in reason
+        assert "same-signal skip" in reason
 
     def test_live_same_signal_skip_reason_uses_generic_guard(self, monkeypatch):
         ex, rest, paper = _make_executor(monkeypatch)
@@ -1358,7 +1344,7 @@ class TestBlendedCandidateCompatibility:
         ex._execute_paper.assert_not_called()
         assert (
             trade_log_mock.log_skipped.call_args.kwargs["reason"]
-            == "unified_edge_unreadable"
+            == "not_reserve_series"
         )
         assert trade_log_mock.log_skipped.call_args.kwargs["venue"] == "polymarket_us"
 
@@ -1395,7 +1381,8 @@ class TestBlendedCandidateCompatibility:
         ex._execute_paper.assert_not_called()
         trade_log_mock.log_skipped.assert_called_once()
         kwargs = trade_log_mock.log_skipped.call_args.kwargs
-        assert kwargs["reason"] == "unified_edge_unreadable"
+        assert kwargs["reason"].startswith("edge ")
+        assert "below min_edge" in kwargs["reason"]
         assert kwargs["venue"] == "polymarket_us"
         assert kwargs["side"] == candidate.side
         assert kwargs["signal_meta"] == candidate.signal_meta
@@ -1455,9 +1442,9 @@ class TestBlendedCandidateCompatibility:
         ex._execute_paper.assert_not_called()
         trade_log_mock.log_skipped.assert_called_once()
         kwargs = trade_log_mock.log_skipped.call_args.kwargs
-        # 0.62 versus the 61c YES ask is +0.01, under yaml edge_min 0.04.
-        assert kwargs["reason"] == "below_fee_net_min_edge"
-        assert kwargs["min_edge_threshold"] == pytest.approx(0.02)
+        # 0.62 versus the 61c YES ask is +0.01, under the shared 0.04 min edge.
+        assert "below min_edge" in kwargs["reason"]
+        assert kwargs["min_edge_threshold"] == pytest.approx(0.04)
         assert kwargs["signal_meta"] == candidate.signal_meta
         assert kwargs["venue"] == "kalshi"
         assert kwargs["side"] == candidate.side
@@ -1623,6 +1610,7 @@ def _make_paper_executor(monkeypatch):
     monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
     monkeypatch.setattr(_cfg_module.cfg, "live_loss_limit_pct", 0.10)
     monkeypatch.setattr(_cfg_module.cfg, "paper_ticker_cooldown", 14400)
+    monkeypatch.setattr(_cfg_module.cfg, "live_ticker_cooldown", 0)
     monkeypatch.setattr(_cfg_module.cfg, "min_edge", 0.04)
     monkeypatch.setattr(_cfg_module.cfg, "max_ticker_exposure_pct", 1.0)
 
@@ -1639,6 +1627,7 @@ def _make_paper_executor(monkeypatch):
         return {}
 
     rest._request.side_effect = _readable_book
+    rest.get_balance.return_value = 500.0
     paper = MagicMock()
     paper.get_notional_bankroll.return_value = 500.0
     paper.portfolio.open_positions.return_value = []
@@ -1670,13 +1659,21 @@ class TestExecutorModeSafety:
 
         assert reason == "G8_execution_depth_invalid_terms"
 
-    def test_paper_contract_cost_cannot_exceed_notional_bankroll(self, monkeypatch):
-        ex, _, paper = _make_paper_executor(monkeypatch)
+    def test_paper_and_live_share_the_notional_cost_decision(self, monkeypatch):
+        """The paper-only notional reject is gone. The same book has one reason."""
+        paper_ex, _, paper = _make_paper_executor(monkeypatch)
         paper.get_notional_bankroll.return_value = 0.40
+        analysis = _make_analysis(capped_dollars=0.60)
+        paper_reason = paper_ex._validate(analysis)
 
-        reason = ex._validate(_make_analysis(capped_dollars=0.60))
+        live_ex, live_rest, live_paper = _make_executor(monkeypatch)
+        live_paper.get_notional_bankroll.return_value = 0.40
+        live_rest.get_balance.return_value = 500.0
+        live_rest.get_open_positions.return_value = []
+        live_reason = live_ex._validate(analysis)
 
-        assert reason == "paper contract cost $0.60 exceeds notional bankroll $0.40"
+        assert paper_reason == live_reason
+        assert paper_reason is None
 
     def test_mode_frozen_at_construction_paper(self, monkeypatch):
         """Paper executor stays paper even if cfg is mutated to live after construction."""
@@ -1732,12 +1729,12 @@ class TestExecutorModeSafety:
         result = await ex._execute_live(analysis)
         assert result is None
 
-    def test_loss_limit_not_seeded_in_paper_mode(self, monkeypatch):
-        """_check_live_loss_limit must return False and not seed balance for paper executors."""
+    def test_loss_limit_seeds_for_paper_the_same_way_as_live(self, monkeypatch):
+        """Paper tracks the same cash baseline. The first read seeds and does not halt."""
         ex, _, _ = _make_paper_executor(monkeypatch)
         result = ex._check_live_loss_limit(500.0)
         assert result is False
-        assert ex._session_start_balance is None
+        assert ex._session_start_balance == 500.0
 
     def test_loss_limit_seeded_in_live_mode(self, monkeypatch):
         """_check_live_loss_limit must seed balance for live executors (existing behavior)."""
@@ -1834,37 +1831,30 @@ class TestPaperResearchAdmission:
 
 class TestPaperFeeAdmission:
     @pytest.mark.asyncio
-    async def test_politics_paper_uses_fee_net_not_the_legacy_edge_field(
+    async def test_politics_paper_uses_the_same_flat_edge_as_live(
         self,
         monkeypatch,
     ):
-        """analysis.edge is not a second gate. Fee-net of p=0.90 at 60c still records."""
-        executor, _, paper = _make_paper_executor(monkeypatch)
+        """Flag off: analysis.edge 0.02 is below 0.04 for paper and for live."""
+        paper_ex, _, paper = _make_paper_executor(monkeypatch)
         monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
-        terms = FinalExecutionTerms(price_cents=60, contracts=1, cost_dollars=0.60)
-        executor._final_execution_plan = AsyncMock(return_value=(terms, None))
-        paper.record_trade.return_value = "paper-trade-id"
-
-        def legacy_quote_must_not_run(_context):
-            raise AssertionError("legacy executor fee quote must not run")
-
-        monkeypatch.setattr(
-            "trading.executor.quote_fee",
-            legacy_quote_must_not_run,
-            raising=False,
-        )
         analysis = _make_analysis(
             edge=0.02,
             estimated_prob=0.90,
             yes_price=60.0,
             capped_dollars=0.60,
         )
+        paper_reason = paper_ex._validate(analysis)
 
-        with patch("trading.executor.trade_log"):
-            trade_id = await executor.execute(analysis)
+        live_ex, live_rest, _live_paper = _make_executor(monkeypatch)
+        live_rest.get_balance.return_value = 500.0
+        live_rest.get_open_positions.return_value = []
+        live_reason = live_ex._validate(analysis)
 
-        assert trade_id == "paper-trade-id"
-        paper.record_trade.assert_called_once_with(analysis, execution_terms=terms)
+        assert paper_reason == live_reason
+        assert paper_reason is not None
+        assert "below min_edge" in paper_reason
+        paper.record_trade.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_kalshi_paper_entry_records_when_gross_edge_strictly_exceeds_entry_fee(
@@ -1891,12 +1881,14 @@ class TestPaperFeeAdmission:
         paper.record_trade.assert_called_once_with(analysis, execution_terms=terms)
 
     @pytest.mark.asyncio
-    async def test_kalshi_paper_entry_blocks_when_fee_provenance_is_unscorable(self, monkeypatch):
-        """An unavailable pinned schedule must stop before the paper writer runs."""
+    @pytest.mark.asyncio
+    async def test_kalshi_paper_entry_ignores_an_unscorable_fee_schedule(self, monkeypatch):
+        """Flag off: a fee-schedule failure does not change the flat edge decision."""
         executor, _, paper = _make_paper_executor(monkeypatch)
         monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
         terms = FinalExecutionTerms(price_cents=60, contracts=1, cost_dollars=0.60)
         executor._final_execution_plan = AsyncMock(return_value=(terms, None))
+        paper.record_trade.return_value = "paper-trade-id"
 
         def unscorable_schedule(**_kwargs):
             raise FeeUnscorableError("no pinned fee schedule is effective at timestamp")
@@ -1912,20 +1904,20 @@ class TestPaperFeeAdmission:
             capped_dollars=0.60,
         )
 
-        with patch("trading.executor.trade_log") as trade_log_mock:
+        with patch("trading.executor.trade_log"):
             trade_id = await executor.execute(analysis)
 
-        assert trade_id is None
-        paper.record_trade.assert_not_called()
-        assert trade_log_mock.log_skipped.call_args.kwargs["reason"] == "unified_edge_unreadable"
+        assert trade_id == "paper-trade-id"
+        paper.record_trade.assert_called_once_with(analysis, execution_terms=terms)
 
     @pytest.mark.asyncio
-    async def test_kalshi_paper_entry_blocks_when_fee_quote_fails(self, monkeypatch):
-        """A fee-model failure must stop before the paper writer runs."""
+    async def test_kalshi_paper_entry_ignores_a_failed_fee_quote(self, monkeypatch):
+        """Flag off: a fee-quote failure does not change the flat edge decision."""
         executor, _, paper = _make_paper_executor(monkeypatch)
         monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
         terms = FinalExecutionTerms(price_cents=60, contracts=1, cost_dollars=0.60)
         executor._final_execution_plan = AsyncMock(return_value=(terms, None))
+        paper.record_trade.return_value = "paper-trade-id"
 
         def unscorable_quote(_context):
             raise FeeUnscorableError("fee model cannot quote the pinned schedule")
@@ -1938,12 +1930,11 @@ class TestPaperFeeAdmission:
             capped_dollars=0.60,
         )
 
-        with patch("trading.executor.trade_log") as trade_log_mock:
+        with patch("trading.executor.trade_log"):
             trade_id = await executor.execute(analysis)
 
-        assert trade_id is None
-        paper.record_trade.assert_not_called()
-        assert trade_log_mock.log_skipped.call_args.kwargs["reason"] == "unified_edge_unreadable"
+        assert trade_id == "paper-trade-id"
+        paper.record_trade.assert_called_once_with(analysis, execution_terms=terms)
 
     @pytest.mark.asyncio
     async def test_non_kalshi_paper_entry_bypasses_kalshi_fee_admission(self, monkeypatch):
@@ -2154,8 +2145,8 @@ class TestCooldownSeeding:
     def _make_executor_with_portfolio(self, monkeypatch, *, tickers, latest_ts_map):
         monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
         monkeypatch.setattr(_cfg_module.cfg, "bankroll", 500.0)
-        monkeypatch.setattr(_cfg_module.cfg, "paper_ticker_cooldown", 14400)  # 4h
-        monkeypatch.setattr(_cfg_module.cfg, "live_ticker_cooldown", 0)
+        monkeypatch.setattr(_cfg_module.cfg, "paper_ticker_cooldown", 14400)  # unused
+        monkeypatch.setattr(_cfg_module.cfg, "live_ticker_cooldown", 600)
 
         paper = MagicMock()
         paper.portfolio.tickers.return_value = tickers
@@ -2166,7 +2157,7 @@ class TestCooldownSeeding:
         return TradeExecutor(rest, paper)
 
     def test_seeds_cooldown_for_recent_ticker(self, monkeypatch):
-        recent = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+        recent = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
         ex = self._make_executor_with_portfolio(
             monkeypatch,
             tickers={"KXRECENT-25DEC31"},
@@ -2193,7 +2184,7 @@ class TestCooldownSeeding:
 
     def test_handles_naive_timestamp_as_utc(self, monkeypatch):
         """Timestamps missing tzinfo are treated as UTC (not raising)."""
-        naive = (datetime.now(timezone.utc) - timedelta(minutes=15)).replace(tzinfo=None).isoformat()
+        naive = (datetime.now(timezone.utc) - timedelta(minutes=2)).replace(tzinfo=None).isoformat()
         ex = self._make_executor_with_portfolio(
             monkeypatch,
             tickers={"KXNAIVE-25DEC31"},
@@ -2322,17 +2313,16 @@ def _last_traded_get_lines() -> list[tuple[int, str]]:
 class TestCooldownSentinelOBS005:
     """Pin the post-fix sentinel default for never-traded tickers in `_validate`.
 
-    Source-inspection contract: every `self._last_traded.get(...)` call site
-    in `trading/executor.py` (the paper-mode site near line 208 and the
-    live-mode site near line 276) must default to `float("-inf")` after
-    PROFIT-OBS-005 lands. The set-on-trade write at line ~171 is unaffected.
+    Source-inspection contract: the one shared `_last_traded.get(...)`
+    call site in `trading/executor.py` must default to `float("-inf")`.
     """
 
     def test_all_last_traded_get_call_sites_use_neg_inf_sentinel(self):
-        """Every `_last_traded.get(ticker, <default>)` must default to float('-inf')."""
+        """The shared cooldown read must default to float('-inf')."""
         sites = _last_traded_get_lines()
-        # We expect at least the paper site and the live site.
-        assert len(sites) >= 2, f"expected at least 2 `_last_traded.get(...)` call sites; got {len(sites)}: {sites}"
+        assert len(sites) == 1, (
+            f"expected 1 `_last_traded.get(...)` call site; got {len(sites)}: {sites}"
+        )
         bad_sites = [
             (lineno, text) for lineno, text in sites if 'float("-inf")' not in text and "float('-inf')" not in text
         ]
@@ -2342,19 +2332,12 @@ class TestCooldownSentinelOBS005:
             + "\n".join(f"  line {ln}: {tx}" for ln, tx in bad_sites)
         )
 
-    def test_paper_cooldown_call_site_uses_neg_inf(self):
-        """Paper path (executor.py:208 area) — sentinel pinned for the paper site."""
-        sites = _last_traded_get_lines()
-        # The paper-mode site sits near the `paper_ticker_cooldown` reference.
+    def test_paper_cooldown_is_not_a_separate_decision_window(self):
+        """Paper and live share the live cooldown. The 4h window is gone."""
         src = _executor_source_lines()
-        for lineno, text in sites:
+        for lineno, text in _last_traded_get_lines():
             window = "\n".join(src[max(0, lineno - 1) : min(len(src), lineno + 4)])
-            if "paper_ticker_cooldown" in window:
-                assert 'float("-inf")' in text or "float('-inf')" in text, (
-                    f"paper-mode site at line {lineno} must use float('-inf') sentinel; got: {text}"
-                )
-                return
-        pytest.fail("could not locate paper-mode `_last_traded.get(...)` call site")
+            assert "paper_ticker_cooldown" not in window, text
 
     def test_live_cooldown_call_site_uses_neg_inf(self):
         """Live path (executor.py:276 area) — sentinel pinned for the live site."""
@@ -2447,11 +2430,14 @@ class TestPerPrefixPositionCap:
         monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
         monkeypatch.setattr(_cfg_module.cfg, "max_open_positions_per_prefix", cap)
         monkeypatch.setattr(_cfg_module.cfg, "paper_ticker_cooldown", 0)
+        monkeypatch.setattr(_cfg_module.cfg, "live_ticker_cooldown", 0)
         monkeypatch.setattr(_cfg_module.cfg, "min_edge", 0.04)
         rest = MagicMock()
+        rest.get_balance.return_value = 500.0
+        rest.get_open_positions.return_value = []
         paper = MagicMock()
         paper.get_notional_bankroll.return_value = 500.0
-        paper.portfolio.open_positions.return_value = []
+        paper.portfolio.open_positions.return_value = list(open_in_prefix or [])
         paper.portfolio.is_concentration_ok.return_value = True
         paper.portfolio.exposure.return_value = 0.0
         paper.portfolio.open_positions_by_prefix = MagicMock(return_value=open_in_prefix or [])
@@ -2472,6 +2458,7 @@ class TestPerPrefixPositionCap:
         ]
         ex, paper = self._setup(monkeypatch, open_in_prefix=existing, cap=2)
         a = _make_analysis(ticker="KXAPRPOTUS-26OCT17-C")
+        a.market.event_ticker = "KXAPRPOTUS-26OCT17"
         reason = ex._validate(a)
         assert reason is not None
         assert "per-prefix cap" in reason
@@ -2484,6 +2471,7 @@ class TestPerPrefixPositionCap:
         ]
         ex, paper = self._setup(monkeypatch, open_in_prefix=existing, cap=1)
         analysis = _make_analysis(ticker="KXAPRPOTUS-26OCT17-B")
+        analysis.market.event_ticker = "KXAPRPOTUS-26OCT17"
         monkeypatch.setattr(
             "trading.executor.write_trade_log_async",
             AsyncMock(),
@@ -2507,9 +2495,12 @@ class TestPerPrefixPositionCap:
             _cfg_module.cfg, "llm_excluded_price_bands", [(0.00, 0.35)]
         )
         monkeypatch.setattr(_cfg_module.cfg, "paper_ticker_cooldown", 0)
+        monkeypatch.setattr(_cfg_module.cfg, "live_ticker_cooldown", 0)
         monkeypatch.setattr(_cfg_module.cfg, "min_edge", 0.04)
         monkeypatch.setattr(_cfg_module.cfg, "max_open_positions_per_prefix", 8)
         rest = MagicMock()
+        rest.get_balance.return_value = 500.0
+        rest.get_open_positions.return_value = []
         paper = MagicMock()
         paper.get_notional_bankroll.return_value = 500.0
         paper.portfolio.open_positions.return_value = []
@@ -2806,7 +2797,7 @@ class TestPerPrefixPositionCap:
 
         assert _correlated_exposure_prefix(a.market) == "ewc-usse-me"
         reason = ex._validate(a)
-        assert reason == "unified_edge_unreadable", (
+        assert reason == "not_reserve_series", (
             f"a non-reserve Polymarket book must die before the prefix cap; got: {reason}"
         )
 
@@ -2831,8 +2822,12 @@ class TestPerPrefixPositionCap:
             "KXAPRPOTUS-26OCT17-B",
         ]
         ex, paper = self._setup(monkeypatch, cap=2)
+        paper.portfolio.open_positions.return_value = [
+            SimpleNamespace(ticker=ticker) for ticker in open_tickers
+        ]
         paper.portfolio.open_positions_by_prefix = MagicMock(side_effect=self._real_prefix_matcher(open_tickers))
         a = _make_analysis(ticker="KXAPRPOTUS-26OCT17-C")
+        a.market.event_ticker = "KXAPRPOTUS-26OCT17"
         reason = ex._validate(a)
         assert reason is not None and "per-prefix cap" in reason, (
             f"Kalshi same-series cap must still block; got: {reason}"

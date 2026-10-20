@@ -1110,11 +1110,12 @@ async def test_ask_89c_keeps_size_cap_and_family_lock(monkeypatch, tmp_path, cap
 
 
 @pytest.mark.asyncio
-async def test_paper_risk_cap_shrinks_an_89c_yes_to_six_contracts(
+async def test_paper_risk_cap_matches_live_until_the_flag_is_set(
     monkeypatch, tmp_path, caplog
 ):
-    """600 cents at 89c is 6 contracts. The hard maximum stays 8."""
+    """Unset keeps the live 8-lot. 600 cents at 89c is 6 once the flag is set."""
     _band_flags_unset(monkeypatch)
+    monkeypatch.delenv("EVENT_NEWS_MAX_RISK_CENTS", raising=False)
     monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
     executor = _executor(monkeypatch, tmp_path, paper=True)
     _stub_equity(executor)
@@ -1136,12 +1137,24 @@ async def test_paper_risk_cap_shrinks_an_89c_yes_to_six_contracts(
         trade_id = await executor._execute_paper(analysis, execution_plan=plan)
     assert reason is None
     assert plan is not None
-    assert plan.contracts == 6
+    assert plan.contracts == 8
     assert plan.price_cents == 89
     assert trade_id == "paper-risk"
-    assert "EVENT_NEWS_RISK_CAP" in caplog.text
+    assert "EVENT_NEWS_RISK_CAP" not in caplog.text
     recorded = executor._paper.record_trade.call_args.kwargs["execution_terms"]
-    assert recorded.contracts == 6
+    assert recorded.contracts == 8
+
+    monkeypatch.setenv("EVENT_NEWS_MAX_RISK_CENTS", "600")
+    caplog.clear()
+    executor._paper.record_trade.reset_mock()
+    executor._paper.record_trade.return_value = "paper-risk-capped"
+    with caplog.at_level(logging.INFO):
+        capped_id = await executor._execute_paper(analysis, execution_plan=plan)
+    assert capped_id == "paper-risk-capped"
+    assert "EVENT_NEWS_RISK_CAP" in caplog.text
+    capped = executor._paper.record_trade.call_args.kwargs["execution_terms"]
+    assert capped.contracts == 6
+    assert capped.price_cents == 89
 
 
 @pytest.mark.asyncio
@@ -1149,6 +1162,7 @@ async def test_paper_exposure_and_family_skips_log_and_do_not_record(
     monkeypatch, tmp_path, caplog
 ):
     _band_flags_unset(monkeypatch)
+    monkeypatch.delenv("EVENT_NEWS_MAX_EXPOSURE_PCT", raising=False)
     monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
     executor = _executor(monkeypatch, tmp_path, paper=True)
     _stub_equity(
@@ -1175,6 +1189,14 @@ async def test_paper_exposure_and_family_skips_log_and_do_not_record(
     )
     crowded = _analysis()
     crowded.executed_price_cents = 60
+    with caplog.at_level(logging.INFO):
+        unset = executor._event_news_plan_skip(
+            crowded,
+            FinalExecutionTerms(60, 4, 2.40),
+        )
+    assert unset is None
+    monkeypatch.setenv("EVENT_NEWS_MAX_EXPOSURE_PCT", "25")
+    caplog.clear()
     with caplog.at_level(logging.INFO):
         reason = executor._event_news_plan_skip(
             crowded,
