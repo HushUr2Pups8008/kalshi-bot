@@ -19,6 +19,12 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.36.10] - 2026-10-19
+
+### Removed
+
+- **Unreferenced diagnostic scripts.** Scripts with no importer on the politics path, in launchd, Make, or CI are gone, along with tests that only covered them. The execution-ledger reconciler, politics cash refresh, Grok paper sidecar, universe discovery, and anything a launchd job or start script calls stay. Scripts that live tests still import stay. Paper series still cannot POST.
+
 ## [0.36.9] - 2026-10-19
 
 ### Removed
