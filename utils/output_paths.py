@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 _BOOL_TRUE = {"1", "true", "yes", "on"}
@@ -14,6 +15,31 @@ def parse_bool_text(value: str) -> bool:
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+_BOOT_SECRET = re.compile(r"KEY|SECRET|TOKEN|PASSWORD|PEM|CREDENTIAL|CLIENT_ID")
+
+
+def boot_config_lines() -> list[str]:
+    """Resolved .env.example names. Secrets are set, unset, or empty."""
+    path = REPO_ROOT / ".env.example"
+    lines: list[str] = []
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        text = raw_line.split("#", 1)[0].strip()
+        if not text or "=" not in text:
+            continue
+        name = text.split("=", 1)[0].removeprefix("export ").strip()
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]{2,}", name):
+            continue
+        raw = os.environ.get(name)
+        if _BOOT_SECRET.search(name):
+            state = "unset" if raw is None else ("empty" if not raw.strip() else "set")
+        elif raw is None:
+            state = "default"
+        elif not raw.isascii() or any(ord(ch) < 32 for ch in raw) or "PRIVATE" in raw:
+            state = "set"
+        else:
+            state = raw
+        lines.append(f"{name}={state}")
+    return lines
 
 
 def _env_path(name: str) -> Path | None:

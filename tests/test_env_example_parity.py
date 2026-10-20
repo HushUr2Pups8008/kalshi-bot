@@ -330,7 +330,7 @@ def test_boot_config_masks_client_id(monkeypatch) -> None:
     """A client id is a secret. Boot prints set, never the value."""
     monkeypatch.setenv("REDDIT_CLIENT_ID", "client-id-sentinel")
     monkeypatch.setenv("KALSHI_ENV", "demo")
-    from config import boot_config_lines
+    from utils.output_paths import boot_config_lines
 
     lines = boot_config_lines()
     assert [line for line in lines if line.startswith("REDDIT_CLIENT_ID=")] == [

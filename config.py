@@ -96,31 +96,6 @@ def _parse_bool_env(name: str, default: str = "false") -> bool:
     return parse_bool_text(os.getenv(name, default))
 
 
-def boot_config_lines() -> list[str]:
-    """Resolved .env.example names. Secrets are set, unset, or empty."""
-    path = Path(__file__).resolve().parent / ".env.example"
-    secret = re.compile(r"KEY|SECRET|TOKEN|PASSWORD|PEM|CREDENTIAL|CLIENT_ID")
-    lines: list[str] = []
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        text = raw_line.split("#", 1)[0].strip()
-        if not text or "=" not in text:
-            continue
-        name = text.split("=", 1)[0].removeprefix("export ").strip()
-        if not re.fullmatch(r"[A-Z][A-Z0-9_]{2,}", name):
-            continue
-        raw = os.environ.get(name)
-        if secret.search(name):
-            state = "unset" if raw is None else ("empty" if not raw.strip() else "set")
-        elif raw is None:
-            state = "default"
-        elif not raw.isascii() or any(ord(ch) < 32 for ch in raw) or "PRIVATE" in raw:
-            state = "set"
-        else:
-            state = raw
-        lines.append(f"{name}={state}")
-    return lines
-
-
 def _parse_string_tuple(value: str | None, *, default: tuple[str, ...]) -> tuple[str, ...]:
     text = str(value or "").strip()
     if not text:
