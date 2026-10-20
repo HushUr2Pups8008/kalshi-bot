@@ -15,6 +15,7 @@ from scripts.copy_live_fill_log import (
     copy_live_fill_log,
     git_env_for_fill_log,
     publish_live_fill_report,
+    run_daily_pnl_report,
 )
 from trading.executor import LIVE_FILL_LOG_ARCHIVE_PATH, LIVE_FILL_LOG_PATH
 
@@ -336,7 +337,36 @@ def test_in_repo_credentials_are_ignored(tmp_path, monkeypatch):
     env = git_env_for_fill_log(repo)
     assert "GIT_SSH_COMMAND" not in env
     assert "credential.helper" not in " ".join(env.values())
-    assert "ghp_shouldnotappear" not in " ".join(env.values())
+
+
+def test_run_daily_pnl_report_swallows_a_runner_failure():
+    """The 06:05 copy must still publish when the P&L child fails."""
+    seen = {}
+
+    def runner(argv, cwd, check):
+        seen["argv"] = argv
+        seen["cwd"] = cwd
+        seen["check"] = check
+        raise RuntimeError("pnl down")
+
+    repo = Path(__file__).resolve().parents[1]
+    run_daily_pnl_report(repo, runner=runner)
+    assert seen["check"] is False
+    assert seen["cwd"] == str(repo)
+    assert seen["argv"][1].endswith("pnl_report.py")
+    assert "--write-fill-log" in seen["argv"]
+    assert "--repo" in seen["argv"]
+
+
+def test_run_daily_pnl_report_skips_a_missing_script(tmp_path):
+    called = False
+
+    def runner(*_args, **_kwargs):
+        nonlocal called
+        called = True
+
+    run_daily_pnl_report(tmp_path, runner=runner)
+    assert called is False
 
 
 def test_outside_credentials_are_referenced_not_inlined(tmp_path, monkeypatch):

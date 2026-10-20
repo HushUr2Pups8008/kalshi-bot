@@ -61,6 +61,45 @@ def test_mela_fill_detail_fee_cents_are_not_the_premium():
     assert Decimal(detail["fee_cents"]) / Decimal("100") == Decimal("0.1291")
 
 
+def test_fill_detail_uses_one_fill_order_id_when_the_receipt_has_none():
+    """A 201 receipt can omit the id while the fill still has the fee.
+
+    The detail must keep 12.91 cents of fee and copy the id only when every
+    fill names that same id. Two different fill ids stay blank.
+    """
+    agreed = fill_log_detail_from_receipts(
+        side="yes",
+        order={},
+        fills=[
+            {
+                "order_id": "fill-order-1",
+                "count_fp": "8.00",
+                "yes_price_dollars": "0.6400",
+                "fee_cost": "0.129100",
+            }
+        ],
+    )
+    assert agreed["fee_cents"] == "12.91"
+    assert agreed["order_id"] == "fill-order-1"
+    assert Decimal(agreed["filled_count"]) * Decimal(agreed["avg_fill_cents"]) / Decimal("100") == Decimal("5.12")
+
+    disagreed = fill_log_detail_from_receipts(
+        side="yes",
+        order={},
+        fills=[
+            {
+                "order_id": "fill-order-1",
+                "count_fp": "8.00",
+                "yes_price_dollars": "0.6400",
+                "fee_cost": "0.129100",
+            },
+            {"order_id": "fill-order-2"},
+        ],
+    )
+    assert disagreed["fee_cents"] == "12.91"
+    assert disagreed["order_id"] is None
+
+
 def test_classify_skip_category_groups_controllable_executor_reasons():
     assert classify_skip_category("paper cooldown: last trade 1.0h ago") == "cooldown"
     assert classify_skip_category("cooldown: last trade 30s ago (cooldown=600s)") == "cooldown"
