@@ -19,6 +19,12 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.36.14] - 2026-10-20
+
+### Removed
+
+- **The replay-ci-gate workflow.** It failed every PR with an empty corpus. Branch protection does not require it. Merges wait on lint, tests, sims-smoke, and p0-gate. `scripts/edge_replay/ci_entry.py` stays for a manual run. `POLYMARKET_US_*`, `REDDIT_*`, and `ANTHROPIC_API_KEY` stay in `.env.example` because production code still reads them.
+
 ## [0.36.13] - 2026-10-20
 
 ### Changed

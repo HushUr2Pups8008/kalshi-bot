@@ -1,7 +1,7 @@
 """Tests for `scripts/edge_replay/ci_entry.py` (Phase 3 activation).
 
-The CI entry script is the single integration point between
-`.github/workflows/replay-ci-gate.yml` and `run_replay_gate`. These
+The CI entry script remains the manual integration point for
+`run_replay_gate` after the GitHub workflow was removed. These
 tests pin:
 
   - semantic-flag detection (which file paths trigger config/prompt/
