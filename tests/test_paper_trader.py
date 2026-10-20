@@ -1079,10 +1079,10 @@ class TestKellyShadow:
         ).fetchone()
         assert row["kelly_contracts"] is not None
         assert row["kelly_contracts"] >= 1
-        # PROFIT-SIZING-001b: paper now mirrors live -- contracts == Kelly size,
-        # not flat-5. At 50c, $10 capped => 20 contracts.
-        assert row["contracts"] == row["kelly_contracts"]
-        assert row["contracts"] == 20
+        # kelly_contracts is pre-clamp Kelly. contracts is min(kelly, 8).
+        # At 50c, $10 Kelly is 20; recorded contracts are 8.
+        assert row["kelly_contracts"] == 20
+        assert row["contracts"] == 8
 
     def test_record_trade_logs_blended_signal_meta_when_present(self, trader):
         analysis = _make_mock_analysis(yes_price=50.0, capped_dollars=10.0)
@@ -1106,9 +1106,8 @@ class TestKellyShadow:
         ] == analysis.keywords_matched
 
     def test_paper_contracts_track_kelly_sizing(self, trader):
-        """PROFIT-SIZING-001b: paper sizes by Kelly (mirrors live), so recorded
-        contracts == kelly_contracts and scale with capped_dollars."""
-        # At 50c, $20 => 40 contracts; $2 => 4 contracts.
+        """kelly_contracts tracks pre-clamp Kelly. contracts is min(kelly, 8)."""
+        # At 50c, $20 Kelly is 40 and records 8; $2 Kelly is 4 and stays 4.
         analysis_big  = _make_mock_analysis(yes_price=50.0, capped_dollars=20.0)
         analysis_small = _make_mock_analysis(
             yes_price=50.0, capped_dollars=2.0, ticker="KXTEST-25DEC30"
@@ -1123,8 +1122,8 @@ class TestKellyShadow:
         big_kelly   = rows[0]["kelly_contracts"]
         small_kelly = rows[1]["kelly_contracts"]
         assert big_kelly > small_kelly
-        # Paper now records the Kelly size, not flat-5.
-        assert rows[0]["contracts"] == big_kelly == 40
+        assert big_kelly == 40
+        assert rows[0]["contracts"] == 8
         assert rows[1]["contracts"] == small_kelly == 4
 
     def test_record_trade_persists_executed_side_edge_yes(self, trader):

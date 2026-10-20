@@ -28,12 +28,10 @@ from analysis.research_gate import (
     run_research_gate,
 )
 from tasks.research_dossier import (
-    RESEARCH_TASK_TERMINAL_AFTER_SAME_REASON,
     ResearchDossierStore,
     _evidence_has_both_sides_probability,
     default_store,
 )
-from utils.event_news_research import is_event_news_paper_cohort
 from utils.logger import get_logger, trade_log, write_trade_log_async
 from utils.research_evidence_quality import has_reliable_research_source_path
 from utils.research_market_eligibility import research_market_eligibility
@@ -146,8 +144,6 @@ class ResearchPrewarmResult:
 
 def _politics_grok_source_reader_kwargs() -> dict[str, Any]:
     """Pass the source reader only on the politics desk. Freeze stays unchanged."""
-    if not is_event_news_paper_cohort():
-        return {}
     from utils.event_news_grok_source import event_news_grok_source_reader
 
     return {"grok_source_reader": event_news_grok_source_reader}
@@ -262,22 +258,12 @@ class ResearchPrewarmTask:
                 ticker,
                 prewarm_skip,
             )
-            from utils.event_news_research import is_event_news_paper_cohort
 
-            if is_event_news_paper_cohort():
-                return ResearchPrewarmResult(
-                    market_ticker=ticker,
-                    status="needs_research",
-                    attempted=False,
-                    skip_reason=prewarm_skip,
-                )
-            return await self._queued_skip_result(
-                ticker,
+            return ResearchPrewarmResult(
+                market_ticker=ticker,
                 status="needs_research",
-                result_skip_reason=prewarm_skip,
-                summary=f"Politics prewarm skip: {prewarm_skip}",
-                contract_question=contract_question,
-                market=market,
+                attempted=False,
+                skip_reason=prewarm_skip,
             )
         if not market_has_research_source_path(market):
             return await self._queued_skip_result(
@@ -546,73 +532,12 @@ class ResearchPrewarmTask:
         contract_question: str | None = None,
         market: Any | None = None,
     ) -> ResearchPrewarmResult:
-        from utils.event_news_research import is_event_news_paper_cohort
 
-        if is_event_news_paper_cohort():
-            return ResearchPrewarmResult(
-                market_ticker=ticker,
-                status=status,
-                attempted=False,
-                skip_reason=result_skip_reason,
-            )
-        if result_skip_reason == "no_reliable_source_path":
-            snapshot = await self.store.get_research_task_snapshot(ticker)
-            projected_same_reason_count = (
-                int(snapshot.same_reason_count) + 1
-                if snapshot is not None
-                and snapshot.last_skip_reason == result_skip_reason
-                else 1
-            )
-            if (
-                projected_same_reason_count
-                >= RESEARCH_TASK_TERMINAL_AFTER_SAME_REASON
-            ):
-                return await self._terminal_skip_result(
-                    ticker,
-                    status="untradeable",
-                    result_skip_reason="no_reliable_source_path",
-                    terminal_reason="no_reliable_source_path",
-                    summary=(
-                        "Market repeatedly lacked a reliable source path; "
-                        "research task is terminal no-trade."
-                    ),
-                    contract_question=contract_question,
-                    market=market,
-                )
-        run_id = f"rr-skip-{uuid.uuid4().hex}"
-        try:
-            await self.store.record_research_run(
-                ticker,
-                run_id,
-                trigger_headline="",
-                trigger_source="research_prewarm",
-                contract_question=contract_question,
-                attempted=False,
-                summary=summary,
-                verdict_status=status,
-                skip_reason=result_skip_reason,
-                decision_grade_status=status,
-                market_status=getattr(market, "status", None),
-                market_close_time=getattr(market, "close_time", None),
-                update_dossier_snapshot=True,
-                update_dossier_run_id=True,
-            )
-        except Exception as exc:
-            return ResearchPrewarmResult(
-                market_ticker=ticker,
-                status=status,
-                attempted=False,
-                skip_reason=result_skip_reason,
-                research_persisted=False,
-                research_persistence_error=str(exc),
-            )
         return ResearchPrewarmResult(
             market_ticker=ticker,
             status=status,
             attempted=False,
             skip_reason=result_skip_reason,
-            research_run_id=run_id,
-            research_persisted=True,
         )
 
     async def emit_result(self, result: ResearchPrewarmResult) -> None:
@@ -738,15 +663,13 @@ class ResearchPrewarmTask:
         persisted_skip = await self._persisted_task_skip_result(ticker, market)
         if persisted_skip is None:
             return True
-        from utils.event_news_research import is_event_news_paper_cohort
 
-        if is_event_news_paper_cohort():
-            _log.info(
-                "[EVENT_NEWS_PREWARM] unavailable ticker=%s status=%s reason=%s",
-                ticker,
-                persisted_skip.status,
-                persisted_skip.skip_reason,
-            )
+        _log.info(
+            "[EVENT_NEWS_PREWARM] unavailable ticker=%s status=%s reason=%s",
+            ticker,
+            persisted_skip.status,
+            persisted_skip.skip_reason,
+        )
         return (
             persisted_skip.status == "skipped_terminal"
             and persisted_skip.skip_reason == "decision_grade_candidate"
@@ -791,8 +714,7 @@ class ResearchPrewarmTask:
             )
 
             if (
-                is_event_news_paper_cohort()
-                and market is not None
+                market is not None
                 and event_news_prewarm_skip_reason(market) is None
             ):
                 try:
@@ -860,8 +782,7 @@ class ResearchPrewarmTask:
         from utils.event_news_research import event_news_prewarm_skip_reason
 
         if (
-            is_event_news_paper_cohort()
-            and market is not None
+            market is not None
             and event_news_prewarm_skip_reason(market) is None
         ):
             return None
@@ -923,7 +844,7 @@ class ResearchPrewarmTask:
                 ticker,
                 snapshot.last_research_run_id,
             )
-            if is_event_news_paper_cohort() and _evidence_has_both_sides_probability(
+            if _evidence_has_both_sides_probability(
                 evidence
             ):
                 return True

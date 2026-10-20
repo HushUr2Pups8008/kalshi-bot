@@ -1676,7 +1676,7 @@ async def test_paper_mode_skips_the_same_excluded_asks(monkeypatch, tmp_path, ca
 
 
 @pytest.mark.asyncio
-async def test_exact_35c_blocks_politics_post_and_other_cohorts_still_post(
+async def test_exact_35c_and_lower_asks_block_every_cohort(
     monkeypatch, tmp_path, caplog
 ):
     _band_flags_unset(monkeypatch)
@@ -1706,9 +1706,8 @@ async def test_exact_35c_blocks_politics_post_and_other_cohorts_still_post(
         lambda *args, **kwargs: True,
     )
     assert reason is None
-    assert order_id == "ord-1"
-    other._rest.place_limit_order.assert_called_once()
-    assert other._rest.place_limit_order.call_args.kwargs["count"] == 8
+    assert order_id is None
+    other._rest.place_limit_order.assert_not_called()
 
 
 @pytest.mark.asyncio

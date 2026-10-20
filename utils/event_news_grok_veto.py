@@ -29,7 +29,6 @@ from utils.event_news_grok_flags import (
 )
 from utils.event_news_research import (
     event_news_executed_side_skip_reason,
-    is_event_news_paper_cohort,
     snapshot_ask_cents,
 )
 from utils.logger import get_logger
@@ -560,8 +559,6 @@ def event_news_paper_grounding_skip(
 
     Timeout and a missing key do not skip. Live does not call this.
     """
-    if not is_event_news_paper_cohort():
-        return False
     if not event_news_grok_grounding_for_mode(False, environ):
         return False
     meta = _signal_meta(analysis)
@@ -590,8 +587,6 @@ def event_news_grok_veto_allows_live_post(
     post: Callable[..., Any] | None = None,
 ) -> bool:
     """True only on an explicit Grok YES. Politics live POST gate."""
-    if not is_event_news_paper_cohort():
-        return True
     market = getattr(analysis, "market", None)
     side = str(getattr(analysis, "side", "") or "")
     if event_news_executed_side_skip_reason(market, side) is not None:

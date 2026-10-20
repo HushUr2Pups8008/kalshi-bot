@@ -110,8 +110,6 @@ def routing_yes_probability(market: Any, *, config: Any = None) -> tuple[float, 
     mid = _cents_or_probability(getattr(market, "yes_prob", None))
     if mid is None:
         mid = _cents_or_probability(getattr(market, "yes_price", None)) or 0.5
-    if not is_event_news_paper_cohort(config):
-        return mid, "mid"
     ask = _cents_or_probability(
         getattr(market, "yes_ask_cents", None)
     ) or _cents_or_probability(getattr(market, "yes_ask", None))
@@ -122,8 +120,6 @@ def routing_yes_probability(market: Any, *, config: Any = None) -> tuple[float, 
 
 def event_news_spread_disagreement(market: Any, *, config: Any = None) -> str | None:
     """Do not take when last trade and ask disagree badly (politics only)."""
-    if not is_event_news_paper_cohort(config):
-        return None
     last = _as_float(getattr(market, "last_price_cents", None))
     ask = _as_float(getattr(market, "yes_ask_cents", None))
     if last is None:
@@ -149,8 +145,6 @@ def event_news_spread_disagreement(market: Any, *, config: Any = None) -> str | 
 
 def event_news_illiquid(market: Any, *, config: Any = None) -> str | None:
     """Skip obviously empty books before spending LLM/research (politics only)."""
-    if not is_event_news_paper_cohort(config):
-        return None
     sizes = [
         _as_float(getattr(market, name, None))
         for name in ("yes_ask_size", "no_ask_size")
@@ -194,8 +188,6 @@ def event_news_executable_top_size(
     Kalshi ``/markets`` often omits ``no_ask_size_fp``. Buying NO is lifting
     YES bids, so ``yes_bid_size`` is the complementary size.
     """
-    if not is_event_news_paper_cohort(config):
-        return None
     wanted = str(side or "").strip().lower()
     if wanted == "yes":
         size = _as_float(getattr(market, "yes_ask_size", None))
@@ -244,8 +236,6 @@ def event_news_executable_top_notional(
 
 def event_news_horizon_days(market: Any, days: float, *, config: Any = None) -> float:
     """Compress Kelly horizon when Kalshi says the market can close early."""
-    if not is_event_news_paper_cohort(config):
-        return days
     early = getattr(market, "can_close_early", None)
     condition = str(getattr(market, "early_close_condition", "") or "").strip()
     if early is not True and not condition:
@@ -263,15 +253,11 @@ def event_news_horizon_days(market: Any, days: float, *, config: Any = None) -> 
 
 def event_news_open_prefix_cap(default_cap: int, *, config: Any = None) -> int:
     """One open position per event on the politics desk."""
-    if not is_event_news_paper_cohort(config):
-        return default_cap
     return 1
 
 
 def event_news_exposure_prefix(market: Any, fallback: str, *, config: Any = None) -> str:
     """Prefer event_ticker so one headline cannot spray a whole ladder."""
-    if not is_event_news_paper_cohort(config):
-        return fallback
     event = str(getattr(market, "event_ticker", "") or "").strip()
     if event:
         return event
@@ -290,8 +276,6 @@ def event_news_blocking_open_ticker(
     Politics allows one open row per event_ticker. Sibling strikes
     (T6 vs T8) share the event and must not enqueue a second fill.
     """
-    if not is_event_news_paper_cohort(config):
-        return None
     cap = event_news_open_prefix_cap(default_cap, config=config)
     if cap <= 0:
         return None
@@ -338,8 +322,6 @@ def event_news_family_lock_ticker(
     Sibling strikes of the same event use event_open_prefix_cap.
     Does not cancel an existing open row.
     """
-    if not is_event_news_paper_cohort(config):
-        return None
     ticker = str(getattr(market, "ticker", "") or "").strip()
     series = str(getattr(market, "series_ticker", "") or "").strip().upper()
     if not series:
@@ -376,8 +358,6 @@ def event_news_clamp_execution_terms(
     config: Any = None,
 ) -> Any:
     """Clamp event-news contracts after Kelly. Leaves kelly_bet math unchanged."""
-    if not is_event_news_paper_cohort(config):
-        return terms
     contracts = int(getattr(terms, "contracts", 0) or 0)
     if contracts <= EVENT_NEWS_MAX_CONTRACTS:
         return terms
@@ -400,9 +380,7 @@ def event_news_clamp_execution_terms(
 
 def event_news_settle_statuses(*, config: Any = None) -> tuple[str, ...]:
     """Paper auto-resolve statuses. Politics may write on determined+result."""
-    if is_event_news_paper_cohort(config):
-        return ("finalized", "settled", "determined")
-    return ("finalized", "settled")
+    return ("finalized", "settled", "determined")
 
 
 def _ask_probability(market: Any, *names: str) -> float | None:
@@ -452,8 +430,6 @@ def snapshot_ask_cents(market: Any) -> tuple[int | None, int | None]:
 
 def event_news_missing_snapshot_ask(market: Any, *, config: Any = None) -> str | None:
     """Skip only when neither side has an executable ask."""
-    if not is_event_news_paper_cohort(config):
-        return None
     yes_ask, no_ask = snapshot_ask_cents(market)
     if yes_ask is None and no_ask is None:
         return "missing_snapshot_ask"
@@ -462,8 +438,6 @@ def event_news_missing_snapshot_ask(market: Any, *, config: Any = None) -> str |
 
 def event_news_wide_spread(market: Any, *, config: Any = None) -> str | None:
     """Skip books whose round-trip cost is too wide to be a favorite take."""
-    if not is_event_news_paper_cohort(config):
-        return None
     yes_ask, no_ask = snapshot_ask_cents(market)
     if yes_ask is None or no_ask is None:
         return None
@@ -490,8 +464,6 @@ def event_news_favorite_side(
     the higher ask is the favorite. Trade side comes from both-side edge
     after research produces a probability. Freeze never uses this.
     """
-    if not is_event_news_paper_cohort(config):
-        return None, None
     yes_ask, no_ask = snapshot_ask_cents(market)
     active = config if config is not None else cfg
     entry = None if universe_failed() else match_market(market)
@@ -534,8 +506,6 @@ def _price_in_band(price: float, low: float, high: float) -> bool:
 
 def event_news_in_allowed_ask_band(market: Any, *, config: Any = None) -> bool:
     """True when an executable favorite-side ask is inside the allowed band."""
-    if not is_event_news_paper_cohort(config):
-        return True
     side, _cents = event_news_favorite_side(market, config=config)
     return side is not None
 
@@ -600,8 +570,6 @@ def event_news_blocked_final_ask(
     means this gate does not skip. Non-politics cohorts are ignored.
     The requote flag defaults on.
     """
-    if not is_event_news_paper_cohort(config):
-        return None
     if not event_news_requote_band_check_enabled(environ):
         return None
     if fresh_ask_invalid:
@@ -630,8 +598,6 @@ def event_news_executed_side_skip_reason(
     The executed ask still uses llm_excluded_price_bands (0.00-0.35).
     Freeze never uses this.
     """
-    if not is_event_news_paper_cohort(config):
-        return None
     executed = str(side or "").strip().lower()
     if executed not in {"yes", "no"}:
         return None
@@ -651,8 +617,6 @@ def event_news_executed_side_skip_reason(
 
 def event_news_crossed_asks(market: Any, *, config: Any = None) -> str | None:
     """Skip locked/crossed books (YES ask + NO ask < 100c) on politics only."""
-    if not is_event_news_paper_cohort(config):
-        return None
     yes_ask, no_ask = snapshot_ask_cents(market)
     if yes_ask is None or no_ask is None:
         return None
@@ -750,8 +714,6 @@ def event_news_score_edge(
     config: Any = None,
 ) -> dict[str, Any] | None:
     """Fee-net versus yaml edge_min. None means this cohort does not apply."""
-    if not is_event_news_paper_cohort(config):
-        return None
     name = str(side or "").strip().lower()
     try:
         yes = Decimal(str(yes_probability))
@@ -878,8 +840,6 @@ def event_news_bypass_quote_skip_cooldown(
     incomplete official research (missing Roll Call fetch, neutral-only
     verifier) must not 5h-lock T240/B230 while they are 70¢+ favorites.
     """
-    if not is_event_news_paper_cohort(config):
-        return False
     reason = str(last_skip_reason or "").strip()
     retryable = reason in _QUOTE_DEPENDENT_PREWARM_REASONS or (
         reason in _IN_BAND_RETRYABLE_RESEARCH_REASONS
@@ -911,8 +871,6 @@ def event_news_gate_chain_reason(
     halt_reason: str | None = None,
     purpose: str = "order",
 ) -> str | None:
-    if not is_event_news_paper_cohort(config):
-        return None
     denied = event_news_non_politics_series(market, config=config)
     if denied:
         return denied
@@ -1194,8 +1152,6 @@ def event_news_one_market_per_event(
     65c, then larger top size. Trade side is decided later from p vs both
     asks. Freeze is a no-op.
     """
-    if not is_event_news_paper_cohort(config):
-        return list(markets)
     best: dict[str, tuple[tuple[int, float], Any]] = {}
     for market in markets:
         event = event_news_exposure_prefix(
@@ -1236,8 +1192,6 @@ def event_news_finalize_prewarm_batch(
     Due-task refill can restore wide/illiquid siblings and macro leaks after
     the first filter. Freeze is a no-op.
     """
-    if not is_event_news_paper_cohort(config):
-        return list(markets)
     eligible: list[Any] = []
     for market in markets:
         if event_news_prewarm_skip_reason(market, config=config) is None:
@@ -1257,8 +1211,6 @@ def event_news_reorder_prewarm_batch(
     Freeze is a no-op.
     """
     in_band = event_news_finalize_prewarm_batch(markets, config=config)
-    if not is_event_news_paper_cohort(config):
-        return in_band
     by_ticker: dict[str, Any] = {}
     for market in in_band:
         ticker = str(getattr(market, "ticker", "") or "").strip()
@@ -1293,8 +1245,6 @@ def event_news_news_may_refresh_research(
     Matcher Jaccard must not add soccer/CPI/macro books to the research set.
     Settlement-source refresh is reserve-series only. Freeze is unchanged.
     """
-    if not is_event_news_paper_cohort(config):
-        return True
     if event_news_prewarm_allows(market, config=config):
         return True
     if not settlement_source_match:
@@ -1334,8 +1284,6 @@ def event_news_should_retry_admission(
     unfilled enqueue when the caller confirmed no open paper exposure.
     Never steal a live `claimed` row. Freeze keeps the one-claim invariant.
     """
-    if not is_event_news_paper_cohort(config):
-        return False
     if has_paper_exposure:
         return False
     state_name = str(state or "").strip()
@@ -1414,8 +1362,6 @@ def event_news_google_counter_not_required(
     Freeze is unchanged. Persist/admission may skip the ask band; those callers
     re-check quotes later.
     """
-    if not is_event_news_paper_cohort(config):
-        return False
     side = str(force_side or "").strip().lower()
     if side not in {"yes", "no"}:
         return False
@@ -1481,7 +1427,7 @@ def event_news_prewarm_retries_terminal_missing_counter(
     The market must already name an official settlement source. A
     rules_primary sentence alone does not retry, and this does not order.
     """
-    if market is None or not is_event_news_paper_cohort(config):
+    if market is None:
         return False
     if not event_news_is_reserve_series(market, config=config):
         return False
@@ -1533,8 +1479,6 @@ def event_news_official_p_ready(
     config: Any = None,
 ) -> bool:
     """True when research_gate already priced both sides on an in-band book."""
-    if not is_event_news_paper_cohort(config):
-        return False
     side = str(force_side or "").strip().lower()
     if side not in {"yes", "no"}:
         return False
@@ -1629,8 +1573,6 @@ def event_news_dossier_is_stale(
 
 
 def event_news_official_research_kwargs(*, config: Any = None) -> dict[str, bool]:
-    if not is_event_news_paper_cohort(config):
-        return {}
     return {
         "allow_official_pdf_and_homepage": True,
         "prefer_official_sources": True,
@@ -1639,7 +1581,7 @@ def event_news_official_research_kwargs(*, config: Any = None) -> dict[str, bool
 
 def event_news_omit_idle_runtime_tasks(*, config: Any = None) -> bool:
     """Politics does not start news-discovery or second-venue shells."""
-    return is_event_news_paper_cohort(config)
+    return True
 
 
 def event_news_operator_live_allow(*, config: Any = None) -> bool:
@@ -1647,8 +1589,6 @@ def event_news_operator_live_allow(*, config: Any = None) -> bool:
 
     Does not apply to freeze/DJI. Does not by itself place live orders.
     """
-    if not is_event_news_paper_cohort(config):
-        return False
     active = config if config is not None else cfg
     return bool(getattr(active, "event_news_live_allow", False))
 
@@ -1659,9 +1599,7 @@ def event_news_forecast_refresh_series(
     config: Any = None,
 ) -> tuple[str, ...]:
     """Drop inherited freeze forecast-refresh series on the politics desk."""
-    if is_event_news_paper_cohort(config):
-        return ()
-    return tuple(str(series).strip().upper() for series in (configured or ()) if str(series).strip())
+    return ()
 
 
 def event_news_matcher_reserve_series(*, config: Any = None) -> tuple[str, ...]:
@@ -1672,8 +1610,6 @@ def event_news_matcher_reserve_series(*, config: Any = None) -> tuple[str, ...]:
     fallback are still prepended, then deduped, when the file loads.
     A failed file returns nothing.
     """
-    if not is_event_news_paper_cohort(config):
-        return ()
     if universe_failed():
         return ()
     live = live_series_tickers()
@@ -1706,8 +1642,6 @@ def event_news_is_reserve_series(market: Any, *, config: Any = None) -> bool:
     A series matches the exact ticker or that ticker plus a hyphen.
     A glued sibling name does not match the shorter series.
     """
-    if not is_event_news_paper_cohort(config):
-        return True
     if universe_failed():
         return False
     series = event_news_series_ticker(market)
@@ -1731,8 +1665,6 @@ def event_news_prewarm_seed_markets(
     Freeze does not call this helper.
     """
     cache = list(matcher_markets or [])
-    if not is_event_news_paper_cohort(config):
-        return cache
     if universe_failed():
         return []
     series = event_news_matcher_reserve_series(config=config)
@@ -1826,16 +1758,6 @@ async def apply_event_news_live_research(
     Fail-closed corroboration/settlement checks stay inside run_research_gate.
     If the gate does not return an independent p, the LLM/keyword estimate is kept.
     """
-    if not is_event_news_paper_cohort(config):
-        return (
-            estimated_prob,
-            confidence,
-            keywords,
-            reasoning,
-            llm_dir,
-            llm_mag,
-            llm_conf,
-        )
 
     from utils.event_news_grok_source import event_news_grok_source_reader
 

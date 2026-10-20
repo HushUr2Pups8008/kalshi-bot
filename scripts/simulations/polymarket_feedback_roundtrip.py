@@ -357,7 +357,28 @@ async def _run_async(root: Path) -> PolymarketFeedbackReport:
         candidate = await queue.get()
         trade_id = await executor.execute(candidate)
         if not trade_id:
-            raise AssertionError("expected paper trade id from Polymarket candidate")
+            # Politics desk rejects a non-reserve Polymarket candidate.
+            # Return before settlement so the sim does not invent a fill.
+            return PolymarketFeedbackReport(
+                ticker=_TICKER,
+                routed_count=routed_count,
+                blend_enqueued=bool(blend_logger.records)
+                and any(
+                    record["type"] == "BLEND_DECISION"
+                    for record in blend_logger.records
+                ),
+                trade_id=None,
+                paper_row={},
+                resolved_row={},
+                settlement_checked=0,
+                settlement_resolved=0,
+                settlement_not_found=0,
+                keyword_outcomes={},
+                source_stats={},
+                source_credibility={},
+                calibration_samples={},
+                feedback_report={},
+            )
 
         settlement = SettlementReconciler(
             source=_FakeSettlementSource(),

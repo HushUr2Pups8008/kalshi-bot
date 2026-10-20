@@ -393,29 +393,24 @@ async def test_run_drains_only_weather_before_existing_cleanup(monkeypatch):
 
     await bot.run()
 
-    assert global_items.count(weather_task) == 1
+    assert global_items.count(weather_task) == 0
     assert global_items.count(prewarm_task) == 1
-    assert global_items.count(capital_guard_task) == 1
-    assert drain_items == [weather_task]
-    assert weather_task.cancelled is True
+    assert global_items.count(capital_guard_task) == 0
+    assert drain_items == []
+    assert "drain:weather_shadow_capture" not in events
+    assert weather_task.cancelled is False
     assert prewarm_task.cancelled is True
-    assert capital_guard_task.cancelled is True
+    assert capital_guard_task.cancelled is False
+    bot._create_weather_shadow_runtime_task.assert_not_called()
+    bot._create_capital_guard_shadow_settlement_collection_task.assert_not_called()
     assert all(task.cancelled for task in runtime_tasks)
     assert all(task not in drain_items for task in runtime_tasks)
     assert Counter(task.name for task in global_items) == Counter(
         {
-            "rss": 1,
-            "fade_tweets": 1,
-            "reddit": 1,
-            "search": 1,
-            "gdelt": 1,
-            "news_consumer_0": 1,
             "websocket": 1,
             "ws_warm": 1,
             "market_refresh": 1,
-            "polymarket_market_refresh": 1,
             "auto_resolve": 1,
-            "sub_discovery": 1,
             "log_rotation": 1,
             "log_maint": 1,
             "runtime_overrides_poll": 1,
@@ -423,25 +418,7 @@ async def test_run_drains_only_weather_before_existing_cleanup(monkeypatch):
             "blend_consumer": 1,
             "structural": 1,
             "research_prewarm": 1,
-            "weather_shadow_capture": 1,
-            "capital_guard_shadow_settlement_collection": 1,
         }
     )
-    from feeds.rss_monitor import RSS_SEEN_STATE_PATH
-
-    normal_args, normal_kwargs = rss_monitor_calls[0]
-    fade_args, fade_kwargs = rss_monitor_calls[1]
-    assert normal_args == (bot._enqueue_news,)
-    assert normal_kwargs == {}
-    assert fade_args[0].__self__ is bot
-    assert fade_kwargs["feeds"] == fade_feeds
-    normal_seen_state_path = normal_kwargs.get("seen_state_path", RSS_SEEN_STATE_PATH)
-    fade_seen_state_path = fade_kwargs["seen_state_path"]
-    assert normal_seen_state_path == RSS_SEEN_STATE_PATH
-    assert fade_seen_state_path != normal_seen_state_path
-    assert fade_seen_state_path.name == "fade_tweet_seen_ids.json"
-    assert main_module.FADE_TWEET_SEEN_STATE_PATH == fade_seen_state_path
-    assert events.index("drain:weather_shadow_capture") < events.index(
-        "targeted-prewarm-cleanup"
-    )
+    assert rss_monitor_calls == []
     assert events.index("targeted-prewarm-cleanup") < events.index("ws-stop")

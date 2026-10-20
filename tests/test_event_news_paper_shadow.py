@@ -151,12 +151,13 @@ async def test_shadow_failure_does_not_raise(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_other_cohort_does_not_record(monkeypatch) -> None:
-    executor, _rest, paper = _executor(monkeypatch)
+async def test_other_cohort_still_records_and_does_not_post(monkeypatch) -> None:
+    executor, rest, paper = _executor(monkeypatch)
     monkeypatch.setattr(config_module.cfg, "paper_cohort_id", "kalshi-macro-20260820")
     trade_id = await executor._record_event_news_paper_shadow(_analysis("no", 60))
-    assert trade_id is None
-    paper.record_trade.assert_not_called()
+    assert trade_id == "paper-shadow-1"
+    paper.record_trade.assert_called_once()
+    rest.place_limit_order.assert_not_called()
 
 
 def _fee_net_on(monkeypatch: pytest.MonkeyPatch, paper: MagicMock) -> str:

@@ -10,8 +10,8 @@ Two passes:
 *  **Independent** — each event evaluated on a fresh executor, isolating
    intrinsic-pass / fail behaviour.
 *  **Sequential** — all events evaluated in firing order on the same
-   executor, exercising cooldown + opposing-position interactions
-   (e.g. Event 5 KXTRUMPIRAN within 4 h of Event 3 must be cooldown-suppressed).
+   executor. The canonical 50c books are rejected by the politics desk
+   before cooldown can bind.
 
 Origin: PROFIT-EDGE-002 follow-up simulation, formalised from
 ``/tmp/executor_simulation_v0.29.58.py`` on 2026-04-26.
@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import threading
 import time as _time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -131,10 +132,15 @@ def _make_paper_executor() -> TradeExecutor:
     # CR-D re-fetch: return None so executor falls back to the candidate
     # snapshot, which simulations populate with full post-P0 cents fields.
     e._rest.get_market.return_value = None
+    e._rest.get_open_positions.return_value = []
     e._is_paper = True
     e._last_traded = {}
     e._live_halted = False
     e._session_start_balance = 0.0
+    # __new__ skips TradeExecutor.__init__, which owns this thread-local.
+    # _validate reads it while listing open tickers, before the desk gate
+    # returns. Without it the canonical KXSBUDGETRES book crashes.
+    e._offloop_local = threading.local()
     return e
 
 

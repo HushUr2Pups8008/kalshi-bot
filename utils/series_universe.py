@@ -38,7 +38,6 @@ _ALLOWED_KEYS = frozenset(
 )
 _DEFAULT_MAX_CONTRACTS = 8
 _DEFAULT_EDGE_MIN = "0.04"
-_POLITICS_COHORT_ID = "kalshi-event-news-20260820"
 _MENTION_SERIES = "KXTRUMPMENTION"
 
 _cached: SeriesUniverse | None = None
@@ -154,18 +153,15 @@ def exact_series_in_universe(series: str) -> bool:
 def event_news_prefix_blocked(series: str, prefixes: Sequence[str]) -> bool:
     """True when a startswith block applies.
 
-    On the politics desk, an exact yaml series is exempt. Glued siblings
-    stay blocked. Other cohorts keep the prefix block. A failed universe
-    exempts nothing.
+    An exact yaml series is exempt. Glued siblings stay blocked.
+    A failed universe exempts nothing.
     """
     name = str(series or "").strip().upper()
     if not name:
         return False
     if exact_series_in_universe(name):
-        from utils.event_news_research import is_event_news_paper_cohort
 
-        if is_event_news_paper_cohort():
-            return False
+        return False
     return any(name.startswith(str(prefix)) for prefix in prefixes if prefix)
 
 
@@ -240,12 +236,7 @@ def event_news_live_post_block_reason(
     *,
     config: Any = None,
 ) -> str | None:
-    """None lets a politics live series continue. Every other case blocks POST.
-
-    Non-politics cohorts return None so freeze orders are unchanged.
-    """
-    if not _is_politics_cohort(config):
-        return None
+    """None lets a live series continue. Paper mode returns paper_series_no_post."""
     universe = get_universe()
     if universe.failed:
         return "universe_unavailable"
@@ -260,17 +251,6 @@ def event_news_live_post_block_reason(
     if entry.transcript_skip:
         return "transcript_skip"
     return None
-
-
-def _is_politics_cohort(config: Any) -> bool:
-    if config is None:
-        from config import cfg
-
-        config = cfg
-    return (
-        str(getattr(config, "paper_cohort_id", "")).strip().lower()
-        == _POLITICS_COHORT_ID
-    )
 
 
 def _market_series(market: Any) -> str:

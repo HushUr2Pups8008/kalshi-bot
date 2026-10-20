@@ -223,8 +223,8 @@ def test_freeze_cohort_does_not_call(monkeypatch, tmp_path):
         environ={"XAI_API_KEY": _SECRET},
         post=_post,
     )
-    assert results == []
-    assert calls == [1]
+    assert results[0].result == "contradict"
+    assert calls == [1, 1]
     assert direct.result == "contradict"
 
 

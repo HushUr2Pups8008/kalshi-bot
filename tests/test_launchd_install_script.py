@@ -18,7 +18,6 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 INSTALL_SH = REPO_ROOT / "ops" / "launchd" / "install.sh"
 TEMPLATES = (
-    REPO_ROOT / "ops" / "launchd" / "com.jake.kalshi-bot.plist.template",
     REPO_ROOT / "ops" / "launchd" / "com.jake.kalshi-bothealth.plist.template",
     REPO_ROOT / "ops" / "launchd" / "com.jake.kalshi-match-feedback-aggregator.plist.template",
     REPO_ROOT / "ops" / "launchd" / "com.kalshi.db-backup.plist.template",
@@ -243,5 +242,7 @@ def test_allow_drift_confirm_allows_non_tty_install_to_temp_home(tmp_path: Path)
         check=True,
     )
 
-    rendered = tmp_path / "Library/LaunchAgents/com.jake.kalshi-bot.plist"
+    rendered = tmp_path / "Library/LaunchAgents/com.jake.kalshi-bothealth.plist"
+    freeze = tmp_path / "Library/LaunchAgents/com.jake.kalshi-bot.plist"
     assert rendered.exists(), result.stdout + result.stderr
+    assert not freeze.exists()

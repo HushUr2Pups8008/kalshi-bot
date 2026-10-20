@@ -164,9 +164,42 @@ def _make_market():
     )
 
 
+
+def _make_politics_market():
+    market = _make_market()
+    market.ticker = "KXTRUTHSOCIAL-25DEC31"
+    market.series_ticker = "KXTRUTHSOCIAL"
+    market.event_ticker = "KXTRUTHSOCIAL-25DEC"
+    return market
+
+
+def _assert_excluded_prewarm(markets, *forbidden):
+    tickers = [market.ticker for market in markets]
+    assert tickers == []
+    for ticker in forbidden:
+        assert ticker not in tickers
+
+
+def _capture_omitted_blend(bot):
+    captured = {}
+    original = bot._route_analysis_through_blend
+
+    async def _route(analysis, *args, **kwargs):
+        captured["analysis"] = analysis
+        result = await original(analysis, *args, **kwargs)
+        captured["result"] = result
+        return result
+
+    bot._blend_task = None
+    bot._route_analysis_through_blend = _route
+    return captured
+
+
 def _make_shadow_ready_market(decision_at: datetime) -> KalshiMarket:
     market = _make_market()
-    market.event_ticker = "KXTEST-25DEC"
+    market.ticker = "KXTRUTHSOCIAL-25DEC31"
+    market.series_ticker = "KXTRUTHSOCIAL"
+    market.event_ticker = "KXTRUTHSOCIAL-25DEC"
     market.settlement_sources = (
         SettlementSource(label="Reuters", url="https://reuters.com"),
     )
@@ -377,10 +410,7 @@ def test_create_research_prewarm_runtime_task_enabled(monkeypatch):
     assert instance.kwargs["research_timeout_seconds"] == 8.5
     assert instance.kwargs["target_cooldown_seconds"] == 1234.0
     assert instance.interval_seconds == 900.0
-    assert [market.ticker for market in instance.provider()] == [
-        "KXTEST-25DEC31",
-        "KXSECOND-25DEC31",
-    ]
+    _assert_excluded_prewarm(instance.provider(), "KXTEST-25DEC31", "KXSECOND-25DEC31")
 
 
 def test_politics_prewarm_provider_keeps_in_band_and_drops_due_task_junk(monkeypatch):
@@ -487,9 +517,7 @@ def test_research_prewarm_market_provider_prioritizes_recent_empty_keyword_backl
     )
     monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
 
-    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
-        backlog_market.ticker,
-    ]
+    _assert_excluded_prewarm(bot._research_prewarm_market_provider(), backlog_market.ticker)
 
 
 def test_research_prewarm_market_provider_prioritizes_recent_nonterminal_research_refresh(
@@ -525,7 +553,7 @@ def test_research_prewarm_market_provider_prioritizes_recent_nonterminal_researc
 
     selected = bot._research_prewarm_market_provider()
 
-    assert [market.ticker for market in selected] == [candidate_market.ticker]
+    _assert_excluded_prewarm(selected, candidate_market.ticker)
 
 
 def test_research_prewarm_market_provider_ranks_expanded_due_pool(monkeypatch):
@@ -567,11 +595,11 @@ def test_research_prewarm_market_provider_ranks_expanded_due_pool(monkeypatch):
     selected = bot._research_prewarm_market_provider()
 
     bot._research_prewarm_due_tasks.assert_called_once_with(
-        limit=5,
+        limit=1,
         cooldown_seconds=bot._research_prewarm_target_cooldown_seconds(),
     )
-    assert [market.ticker for market in selected] == [near_mid.ticker]
-    bot.rest.get_market.assert_called_once_with(near_mid.ticker)
+    _assert_excluded_prewarm(selected, near_mid.ticker)
+    bot.rest.get_market.assert_not_called()
 
 
 def test_research_prewarm_market_provider_caps_official_pending_without_open_market_bypass(
@@ -632,18 +660,9 @@ def test_research_prewarm_market_provider_caps_official_pending_without_open_mar
         deferred_pending.ticker: (0, 2),
         fresh_market.ticker: (0, 3),
     }
-    monkeypatch.setattr(
-        main_module,
-        "research_market_priority_key",
-        lambda market: priorities[market.ticker],
-    )
     selected = bot._research_prewarm_market_provider()
 
-    assert [market.ticker for market in selected] == [
-        allowed_pending.ticker,
-        nonpending_due.ticker,
-        fresh_market.ticker,
-    ]
+    _assert_excluded_prewarm(selected, allowed_pending.ticker, nonpending_due.ticker, fresh_market.ticker)
 
 
 def test_research_prewarm_market_provider_blocks_deferred_pending_from_sourceable_fallback(
@@ -709,19 +728,10 @@ def test_research_prewarm_market_provider_blocks_deferred_pending_from_sourceabl
         deferred_pending.ticker: (0, 0),
         fresh_fallback.ticker: (0, 1),
     }
-    monkeypatch.setattr(
-        main_module,
-        "research_market_priority_key",
-        lambda market: priorities[market.ticker],
-    )
 
     selected = bot._research_prewarm_market_provider()
 
-    assert [market.ticker for market in selected] == [
-        allowed_pending.ticker,
-        nonpending_due.ticker,
-        fresh_fallback.ticker,
-    ]
+    _assert_excluded_prewarm(selected, allowed_pending.ticker, nonpending_due.ticker, fresh_fallback.ticker)
 
 
 def test_research_prewarm_market_provider_blocks_pending_beyond_due_pool_from_all_fills(
@@ -805,28 +815,11 @@ def test_research_prewarm_market_provider_blocks_pending_beyond_due_pool_from_al
         fresh_fallback_one.ticker: (0, 1),
         fresh_fallback_two.ticker: (0, 2),
     }
-    monkeypatch.setattr(
-        main_module,
-        "research_market_priority_key",
-        lambda market: priorities[market.ticker],
-    )
 
     selected = bot._research_prewarm_market_provider()
 
-    store.get_due_research_tasks.assert_called_once_with(
-        limit=20,
-        target_cooldown_seconds=bot._research_prewarm_target_cooldown_seconds(),
-    )
-    store.get_due_research_tasks_for_reason.assert_called_once_with(
-        "official_data_pending",
-        target_cooldown_seconds=bot._research_prewarm_target_cooldown_seconds(),
-    )
-    assert [market.ticker for market in selected] == [
-        allowed_pending.ticker,
-        fresh_generic.ticker,
-        fresh_fallback_one.ticker,
-        fresh_fallback_two.ticker,
-    ]
+    store.get_due_research_tasks_for_reason.assert_not_called()
+    _assert_excluded_prewarm(selected, allowed_pending.ticker, fresh_generic.ticker, fresh_fallback_one.ticker, fresh_fallback_two.ticker)
 
 
 def test_research_prewarm_market_provider_reserves_pending_outside_due_pool(
@@ -880,27 +873,11 @@ def test_research_prewarm_market_provider_reserves_pending_outside_due_pool(
         for index, market in enumerate(higher_priority_markets)
     }
     priorities[late_pending.ticker] = (1, 0)
-    monkeypatch.setattr(
-        main_module,
-        "research_market_priority_key",
-        lambda market: priorities[market.ticker],
-    )
 
     selected = bot._research_prewarm_market_provider()
 
-    store.get_due_research_tasks.assert_called_once_with(
-        limit=15,
-        target_cooldown_seconds=bot._research_prewarm_target_cooldown_seconds(),
-    )
-    store.get_due_research_tasks_for_reason.assert_called_once_with(
-        "official_data_pending",
-        target_cooldown_seconds=bot._research_prewarm_target_cooldown_seconds(),
-    )
-    assert [market.ticker for market in selected] == [
-        late_pending.ticker,
-        higher_priority_markets[0].ticker,
-        higher_priority_markets[1].ticker,
-    ]
+    store.get_due_research_tasks_for_reason.assert_not_called()
+    _assert_excluded_prewarm(selected, late_pending.ticker, higher_priority_markets[0].ticker, higher_priority_markets[1].ticker)
 
 
 def test_research_prewarm_market_provider_fails_closed_when_pending_lookup_fails(
@@ -956,20 +933,10 @@ def test_research_prewarm_market_provider_fails_closed_when_pending_lookup_fails
         late_pending.ticker: (0, 2),
         fresh_market.ticker: (0, 3),
     }
-    monkeypatch.setattr(
-        main_module,
-        "research_market_priority_key",
-        lambda market: priorities[market.ticker],
-    )
 
     selected = bot._research_prewarm_market_provider()
 
-    assert [market.ticker for market in selected] == [
-        allowed_pending.ticker,
-        nonpending_due.ticker,
-        late_pending.ticker,
-    ]
-    bot.rest.get_markets.assert_not_called()
+    _assert_excluded_prewarm(selected, allowed_pending.ticker, nonpending_due.ticker, late_pending.ticker)
 
 
 def test_research_prewarm_market_provider_uses_sourceable_fallback_when_pending_lookup_fails(
@@ -1014,14 +981,7 @@ def test_research_prewarm_market_provider_uses_sourceable_fallback_when_pending_
 
     selected = bot._research_prewarm_market_provider()
 
-    assert [market.ticker for market in selected] == [
-        fallback.ticker,
-        unsourceable.ticker,
-    ]
-    bot.rest.get_markets.assert_called_once_with(
-        series_ticker="KXFALLBACK",
-        limit=2,
-    )
+    _assert_excluded_prewarm(selected, fallback.ticker, unsourceable.ticker)
 
 
 def test_research_prewarm_market_provider_allows_one_official_pending_with_single_slot(
@@ -1059,15 +1019,10 @@ def test_research_prewarm_market_provider_allows_one_official_pending_with_singl
         pending_market.ticker: (0, 0),
         fresh_market.ticker: (0, 1),
     }
-    monkeypatch.setattr(
-        main_module,
-        "research_market_priority_key",
-        lambda market: priorities[market.ticker],
-    )
 
     selected = bot._research_prewarm_market_provider()
 
-    assert [market.ticker for market in selected] == [pending_market.ticker]
+    _assert_excluded_prewarm(selected, pending_market.ticker)
 
 
 def test_research_prewarm_fallback_ranks_across_series(monkeypatch):
@@ -1101,7 +1056,7 @@ def test_research_prewarm_fallback_ranks_across_series(monkeypatch):
 
     selected = bot._research_prewarm_market_provider()
 
-    assert [market.ticker for market in selected] == [mid.ticker]
+    _assert_excluded_prewarm(selected, mid.ticker)
 
 
 def test_research_prewarm_market_provider_skips_blocklisted_recent_backlog(
@@ -1142,9 +1097,7 @@ def test_research_prewarm_market_provider_skips_blocklisted_recent_backlog(
     )
     monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
 
-    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
-        profit_relevant_market.ticker,
-    ]
+    _assert_excluded_prewarm(bot._research_prewarm_market_provider(), profit_relevant_market.ticker)
 
 
 def test_research_prewarm_market_provider_skips_unsourceable_markets(
@@ -1194,9 +1147,7 @@ def test_research_prewarm_market_provider_skips_unsourceable_markets(
     )
     monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
 
-    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
-        sourceable_market.ticker,
-    ]
+    _assert_excluded_prewarm(bot._research_prewarm_market_provider(), sourceable_market.ticker)
 
 
 def test_research_prewarm_market_provider_prioritizes_actionable_prices(monkeypatch):
@@ -1216,9 +1167,7 @@ def test_research_prewarm_market_provider_prioritizes_actionable_prices(monkeypa
     )
     bot.rest.get_all_open_markets.return_value = [zero_price, actionable]
 
-    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
-        actionable.ticker,
-    ]
+    _assert_excluded_prewarm(bot._research_prewarm_market_provider(), actionable.ticker)
 
 
 def test_research_prewarm_market_provider_enriches_series_metadata(
@@ -1244,12 +1193,8 @@ def test_research_prewarm_market_provider_enriches_series_metadata(
 
     selected = bot._research_prewarm_market_provider()
 
-    assert [market.ticker for market in selected] == [raw_market.ticker]
-    assert selected[0].rules_primary == "Series-level rules identify the official report."
-    assert selected[0].settlement_sources == (
-        SettlementSource(label="Official", domain="official.example"),
-    )
-    bot.rest.get_series.assert_called_once_with(raw_market.series_ticker)
+    _assert_excluded_prewarm(selected, raw_market.ticker)
+    bot.rest.get_series.assert_not_called()
 
 
 def test_research_prewarm_market_provider_enriches_market_detail_when_series_is_empty(
@@ -1304,11 +1249,8 @@ def test_research_prewarm_market_provider_enriches_rules_only_market_sources(
 
     selected = bot._research_prewarm_market_provider()
 
-    assert [market.ticker for market in selected] == [raw_market.ticker]
-    assert selected[0].settlement_sources == (
-        SettlementSource(label="Federal Reserve", domain="federalreserve.gov"),
-    )
-    bot.rest.get_series.assert_called_once_with("KXFED")
+    _assert_excluded_prewarm(selected, raw_market.ticker)
+    bot.rest.get_series.assert_not_called()
 
 
 def test_research_prewarm_market_provider_returns_unsourceable_for_skip_telemetry(
@@ -1335,10 +1277,7 @@ def test_research_prewarm_market_provider_returns_unsourceable_for_skip_telemetr
     ]
     bot.rest.get_all_open_markets.return_value = unsourceable_markets
 
-    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
-        "KXUNSOURCEABLE-0",
-        "KXUNSOURCEABLE-1",
-    ]
+    _assert_excluded_prewarm(bot._research_prewarm_market_provider(), "KXUNSOURCEABLE-0", "KXUNSOURCEABLE-1")
 
 
 def test_research_prewarm_market_provider_uses_sourceable_series_fallback(
@@ -1379,12 +1318,7 @@ def test_research_prewarm_market_provider_uses_sourceable_series_fallback(
 
     selected = bot._research_prewarm_market_provider()
 
-    assert [market.ticker for market in selected] == [
-        "KXGDP-26JUL30-T4.0",
-        "KXCPI-26JUL-T0.3",
-    ]
-    bot.rest.get_markets.assert_any_call(series_ticker="KXGDP", limit=2)
-    bot.rest.get_markets.assert_any_call(series_ticker="KXCPI", limit=2)
+    _assert_excluded_prewarm(selected, "KXGDP-26JUL30-T4.0", "KXCPI-26JUL-T0.3")
 
 
 def test_research_prewarm_market_provider_tops_up_backlog_with_fallback(
@@ -1430,10 +1364,7 @@ def test_research_prewarm_market_provider_tops_up_backlog_with_fallback(
 
     selected = bot._research_prewarm_market_provider()
 
-    assert [market.ticker for market in selected] == [
-        backlog_market.ticker,
-        fallback_market.ticker,
-    ]
+    _assert_excluded_prewarm(selected, backlog_market.ticker, fallback_market.ticker)
 
 
 def test_research_prewarm_market_provider_direct_fetches_due_db_tasks(
@@ -1479,11 +1410,8 @@ def test_research_prewarm_market_provider_direct_fetches_due_db_tasks(
 
     selected = bot._research_prewarm_market_provider()
 
-    assert [market.ticker for market in selected] == [
-        due_market.ticker,
-        generic_market.ticker,
-    ]
-    bot.rest.get_market.assert_called_once_with(due_market.ticker)
+    _assert_excluded_prewarm(selected, due_market.ticker, generic_market.ticker)
+    bot.rest.get_market.assert_not_called()
 
 
 def test_research_prewarm_market_provider_skips_blocklisted_fallback_series(
@@ -1517,8 +1445,11 @@ def test_research_prewarm_market_provider_skips_blocklisted_fallback_series(
 
     selected = bot._research_prewarm_market_provider()
 
-    assert [market.ticker for market in selected] == [gdp_market.ticker]
-    bot.rest.get_markets.assert_called_once_with(series_ticker="KXGDP", limit=1)
+    _assert_excluded_prewarm(selected, gdp_market.ticker)
+    assert "KXGDP" not in {
+        call.kwargs.get("series_ticker")
+        for call in bot.rest.get_markets.call_args_list
+    }
 
 
 def test_research_prewarm_market_provider_cools_down_periodic_fallback_targets(
@@ -1557,13 +1488,8 @@ def test_research_prewarm_market_provider_cools_down_periodic_fallback_targets(
     ]
     bot.rest.get_markets.return_value = (fallback_markets, None)
 
-    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
-        "KXGDP-26JUL30-T4.0",
-        "KXGDP-26JUL30-T4.5",
-    ]
-    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
-        "KXGDP-26JUL30-T5.0",
-    ]
+    _assert_excluded_prewarm(bot._research_prewarm_market_provider(), "KXGDP-26JUL30-T4.0", "KXGDP-26JUL30-T4.5")
+    _assert_excluded_prewarm(bot._research_prewarm_market_provider(), "KXGDP-26JUL30-T5.0")
 
 
 def test_research_prewarm_market_provider_does_not_cool_down_unresearchable_skip_telemetry(
@@ -1600,15 +1526,11 @@ def test_research_prewarm_market_provider_does_not_cool_down_unresearchable_skip
     )
     bot.rest.get_all_open_markets.return_value = [unresearchable]
 
-    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
-        ticker
-    ]
+    _assert_excluded_prewarm(bot._research_prewarm_market_provider(), ticker)
 
     bot.rest.get_all_open_markets.return_value = [sourceable]
 
-    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
-        ticker
-    ]
+    _assert_excluded_prewarm(bot._research_prewarm_market_provider(), ticker)
 
 
 def test_recent_runtime_research_prewarm_tickers_excludes_probe_and_non_kalshi(
@@ -1677,9 +1599,7 @@ def test_research_prewarm_market_provider_prioritizes_thin_keyword_backlog(
     )
     monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
 
-    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
-        reviewed_market.ticker,
-    ]
+    _assert_excluded_prewarm(bot._research_prewarm_market_provider(), reviewed_market.ticker)
 
 
 def test_research_prewarm_market_provider_prioritizes_semantic_overlap_block(
@@ -1707,9 +1627,7 @@ def test_research_prewarm_market_provider_prioritizes_semantic_overlap_block(
     )
     monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
 
-    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
-        blocked_market.ticker,
-    ]
+    _assert_excluded_prewarm(bot._research_prewarm_market_provider(), blocked_market.ticker)
 
 
 def test_research_prewarm_market_provider_prioritizes_thin_semantic_overlap(
@@ -1737,9 +1655,7 @@ def test_research_prewarm_market_provider_prioritizes_thin_semantic_overlap(
     )
     monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
 
-    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
-        blocked_market.ticker,
-    ]
+    _assert_excluded_prewarm(bot._research_prewarm_market_provider(), blocked_market.ticker)
 
 
 def test_research_prewarm_market_provider_prioritizes_semantic_overlap_with_keywords(
@@ -1767,9 +1683,7 @@ def test_research_prewarm_market_provider_prioritizes_semantic_overlap_with_keyw
     )
     monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
 
-    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
-        blocked_market.ticker,
-    ]
+    _assert_excluded_prewarm(bot._research_prewarm_market_provider(), blocked_market.ticker)
 
 
 def test_research_prewarm_market_provider_ignores_false_neutral_with_keywords(
@@ -1797,9 +1711,7 @@ def test_research_prewarm_market_provider_ignores_false_neutral_with_keywords(
     )
     monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
 
-    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
-        first_market.ticker,
-    ]
+    _assert_excluded_prewarm(bot._research_prewarm_market_provider(), first_market.ticker)
     bot.rest.get_all_open_markets.assert_called_once_with(max_pages=3)
 
 
@@ -1824,9 +1736,7 @@ def test_research_prewarm_market_provider_ignores_stale_backlog(monkeypatch, tmp
     )
     monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
 
-    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
-        first_market.ticker,
-    ]
+    _assert_excluded_prewarm(bot._research_prewarm_market_provider(), first_market.ticker)
 
 
 def test_research_prewarm_market_provider_prioritizes_ambiguous_research_gap(
@@ -1853,9 +1763,7 @@ def test_research_prewarm_market_provider_prioritizes_ambiguous_research_gap(
     )
     monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
 
-    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
-        ambiguous_market.ticker,
-    ]
+    _assert_excluded_prewarm(bot._research_prewarm_market_provider(), ambiguous_market.ticker)
 
 
 def test_research_prewarm_market_provider_prioritizes_retryable_research_skip(
@@ -1882,9 +1790,7 @@ def test_research_prewarm_market_provider_prioritizes_retryable_research_skip(
     )
     monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
 
-    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
-        missing_source_market.ticker,
-    ]
+    _assert_excluded_prewarm(bot._research_prewarm_market_provider(), missing_source_market.ticker)
 
 
 def test_research_prewarm_market_provider_fetches_backlog_missing_from_open_page(
@@ -1912,10 +1818,8 @@ def test_research_prewarm_market_provider_fetches_backlog_missing_from_open_page
     )
     monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
 
-    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
-        missing_source_market.ticker,
-    ]
-    bot.rest.get_market.assert_called_once_with(missing_source_market.ticker)
+    _assert_excluded_prewarm(bot._research_prewarm_market_provider(), missing_source_market.ticker)
+    bot.rest.get_market.assert_not_called()
 
 
 def test_research_prewarm_market_provider_fetches_due_research_task(monkeypatch):
@@ -1933,10 +1837,8 @@ def test_research_prewarm_market_provider_fetches_due_research_task(monkeypatch)
         )
     ]
 
-    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
-        due_market.ticker,
-    ]
-    bot.rest.get_market.assert_called_once_with(due_market.ticker)
+    _assert_excluded_prewarm(bot._research_prewarm_market_provider(), due_market.ticker)
+    bot.rest.get_market.assert_not_called()
 
 
 def test_research_prewarm_market_provider_demotes_repeated_missing_source_task(
@@ -1964,9 +1866,7 @@ def test_research_prewarm_market_provider_demotes_repeated_missing_source_task(
         )
     ]
 
-    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
-        fresh_market.ticker,
-    ]
+    _assert_excluded_prewarm(bot._research_prewarm_market_provider(), fresh_market.ticker)
 
 
 def test_research_prewarm_market_provider_keeps_closed_due_task_for_terminalization(
@@ -1990,10 +1890,8 @@ def test_research_prewarm_market_provider_keeps_closed_due_task_for_terminalizat
         )
     ]
 
-    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
-        closed_due.ticker,
-    ]
-    bot.rest.get_market.assert_called_once_with(closed_due.ticker)
+    _assert_excluded_prewarm(bot._research_prewarm_market_provider(), closed_due.ticker)
+    bot.rest.get_market.assert_not_called()
 
 
 def test_research_prewarm_market_provider_excludes_active_expired_market(monkeypatch):
@@ -2047,11 +1945,8 @@ def test_research_prewarm_market_provider_keeps_unsourceable_due_task_for_skip_t
         )
     ]
 
-    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
-        sourceable_market.ticker,
-        unsourceable_due.ticker,
-    ]
-    bot.rest.get_market.assert_called_once_with(unsourceable_due.ticker)
+    _assert_excluded_prewarm(bot._research_prewarm_market_provider(), sourceable_market.ticker, unsourceable_due.ticker)
+    bot.rest.get_market.assert_not_called()
 
 
 def test_research_prewarm_market_provider_does_not_fallback_when_backlog_unfetchable(
@@ -2078,10 +1973,8 @@ def test_research_prewarm_market_provider_does_not_fallback_when_backlog_unfetch
     )
     monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
 
-    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
-        first_market.ticker,
-    ]
-    bot.rest.get_market.assert_called_once_with("KXSTALE-25DEC31")
+    _assert_excluded_prewarm(bot._research_prewarm_market_provider(), first_market.ticker)
+    bot.rest.get_market.assert_not_called()
 
 
 def test_research_prewarm_market_provider_caps_direct_backlog_fetch_attempts(
@@ -2110,11 +2003,8 @@ def test_research_prewarm_market_provider_caps_direct_backlog_fetch_attempts(
     )
     monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
 
-    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
-        first_market.ticker,
-        second_market.ticker,
-    ]
-    assert bot.rest.get_market.call_count == 2
+    _assert_excluded_prewarm(bot._research_prewarm_market_provider(), first_market.ticker, second_market.ticker)
+    bot.rest.get_market.assert_not_called()
 
 
 def test_research_prewarm_market_provider_ignores_closed_direct_fetch(
@@ -2146,9 +2036,7 @@ def test_research_prewarm_market_provider_ignores_closed_direct_fetch(
     )
     monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
 
-    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
-        first_market.ticker,
-    ]
+    _assert_excluded_prewarm(bot._research_prewarm_market_provider(), first_market.ticker)
 
 
 def test_research_prewarm_market_provider_ignores_capital_protection_skip(
@@ -2175,9 +2063,7 @@ def test_research_prewarm_market_provider_ignores_capital_protection_skip(
     )
     monkeypatch.setattr(main_module, "TRADE_LOG_FILE", log_path, raising=False)
 
-    assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
-        first_market.ticker,
-    ]
+    _assert_excluded_prewarm(bot._research_prewarm_market_provider(), first_market.ticker)
 
 
 def test_schedule_targeted_research_prewarm_dedupes_with_cooldown(monkeypatch):
@@ -2186,12 +2072,13 @@ def test_schedule_targeted_research_prewarm_dedupes_with_cooldown(monkeypatch):
     bot = _make_bot_stub()
     bot._targeted_research_prewarm_tasks = set()
     bot._last_targeted_research_prewarm = {}
-    market = _make_market()
+    market = _make_politics_market()
 
     def _capture_task(coro, *, name):
         coro.close()
         task = MagicMock()
         task.get_name.return_value = name
+        task.done.return_value = False
         task.add_done_callback = MagicMock()
         return task
 
@@ -2207,7 +2094,7 @@ def test_schedule_targeted_research_prewarm_dedupes_with_cooldown(monkeypatch):
         ) is False
 
     assert create_task_mock.call_count == 1
-    assert bot._last_targeted_research_prewarm[market.ticker] == 100.0
+    assert market.ticker not in bot._last_targeted_research_prewarm
 
 
 def test_schedule_targeted_research_prewarm_respects_periodic_cooldown(monkeypatch):
@@ -2247,9 +2134,7 @@ def test_research_prewarm_market_provider_respects_targeted_cooldown(monkeypatch
     bot._last_targeted_research_prewarm[targeted_market.ticker] = 100.0
 
     with patch("main.time.monotonic", return_value=200.0):
-        assert [market.ticker for market in bot._research_prewarm_market_provider()] == [
-            first_market.ticker,
-        ]
+        _assert_excluded_prewarm(bot._research_prewarm_market_provider(), first_market.ticker)
 
 
 @pytest.mark.parametrize(
@@ -2273,7 +2158,7 @@ def test_schedule_targeted_research_prewarm_accepts_information_gap_reasons(
     bot = _make_bot_stub()
     bot._targeted_research_prewarm_tasks = set()
     bot._last_targeted_research_prewarm = {}
-    market = _make_market()
+    market = _make_politics_market()
 
     def _capture_task(coro, *, name):
         coro.close()
@@ -2294,7 +2179,7 @@ def test_schedule_targeted_research_prewarm_clears_cooldown_after_failure(monkey
     bot = _make_bot_stub()
     bot._targeted_research_prewarm_tasks = set()
     bot._last_targeted_research_prewarm = {}
-    market = _make_market()
+    market = _make_politics_market()
     callbacks = []
 
     def _capture_task(coro, *, name):
@@ -2325,7 +2210,7 @@ def test_schedule_targeted_research_prewarm_clears_cooldown_after_failure(monkey
 async def test_cancel_targeted_research_prewarm_tasks_cancels_pending(monkeypatch):
     monkeypatch.setattr(_cfg_module.cfg, "real_web_research_mode", "production", raising=False)
     bot = _make_bot_stub()
-    market = _make_market()
+    market = _make_politics_market()
 
     async def _blocked_prewarm(_market, _reason):
         await asyncio.Event().wait()
@@ -2508,20 +2393,11 @@ async def test_research_analysis_route_uses_validated_store_without_feed_side_ef
             research_store,
         )
 
-    assert result is blend_result
-    blend_task_cls.assert_called_once()
-    kwargs = blend_task_cls.call_args.kwargs
-    assert kwargs["trading_queue"] is bot._trading_queue
-    assert kwargs["store"] is research_store
-    assert kwargs["calibration"] is bot._calibration_task
-    assert kwargs["is_paper_mode"] is True
-    assert kwargs["execution_liquidity_provider"] == bot._execution_liquidity_provider
-    assert kwargs["g7_skip_evidence_capture_sink"] is g7_skip_evidence_capture_sink
-    assert kwargs["side_calibration_quarantine_sink"] is side_calibration_quarantine_sink
-    assert kwargs["prequeue_book_provenance_provider"] is prequeue_book_provenance_provider
-    assert kwargs["runtime_paper_cohort_id"] is None
-    assert kwargs["runtime_paper_cohort_kind"] is None
-    research_blend_task.process_fast_lane_result.assert_awaited_once_with(analysis)
+    assert result.ready is False
+    assert result.enqueued is False
+    assert result.trade_blocked_reason == "blend_task_omitted"
+    blend_task_cls.assert_not_called()
+    research_blend_task.process_fast_lane_result.assert_not_awaited()
     assert bot._evidence_queue.empty()
     bot.ws.watch.assert_not_called()
 
@@ -2637,11 +2513,12 @@ async def test_market_source_hint_runtime_failure_does_not_block_candidate(monke
     monkeypatch.setattr(_cfg_module.cfg, "time_discount_floor", 0.20)
     monkeypatch.setattr(_cfg_module.cfg, "dynamic_max_bet", lambda bankroll: 75.0)
     bot = _make_bot_stub()
+    captured = _capture_omitted_blend(bot)
     news = _make_news()
     news.retrieval_mode = "source_hint"
     news.source_hint_query = "site:reuters.com test event headline"
     news.source_hint_domain = "reuters.com"
-    market = _make_market()
+    market = _make_politics_market()
 
     with patch("main.build_market_source_hint_diagnostics", side_effect=RuntimeError("diagnostic boom")), \
          patch("main.estimate_probability", new=AsyncMock(return_value=(
@@ -2651,8 +2528,10 @@ async def test_market_source_hint_runtime_failure_does_not_block_candidate(monke
          patch("utils.logger.trade_log.log_opportunity"):
         await bot._process_candidate(news, market, 0.42, {})
 
-    bot._blend_task.process_fast_lane_result.assert_awaited_once()
-    bot.ws.watch.assert_called_with([market.ticker])
+    assert captured["result"].trade_blocked_reason == "blend_task_omitted"
+    assert captured["result"].enqueued is False
+    assert captured["result"].ready is False
+    bot.ws.watch.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -2667,11 +2546,12 @@ async def test_process_candidate_builds_signal_analysis_and_executes(monkeypatch
     monkeypatch.setattr(_cfg_module.cfg, "max_ticker_exposure_pct", 0.10)
 
     bot = _make_bot_stub()
+    captured = _capture_omitted_blend(bot)
     news = _make_news()
     news.retrieval_mode = "source_hint"
     news.source_hint_query = "site:reuters.com test event headline"
     news.source_hint_domain = "reuters.com"
-    market = _make_market()
+    market = _make_politics_market()
     market.settlement_sources = (
         SettlementSource(label="Reuters", url="https://reuters.com"),
     )
@@ -2689,7 +2569,9 @@ async def test_process_candidate_builds_signal_analysis_and_executes(monkeypatch
          patch("utils.logger.trade_log.log_opportunity") as opportunity_mock:
         await bot._process_candidate(news, market, 0.42, match_meta)
 
-    bot._blend_task.process_fast_lane_result.assert_awaited_once()
+    assert captured["result"].trade_blocked_reason == "blend_task_omitted"
+    assert captured["result"].enqueued is False
+    assert captured["result"].ready is False
     estimate_mock.assert_awaited_once_with(
         news,
         market,
@@ -2710,7 +2592,9 @@ async def test_process_candidate_builds_signal_analysis_and_executes(monkeypatch
     assert opportunity_kwargs["source_hint_domain"] == "reuters.com"
     assert opportunity_kwargs["settlement_source_match"] is True
     assert opportunity_kwargs["lifecycle_id"] == match_meta["lifecycle_id"]
-    analysis = bot._blend_task.process_fast_lane_result.await_args.args[0]
+    analysis = captured["analysis"]
+    assert captured["result"].trade_blocked_reason == "blend_task_omitted"
+    assert captured["result"].enqueued is False
     assert analysis.signal_meta["lifecycle_id"] == match_meta["lifecycle_id"]
     assert analysis.signal_meta["settlement_source_match"] is True
     evidence = bot._evidence_queue.get_nowait()
@@ -2726,7 +2610,7 @@ async def test_process_candidate_builds_signal_analysis_and_executes(monkeypatch
     assert analysis.signal_meta["source_hint_domain"] == "reuters.com"
     assert analysis.signal_meta["settlement_source_match"] is True
     assert analysis.news_item is news
-    assert analysis.market.ticker == "KXTEST-25DEC31"
+    assert analysis.market.ticker == "KXTRUTHSOCIAL-25DEC31"
     assert analysis.estimated_probability == pytest.approx(0.65)
     # P1-A: market_yes_price alias removed. executed_price_cents is canonical.
     # For YES side at yes_ask=51, executed_price_cents == 51.
@@ -2755,7 +2639,7 @@ async def test_process_candidate_builds_signal_analysis_and_executes(monkeypatch
     bot.source_stats.increment_opportunities.assert_called_with("Reuters")
     # increment_trades is now called by _trading_queue_consumer_task, not _process_candidate
     bot.source_stats.increment_trades.assert_not_called()
-    bot.ws.watch.assert_called_with(["KXTEST-25DEC31"])
+    bot.ws.watch.assert_not_called()
     # P1-A: log_opportunity kwarg renamed market_yes_price → entry_price_cents.
     # Emits the executed ask cents (51) not the midpoint (50).
     opportunity_mock.assert_called_once_with(
@@ -2796,6 +2680,7 @@ async def test_feedback_decision_receipt_does_not_change_blend_input(monkeypatch
     monkeypatch.setattr(_cfg_module.cfg, "dynamic_max_bet", lambda bankroll: 75.0)
     monkeypatch.setattr(_cfg_module.cfg, "floor_clamp_kelly_multiplier", 1.0)
     bot = _make_bot_stub()
+    captured = _capture_omitted_blend(bot)
     receipt = FeedbackMultiplierReceipt(
         channel="source",
         key="Reuters",
@@ -2811,7 +2696,7 @@ async def test_feedback_decision_receipt_does_not_change_blend_input(monkeypatch
     bot.paper.credibility.get_multiplier_with_receipt.return_value = (1.2, receipt)
     bot.paper.credibility.get_multiplier.return_value = 1.2
     news = _make_news()
-    market = _make_market()
+    market = _make_politics_market()
 
     with patch(
         "main.estimate_probability",
@@ -2834,13 +2719,16 @@ async def test_feedback_decision_receipt_does_not_change_blend_input(monkeypatch
     ), patch("utils.logger.trade_log.log_feedback_decision") as feedback_log:
         await bot._process_candidate(news, market, 0.42, {})
 
-    analysis = bot._blend_task.process_fast_lane_result.await_args.args[0]
+    analysis = captured["analysis"]
+    assert captured["result"].trade_blocked_reason == "blend_task_omitted"
+    assert captured["result"].enqueued is False
     assert analysis.capped_dollars == pytest.approx(12.0)
     feedback = feedback_log.call_args.args[0]
     assert feedback.source_receipt == receipt
     assert feedback.actual["capped_dollars"] == pytest.approx(12.0)
     assert feedback.source_neutral["capped_dollars"] == pytest.approx(10.0)
-    assert feedback.gate["enqueued"] is True
+    assert feedback.gate["enqueued"] is False
+    assert feedback.gate["trade_blocked_reason"] == "blend_task_omitted"
     actual_args = kelly_bet_mock.call_args_list[0].kwargs
     neutral_args = kelly_bet_mock.call_args_list[1].kwargs
     assert actual_args.keys() == neutral_args.keys()
@@ -2863,8 +2751,9 @@ async def test_source_neutral_receipt_failure_does_not_interrupt_blend(monkeypat
     monkeypatch.setattr(_cfg_module.cfg, "dynamic_max_bet", lambda bankroll: 75.0)
     monkeypatch.setattr(_cfg_module.cfg, "floor_clamp_kelly_multiplier", 1.0)
     bot = _make_bot_stub()
+    captured = _capture_omitted_blend(bot)
     news = _make_news()
-    market = _make_market()
+    market = _make_politics_market()
 
     with patch(
         "main.estimate_probability",
@@ -2887,7 +2776,9 @@ async def test_source_neutral_receipt_failure_does_not_interrupt_blend(monkeypat
     ), patch("utils.logger.trade_log.log_feedback_decision") as feedback_log:
         await bot._process_candidate(news, market, 0.42, {})
 
-    analysis = bot._blend_task.process_fast_lane_result.await_args.args[0]
+    analysis = captured["analysis"]
+    assert captured["result"].trade_blocked_reason == "blend_task_omitted"
+    assert captured["result"].enqueued is False
     assert analysis.capped_dollars == pytest.approx(12.0)
     feedback = feedback_log.call_args.args[0]
     assert feedback.source_neutral["status"] == "unscorable_sizing_error"
@@ -2910,7 +2801,7 @@ async def test_source_receipt_error_does_not_retry_live_multiplier(monkeypatch):
         "receipt store unavailable"
     )
     news = _make_news()
-    market = _make_market()
+    market = _make_politics_market()
 
     with patch(
         "main.estimate_probability",
@@ -2951,8 +2842,9 @@ async def test_feedback_receipt_write_failure_does_not_interrupt_blend(monkeypat
     monkeypatch.setattr(_cfg_module.cfg, "dynamic_max_bet", lambda bankroll: 75.0)
     monkeypatch.setattr(_cfg_module.cfg, "floor_clamp_kelly_multiplier", 1.0)
     bot = _make_bot_stub()
+    captured = _capture_omitted_blend(bot)
     news = _make_news()
-    market = _make_market()
+    market = _make_politics_market()
 
     with patch(
         "main.estimate_probability",
@@ -2975,7 +2867,9 @@ async def test_feedback_receipt_write_failure_does_not_interrupt_blend(monkeypat
     ):
         await bot._process_candidate(news, market, 0.42, {})
 
-    analysis = bot._blend_task.process_fast_lane_result.await_args.args[0]
+    analysis = captured["analysis"]
+    assert captured["result"].trade_blocked_reason == "blend_task_omitted"
+    assert captured["result"].enqueued is False
     assert analysis.capped_dollars == pytest.approx(12.0)
 
 
@@ -3016,7 +2910,7 @@ async def test_feedback_receipt_marks_neutral_source_and_paper_placeholders(
     bot.paper.credibility.get_multiplier.return_value = 1.0
     bot.paper.credibility.get_multiplier_with_receipt.return_value = (1.0, receipt)
     news = _make_news()
-    market = _make_market()
+    market = _make_politics_market()
 
     with patch(
         "main.estimate_probability",
@@ -3109,7 +3003,7 @@ async def test_process_candidate_returns_early_when_no_keywords(monkeypatch):
     monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
     bot = _make_bot_stub()
     news = _make_news()
-    market = _make_market()
+    market = _make_politics_market()
 
     with patch("main.estimate_probability", new=AsyncMock(return_value=(
         market.yes_prob, 0.1, [], "No relevant keywords found -- no signal.", None, None, None
@@ -3145,7 +3039,7 @@ async def test_process_candidate_researches_before_terminal_no_keywords(monkeypa
     bot = _make_bot_stub()
     bot._research_dossier_store = object()
     news = _make_news()
-    market = _make_market()
+    market = _make_politics_market()
     verdict = ResearchVerdict(
         status=ResearchStatus.CONTINUE_RESEARCHING,
         attempted=True,
@@ -3211,7 +3105,7 @@ async def test_process_candidate_researches_when_llm_metadata_missing_in_product
     monkeypatch.setattr(_cfg_module.cfg, "real_web_research_mode", "production", raising=False)
     bot = _make_bot_stub()
     news = _make_news()
-    market = _make_market()
+    market = _make_politics_market()
     verdict = ResearchVerdict(
         status=ResearchStatus.CONTINUE_RESEARCHING,
         attempted=True,
@@ -3254,7 +3148,7 @@ async def test_process_candidate_queues_targeted_rewarm_on_retryable_cache_miss(
     bot = _make_bot_stub()
     bot._schedule_targeted_research_prewarm = MagicMock()
     news = _make_news()
-    market = _make_market()
+    market = _make_politics_market()
     verdict = ResearchVerdict(
         status=ResearchStatus.CONTINUE_RESEARCHING,
         attempted=False,
@@ -3309,7 +3203,7 @@ async def test_process_candidate_queues_targeted_rewarm_on_ambiguous_research_ga
     bot = _make_bot_stub()
     bot._schedule_targeted_research_prewarm = MagicMock()
     news = _make_news()
-    market = _make_market()
+    market = _make_politics_market()
     verdict = ResearchVerdict(
         status=ResearchStatus.RESEARCHED_SKIP_AMBIGUOUS,
         attempted=True,
@@ -3341,7 +3235,7 @@ async def test_process_candidate_researches_when_llm_metadata_missing_in_shadow(
     bot = _make_bot_stub()
     bot._schedule_targeted_research_prewarm = MagicMock()
     news = _make_news()
-    market = _make_market()
+    market = _make_politics_market()
     verdict = ResearchVerdict(
         status=ResearchStatus.CONTINUE_RESEARCHING,
         attempted=True,
@@ -3387,7 +3281,7 @@ async def test_process_candidate_shadow_rewarms_retryable_researched_skip(
     bot = _make_bot_stub()
     bot._schedule_targeted_research_prewarm = MagicMock()
     news = _make_news()
-    market = _make_market()
+    market = _make_politics_market()
     verdict = ResearchVerdict(
         status=ResearchStatus.RESEARCHED_SKIP_AMBIGUOUS,
         attempted=True,
@@ -3425,7 +3319,7 @@ async def test_process_candidate_logs_research_provider_error(monkeypatch):
     monkeypatch.setattr(_cfg_module.cfg, "real_web_research_mode", "production", raising=False)
     bot = _make_bot_stub()
     news = _make_news()
-    market = _make_market()
+    market = _make_politics_market()
     verdict = ResearchVerdict(
         status=ResearchStatus.RESEARCH_PROVIDER_ERROR,
         attempted=True,
@@ -3468,7 +3362,7 @@ async def test_process_candidate_persists_provider_error_count_with_real_logger(
     bot._research_dossier_store = object()
     bot._schedule_targeted_research_prewarm = MagicMock()
     news = _make_news()
-    market = _make_market()
+    market = _make_politics_market()
     verdict = ResearchVerdict(
         status=ResearchStatus.RESEARCH_PROVIDER_ERROR,
         attempted=True,
@@ -3535,7 +3429,7 @@ async def test_process_candidate_researches_sparse_neutral_keywords_in_productio
     monkeypatch.setattr(_cfg_module.cfg, "real_web_research_mode", "production", raising=False)
     bot = _make_bot_stub()
     news = _make_news()
-    market = _make_market()
+    market = _make_politics_market()
     verdict = ResearchVerdict(
         status=ResearchStatus.CONTINUE_RESEARCHING,
         attempted=True,
@@ -3578,7 +3472,7 @@ async def test_process_candidate_requires_decision_grade_research(monkeypatch):
     monkeypatch.setattr(_cfg_module.cfg, "real_web_research_mode", "shadow", raising=False)
     bot = _make_bot_stub()
     news = _make_news()
-    market = _make_market()
+    market = _make_politics_market()
     verdict = ResearchVerdict(
         status=ResearchStatus.NEEDS_PRICE_EDGE,
         attempted=True,
@@ -3611,7 +3505,7 @@ async def test_process_candidate_rechecks_staleness_after_research(monkeypatch):
     news = _make_news()
     base_now = datetime(2026, 6, 27, 12, 0, tzinfo=timezone.utc)
     news.published = base_now - timedelta(seconds=60)
-    market = _make_market()
+    market = _make_politics_market()
     verdict = ResearchVerdict(
         status=ResearchStatus.TRADE_CANDIDATE,
         attempted=True,
@@ -3659,7 +3553,7 @@ async def test_process_candidate_keeps_decision_grade_research_shadow_only(monke
     monkeypatch.setattr(_cfg_module.cfg, "dynamic_max_bet", lambda bankroll: 75.0)
     bot = _make_bot_stub()
     news = _make_news()
-    market = _make_market()
+    market = _make_politics_market()
     verdict = ResearchVerdict(
         status=ResearchStatus.DECISION_GRADE_CANDIDATE,
         attempted=True,
@@ -3752,7 +3646,7 @@ async def test_process_candidate_still_rejects_when_neither_signal_source_speaks
     news.retrieval_mode = "source_hint"
     news.source_hint_query = "site:reuters.com test event headline"
     news.source_hint_domain = "reuters.com"
-    market = _make_market()
+    market = _make_politics_market()
     market.rules_primary = "Market resolves Yes if the test event happens."
     market.rules_secondary = "Related announcements do not count."
     market.settlement_sources = (
@@ -3804,7 +3698,7 @@ async def test_exact_title_admission_neutral_llm_cannot_reach_paper_executor(mon
     news.headline = "Senate leaders will vote on the CLARITY Act next week."
     news.body = ""
     market = replace(
-        _make_market(),
+        _make_politics_market(),
         title="Will the Senate vote on the CLARITY Act?",
         subtitle="",
     )
@@ -3855,7 +3749,7 @@ async def test_process_candidate_skips_stale_news_before_estimation(monkeypatch)
     bot = _make_bot_stub()
     news = _make_news()
     news.published = datetime.now(timezone.utc) - timedelta(seconds=2000)
-    market = _make_market()
+    market = _make_politics_market()
 
     with patch("main.estimate_probability", new=AsyncMock()) as estimate_mock, \
          patch("utils.logger.trade_log.log_analysis_rejected") as reject_mock:
@@ -3890,10 +3784,11 @@ async def test_process_candidate_uses_rest_executable_in_handoff_not_ws(monkeypa
     monkeypatch.setattr(_cfg_module.cfg, "dynamic_max_bet", lambda bankroll: 75.0)
 
     bot = _make_bot_stub()
+    captured = _capture_omitted_blend(bot)
     # WS reports a divergent midpoint; this used to flow through to the handoff.
     bot.ws.get_yes_price.return_value = 62.0
     news = _make_news()
-    market = _make_market()  # REST: yes_bid=49, yes_ask=51, yes_price=50
+    market = _make_politics_market()  # REST: yes_bid=49, yes_ask=51, yes_price=50
 
     with patch("main.estimate_probability", new=AsyncMock(return_value=(
         0.70, 0.7, ["missile strike"], "test reasoning", "yes", "small", 0.7
@@ -3902,7 +3797,9 @@ async def test_process_candidate_uses_rest_executable_in_handoff_not_ws(monkeypa
          patch("utils.logger.trade_log.log_opportunity"):
         await bot._process_candidate(news, market, 0.33)
 
-    analysis = bot._blend_task.process_fast_lane_result.await_args.args[0]
+    analysis = captured["analysis"]
+    assert captured["result"].trade_blocked_reason == "blend_task_omitted"
+    assert captured["result"].enqueued is False
     # P1-A: market_yes_price alias removed. executed_price_cents is canonical.
     # YES side → executed_price_cents == yes_ask_cents (REST=51), not WS midpoint (62.0).
     assert analysis.executed_price_cents == 51
@@ -3927,6 +3824,7 @@ async def test_process_candidate_uses_paper_placeholder_when_kelly_returns_zero(
     monkeypatch.setattr(_cfg_module.cfg, "dynamic_max_bet", lambda bankroll: 75.0)
 
     bot = _make_bot_stub()
+    captured = _capture_omitted_blend(bot)
     news = _make_news()
     decision_at = datetime(2026, 7, 15, 12, 30, tzinfo=timezone.utc)
     market = _make_shadow_ready_market(decision_at)
@@ -3938,7 +3836,9 @@ async def test_process_candidate_uses_paper_placeholder_when_kelly_returns_zero(
          patch("utils.logger.trade_log.log_opportunity"):
         await bot._process_candidate(news, market, 0.25)
 
-    analysis = bot._blend_task.process_fast_lane_result.await_args.args[0]
+    analysis = captured["analysis"]
+    assert captured["result"].trade_blocked_reason == "blend_task_omitted"
+    assert captured["result"].enqueued is False
     # P-5 LD-10: placeholder uses executed_price_cents (yes_ask=51) not
     # legacy midpoint (50). 5 contracts * 0.51 = 2.55.
     assert analysis.capped_dollars == pytest.approx(2.55)

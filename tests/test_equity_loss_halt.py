@@ -219,7 +219,7 @@ def test_unreadable_sizing_bankroll_fails_closed(monkeypatch, tmp_path):
     assert not (tmp_path / "halt.json").exists()
 
 
-def test_flag_on_outside_politics_keeps_the_cash_halt(monkeypatch, tmp_path):
+def test_flag_on_legacy_cohort_still_uses_the_equity_halt(monkeypatch, tmp_path):
     monkeypatch.setattr(cfg_module.cfg, "paper_cohort_id", "legacy")
     monkeypatch.setenv(EVENT_NEWS_EQUITY_LOSS_HALT, "true")
     monkeypatch.delenv("EVENT_NEWS_SESSION_HALT", raising=False)
@@ -229,12 +229,15 @@ def test_flag_on_outside_politics_keeps_the_cash_halt(monkeypatch, tmp_path):
     ex, rest, _paper = _executor(monkeypatch)
     callback = MagicMock()
     ex.set_shutdown_callback(callback)
-    rest.get_balance.side_effect = [50.0, 42.0]
-    rest._request.side_effect = AssertionError("freeze path must not read equity")
-    analysis = _make_analysis(capped_dollars=2.0)
+    rest.get_balance.return_value = 42.0
+    rest._request.side_effect = [
+        {"balance": 4200, "portfolio_value": 800},
+        {"balance": 4200, "portfolio_value": 0},
+    ]
+    analysis = _desk_analysis(capped_dollars=2.0)
 
     assert ex._validate(analysis) is None
     assert ex._validate(analysis) == _HALT
-    callback.assert_called_once()
-    assert ex._equity_halt_seed is None
+    callback.assert_not_called()
     assert not (tmp_path / "halt.json").exists()
+    assert ex._equity_halt_seed == pytest.approx(50.0)

@@ -30,16 +30,6 @@ from kalshi.rest_client import KalshiRestClient
 from polymarket.domain_key import pm_domain_key
 from tasks.kalshi_execution_liquidity import fetch_kalshi_execution_liquidity
 from trading.execution_terms import FinalExecutionTerms, final_execution_terms
-from trading.fees import (
-    DIRECT_ACCOUNT_PRECISION,
-    INITIAL_ORDER_FEE_ACCUMULATOR,
-    FeeContext,
-    FeeRole,
-    FeeUnscorableError,
-    fee_coefficient_for,
-    fee_schedule_at,
-    quote_fee,
-)
 from trading.live_submission_hold import LIVE_SUBMISSION_HOLD_PATH, LiveSubmissionHoldStore
 from trading.paper_trader import PaperTrader
 from trading.portfolio import PAPER_SHADOW_SIGNAL_TYPE
@@ -121,10 +111,7 @@ def _is_research_paper_review_signal(signal_meta: dict[str, Any]) -> bool:
 
 def _event_news_official_p_may_live(signal_meta: dict[str, Any]) -> bool:
     """Politics official-p decision-grade may live-POST; generic LLM review may not."""
-    from utils.event_news_research import is_event_news_paper_cohort
 
-    if not is_event_news_paper_cohort():
-        return False
     if str(signal_meta.get("blend_bypass_reason") or "") == "official_p":
         return True
     return str(signal_meta.get("source_lane") or "") == "research_official_p"
@@ -566,10 +553,7 @@ class TradeExecutor:
             EVENT_NEWS_SESSION_HALT,
             event_news_desk_flag_enabled,
         )
-        from utils.event_news_research import is_event_news_paper_cohort
 
-        if not is_event_news_paper_cohort():
-            return False
         return event_news_desk_flag_enabled(
             EVENT_NEWS_SESSION_HALT,
             live=not self._is_paper,
@@ -587,9 +571,8 @@ class TradeExecutor:
             )
 
     def _maybe_record_cash_cents(self, cash: float) -> None:
-        from utils.event_news_research import is_event_news_paper_cohort
 
-        if self._is_paper or not is_event_news_paper_cohort():
+        if self._is_paper:
             return
         if not self._offloop_current():
             return
@@ -762,9 +745,8 @@ class TradeExecutor:
     def _equity_loss_halt_enabled(self) -> bool:
         """Politics live only. Unset is off for paper and for live."""
         from utils.event_news_desk_flags import event_news_equity_loss_halt_enabled
-        from utils.event_news_research import is_event_news_paper_cohort
 
-        if self._is_paper or not is_event_news_paper_cohort():
+        if self._is_paper:
             return False
         return event_news_equity_loss_halt_enabled()
 
@@ -857,9 +839,8 @@ class TradeExecutor:
     def _shadow_equity_loss_halt(self, *, cash_halted: bool) -> None:
         """Log the cash decision against mark-to-market equity. Never blocks."""
         try:
-            from utils.event_news_research import is_event_news_paper_cohort
 
-            if self._is_paper or not is_event_news_paper_cohort():
+            if self._is_paper:
                 return
             if self._equity_loss_halt_enabled():
                 return
@@ -1060,15 +1041,6 @@ class TradeExecutor:
                 analysis,
                 execution_plan,
             )
-        if skip_reason is None and self._is_paper:
-            assert execution_plan is not None
-            from utils.event_news_research import is_event_news_paper_cohort
-
-            if not is_event_news_paper_cohort():
-                skip_reason = self._paper_fee_admission_skip_reason(
-                    analysis,
-                    execution_plan,
-                )
         if skip_reason:
             effective_min_edge = self._min_edge_threshold(analysis)
             method = (
@@ -1161,10 +1133,7 @@ class TradeExecutor:
             source = "decision"
         if self._is_paper:
             return
-        from utils.event_news_research import is_event_news_paper_cohort
 
-        if not is_event_news_paper_cohort():
-            return
         ticker = getattr(getattr(analysis, "market", None), "ticker", "")
         try:
             snapshot = copy.copy(analysis)
@@ -1339,10 +1308,9 @@ class TradeExecutor:
         from utils.event_news_research import (
             event_news_exposure_prefix,
             event_news_open_prefix_cap,
-            is_event_news_paper_cohort,
         )
 
-        if self._is_paper or not is_event_news_paper_cohort():
+        if self._is_paper:
             return None
         source = self._paper_shadow_source(analysis)
         self._ensure_sized(analysis)
@@ -1610,27 +1578,23 @@ class TradeExecutor:
         if analysis.capped_dollars <= 0:
             return "capped_dollars=0 (below minimum bet size)"
 
-        from utils.event_news_research import is_event_news_paper_cohort
 
-        if is_event_news_paper_cohort():
-            edge_skip = self._event_news_edge_skip(
-                analysis,
-                ask_cents=(
-                    analysis.executed_price_cents
-                    if type(analysis.executed_price_cents) is int
-                    else None
-                ),
-                gross_edge=float(analysis.edge),
-                old_take=abs(analysis.edge) >= effective_min_edge,
-                contracts=1,
-                shadow=not self._is_paper,
-            )
-            if edge_skip == "old_skip":
-                return f"edge {analysis.edge:+.4f} below min_edge {effective_min_edge}"
-            if edge_skip:
-                return edge_skip
-        elif abs(analysis.edge) < effective_min_edge:
+        edge_skip = self._event_news_edge_skip(
+            analysis,
+            ask_cents=(
+                analysis.executed_price_cents
+                if type(analysis.executed_price_cents) is int
+                else None
+            ),
+            gross_edge=float(analysis.edge),
+            old_take=abs(analysis.edge) >= effective_min_edge,
+            contracts=1,
+            shadow=not self._is_paper,
+        )
+        if edge_skip == "old_skip":
             return f"edge {analysis.edge:+.4f} below min_edge {effective_min_edge}"
+        if edge_skip:
+            return edge_skip
 
         if analysis.market.status not in ("open", "active"):
             return f"market status={analysis.market.status}"
@@ -1655,36 +1619,18 @@ class TradeExecutor:
         if yes_price < price_floor or yes_price > price_ceil:
             return f"price {yes_price:.1f}c is near limit (too illiquid)"
 
-        from utils.event_news_research import is_event_news_paper_cohort
 
-        if is_event_news_paper_cohort():
-            chain_reason = self._event_news_chain_reason(
-                analysis,
-                limit_cents=(
-                    analysis.executed_price_cents
-                    if type(analysis.executed_price_cents) is int
-                    else None
-                ),
-                open_tickers=self._event_news_open_exposure_tickers(),
-            )
-            if chain_reason:
-                return chain_reason
-        elif self._is_paper:
-            from utils.event_news_research import (
-                event_news_crossed_asks,
-                event_news_missing_snapshot_ask,
-                event_news_spread_disagreement,
-            )
-
-            snapshot_reason = event_news_missing_snapshot_ask(analysis.market)
-            if snapshot_reason:
-                return snapshot_reason
-            divergence = event_news_spread_disagreement(analysis.market)
-            if divergence:
-                return divergence
-            crossed = event_news_crossed_asks(analysis.market)
-            if crossed:
-                return crossed
+        chain_reason = self._event_news_chain_reason(
+            analysis,
+            limit_cents=(
+                analysis.executed_price_cents
+                if type(analysis.executed_price_cents) is int
+                else None
+            ),
+            open_tickers=self._event_news_open_exposure_tickers(),
+        )
+        if chain_reason:
+            return chain_reason
 
         # Paper ticker cooldown (4h): prevents same ticker being spammed by a burst
         # of headlines on the same topic (e.g. 30 Iran-war articles in one poll cycle).
@@ -1708,7 +1654,6 @@ class TradeExecutor:
         from utils.event_news_research import (
             event_news_exposure_prefix,
             event_news_open_prefix_cap,
-            is_event_news_paper_cohort,
         )
 
         prefix_cap = event_news_open_prefix_cap(cfg.max_open_positions_per_prefix)
@@ -1720,7 +1665,7 @@ class TradeExecutor:
             if prefix:
                 # Live politics uses the same open list as the admit gate.
                 # Paper keeps the paper book so live rows do not block a shadow.
-                if not self._is_paper and is_event_news_paper_cohort():
+                if not self._is_paper:
                     from utils.event_news_research import event_news_blocking_open_ticker
 
                     blocked = event_news_blocking_open_ticker(
@@ -2002,12 +1947,11 @@ class TradeExecutor:
         from utils.event_news_grok_flags import event_news_requote_band_check_enabled
         from utils.event_news_research import (
             event_news_fresh_ask_cents,
-            is_event_news_paper_cohort,
         )
 
         # Keep the fresh ask for the pre-POST guard. Do not skip here:
         # the client_order_id does not exist until _execute_live.
-        if event_news_requote_band_check_enabled() and is_event_news_paper_cohort():
+        if event_news_requote_band_check_enabled():
             fresh_cents, fresh_invalid = event_news_fresh_ask_cents(liquidity.best_price)
             analysis._event_news_final_ask_cents = fresh_cents
             analysis._event_news_final_ask_invalid = fresh_invalid
@@ -2266,64 +2210,6 @@ class TradeExecutor:
             raise ValueError("readiness_gate_min_edge_override must be non-negative")
         return float(override)
 
-    def _paper_fee_admission_skip_reason(
-        self,
-        analysis: SignalAnalysis,
-        execution_plan: FinalExecutionTerms,
-    ) -> str | None:
-        """Return a skip reason unless a final Kalshi paper entry clears its entry fee."""
-        if self._venue_value(analysis.market) != Venue.KALSHI.value:
-            return None
-
-        quantity = Decimal(execution_plan.contracts)
-        price = Decimal(execution_plan.price_cents) / Decimal("100")
-        timestamp = datetime.now(timezone.utc)
-        try:
-            schedule_id = fee_schedule_at(
-                venue=Venue.KALSHI,
-                timestamp=timestamp,
-            )
-            context = FeeContext(
-                schedule_id=schedule_id,
-                role=FeeRole.TAKER,
-                quantity=quantity,
-                price=price,
-                signed_revenue=-(quantity * price),
-                order_id="paper-admission",
-                accumulator=INITIAL_ORDER_FEE_ACCUMULATOR,
-                multiplier=Decimal("1"),
-                coefficient=fee_coefficient_for(schedule_id, FeeRole.TAKER),
-                account_precision=DIRECT_ACCOUNT_PRECISION,
-                timestamp=timestamp,
-            )
-            entry_fee = quote_fee(context).net_fee
-            gross_edge = Decimal(str(analysis.edge)) * quantity
-            if (
-                not isinstance(entry_fee, Decimal)
-                or not entry_fee.is_finite()
-                or entry_fee < 0
-                or not gross_edge.is_finite()
-            ):
-                raise FeeUnscorableError("entry fee or expected gross edge is not finite")
-        except (ArithmeticError, FeeUnscorableError, TypeError, ValueError) as exc:
-            log.warning(
-                "[FEE_ADMISSION] skip ticker=%s reason=unscorable error=%s",
-                analysis.market.ticker,
-                type(exc).__name__,
-            )
-            return "fee_admission_unscorable"
-
-        if gross_edge <= entry_fee:
-            log.warning(
-                "[FEE_ADMISSION] skip ticker=%s schedule=%s gross_edge=$%s entry_fee=$%s",
-                analysis.market.ticker,
-                schedule_id.name,
-                gross_edge,
-                entry_fee,
-            )
-            return "fee_admission_non_positive_net_edge"
-        return None
-
     def _event_news_chain_reason(
         self,
         analysis: SignalAnalysis,
@@ -2391,10 +2277,7 @@ class TradeExecutor:
         execution_plan: FinalExecutionTerms,
     ) -> str | None:
         """Politics desk skips. Paper defaults on. Live stays off until the env is set."""
-        from utils.event_news_research import is_event_news_paper_cohort
 
-        if not is_event_news_paper_cohort():
-            return None
         reason = self._event_news_chain_reason(
             analysis,
             limit_cents=execution_plan.price_cents,
@@ -2509,10 +2392,7 @@ class TradeExecutor:
             event_news_desk_flag_enabled,
             event_news_risk_capped_contracts,
         )
-        from utils.event_news_research import is_event_news_paper_cohort
 
-        if not is_event_news_paper_cohort():
-            return execution_plan, None
         live = not self._is_paper
         if not event_news_desk_flag_enabled(EVENT_NEWS_MAX_RISK, live=live):
             return execution_plan, None
@@ -2753,10 +2633,9 @@ class TradeExecutor:
             from utils.event_news_research import (
                 EVENT_NEWS_MAX_CONTRACTS,
                 event_news_clamp_execution_terms,
-                is_event_news_paper_cohort,
             )
 
-            if is_event_news_paper_cohort() and contracts > EVENT_NEWS_MAX_CONTRACTS:
+            if contracts > EVENT_NEWS_MAX_CONTRACTS:
                 fallback_terms = event_news_clamp_execution_terms(
                     FinalExecutionTerms(
                         price_cents=price_cents,
@@ -2797,17 +2676,13 @@ class TradeExecutor:
             EVENT_NEWS_MAKER_FIRST,
             event_news_desk_flag_enabled,
         )
-        from utils.event_news_research import is_event_news_paper_cohort as _cohort_for_maker
-
         # One check when the flag is off. The body below stays the taker path.
         if (
             not maker_passthrough
-            and _cohort_for_maker()
             and event_news_desk_flag_enabled(EVENT_NEWS_MAKER_FIRST, live=True)
         ):
             return await self._event_news_maker_first(analysis, execution_plan)
 
-        from utils.event_news_research import is_event_news_paper_cohort
         from utils.event_news_grok_veto import event_news_grok_veto_allows_live_post
 
         chain_reason = self._event_news_chain_reason(
@@ -2848,31 +2723,30 @@ class TradeExecutor:
             ),
         ):
             return None
-        if is_event_news_paper_cohort():
-            veto = await self._wait_off_loop(
-                functools.partial(
-                    event_news_grok_veto_allows_live_post,
-                    analysis,
-                    contracts=contracts,
-                ),
-                timeout=_grok_hard_timeout_s(),
+        veto = await self._wait_off_loop(
+            functools.partial(
+                event_news_grok_veto_allows_live_post,
+                analysis,
+                contracts=contracts,
+            ),
+            timeout=_grok_hard_timeout_s(),
+        )
+        if veto is _OFF_LOOP_TIMEOUT or not veto:
+            log.info(
+                "[LIVE] BLOCKED %s: EVENT_NEWS_GROK_VETO did not return yes; no POST",
+                analysis.market.ticker,
             )
-            if veto is _OFF_LOOP_TIMEOUT or not veto:
-                log.info(
-                    "[LIVE] BLOCKED %s: EVENT_NEWS_GROK_VETO did not return yes; no POST",
-                    analysis.market.ticker,
-                )
-                return None
-            from utils.series_universe import event_news_live_post_block_reason
+            return None
+        from utils.series_universe import event_news_live_post_block_reason
 
-            universe_block = event_news_live_post_block_reason(analysis.market)
-            if universe_block:
-                log.error(
-                    "[EVENT_NEWS_UNIVERSE] BLOCKED %s reason=%s no POST",
-                    analysis.market.ticker,
-                    universe_block,
-                )
-                return None
+        universe_block = event_news_live_post_block_reason(analysis.market)
+        if universe_block:
+            log.error(
+                "[EVENT_NEWS_UNIVERSE] BLOCKED %s reason=%s no POST",
+                analysis.market.ticker,
+                universe_block,
+            )
+            return None
         if self._live_halted:
             log.info(
                 "[LIVE] BLOCKED %s: session halt latched; no POST",
@@ -3116,12 +2990,8 @@ class TradeExecutor:
             event_news_yes_floor_cents,
         )
         from utils.event_news_grok_flags import EVENT_NEWS_BAND_FLOOR_CENTS
-        from utils.event_news_research import is_event_news_paper_cohort
 
-        if paper_shadow:
-            if not is_event_news_paper_cohort():
-                return
-        elif not self._is_paper or not is_event_news_paper_cohort():
+        if not paper_shadow and not self._is_paper:
             return
         if not event_news_desk_flag_enabled(EVENT_NEWS_MAKER_FIRST, live=False):
             return

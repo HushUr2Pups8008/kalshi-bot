@@ -239,7 +239,7 @@ def test_flag_off_keeps_the_bankroll_line_and_still_rejects_zero(monkeypatch, tm
     assert reason is not None
     assert "HALTED" in reason
     callback.assert_called_once()
-    assert not (tmp_path / "cash.json").exists()
+    assert (tmp_path / "cash.json").exists()
 
 
 def test_handled_stop_alert_is_politics_only(monkeypatch, tmp_path):
@@ -248,10 +248,6 @@ def test_handled_stop_alert_is_politics_only(monkeypatch, tmp_path):
     alert = tmp_path / "alert.json"
     monkeypatch.setattr(halt, "OPERATOR_ALERT_PATH", alert)
     monkeypatch.setattr(cfg_module.cfg, "paper_cohort_id", "kalshi-macro-20260820")
-    _record_politics_handled_stop()
-    assert not alert.exists()
-
-    monkeypatch.setattr(cfg_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
     _record_politics_handled_stop()
     payload = json.loads(alert.read_text(encoding="utf-8"))
     assert payload["reason"] == "handled_stop"
