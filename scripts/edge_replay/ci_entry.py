@@ -1,12 +1,12 @@
 """CI wrapper for `run_replay_gate` (Phase 3 activation).
 
-Invoked from `.github/workflows/replay-ci-gate.yml` on every PR.
+Manual entry for `run_replay_gate`. The GitHub workflow was removed in v0.36.14.
 
 Behavior:
   1. Determine changed files from `git diff <base>...HEAD`.
   2. Invoke `run_replay_gate` with classified tier + Rule 4 evaluation.
   3. Print human-readable summary + emit machine-readable artifact.
-  4. Exit 0 on pass, 1 on fail (CI marks PR check accordingly).
+  4. Exit 0 on pass, 1 on fail. No GitHub workflow calls this module.
 
 Operator override:
   Set env var `REPLAY_GATE_OVERRIDE=1` to force exit 0 regardless of

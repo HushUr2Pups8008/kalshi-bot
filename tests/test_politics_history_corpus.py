@@ -43,9 +43,8 @@ def test_fixture_is_diverse_and_outside_discovery(tmp_path: Path) -> None:
         "registered_oos",
     ):
         assert banned not in text
-    workflow = WORKFLOW.read_text(encoding="utf-8")
-    assert "corpus_politics_desk_history" not in workflow
-    assert "tests/fixtures/edge_replay" not in workflow
+    # The replay workflow is gone. This fixture must not be a CI corpus.
+    assert not WORKFLOW.exists()
 
     corpus_dir = tmp_path / "logs" / "edge_replay"
     verdict = run_replay_gate(
