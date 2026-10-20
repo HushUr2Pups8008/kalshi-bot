@@ -53,7 +53,6 @@ persisted ID requires a separate reviewed repair task.
 | `match_quality_diagnostics.py` | Headline-to-market match quality diagnostics. |
 | `match_suppression_audit.py` | Audit for `MATCH_SUPPRESSION_CANDIDATE` events. |
 | `observability_completeness_review.py` | Observability completeness review for Stage 4.2. |
-| `ollama_error_audit.py` | Parse `bot.log` for Ollama HTTP errors and classify by failure bucket. |
 | `audit_open_paper_settlements.py` | Exact-identity, read-only authoritative receipt audit for unresolved Kalshi and Polymarket paper lots. Reports receipt hashes and pending/error states; never resolves trades or writes the database. |
 | `paper_performance_drilldown.py` | Paper trading performance drilldown from `data/paper_trades.db`. |
 | `performance_analysis.py` | Performance analysis over trade history. |
@@ -77,7 +76,6 @@ persisted ID requires a separate reviewed repair task.
 
 | Script | Purpose |
 |---|---|
-| `budget_manager_stress.py` | Synthetic S4.3 stress test for the LLM budget manager. |
 | `ollama_test_harness.py` | Standalone harness for validating the Ollama OpenAI-compatible path. |
 | `regime_weight_validation.py` | S4.4 — Regime weight validation against historical outcomes. |
 | `structured_log_latency_benchmark.py` | Measure durable structured-log append latency. |

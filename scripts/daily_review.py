@@ -2429,7 +2429,6 @@ def _build_daily_review_from_paths(
     lines.append("    scripts/replay_dossier.py                  -- dossier trajectory replay")
     lines.append("    scripts/regime_weight_validation.py        -- S4.4 regime weight back-check")
     lines.append("    scripts/observability_completeness_review.py -- observability gap audit")
-    lines.append("    scripts/ollama_error_audit.py              -- Ollama HTTP error classification")
     lines.append("    scripts/keyword_shadow_eval.py             -- shadow-eval of candidate keywords")
     lines.append("    scripts/keyword_promotion_report.py        -- keyword promotion governance")
     lines.append("    scripts/botcheck.py                        -- macOS LaunchAgent status report")

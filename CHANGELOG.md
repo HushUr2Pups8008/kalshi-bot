@@ -19,6 +19,12 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.36.9] - 2026-10-19
+
+### Removed
+
+- **Unimported horizon, observer, and freeze-era modules.** Eighteen files with no production importer are gone, including the horizon paper-study ledger, the legacy pending finalizer, capital-guard shadow v3, the observer package, and `polymarket/paper_trader.py`. `trading/horizon_paper_study_manifest.py` stays because `main.py` imports it. `trading/kalshi_fix_settlement_ingress.py` stays because botcheck reads it. The four scripts that were the only callers (`finalize_legacy_pending_paper_cohort.py`, `budget_manager_stress.py`, `observer_preview.py`, `ollama_error_audit.py`) are gone with their tests. Paper series still cannot POST.
+
 ## [0.36.8] - 2026-10-19
 
 ### Changed
