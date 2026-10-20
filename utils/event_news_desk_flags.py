@@ -1,9 +1,8 @@
 """Politics desk risk flags.
 
 Each flag defaults on for a paper order and off for a live order.
-An explicit ``true`` or ``false`` wins in both modes. A positive integer
-turns that flag on and replaces its numeric default. Any other text
-leaves the behavior off.
+An explicit false wins in both modes. ``parse_bool_text`` and a positive
+integer turn the flag on. Zero and any other text leave it off.
 
 The live plist sets EVENT_NEWS_YES_FLOOR_CENTS. The other names stay
 unset, so those live paths stay off. The paper risk cap defaults to
@@ -17,6 +16,7 @@ import os
 from typing import Mapping
 
 from utils.event_news_grok_flags import EVENT_NEWS_BAND_FLOOR_CENTS
+from utils.output_paths import parse_bool_text
 
 EVENT_NEWS_YES_FLOOR = "EVENT_NEWS_YES_FLOOR_CENTS"
 EVENT_NEWS_MAX_RISK = "EVENT_NEWS_MAX_RISK_CENTS"
@@ -69,9 +69,9 @@ def event_news_desk_flag_enabled(
     raw = _raw_flag(name, environ)
     if raw is None or raw == "":
         return not live
-    if raw == "true" or raw.isdigit():
-        return True
-    return False
+    if raw.isdigit():
+        return int(raw) > 0
+    return parse_bool_text(raw)
 
 
 def event_news_equity_loss_halt_enabled(

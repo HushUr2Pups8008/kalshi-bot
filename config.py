@@ -14,7 +14,7 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
-from utils.output_paths import DB_STATE_DIR, OUTPUT_ROOT
+from utils.output_paths import DB_STATE_DIR, OUTPUT_ROOT, parse_bool_text
 
 load_dotenv(Path(__file__).parent / ".env")
 
@@ -82,7 +82,7 @@ def _resolve_keyword_override_mode() -> str:
         legacy_norm = legacy.strip().lower()
         if legacy_norm in {"0", "false", "no", "off"}:
             return "disabled"
-        if legacy_norm in {"1", "true", "yes", "on"}:
+        if parse_bool_text(legacy_norm):
             return "any_hit"
     return "all_required"
 
@@ -93,7 +93,7 @@ def _resolve_market_source_hints_mode() -> str:
 
 
 def _parse_bool_env(name: str, default: str = "false") -> bool:
-    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+    return parse_bool_text(os.getenv(name, default))
 
 
 def _parse_string_tuple(value: str | None, *, default: tuple[str, ...]) -> tuple[str, ...]:
@@ -195,9 +195,7 @@ MAX_NEWS_AGE_SECONDS: int = int(os.getenv("MAX_NEWS_AGE_SECONDS", "300"))  # 5 m
 # Early age pre-filter applied before news enters the deeper queue/matching
 # path. This is an optimization only; _process_candidate() still enforces the
 # authoritative stale-news guard with MAX_NEWS_AGE_SECONDS.
-EARLY_MAX_NEWS_AGE_SECONDS: int = int(
-    os.getenv("EARLY_MAX_NEWS_AGE_SECONDS", "1800")
-)  # 30 min default — PROFIT-STALE-002 (2026-05-24): raised from 300s to
+EARLY_MAX_NEWS_AGE_SECONDS: int = 1800  # 30 min default — PROFIT-STALE-002 (2026-05-24): raised from 300s to
    # match the per-source-override value (1800s) for all curated publishers.
    # The 7-day funnel showed 681 items at 5-15m age killed because their
    # source string had no explicit override and fell to the old 300s default.
@@ -272,23 +270,17 @@ SOURCE_PRIORITY_TIERS: dict[str, int] = {
 #   - low_match_quality flag is set (at least one heuristic flag present)
 #   - heuristic_flags includes minimal_overlap OR single_named_entity_only
 #   - heuristic_flags includes near_threshold_score (score within 0.02 of min_score)
-ENABLE_LOW_QUALITY_MATCH_SUPPRESSION: bool = os.getenv(
-    "ENABLE_LOW_QUALITY_MATCH_SUPPRESSION", "true"
-).strip().lower() in {"1", "true", "yes", "on"}
+ENABLE_LOW_QUALITY_MATCH_SUPPRESSION: bool = _parse_bool_env("ENABLE_LOW_QUALITY_MATCH_SUPPRESSION", "true")
 
 # When enabled, logs a MATCH_SUPPRESSION_CANDIDATE event for every match that meets
 # suppression criteria, regardless of whether suppression itself is on. Use this to
 # inspect would-be suppressions before enabling ENABLE_LOW_QUALITY_MATCH_SUPPRESSION.
 # Safe to leave on during validation -- fires only at DEBUG level into trades.jsonl.
-ENABLE_MATCH_SUPPRESSION_DEBUG: bool = os.getenv(
-    "ENABLE_MATCH_SUPPRESSION_DEBUG", "false"
-).strip().lower() in {"1", "true", "yes", "on"}
+ENABLE_MATCH_SUPPRESSION_DEBUG: bool = _parse_bool_env("ENABLE_MATCH_SUPPRESSION_DEBUG", "false")
 
 # If a feed item arrives without a valid timestamp, drop it before enqueueing
 # rather than letting it into the deeper analysis path.
-EARLY_DROP_IF_NO_TIMESTAMP: bool = os.getenv(
-    "EARLY_DROP_IF_NO_TIMESTAMP", "true"
-).strip().lower() in {"1", "true", "yes", "on"}
+EARLY_DROP_IF_NO_TIMESTAMP: bool = _parse_bool_env("EARLY_DROP_IF_NO_TIMESTAMP", "true")
 
 # Sources disabled at intake based on operator review of stale-heavy / low-value
 # behavior. Exact source strings are preferred; main.py also applies a simple
@@ -667,10 +659,7 @@ NEWS_EDGE_SERIES: frozenset = frozenset({
 # (it alters which markets get targeted news → which paper trades arise), so per
 # IC §16 it ships INERT and may only be turned on with replayed-EV evidence (or
 # an explicit operator REPLAY_GATE_OVERRIDE memo). Flip via .env + restart.
-ENABLE_NEWS_EDGE_PRIORITIZATION: bool = (
-    os.getenv("ENABLE_NEWS_EDGE_PRIORITIZATION", "false").strip().lower()
-    in {"1", "true", "yes", "on"}
-)
+ENABLE_NEWS_EDGE_PRIORITIZATION: bool = _parse_bool_env("ENABLE_NEWS_EDGE_PRIORITIZATION", "false")
 
 # Shadow-only market-first retrieval diagnostics. DEFAULT OFF.
 ENABLE_MARKET_FIRST_QUERY_SHADOW: bool = _parse_bool_env(
@@ -704,9 +693,7 @@ RESEARCH_PREWARM_INTERVAL_SECONDS: float = float(
     os.getenv("RESEARCH_PREWARM_INTERVAL_SECONDS", "900")
 )
 RESEARCH_PREWARM_MAX_MARKETS: int = int(os.getenv("RESEARCH_PREWARM_MAX_MARKETS", "25"))
-RESEARCH_PREWARM_MAX_OFFICIAL_PENDING_PER_CYCLE: int = int(
-    os.getenv("RESEARCH_PREWARM_MAX_OFFICIAL_PENDING_PER_CYCLE", "1")
-)
+RESEARCH_PREWARM_MAX_OFFICIAL_PENDING_PER_CYCLE: int = 1
 RESEARCH_PREWARM_MAX_PAGES: int = int(os.getenv("RESEARCH_PREWARM_MAX_PAGES", "5"))
 RESEARCH_PREWARM_CONCURRENCY: int = int(os.getenv("RESEARCH_PREWARM_CONCURRENCY", "1"))
 RESEARCH_PREWARM_SOURCEABLE_SERIES_FALLBACK: tuple[str, ...] = _parse_string_tuple(
@@ -881,28 +868,16 @@ CREDIBILITY_HALF_LIFE_DAYS: float = 30.0
 # Signal rate (signals / posts_seen) is available in 24-48h vs win_rate which
 # needs 10+ resolved trades per source (weeks to months).  Quality gates fire
 # only after MIN_POSTS posts so brand-new sources get a fair trial first.
-SOURCE_STATS_MIN_POSTS: int = int(os.getenv("SOURCE_STATS_MIN_POSTS", "100"))
-SOURCE_STATS_LOW_SIGNAL_RATE: float = float(
-    os.getenv("SOURCE_STATS_LOW_SIGNAL_RATE", "0.005")
-)
-SOURCE_STATS_ZERO_SIGNAL_POSTS: int = int(
-    os.getenv("SOURCE_STATS_ZERO_SIGNAL_POSTS", "200")
-)
+SOURCE_STATS_MIN_POSTS: int = 100
+SOURCE_STATS_LOW_SIGNAL_RATE: float = 0.005
+SOURCE_STATS_ZERO_SIGNAL_POSTS: int = 200
 
 # Subreddit discovery (v0.21.0) -- Reddit post search finds candidate subreddits
 # organically active on our market topics; source_stats then evaluates quality.
-SUBREDDIT_DISCOVERY_INTERVAL_SECS: int = int(
-    os.getenv("SUBREDDIT_DISCOVERY_INTERVAL_SECS", "21600")
-)  # 6h between passes
-SUBREDDIT_PROBE_COOLDOWN_SECS: int = int(
-    os.getenv("SUBREDDIT_PROBE_COOLDOWN_SECS", "10800")
-)  # 3h cooldown per candidate
-SUBREDDIT_PROBE_SLOTS: int = int(
-    os.getenv("SUBREDDIT_PROBE_SLOTS", "3")
-)  # candidates per poll cycle
-SUBREDDIT_DISCOVERY_MAX_QUERIES: int = int(
-    os.getenv("SUBREDDIT_DISCOVERY_MAX_QUERIES", "10")
-)  # queries per pass
+SUBREDDIT_DISCOVERY_INTERVAL_SECS: int = 21600  # 6h between passes
+SUBREDDIT_PROBE_COOLDOWN_SECS: int = 10800  # 3h cooldown per candidate
+SUBREDDIT_PROBE_SLOTS: int = 3  # candidates per poll cycle
+SUBREDDIT_DISCOVERY_MAX_QUERIES: int = 10  # queries per pass
 
 # ── Signal keyword categories ─────────────────────────────────────────────────
 GEOPOLITICAL_SIGNALS = [
@@ -1588,40 +1563,12 @@ class BotConfig:
             "ENABLE_MARKET_SOURCE_HINT_SHADOW_CAPTURE", "false"
         )
     )
-    market_source_hint_shadow_capture_interval_seconds: float = field(
-        default_factory=lambda: float(
-            os.getenv("MARKET_SOURCE_HINT_SHADOW_CAPTURE_INTERVAL_SECONDS", "900")
-        )
-    )
-    market_source_hint_shadow_capture_max_markets: int = field(
-        default_factory=lambda: int(
-            os.getenv("MARKET_SOURCE_HINT_SHADOW_CAPTURE_MAX_MARKETS", "5")
-        )
-    )
-    market_source_hint_shadow_capture_max_queries_per_market: int = field(
-        default_factory=lambda: int(
-            os.getenv(
-                "MARKET_SOURCE_HINT_SHADOW_CAPTURE_MAX_QUERIES_PER_MARKET", "2"
-            )
-        )
-    )
-    market_source_hint_shadow_capture_max_records_per_cycle: int = field(
-        default_factory=lambda: int(
-            os.getenv(
-                "MARKET_SOURCE_HINT_SHADOW_CAPTURE_MAX_RECORDS_PER_CYCLE", "20"
-            )
-        )
-    )
-    market_source_hint_shadow_capture_concurrency: int = field(
-        default_factory=lambda: int(
-            os.getenv("MARKET_SOURCE_HINT_SHADOW_CAPTURE_CONCURRENCY", "2")
-        )
-    )
-    market_source_hint_shadow_capture_timeout_seconds: float = field(
-        default_factory=lambda: float(
-            os.getenv("MARKET_SOURCE_HINT_SHADOW_CAPTURE_TIMEOUT_SECONDS", "20")
-        )
-    )
+    market_source_hint_shadow_capture_interval_seconds: float = 900.0
+    market_source_hint_shadow_capture_max_markets: int = 5
+    market_source_hint_shadow_capture_max_queries_per_market: int = 2
+    market_source_hint_shadow_capture_max_records_per_cycle: int = 20
+    market_source_hint_shadow_capture_concurrency: int = 2
+    market_source_hint_shadow_capture_timeout_seconds: float = 20.0
     generic_search_circuit_mode: str = field(
         default_factory=lambda: os.getenv(
             "GENERIC_SEARCH_CIRCUIT_MODE", "shadow"
