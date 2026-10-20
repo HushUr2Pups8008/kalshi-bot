@@ -10,7 +10,6 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import json
-import sqlite3
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, create_autospec, patch
 
@@ -42,12 +41,9 @@ from polymarket.settlement_reconciler import (
     SettlementReconciler,
     SettlementReconcileResult,
 )
-from tasks.blend_task import BlendTask
-from tasks.capital_guard_shadow_capture import CapitalGuardShadowCaptureSink
 from tasks.settlement_outbox_task import SettlementOutboxTask
 from tests._helpers import write_jsonl
 from trading.portfolio import Position
-from trading.capital_guard_shadow import CapitalGuardShadowStore
 from trading.fees import KALSHI_GENERAL_2026_07_07, fee_type_for_schedule
 from trading.settlement_store import SettlementStore, StoreCheck
 from trading.venue import MarketRef
@@ -2945,60 +2941,6 @@ async def test_feedback_receipt_marks_neutral_source_and_paper_placeholders(
 
 
 @pytest.mark.asyncio
-async def test_organic_main_sizing_through_blend_persists_shadow_candidate(
-    tmp_path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
-    monkeypatch.setattr(_cfg_module.cfg, "bankroll", 50.0)
-    monkeypatch.setattr(_cfg_module.cfg, "kelly_fraction", 0.5)
-    monkeypatch.setattr(_cfg_module.cfg, "min_bet_dollars", 2.0)
-    monkeypatch.setattr(_cfg_module.cfg, "time_discount_half_life", 14.0)
-    monkeypatch.setattr(_cfg_module.cfg, "time_discount_floor", 0.20)
-    monkeypatch.setattr(_cfg_module.cfg, "dynamic_max_bet", lambda bankroll: 75.0)
-    monkeypatch.setattr(_cfg_module.cfg, "max_ticker_exposure_pct", 0.10)
-    decision_at = datetime(2026, 7, 15, 12, 30, tzinfo=timezone.utc)
-    shadow_store = CapitalGuardShadowStore(tmp_path / "organic-shadow.db")
-    shadow_store.initialize(applied_at=decision_at)
-    bot = _make_bot_stub()
-    bot._blend_task = BlendTask(
-        trading_queue=asyncio.Queue(),
-        store=_EmptyBlendEvidenceStore(),
-        logger=MagicMock(),
-        open_exposure_drawdown_provider=lambda: 0.30,
-        capital_guard_capture_sink=CapitalGuardShadowCaptureSink(shadow_store),
-        is_paper_mode=True,
-        now=lambda: decision_at,
-    )
-    news = _make_news()
-    market = _make_shadow_ready_market(decision_at)
-
-    with patch("main.estimate_probability", new=AsyncMock(return_value=(
-        0.65, 0.8, ["missile strike"], "test reasoning", "yes", "moderate", 0.8
-    ))), patch("main.kelly_bet", return_value=(0.04, 4.0, 4.0)), \
-         patch("utils.logger.trade_log.log_signal"), \
-         patch("utils.logger.trade_log.log_opportunity"):
-        await bot._process_candidate(news, market, 0.42, {})
-
-    with sqlite3.connect(shadow_store.db_path) as conn:
-        attempt = conn.execute(
-            "SELECT ordered_failures_json, scorable "
-            "FROM capital_guard_shadow_capture_attempts"
-        ).fetchone()
-        candidate = conn.execute(
-            "SELECT replay_eligible, sizing_json "
-            "FROM capital_guard_shadow_candidates"
-        ).fetchone()
-    assert attempt == ('["G7_open_exposure_drawdown"]', 1)
-    assert candidate is not None
-    assert candidate[0] == 1
-    sizing = json.loads(candidate[1])
-    assert sizing["bankroll_dollars"] == "50"
-    assert sizing["max_position_dollars"] == "75"
-    assert sizing["max_ticker_exposure_dollars"] == "5"
-
-
-@pytest.mark.asyncio
 async def test_process_candidate_returns_early_when_no_keywords(monkeypatch):
     monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", True)
     bot = _make_bot_stub()
@@ -3844,34 +3786,6 @@ async def test_process_candidate_uses_paper_placeholder_when_kelly_returns_zero(
     assert analysis.capped_dollars == pytest.approx(2.55)
     assert analysis.kelly_dollars == 0
     assert analysis.decision_financial_provenance is not None
-
-    shadow_store = CapitalGuardShadowStore(tmp_path / "placeholder-shadow.db")
-    shadow_store.initialize(applied_at=decision_at)
-    result = await BlendTask(
-        trading_queue=asyncio.Queue(),
-        store=_EmptyBlendEvidenceStore(),
-        logger=MagicMock(),
-        open_exposure_drawdown_provider=lambda: 0.30,
-        capital_guard_capture_sink=CapitalGuardShadowCaptureSink(shadow_store),
-        is_paper_mode=True,
-        now=lambda: decision_at,
-    ).process_fast_lane_result(analysis)
-
-    assert result.readiness_decision.failure_reasons == (
-        "G7_open_exposure_drawdown",
-    )
-    with sqlite3.connect(shadow_store.db_path) as conn:
-        attempt = conn.execute(
-            "SELECT scorable, ordered_unscorable_reasons_json "
-            "FROM capital_guard_shadow_capture_attempts"
-        ).fetchone()
-        candidate_count = conn.execute(
-            "SELECT count(*) FROM capital_guard_shadow_candidates"
-        ).fetchone()[0]
-    assert attempt is not None
-    assert attempt[0] == 0
-    assert "candidate_contract_unscorable" in attempt[1]
-    assert candidate_count == 0
 
 
 @pytest.mark.asyncio

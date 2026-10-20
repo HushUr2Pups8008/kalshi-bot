@@ -4,18 +4,62 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 import json
 import re
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 from urllib.parse import urlsplit
 
 import aiohttp
 
-from weather.shadow_models import Fingerprints, RetrievedEvent, RetrievedMarket
+
+OutcomeResult = Literal["yes", "no"]
+
+
+@dataclass(frozen=True)
+class Fingerprints:
+    contract: str
+    rules_source: str
+    settlement_source: str
+
+
+@dataclass(frozen=True)
+class RetrievedMarket:
+    market_ticker: str
+    event_ticker: str
+    status: str
+    close_time: datetime
+    lower_bound_f: int | None
+    upper_bound_f: int | None
+    is_lower_tail: bool
+    is_upper_tail: bool
+    fingerprints: Fingerprints
+    yes_bid_cents: int
+    yes_ask_cents: int
+    no_bid_cents: int
+    no_ask_cents: int
+    yes_bid_size: Decimal
+    yes_ask_size: Decimal
+    no_bid_size: Decimal
+    no_ask_size: Decimal
+    last_price_cents: int | None
+    volume: Decimal | None
+    price_retrieved_at: datetime
+    raw_payload_json: str
+    result: OutcomeResult | None = None
+
+
+@dataclass(frozen=True)
+class RetrievedEvent:
+    event_ticker: str
+    status: str
+    close_time: datetime
+    market_tickers: tuple[str, ...]
+    markets: tuple[RetrievedMarket, ...]
+    retrieved_at: datetime
 
 
 _ORIGIN = "https://api.elections.kalshi.com"

@@ -145,9 +145,6 @@ from trading.paper_cohorts import (
     validate_active_paper_cohort_manifest,
     validate_legacy_pending_paper_cohort_manifest,
 )
-from trading.horizon_paper_study_manifest import (
-    discover_polymarket_horizon_15_30_manifest_blockers,
-)
 from trading.runtime_paper_cohort_attestation import (
     RuntimePaperCohortAttestation,
     RuntimePaperCohortAttestationError,
@@ -1035,16 +1032,9 @@ def _build_capital_guard_shadow_capture_sink(
     *,
     db_path: os.PathLike[str] | str | None = None,
 ) -> object | None:
-    """Build and initialize the isolated store only after explicit opt-in."""
-    if not enabled:
-        return None
-    from tasks.capital_guard_shadow_capture import CapitalGuardShadowCaptureSink
-    from trading.capital_guard_shadow import CapitalGuardShadowStore
-
-    path = DATA_DIR / "capital_guard_shadow.db" if db_path is None else db_path
-    store = CapitalGuardShadowStore(db_path=path)
-    store.initialize(applied_at=datetime.now(timezone.utc))
-    return CapitalGuardShadowCaptureSink(store)
+    """Capital-guard shadow capture is not on the politics path."""
+    del enabled, db_path
+    return None
 
 
 def _build_g7_skip_evidence_capture_sink(
@@ -1052,16 +1042,9 @@ def _build_g7_skip_evidence_capture_sink(
     *,
     db_path: os.PathLike[str] | str | None = None,
 ) -> object | None:
-    """Build diagnostic G7 evidence storage only after explicit opt-in."""
-    if not enabled:
-        return None
-    from tasks.g7_skip_evidence_capture import G7SkipEvidenceCaptureSink
-    from trading.g7_skip_evidence import G7SkipEvidenceStore
-
-    path = DATA_DIR / "g7_skip_evidence.db" if db_path is None else db_path
-    store = G7SkipEvidenceStore(db_path=path)
-    store.initialize(applied_at=datetime.now(timezone.utc))
-    return G7SkipEvidenceCaptureSink(store)
+    """G7 skip-evidence capture is not on the politics path."""
+    del enabled, db_path
+    return None
 
 
 def _build_paper_side_calibration_quarantine_runtime(
@@ -1103,31 +1086,6 @@ def _build_paper_side_calibration_quarantine_runtime(
             PolymarketPublicClient() if polymarket_reader is None else polymarket_reader
         ),
     )
-
-
-CAPITAL_GUARD_SHADOW_SETTLEMENT_COLLECTION_INTERVAL_SECONDS = 300.0
-
-
-async def _run_capital_guard_shadow_settlement_collection(
-    collector: Any,
-    *,
-    interval_seconds: float = CAPITAL_GUARD_SHADOW_SETTLEMENT_COLLECTION_INTERVAL_SECONDS,
-) -> None:
-    """Drain the isolated settlement backlog serially without affecting runtime flow."""
-    if (
-        isinstance(interval_seconds, bool)
-        or not isinstance(interval_seconds, (int, float))
-        or not math.isfinite(float(interval_seconds))
-        or interval_seconds <= 0
-    ):
-        raise ValueError("interval_seconds must be a finite positive number")
-
-    while True:
-        try:
-            await collector.run_once()
-        except Exception:
-            log.exception("[CAPITAL_GUARD_SHADOW] settlement collection cycle failed")
-        await asyncio.sleep(float(interval_seconds))
 
 
 class TradingBot:
@@ -1872,26 +1830,8 @@ class TradingBot:
         )
 
     def _create_weather_shadow_runtime_task(self) -> asyncio.Task | None:
-        if not bool(getattr(cfg, "enable_weather_shadow_capture", False)):
-            return None
-
-        from kalshi.public_market_data import KalshiPublicMarketDataReader
-        from tasks.kxhighny_shadow_capture import WeatherShadowCaptureTask
-        from tasks.weather_shadow_store import WeatherShadowStore
-        from weather.nws_public_client import NwsPublicClient
-
-        supervisor = WeatherShadowCaptureTask(
-            store=WeatherShadowStore(),
-            capture_markets=KalshiPublicMarketDataReader(),
-            capture_weather=NwsPublicClient(),
-            label_markets=KalshiPublicMarketDataReader(),
-            label_weather=NwsPublicClient(),
-            runtime_logger=log,
-        )
-        return asyncio.create_task(
-            supervisor.run(),
-            name="weather_shadow_capture",
-        )
+        """Weather shadow capture is not on the politics path."""
+        return None
 
     def _create_market_source_hint_shadow_capture_task(
         self,
@@ -1964,45 +1904,8 @@ class TradingBot:
     def _create_capital_guard_shadow_settlement_collection_task(
         self,
     ) -> asyncio.Task | None:
-        if not bool(
-            getattr(cfg, "enable_capital_guard_shadow_settlement_collection", False)
-        ):
-            return None
-
-        db_path = DATA_DIR / "capital_guard_shadow.db"
-        if not db_path.is_file():
-            log.info(
-                "[CAPITAL_GUARD_SHADOW] settlement collection inactive: isolated DB missing"
-            )
-            return None
-
-        try:
-            from polymarket.public_client import PolymarketPublicClient
-            from tasks.capital_guard_shadow_settlement import (
-                CapitalGuardShadowSettlementCollector,
-            )
-            from trading.authoritative_settlement_source import (
-                AuthoritativeSettlementSource,
-            )
-            from trading.capital_guard_shadow import CapitalGuardShadowStore
-
-            store = CapitalGuardShadowStore(db_path=db_path, existing_only=True)
-            store.initialize()
-            source = AuthoritativeSettlementSource(
-                kalshi_client=self.rest,
-                polymarket_client=PolymarketPublicClient(),
-            )
-            collector = CapitalGuardShadowSettlementCollector(store=store, source=source)
-        except Exception:
-            log.exception(
-                "[CAPITAL_GUARD_SHADOW] settlement collection inactive: setup failed"
-            )
-            return None
-
-        return asyncio.create_task(
-            _run_capital_guard_shadow_settlement_collection(collector),
-            name="capital_guard_shadow_settlement_collection",
-        )
+        """Capital-guard settlement collection is not on the politics path."""
+        return None
 
     async def _run_targeted_research_prewarm(self, market, skip_reason: str) -> None:
         prewarm = ResearchPrewarmTask(
@@ -5606,16 +5509,6 @@ def _provisioned_cohort_live_risk_gate_failures(
     db_root: Path = DATA_DIR,
 ) -> tuple[bool, list[str]]:
     """Fail closed on every provisioned cohort, independent of runtime selection."""
-
-    try:
-        study_blockers = discover_polymarket_horizon_15_30_manifest_blockers(db_root)
-    except Exception as exc:  # noqa: BLE001 - live-money boundary must fail closed
-        return True, [
-            "Horizon paper study manifest discovery unavailable "
-            f"({str(exc)[:80]}) -- gate fails closed"
-        ]
-    if study_blockers:
-        return True, list(study_blockers)
 
     discovered: list[PaperCohort] = []
     provisioned_kinds: set[str] = set()

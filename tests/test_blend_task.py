@@ -1,7 +1,7 @@
 import asyncio
 import json
 import sqlite3
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,11 +24,9 @@ from tasks.blend_task import (
     _regime_confidence,
     process_fast_lane_result,
 )
-from tasks.g7_skip_evidence_capture import G7SkipEvidenceCaptureSink
 from tasks.prequeue_book_provenance import PrequeueBookProvenanceResult
 from tasks.trade_readiness_gate import ReadinessDecision, evaluate_readiness
 from tasks.evidence_store import DossierState, EvidenceRecord, StructuralPriorRecord
-from trading.g7_skip_evidence import G7SkipEvidenceStore, read_g7_skip_evidence_records
 from trading.orderbook import ExecutableLiquidity
 from utils.logger import TradeLogger
 
@@ -1488,44 +1486,6 @@ async def test_g7_skip_evidence_capture_ignores_nonbinding_g7_failure():
     assert result.trade_blocked_reason == "G1_blended_confidence"
     assert "G7_adverse_price_momentum" in result.readiness_decision.failure_reasons
     assert sink.envelopes == []
-
-
-@pytest.mark.asyncio
-async def test_g7_skip_evidence_capture_persists_observed_book_after_fetch(
-    tmp_path: Path,
-) -> None:
-    now = datetime(2026, 7, 31, 15, 30, tzinfo=UTC)
-    observed_at = now + timedelta(seconds=1)
-    store = G7SkipEvidenceStore(tmp_path / "g7_skip_evidence.db")
-    store.initialize(applied_at=now)
-
-    async def observed_provider(analysis: SignalAnalysis) -> ExecutableLiquidity:
-        return ExecutableLiquidity(
-            market_ticker=analysis.market.ticker,
-            side="yes",
-            limit_price=Decimal("0.50"),
-            best_price=None,
-            executable_quantity=Decimal("0"),
-            executable_notional=Decimal("0"),
-            as_of=observed_at,
-            raw_payload_hash="a" * 64,
-        )
-
-    result = await BlendTask(
-        trading_queue=asyncio.Queue(),
-        store=FakeStore(),
-        logger=SpyLogger(),
-        execution_liquidity_provider=observed_provider,
-        g7_skip_evidence_capture_sink=G7SkipEvidenceCaptureSink(store, now=lambda: now),
-        is_paper_mode=True,
-        now=lambda: now,
-    ).process_fast_lane_result(_analysis(market=_market(liquidity_dollars=Decimal("0"))))
-
-    assert result.trade_blocked_reason == "G7_zero_liquidity"
-    [record] = read_g7_skip_evidence_records(store.db_path)
-    assert record.liquidity_evidence_status == "observed"
-    assert record.decision_at == observed_at
-    assert record.captured_at == observed_at
 
 
 @pytest.mark.asyncio
