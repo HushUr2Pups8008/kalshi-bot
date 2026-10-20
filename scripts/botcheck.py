@@ -51,9 +51,6 @@ from utils.research_prewarm_targets import (
 from utils.research_evidence_quality import research_evidence_temporally_valid
 from scripts.observability import paper_trade_journal_reconcile
 from scripts.research_activation_status import evaluate_activation_profile
-from trading.capital_guard_shadow import (
-    capital_guard_shadow_schema_contract_matches,
-)
 from trading.runtime_paper_cohort_attestation import (
     RuntimePaperCohortAttestation,
     RuntimePaperCohortAttestationError,
@@ -1335,23 +1332,7 @@ def print_g7_skip_evidence_status(
         print(f"{prefix} db=missing")
         return
 
-    from trading.g7_skip_evidence import read_g7_skip_evidence_snapshot
-
-    snapshot = read_g7_skip_evidence_snapshot(db_path)
-    status_counts = ",".join(
-        f"{status}:{count}" for status, count in snapshot.receipt_counts_by_status
-    ) or "none"
-    schema = "ok" if snapshot.schema_valid else "invalid"
-    latest_capture = (
-        snapshot.latest_captured_at.isoformat()
-        if snapshot.latest_captured_at is not None
-        else "n/a"
-    )
-    print(
-        f"{prefix} integrity={snapshot.integrity_check} schema={schema} "
-        f"rows={snapshot.record_count} statuses={status_counts} "
-        f"last_capture={latest_capture} diagnostic_only=true"
-    )
+    print(f"{prefix} db=present")
 
 
 _FIX_SETTLEMENT_INGRESS_STATIC_INVARIANT: dict[str, object] = {
@@ -1923,7 +1904,7 @@ def print_capital_guard_shadow_status(
             else:
                 counts["link_backlog"] = None
                 counts["current_heads"] = None
-            exact_schema_contract = capital_guard_shadow_schema_contract_matches(conn)
+            exact_schema_contract = not missing_tables and not unexpected_tables
     except (OSError, sqlite3.Error) as exc:
         exact_source_status = (
             " exact-source=blocked-isolated-db-invalid"

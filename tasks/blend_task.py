@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any, Awaitable, Callable, Protocol
+from typing import Any, Awaitable, Callable, Mapping, Protocol
 
 from analysis import SignalAnalysis
 from analysis import decision_blender
@@ -25,12 +25,7 @@ from config import PAPER_MIN_EDGE, cfg
 from kalshi import KalshiMarket
 from polymarket.domain_key import pm_domain_key
 from tasks import evidence_store
-from tasks.capital_guard_shadow_capture import CapitalGuardShadowCaptureEnvelope
 from tasks.evidence_store import DossierState, EvidenceRecord, StructuralPriorRecord
-from tasks.g7_skip_evidence_capture import (
-    G7SkipEvidenceCaptureEnvelope,
-    decision_time_at_or_after_execution_observation,
-)
 from tasks.prequeue_book_provenance import (
     PrequeueBookProvenanceResult,
     unavailable_prequeue_book_provenance,
@@ -53,6 +48,54 @@ from utils.lifecycle import strict_optional_bool
 
 
 log = get_logger("blend_task")
+
+
+@dataclass(frozen=True)
+class CapitalGuardShadowCaptureEnvelope:
+    """In-memory capture record. The shadow store is not on the politics path."""
+
+    analysis: SignalAnalysis
+    blend_result: BlendResult
+    readiness_decision: ReadinessDecision
+    readiness_input: Mapping[str, Any]
+    regime_weights: Mapping[str, float]
+    regime_confidence: float
+    trade_blocked_reason: str | None
+    venue: str
+    market_family: str
+    lifecycle_id: str | None
+    decision_at: datetime
+    default_min_edge: float
+
+
+@dataclass(frozen=True)
+class G7SkipEvidenceCaptureEnvelope:
+    """In-memory G7 receipt. The evidence store is not on the politics path."""
+
+    analysis: SignalAnalysis
+    readiness_decision: ReadinessDecision
+    readiness_input: Mapping[str, Any]
+    trade_blocked_reason: str
+    venue: str
+    market_family: str | None
+    lifecycle_id: str | None
+    decision_at: datetime
+    runtime_paper_cohort_id: str | None = None
+    runtime_paper_cohort_kind: str | None = None
+
+
+def _g7_decision_time(decision_at: datetime, analysis: SignalAnalysis) -> datetime:
+    """Keep a receipt timestamp no earlier than its book read."""
+    signal_meta = analysis.signal_meta if isinstance(analysis.signal_meta, dict) else {}
+    metadata = signal_meta.get("g7_execution_liquidity")
+    if not isinstance(metadata, Mapping):
+        return decision_at
+    observed_at = metadata.get("as_of")
+    if isinstance(observed_at, datetime):
+        return max(decision_at, observed_at)
+    return decision_at
+
+
 _PROCESS_CONTROL_EXCEPTIONS = (KeyboardInterrupt, SystemExit, GeneratorExit)
 _READINESS_LIQUIDITY_UNSET = object()
 _PREQUEUE_BOOK_PROVENANCE_TIMEOUT_SECONDS = 1.0
@@ -953,10 +996,7 @@ class BlendTask:
             venue=venue,
             market_family=market_family,
             lifecycle_id=lifecycle_id,
-            decision_at=decision_time_at_or_after_execution_observation(
-                decision_at,
-                fast_lane_result,
-            ),
+            decision_at=_g7_decision_time(decision_at, fast_lane_result),
             runtime_paper_cohort_id=self._runtime_paper_cohort_id,
             runtime_paper_cohort_kind=self._runtime_paper_cohort_kind,
         )

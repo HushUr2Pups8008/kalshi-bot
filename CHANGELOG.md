@@ -19,6 +19,12 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.0] - 2026-10-20
+
+### Removed
+
+- **Tier C shadow runtimes.** Capital-guard capture, settlement collection, and replay; G7 skip-evidence capture and replay; the KXHIGHNY weather package and its store; and `trading/horizon_paper_study_manifest.py` are gone. Politics builders return None. Public market dataclasses stay in `kalshi/public_market_data.py`. Blend, readiness, accumulation, structural recompute, paper trader, paper cohorts, and the source-hint store stay because the politics process imports them. `POLYMARKET_US_*`, `REDDIT_*`, and `ANTHROPIC_API_KEY` stay because production code still reads them. Paper series still cannot POST. `--go-live` still fails closed when `data/horizon_paper_studies` contains a study. An empty or missing directory does not block.
+
 ## [0.36.15] - 2026-10-20
 
 ### Added

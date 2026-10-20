@@ -9,8 +9,7 @@ import importlib
 import os
 import sqlite3
 import sys
-import threading
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
@@ -128,139 +127,15 @@ def test_weather_shadow_factory_disabled_is_truly_lazy(monkeypatch, tmp_path):
     open_file.assert_not_called()
 
 
-def test_weather_shadow_factory_enabled_builds_one_isolated_supervisor(monkeypatch):
+def test_weather_shadow_factory_enabled_stays_off(monkeypatch):
     monkeypatch.setattr(
         config_module.cfg,
         "enable_weather_shadow_capture",
         True,
         raising=False,
     )
-    stores = []
-    market_clients = []
-    weather_clients = []
-    supervisors = []
-
-    class FakeStore:
-        def __init__(self):
-            stores.append(self)
-
-    class FakeMarketClient:
-        def __init__(self):
-            market_clients.append(self)
-
-    class FakeWeatherClient:
-        def __init__(self):
-            weather_clients.append(self)
-
-    class FakeSupervisor:
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
-            supervisors.append(self)
-
-        def run(self):
-            async def _run():
-                return None
-
-            return _run()
-
-    fake_modules = {
-        "kalshi.public_market_data": {"KalshiPublicMarketDataReader": FakeMarketClient},
-        "tasks.kxhighny_shadow_capture": {"WeatherShadowCaptureTask": FakeSupervisor},
-        "tasks.weather_shadow_store": {"WeatherShadowStore": FakeStore},
-        "weather.nws_public_client": {"NwsPublicClient": FakeWeatherClient},
-    }
-    for name, attrs in fake_modules.items():
-        module = ModuleType(name)
-        for attr_name, value in attrs.items():
-            setattr(module, attr_name, value)
-        monkeypatch.setitem(sys.modules, name, module)
-
-    created_task = MagicMock()
-
-    def _create_task(coro, *, name):
-        coro.close()
-        created_task.get_name.return_value = name
-        return created_task
-
-    create_task = MagicMock(side_effect=_create_task)
-    monkeypatch.setattr(main_module.asyncio, "create_task", create_task)
-
     task = TradingBot.__new__(TradingBot)._create_weather_shadow_runtime_task()
-
-    assert task is created_task
-    assert task.get_name() == "weather_shadow_capture"
-    create_task.assert_called_once()
-    assert len(stores) == 1
-    assert len(market_clients) == 2
-    assert len(weather_clients) == 2
-    assert len(supervisors) == 1
-    assert supervisors[0].kwargs == {
-        "store": stores[0],
-        "capture_markets": market_clients[0],
-        "capture_weather": weather_clients[0],
-        "label_markets": market_clients[1],
-        "label_weather": weather_clients[1],
-        "runtime_logger": main_module.log,
-    }
-
-
-@pytest.mark.asyncio
-async def test_weather_supervisor_cancel_during_initialize_drains_worker(
-    monkeypatch, tmp_path
-):
-    from tasks.kxhighny_shadow_capture import WeatherShadowCaptureTask
-    from tasks.weather_shadow_store import WeatherShadowStore
-
-    db_path = tmp_path / "weather.db"
-    store = WeatherShadowStore(db_path=db_path)
-    initialize_sync = store._initialize_sync
-    worker_started = threading.Event()
-    release_worker = threading.Event()
-
-    def _blocked_initialize_sync():
-        worker_started.set()
-        assert release_worker.wait(timeout=2)
-        initialize_sync()
-
-    monkeypatch.setattr(store, "_initialize_sync", _blocked_initialize_sync)
-    supervisor = WeatherShadowCaptureTask(
-        store=store,
-        capture_markets=object(),
-        capture_weather=object(),
-        label_markets=object(),
-        label_weather=object(),
-    )
-    task = asyncio.create_task(supervisor.run(), name="weather-shadow-init-probe")
-
-    try:
-        assert await asyncio.to_thread(worker_started.wait, 1)
-        task.cancel()
-        await asyncio.sleep(0)
-
-        assert task.done() is False
-        assert db_path.exists() is False
-
-        release_worker.set()
-        with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(task, timeout=2)
-
-        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as connection:
-            tables_at_return = tuple(
-                row[0]
-                for row in connection.execute(
-                    "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
-                )
-            )
-        stat_at_return = db_path.stat()
-        await asyncio.sleep(0.05)
-
-        assert tables_at_return
-        assert db_path.stat().st_mtime_ns == stat_at_return.st_mtime_ns
-    finally:
-        release_worker.set()
-        if not task.done():
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+    assert task is None
 
 
 @pytest.mark.asyncio
