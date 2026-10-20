@@ -156,14 +156,14 @@ def test_executor_independent_pass_returns_one_result_per_event():
 
 def test_executor_sequential_pass_rejects_kxtrumpiran_before_cooldown():
     """KXTRUMPIRAN is not in the politics universe. Both canonical events
-    die at unified_edge_unreadable, so the 4h cooldown never binds. A None
-    skip here would mean a non-desk series was accepted."""
+    die at not_reserve_series, so the cooldown never binds. A None skip
+    here would mean a non-desk series was accepted."""
     results = executor_validate.run_sequential()
     by_name = {r.event_name: r for r in results}
     third = by_name["Event 3: KXTRUMPIRAN (Trump dispatching)"]
     fifth = by_name["Event 5: KXTRUMPIRAN (talks stall)"]
-    assert third.skip_reason == "unified_edge_unreadable"
-    assert fifth.skip_reason == "unified_edge_unreadable"
+    assert third.skip_reason == "not_reserve_series"
+    assert fifth.skip_reason == "not_reserve_series"
 
 
 def test_executor_main_runs_clean(capsys):

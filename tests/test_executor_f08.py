@@ -25,9 +25,9 @@ from trading.executor import TradeExecutor
 def _make_live_executor(monkeypatch):
     """Live mode so the flat edge check runs before the F-08 price gate.
 
-    Paper fee-net cannot score a missing executed price and returns
-    unified_edge_unreadable first. Live, with the unified-edge flag off,
-    still reaches the price_unavailable strings.
+    Paper and live both use the flat edge check when the unified-edge flag
+    is off, so a missing executed price still reaches the price_unavailable
+    strings.
     """
     monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", False)
     monkeypatch.setattr(_cfg_module.cfg, "live_trading_enabled", False)
@@ -65,6 +65,8 @@ def _make_paper_executor(monkeypatch):
 
     rest = MagicMock()
     rest.get_market.return_value = None
+    rest.get_balance.return_value = 500.0
+    rest.get_open_positions.return_value = []
 
     paper = MagicMock()
     paper.get_notional_bankroll.return_value = 500.0

@@ -3232,14 +3232,14 @@ class TradingBot:
 
         # Dynamic max bet is capped until all historical resolved paper outcomes
         # have canonical delivery completion; raw legacy wins cannot expand size.
-        # A paper-shadow debit must not shrink the next live stake. Paper
-        # mode still sizes from the residual notional.
-        if not cfg.is_paper_trading and isinstance(self.paper, PaperTrader):
+        # A paper-shadow debit must not shrink the next stake. Paper and live
+        # both size from the configured starting bankroll at the live min edge.
+        if isinstance(self.paper, PaperTrader):
             notional = _paper_starting_bankroll(self.paper)
         else:
             notional = _paper_effective_sizing_bankroll(self.paper)
         max_bet    = cfg.dynamic_max_bet(notional)
-        min_edge   = PAPER_MIN_EDGE if cfg.is_paper_trading else cfg.min_edge
+        min_edge   = cfg.min_edge
 
         # Days to close -- used by kelly_bet() for time discount
         from analysis.market_matcher import _days_to_close
