@@ -1080,6 +1080,76 @@ class KalshiRestClient:
         # can durably quarantine them instead of discarding exchange evidence.
         return raw_fills, next_cursor or None
 
+    def list_fills_page(
+        self,
+        *,
+        min_ts: int | None = None,
+        max_ts: int | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+        ticker: str | None = None,
+    ) -> tuple[list[object], str | None]:
+        """List fills. This is not the one-order receipt read."""
+        requested_min_ts = _optional_execution_timestamp(min_ts, field="min_ts")
+        requested_max_ts = _optional_execution_timestamp(max_ts, field="max_ts")
+        if (
+            requested_min_ts is not None
+            and requested_max_ts is not None
+            and requested_min_ts > requested_max_ts
+        ):
+            raise ValueError("Kalshi fill min_ts must not exceed max_ts")
+        params: dict[str, Any] = {}
+        optional_params = {
+            "min_ts": requested_min_ts,
+            "max_ts": requested_max_ts,
+            "limit": _optional_execution_limit(limit),
+            "cursor": _optional_execution_cursor(cursor),
+            "ticker": ticker.strip() if isinstance(ticker, str) and ticker.strip() else None,
+        }
+        params.update({key: value for key, value in optional_params.items() if value is not None})
+        data = self._request(
+            "GET",
+            "/portfolio/fills",
+            params=params or None,
+            allow_redirects=False,
+        )
+        if not isinstance(data, dict):
+            raise ValueError("Kalshi fills response must be an object")
+        raw_fills = data.get("fills")
+        next_cursor = data.get("cursor")
+        if not isinstance(raw_fills, list) or not isinstance(next_cursor, str):
+            raise ValueError("Kalshi fills response has invalid pagination")
+        return raw_fills, next_cursor or None
+
+    def list_settlements_page(
+        self,
+        *,
+        limit: int | None = None,
+        cursor: str | None = None,
+        ticker: str | None = None,
+    ) -> tuple[list[object], str | None]:
+        """List settlements. Revenue on each row is integer cents."""
+        params: dict[str, Any] = {}
+        optional_params = {
+            "limit": _optional_execution_limit(limit),
+            "cursor": _optional_execution_cursor(cursor),
+            "ticker": ticker.strip() if isinstance(ticker, str) and ticker.strip() else None,
+        }
+        params.update({key: value for key, value in optional_params.items() if value is not None})
+        data = self._request(
+            "GET",
+            "/portfolio/settlements",
+            params=params or None,
+            allow_redirects=False,
+        )
+        if not isinstance(data, dict):
+            raise ValueError("Kalshi settlements response must be an object")
+        raw_rows = data.get("settlements")
+        next_cursor = data.get("cursor", "")
+        if not isinstance(raw_rows, list) or not isinstance(next_cursor, str):
+            raise ValueError("Kalshi settlements response has invalid pagination")
+        return raw_rows, next_cursor or None
+
     # ── Order placement ───────────────────────────────────────────────────────
 
     def place_limit_order(

@@ -19,6 +19,16 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.36.15] - 2026-10-20
+
+### Added
+
+- **Daily fee-net P&L.** The 06:05 fill-log job starts `scripts/pnl_report.py` before the copy. The script reads Kalshi fills and settlements, reconciles `logs/state/live-fill-log.md` and the event-news paper book, and writes `logs/reports/pnl-YYYYMMDD.md`. A failed read omits the running total. A failed report does not stop the copy. The paper book is not added to the live total. A sell-labeled fill counts when the settlement cost on that side matches the premium and the ticker has no buy. Partial fills that share one id reconcile to one log row. An old `executed` log result still reconciles.
+
+### Fixed
+
+- **Fill-log order id when the order receipt has none.** Detail rows keep the fee. When every fill names the same order id, that id is written. Disagreeing fill ids stay blank.
+
 ## [0.36.14] - 2026-10-20
 
 ### Removed

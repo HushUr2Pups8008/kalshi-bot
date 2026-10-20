@@ -201,7 +201,10 @@ def fill_log_detail_from_receipts(
     """Map a GET order receipt and fills page onto the four detail columns.
 
     Economics come from the fills page when it has usable rows, and from the
-    order receipt otherwise. The logged order_id is the receipt's order_id.
+    order receipt otherwise. The logged order id is the receipt's id when
+    that receipt has one. When the receipt has none and every fill that
+    names an id names the same one, that id is used. Disagreeing fill ids
+    stay blank.
     """
     price_key = "yes_price_dollars" if str(side).lower() == "yes" else "no_price_dollars"
     order_id = None
@@ -216,18 +219,24 @@ def fill_log_detail_from_receipts(
     total_cost = Decimal("0")
     total_fee = Decimal("0")
     usable_fills = False
+    fill_order_ids: list[str] = []
     for fill in fills or ():
         if not isinstance(fill, Mapping):
             continue
         count = _detail_number(fill.get("count_fp"))
         price = _detail_number(fill.get(price_key))
         fee_dollars = _detail_number(fill.get("fee_cost"))
+        raw_fill_order = fill.get("order_id")
+        if isinstance(raw_fill_order, str) and raw_fill_order.strip():
+            fill_order_ids.append(raw_fill_order.strip())
         if count is None or price is None or fee_dollars is None or count <= 0:
             continue
         total_count += count
         total_cost += count * price
         total_fee += fee_dollars
         usable_fills = True
+    if order_id is None and len(set(fill_order_ids)) == 1:
+        order_id = fill_order_ids[0]
     if usable_fills and total_count > 0:
         filled_count = _detail_number_text(total_count)
         avg_fill_cents = _detail_cents_text(total_cost / total_count)

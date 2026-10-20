@@ -152,6 +152,41 @@ def test_execution_ids_are_trimmed_and_opaque_cursors_are_preserved() -> None:
     assert request_kwargs["params"]["cursor"] == " opaque cursor "
 
 
+def test_list_fills_page_omits_order_id() -> None:
+    client = _client_with_payload({"fills": [{"ticker": "KXTRUMPSAY-26OCT19-ZACH"}], "cursor": ""})
+
+    fills, cursor = client.list_fills_page(min_ts=1_700_000_000, limit=100, ticker=" KXTRUMPSAY-26OCT19-ZACH ")
+
+    assert fills == [{"ticker": "KXTRUMPSAY-26OCT19-ZACH"}]
+    assert cursor is None
+    args, kwargs = client._session.request.call_args  # noqa: SLF001
+    assert args == ("GET", f"{client._base}/portfolio/fills")  # noqa: SLF001
+    assert "order_id" not in kwargs["params"]
+    assert kwargs["params"]["min_ts"] == 1_700_000_000
+    assert kwargs["params"]["ticker"] == "KXTRUMPSAY-26OCT19-ZACH"
+    assert kwargs["allow_redirects"] is False
+
+
+def test_list_fills_page_rejects_a_missing_cursor() -> None:
+    client = _client_with_payload({"fills": []})
+
+    with pytest.raises(ValueError, match="invalid pagination"):
+        client.list_fills_page()
+
+
+def test_list_settlements_page_reads_settlements_and_allows_a_missing_cursor() -> None:
+    client = _client_with_payload({"settlements": [{"ticker": "KXTRUMPSAY-26OCT19-ZACH", "revenue": 800}]})
+
+    rows, cursor = client.list_settlements_page(limit=50)
+
+    assert rows == [{"ticker": "KXTRUMPSAY-26OCT19-ZACH", "revenue": 800}]
+    assert cursor is None
+    args, kwargs = client._session.request.call_args  # noqa: SLF001
+    assert args == ("GET", f"{client._base}/portfolio/settlements")  # noqa: SLF001
+    assert "order_id" not in (kwargs["params"] or {})
+    assert kwargs["allow_redirects"] is False
+
+
 def test_get_order_receipt_rejects_redirect_before_decoding_receipt() -> None:
     client = KalshiRestClient()
     response = MagicMock()

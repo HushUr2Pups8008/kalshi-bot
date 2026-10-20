@@ -15,6 +15,8 @@ Credentials stay outside the repo. FILL_LOG_GIT_SSH_KEY, or
 FILL_LOG_GIT_TOKEN_FILE is read by a credential helper and is never placed
 on the git command line. A key or token file inside the repo is ignored.
 When neither is set, git uses its ambient credential helper.
+Before the copy, the job starts scripts/pnl_report.py. A failed report
+does not stop the copy.
 """
 
 from __future__ import annotations
@@ -355,12 +357,31 @@ def publish_live_fill_report(
         return 0
 
 
+def run_daily_pnl_report(repo: Path, runner=None) -> None:
+    """Start the P&L report. A missing script or a failed run does not raise."""
+    script = repo / "scripts" / "pnl_report.py"
+    if not script.is_file():
+        return
+    launch = runner if runner is not None else subprocess.run
+    try:
+        launch(
+            [sys.executable, str(script), "--repo", str(repo), "--write-fill-log"],
+            cwd=str(repo),
+            check=False,
+        )
+    except Exception:
+        return
+
+
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if any(arg != "--dry-run" for arg in args):
         repo = Path(__file__).resolve().parents[1]
         _write_err(repo, "unknown fill-log argument")
         return 0
+    repo = Path(__file__).resolve().parents[1]
+    if "--dry-run" not in args:
+        run_daily_pnl_report(repo)
     from trading.executor import LIVE_FILL_LOG_ARCHIVE_PATH, LIVE_FILL_LOG_PATH
 
     return publish_live_fill_report(
