@@ -5504,11 +5504,56 @@ def _check_go_live_gates(paper: PaperTrader) -> list[str]:
     return failures
 
 
+_HORIZON_STUDY_DIRNAME = "horizon_paper_studies"
+_HORIZON_STUDY_LIVE_BLOCK = (
+    "horizon paper study remains permanently isolated from live trading"
+)
+_HORIZON_STUDY_INVALID_BLOCK = (
+    "invalid horizon paper study manifest blocks live trading"
+)
+
+
+def _horizon_study_live_blocks(data_root: Path) -> tuple[str, ...]:
+    """Block go-live when a horizon study tree is present.
+
+    The study package is gone. A missing or empty directory does not block.
+    Any other tree fails closed. A valid study used to block after its
+    manifest read, and an invalid tree blocked too.
+    """
+
+    study_parent = Path(data_root) / _HORIZON_STUDY_DIRNAME
+    try:
+        present = study_parent.exists() or study_parent.is_symlink()
+        if not present:
+            return ()
+        if study_parent.is_symlink() or not study_parent.is_dir():
+            return (_HORIZON_STUDY_INVALID_BLOCK,)
+        entries = tuple(study_parent.iterdir())
+    except OSError:
+        return (_HORIZON_STUDY_INVALID_BLOCK,)
+    if not entries:
+        return ()
+    entry = entries[0]
+    if len(entries) == 1 and entry.is_dir() and not entry.is_symlink():
+        return (_HORIZON_STUDY_LIVE_BLOCK,)
+    return (_HORIZON_STUDY_INVALID_BLOCK,)
+
+
 def _provisioned_cohort_live_risk_gate_failures(
     *,
     db_root: Path = DATA_DIR,
 ) -> tuple[bool, list[str]]:
     """Fail closed on every provisioned cohort, independent of runtime selection."""
+
+    try:
+        study_blockers = _horizon_study_live_blocks(Path(db_root))
+    except Exception as exc:  # noqa: BLE001 - live-money boundary must fail closed
+        return True, [
+            "Horizon paper study manifest discovery unavailable "
+            f"({str(exc)[:80]}) -- gate fails closed"
+        ]
+    if study_blockers:
+        return True, list(study_blockers)
 
     discovered: list[PaperCohort] = []
     provisioned_kinds: set[str] = set()

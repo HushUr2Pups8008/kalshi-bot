@@ -413,6 +413,49 @@ def test_provisioned_cohort_gate_blocks_unresolved_history_even_when_runtime_is_
     assert any("active-a: 2 unresolved paper trade" in failure for failure in failures)
 
 
+def test_horizon_study_directory_still_blocks_go_live(tmp_path: Path):
+    study = tmp_path / "horizon_paper_studies" / "pm-horizon-15-30-20260801"
+    study.mkdir(parents=True)
+
+    active, failures = main._provisioned_cohort_live_risk_gate_failures(db_root=tmp_path)
+
+    assert active is True
+    assert failures == [
+        "horizon paper study remains permanently isolated from live trading"
+    ]
+
+
+def test_empty_horizon_study_directory_does_not_block_go_live(tmp_path: Path):
+    (tmp_path / "horizon_paper_studies").mkdir()
+
+    active, failures = main._provisioned_cohort_live_risk_gate_failures(db_root=tmp_path)
+
+    assert active is False
+    assert failures == []
+
+
+def test_symlinked_horizon_study_directory_blocks_go_live(tmp_path: Path):
+    real = tmp_path / "elsewhere"
+    real.mkdir()
+    (tmp_path / "horizon_paper_studies").symlink_to(real, target_is_directory=True)
+
+    active, failures = main._provisioned_cohort_live_risk_gate_failures(db_root=tmp_path)
+
+    assert active is True
+    assert failures == ["invalid horizon paper study manifest blocks live trading"]
+
+
+def test_invalid_horizon_study_tree_blocks_go_live(tmp_path: Path):
+    parent = tmp_path / "horizon_paper_studies"
+    parent.mkdir()
+    (parent / "not-a-study").write_text("x", encoding="utf-8")
+
+    active, failures = main._provisioned_cohort_live_risk_gate_failures(db_root=tmp_path)
+
+    assert active is True
+    assert failures == ["invalid horizon paper study manifest blocks live trading"]
+
+
 def test_provisioned_cohort_gate_fails_closed_on_discovery_error(tmp_path):
     (tmp_path / "paper_cohorts").mkdir()
     with patch.object(main, "discover_paper_risk_cohorts", side_effect=ValueError("manifest")):
