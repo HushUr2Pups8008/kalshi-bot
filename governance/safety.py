@@ -9,6 +9,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from utils.output_paths import parse_bool_text
+
 
 @dataclass
 class SafetyConfig:
@@ -48,12 +50,9 @@ class SafetyConfig:
                 raise ValueError(f"{name} must be positive, got {value}")
 
 
-_TRUTHY = frozenset({"1", "true", "yes", "on"})
-
-
 def _env_truthy(name: str) -> bool:
     """Return True iff env var is set to a truthy string (case-insensitive)."""
-    return os.environ.get(name, "").strip().lower() in _TRUTHY
+    return parse_bool_text(os.environ.get(name, ""))
 
 
 class KillSwitch:

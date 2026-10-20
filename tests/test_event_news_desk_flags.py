@@ -31,6 +31,28 @@ def test_missing_env_is_paper_on_and_live_off() -> None:
     ) is False
 
 
+def test_yes_floor_zero_is_off_and_a_positive_cent_value_is_on() -> None:
+    off = {EVENT_NEWS_YES_FLOOR: "0"}
+    on = {EVENT_NEWS_YES_FLOOR: "55"}
+    assert event_news_desk_flag_enabled(EVENT_NEWS_YES_FLOOR, live=True, environ=off) is False
+    assert event_news_desk_flag_enabled(EVENT_NEWS_YES_FLOOR, live=False, environ=off) is False
+    assert event_news_yes_floor_skip_reason("yes", 36, live=False, environ=off) is None
+    assert event_news_desk_flag_enabled(EVENT_NEWS_YES_FLOOR, live=True, environ=on) is True
+    assert event_news_yes_floor_skip_reason("yes", 54, live=True, environ=on) == "yes_below_floor"
+
+
+def test_yes_and_on_enable_a_desk_flag_and_other_words_do_not() -> None:
+    assert event_news_desk_flag_enabled(
+        EVENT_NEWS_YES_FLOOR, live=True, environ={EVENT_NEWS_YES_FLOOR: "yes"}
+    ) is True
+    assert event_news_desk_flag_enabled(
+        EVENT_NEWS_YES_FLOOR, live=True, environ={EVENT_NEWS_YES_FLOOR: "on"}
+    ) is True
+    assert event_news_desk_flag_enabled(
+        EVENT_NEWS_YES_FLOOR, live=False, environ={EVENT_NEWS_YES_FLOOR: "maybe"}
+    ) is False
+
+
 def test_yes_floor_drops_yes_below_55_and_keeps_no_at_36() -> None:
     assert event_news_yes_floor_skip_reason("yes", 54, live=False, environ={}) == "yes_below_floor"
     assert event_news_yes_floor_skip_reason("yes", 55, live=False, environ={}) is None

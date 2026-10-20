@@ -537,6 +537,10 @@ def _log_boot_summary(startup_context: str) -> None:
         startup_context,
         os.getcwd(),
     )
+    from config import boot_config_lines
+
+    for item in boot_config_lines():
+        log.log(level, "[BOOT] config %s", item)
 
 
 def _log_bankroll_summary(

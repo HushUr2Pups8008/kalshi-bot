@@ -5,6 +5,13 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+_BOOL_TRUE = {"1", "true", "yes", "on"}
+
+
+def parse_bool_text(value: str) -> bool:
+    """Single bool parser. True only for 1, true, yes, or on."""
+    return value.strip().lower() in _BOOL_TRUE
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 

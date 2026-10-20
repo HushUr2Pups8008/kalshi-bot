@@ -19,6 +19,16 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.36.12] - 2026-10-19
+
+### Changed
+
+- **One env contract.** `.env.example` lists every name production code reads, with placeholders and empty secrets. The lint job fails when the example and the code disagree. Dead names are gone from the politics start script. `EVENT_NEWS_YES_FLOOR_CENTS=0` leaves the YES floor off. A positive cent value still turns it on. Boot logs the resolved config and masks secrets, including a client id. Live kill switches stay exact `true`. The four held flags stay off. Paper series still cannot POST.
+
+### Removed
+
+- Env reads whose only value was the code default: the early news-age window, the source-stat gates, the subreddit discovery intervals, the prewarm pending cap, and the market-source-hint shadow numeric knobs.
+
 ## [0.36.11] - 2026-10-19
 
 ### Fixed

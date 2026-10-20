@@ -1148,10 +1148,15 @@ def section_source_quality():
     if not rows:
         return "No source stats recorded yet (table exists but is empty)."
 
-    # Read thresholds from env (same defaults as SourceStats class)
-    min_posts = int(os.getenv("SOURCE_STATS_MIN_POSTS", "100"))
-    low_signal_rate = float(os.getenv("SOURCE_STATS_LOW_SIGNAL_RATE", "0.005"))
-    zero_signal_posts = int(os.getenv("SOURCE_STATS_ZERO_SIGNAL_POSTS", "200"))
+    from config import (
+        SOURCE_STATS_LOW_SIGNAL_RATE,
+        SOURCE_STATS_MIN_POSTS,
+        SOURCE_STATS_ZERO_SIGNAL_POSTS,
+    )
+
+    min_posts = SOURCE_STATS_MIN_POSTS
+    low_signal_rate = SOURCE_STATS_LOW_SIGNAL_RATE
+    zero_signal_posts = SOURCE_STATS_ZERO_SIGNAL_POSTS
 
     table_rows = []
     for r in rows:

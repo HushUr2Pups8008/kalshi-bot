@@ -6,7 +6,7 @@ Uses signal_rate (signals / posts_seen) as a fast-feedback quality metric
 that is actionable within 24-48 hours -- unlike win_rate (source_credibility)
 which requires 10+ resolved trades per source (weeks to months).
 
-Quality gates (configurable via env vars):
+Quality gates (the config constants):
   - is_suppressed  : posts_seen >= ZERO_SIGNAL_POSTS and signals == 0
   - is_low_quality : posts_seen >= MIN_POSTS_TO_JUDGE and rate < LOW_SIGNAL_RATE
 
