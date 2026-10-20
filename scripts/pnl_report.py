@@ -45,6 +45,8 @@ class Settlement:
     result: str
     yes_count: Decimal | None
     no_count: Decimal | None
+    yes_cost: Decimal | None
+    no_cost: Decimal | None
     revenue_cents: int | None
     fee: Decimal | None
 
@@ -201,6 +203,8 @@ def settlements_by_ticker(rows: list[object]) -> tuple[dict[str, Settlement], li
             result=result,
             yes_count=_dec(raw.get("yes_count_fp")),
             no_count=_dec(raw.get("no_count_fp")),
+            yes_cost=_dec(raw.get("yes_total_cost_dollars")),
+            no_cost=_dec(raw.get("no_total_cost_dollars")),
             revenue_cents=_cents(raw.get("revenue")),
             fee=_dec(raw.get("fee_cost")),
         )
@@ -223,7 +227,7 @@ def parse_fill_log(text: str) -> list[LogRow]:
             price_cents = None
         qty = _dec(fields[4])
         http = fields[6]
-        http_ok = http.startswith("2")
+        http_ok = http.startswith("2") or http.lower() == "executed"
         fee_cents = fields[9] if len(fields) >= 11 else None
         order_blank = len(fields) >= 11 and fields[10] == ""
         rows.append(
@@ -287,11 +291,9 @@ def assemble_pnl(
     backfill_ids: dict[int, str] = {}
 
     buys_by_ticker: dict[str, list[LiveFill]] = defaultdict(list)
+    sells_by_ticker: dict[str, list[LiveFill]] = defaultdict(list)
     for fill in fills:
-        if fill.action == "sell":
-            mismatches.append(f"{fill.ticker or 'fill'}: sell fill; not allocated")
-            continue
-        if fill.action != "buy":
+        if fill.action not in {"buy", "sell"}:
             mismatches.append(f"{fill.ticker or 'fill'}: fill action absent")
             continue
         if (
@@ -305,7 +307,17 @@ def assemble_pnl(
         ):
             mismatches.append(f"{fill.ticker or 'fill'}: fill economics unreadable")
             continue
-        buys_by_ticker[fill.ticker].append(fill)
+        if fill.action == "sell":
+            sells_by_ticker[fill.ticker].append(fill)
+        else:
+            buys_by_ticker[fill.ticker].append(fill)
+    for ticker, group in sells_by_ticker.items():
+        # A NO buy on the YES book is labeled sell. Count it when the
+        # settlement cost on that side equals the premium and no buy exists.
+        if ticker in buys_by_ticker or not _paid_for_side(group, settlements.get(ticker)):
+            mismatches.append(f"{ticker}: sell fill; not allocated")
+            continue
+        buys_by_ticker[ticker].extend(group)
 
     allocated: list[tuple[LiveFill, str, str]] = []
     for ticker, group in buys_by_ticker.items():
@@ -372,47 +384,13 @@ def assemble_pnl(
                 fee_net_text,
             )
         )
-    log_buckets: dict[tuple[str, str, str, int], list[LogRow]] = defaultdict(list)
-    for row in log_rows:
-        if row.qty is None or row.price_cents is None:
-            mismatches.append(f"{row.ticker}: fill log economics unreadable")
-            continue
-        log_buckets[_match_key(row.ticker, row.side, row.qty, row.price_cents)].append(row)
-
-    fill_buckets: dict[tuple[str, str, str, int], list[LiveFill]] = defaultdict(list)
-    for fill in buys_by_ticker_flat(buys_by_ticker):
-        cents = price_cents_of(fill.price) if fill.price is not None else None
-        if fill.qty is None or cents is None:
-            continue
-        fill_buckets[_match_key(fill.ticker, fill.side, fill.qty, cents)].append(fill)
-
-    seen_keys = set(log_buckets) | set(fill_buckets)
-    backfilled: list[str] = []
-    for key in sorted(seen_keys):
-        logs = log_buckets.get(key, [])
-        matched = fill_buckets.get(key, [])
-        pair_count = min(len(logs), len(matched))
-        for log_row, fill in zip(logs[:pair_count], matched[:pair_count]):
-            if log_row.fee_cents is None:
-                mismatches.append(f"{log_row.ticker}: fee column absent")
-            else:
-                assert fill.fee is not None
-                log_fee = _dec(log_row.fee_cents)
-                fill_fee_cents = fill.fee * Decimal("100")
-                if log_fee is None or abs(log_fee - fill_fee_cents) > Decimal("0.01"):
-                    mismatches.append(f"{log_row.ticker}: fill log fee differs")
-        if len(matched) > len(logs):
-            mismatches.append(f"{key[0]}: fill not in fill log")
-        if len(logs) > len(matched):
-            mismatches.append(f"{key[0]}: fill log row has no live fill")
-        if (
-            len(matched) == 1
-            and len(logs) == 1
-            and logs[0].order_blank
-            and matched[0].order_id
-        ):
-            backfill_ids[logs[0].index] = matched[0].order_id.replace(",", "")
-            backfilled.append(logs[0].ticker)
+    extra_ids, extra_tickers, extra_mismatches = reconcile_log(
+        log_rows,
+        buys_by_ticker_flat(buys_by_ticker),
+    )
+    backfill_ids.update(extra_ids)
+    backfilled = extra_tickers
+    mismatches.extend(extra_mismatches)
 
     new_log = _apply_backfill(fill_log_text, backfill_ids)
     stamp = (now or datetime.now(timezone.utc)).strftime("%Y%m%d")
@@ -427,6 +405,123 @@ def assemble_pnl(
         backfilled=backfilled,
     )
     return report, new_log, backfilled
+
+
+def _paid_for_side(group: list[LiveFill], settlement: Settlement | None) -> bool:
+    """True when a sell-labeled fill paid the settlement cost on its side."""
+    if settlement is None or not group:
+        return False
+    side = group[0].side
+    if any(fill.side != side or fill.qty is None or fill.price is None for fill in group):
+        return False
+    premium = sum((fill.qty or Decimal("0")) * (fill.price or Decimal("0")) for fill in group)
+    if side == "no":
+        cost, other = settlement.no_cost, settlement.yes_cost
+    elif side == "yes":
+        cost, other = settlement.yes_cost, settlement.no_cost
+    else:
+        return False
+    if cost is None:
+        return False
+    if other is not None and abs(other) > FEE_TOLERANCE:
+        return False
+    return abs(cost - premium) <= FEE_TOLERANCE
+
+
+def _same_order_id(fills: list[LiveFill]) -> str | None:
+    ids: list[str] = []
+    for fill in fills:
+        if not fill.order_id:
+            return None
+        ids.append(fill.order_id)
+    if len(set(ids)) == 1:
+        return ids[0]
+    return None
+
+
+def _fee_note(log_row: LogRow, fills: list[LiveFill], mismatches: list[str]) -> None:
+    if log_row.fee_cents is None:
+        mismatches.append(f"{log_row.ticker}: fee column absent")
+        return
+    log_fee = _dec(log_row.fee_cents)
+    total = sum((fill.fee or Decimal("0")) * Decimal("100") for fill in fills)
+    if log_fee is None or abs(log_fee - total) > Decimal("0.01"):
+        mismatches.append(f"{log_row.ticker}: fill log fee differs")
+
+
+def reconcile_log(
+    log_rows: list[LogRow],
+    fills: list[LiveFill],
+) -> tuple[dict[int, str], list[str], list[str]]:
+    """Match log rows to fills. Partials share one id only when the qty sums."""
+    mismatches: list[str] = []
+    backfill: dict[int, str] = {}
+    backfilled: list[str] = []
+    unused_fills = {
+        id(fill): fill
+        for fill in fills
+        if fill.qty is not None and fill.price is not None and price_cents_of(fill.price) is not None
+    }
+    unused_logs: dict[int, LogRow] = {}
+    for row in log_rows:
+        if row.qty is None or row.price_cents is None:
+            mismatches.append(f"{row.ticker}: fill log economics unreadable")
+            continue
+        unused_logs[row.index] = row
+
+    fill_buckets: dict[tuple[str, str, str, int], list[LiveFill]] = defaultdict(list)
+    log_buckets: dict[tuple[str, str, str, int], list[LogRow]] = defaultdict(list)
+    for fill in unused_fills.values():
+        cents = price_cents_of(fill.price)
+        assert fill.qty is not None and cents is not None
+        fill_buckets[_match_key(fill.ticker, fill.side, fill.qty, cents)].append(fill)
+    for row in unused_logs.values():
+        assert row.qty is not None and row.price_cents is not None
+        log_buckets[_match_key(row.ticker, row.side, row.qty, row.price_cents)].append(row)
+    for key in set(fill_buckets) | set(log_buckets):
+        flist = fill_buckets.get(key, [])
+        llist = log_buckets.get(key, [])
+        pair_count = min(len(flist), len(llist))
+        for index in range(pair_count):
+            _fee_note(llist[index], [flist[index]], mismatches)
+            unused_fills.pop(id(flist[index]), None)
+            unused_logs.pop(llist[index].index, None)
+        if len(flist) == 1 and len(llist) == 1:
+            shared = _same_order_id(flist)
+            if llist[0].order_blank and shared:
+                backfill[llist[0].index] = shared.replace(",", "")
+                backfilled.append(llist[0].ticker)
+
+    logs_by_price: dict[tuple[str, str, int], list[LogRow]] = defaultdict(list)
+    fills_by_price: dict[tuple[str, str, int], list[LiveFill]] = defaultdict(list)
+    for row in unused_logs.values():
+        assert row.price_cents is not None
+        logs_by_price[(row.ticker, row.side, row.price_cents)].append(row)
+    for fill in unused_fills.values():
+        cents = price_cents_of(fill.price)
+        assert cents is not None
+        fills_by_price[(fill.ticker, fill.side, cents)].append(fill)
+    for key, llist in logs_by_price.items():
+        flist = fills_by_price.get(key, [])
+        if len(llist) != 1 or len(flist) < 2 or llist[0].qty is None:
+            continue
+        qty_sum = sum((fill.qty or Decimal("0")) for fill in flist)
+        shared = _same_order_id(flist)
+        if qty_sum != llist[0].qty or not shared:
+            continue
+        _fee_note(llist[0], flist, mismatches)
+        if llist[0].order_blank:
+            backfill[llist[0].index] = shared.replace(",", "")
+            backfilled.append(llist[0].ticker)
+        for fill in flist:
+            unused_fills.pop(id(fill), None)
+        unused_logs.pop(llist[0].index, None)
+
+    for fill in unused_fills.values():
+        mismatches.append(f"{fill.ticker}: fill not in fill log")
+    for row in unused_logs.values():
+        mismatches.append(f"{row.ticker}: fill log row has no live fill")
+    return backfill, backfilled, mismatches
 
 
 def buys_by_ticker_flat(groups: dict[str, list[LiveFill]]) -> list[LiveFill]:

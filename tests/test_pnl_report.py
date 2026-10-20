@@ -162,6 +162,91 @@ def test_duplicate_economics_are_not_backfilled():
     assert "running_total_dollars: 5.5018" in report
 
 
+def test_paid_no_sell_is_a_winning_position_and_old_executed_rows_reconcile():
+    """KXTRUTHSOCIAL-26OCT10-B149 is NO 8 at 84c. The fill action is sell.
+
+    The settlement no_cost is 6.72, which is 8 * 0.84, and the NO won.
+    Fee-net is 8 - 6.72 - 0.0753 = 1.2047. An executed log row with no fee
+    column is a reconcile miss, not a dropped trade.
+    """
+    report, _new_log, _tickers = assemble_pnl(
+        fill_rows=[
+            _buy(
+                ticker="KXTRUTHSOCIAL-26OCT10-B149",
+                side="no",
+                action="sell",
+                yes_price_dollars="0.1600",
+                no_price_dollars="0.8400",
+                fee_cost="0.075300",
+                order_id=None,
+            )
+        ],
+        settlement_rows=[
+            _settlement(
+                ticker="KXTRUTHSOCIAL-26OCT10-B149",
+                market_result="no",
+                yes_count_fp="0.00",
+                no_count_fp="8.00",
+                yes_total_cost_dollars="0.0000",
+                no_total_cost_dollars="6.7200",
+                revenue=800,
+                fee_cost="0.0753",
+            )
+        ],
+        fill_log_text="2026-10-04T16:02:48Z, KXTRUTHSOCIAL-26OCT10-B149, no, 84, 8, old-client, 201\n"
+        "2026-10-02T20:05:00Z, KXTRUTHSOCIAL-26OCT03-B129, yes, 36, 20, old-client, executed\n",
+        paper_rows=[],
+        open_tickers=set(),
+    )
+    assert "running_total_dollars: 1.2047" in report
+    assert "KXTRUTHSOCIAL-26OCT10-B149: fee column absent" in report
+    assert "sell fill; not allocated" not in report
+    assert "KXTRUTHSOCIAL-26OCT03-B129: fill log row has no live fill" in report
+
+
+def test_partial_fills_with_one_shared_id_reconcile_to_the_log_qty():
+    """1 and 7 at 89c are one 8-contract log row when they share an id.
+
+    Fees 0.0069 + 0.048 = 0.0549 dollars, which is 5.49 cents on the log.
+    The report names the ticker and does not copy the id.
+    """
+    log = (
+        "2026-10-19T16:21:34Z, KXTRUMPSAY-26OCT26-GOLF, yes, 89, 8, "
+        f"{UUID_TEXT}, 201, 8, 89, 5.49, \n"
+    )
+    report, new_log, tickers = assemble_pnl(
+        fill_rows=[
+            _buy(
+                ticker="KXTRUMPSAY-26OCT26-GOLF",
+                count_fp="1.00",
+                yes_price_dollars="0.8900",
+                fee_cost="0.006900",
+                order_id="fill-order-9",
+            ),
+            _buy(
+                ticker="KXTRUMPSAY-26OCT26-GOLF",
+                count_fp="7.00",
+                yes_price_dollars="0.8900",
+                fee_cost="0.048000",
+                order_id="fill-order-9",
+            ),
+        ],
+        settlement_rows=[],
+        fill_log_text=log,
+        paper_rows=[],
+        open_tickers={"KXTRUMPSAY-26OCT26-GOLF"},
+    )
+    assert "running_total_dollars: 0" in report
+    assert "| open | open |" in report
+    assert "fill not in fill log" not in report
+    assert "fill log fee differs" not in report
+    assert tickers == ["KXTRUMPSAY-26OCT26-GOLF"]
+    assert "fill-order-9" in new_log
+    assert "fill-order-9" not in report
+    assert UUID_TEXT not in report
+    assert "order_id" not in report
+
+
 def test_unsettled_missing_fill_is_a_mismatch_and_not_in_the_total():
     report, _new_log, _tickers = assemble_pnl(
         fill_rows=[_buy(ticker="KXTRUMPACT-26AUG30-T8")],
