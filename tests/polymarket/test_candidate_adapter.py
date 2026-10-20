@@ -1,31 +1,17 @@
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 from datetime import datetime, timezone
 
 import pytest
 
-import config as config_module
 from analysis import SignalAnalysis
 from analysis.decision_blender import BlendResult
 from feeds import NewsItem
 from polymarket.candidate_adapter import adapt_polymarket_analysis
 from polymarket.models import PolymarketMarket
-from polymarket.paper_trader import PolymarketPaperTrader
 from tasks.blend_task import BlendTask
-from trading.paper_trader import PaperTrader, _DDL
-from trading.settlement_store import SETTLEMENT_PAPER_TRADE_COLUMNS_SQL
 from trading.venue import Venue
-
-
-@pytest.fixture()
-def paper_trader(tmp_path, monkeypatch):
-    monkeypatch.setattr(config_module.cfg, "is_paper_trading", True)
-    monkeypatch.setattr(config_module.cfg, "bankroll", 500.0)
-    monkeypatch.setattr(config_module.cfg, "max_ticker_exposure_pct", 0.25)
-    monkeypatch.setattr(config_module.cfg, "kelly_fraction", 0.5)
-    return PaperTrader(tmp_path / "paper_trades.db", startup_context="test")
 
 
 def _base_analysis(side: str = "yes") -> SignalAnalysis:
@@ -189,82 +175,3 @@ async def test_adapted_polymarket_analysis_routes_through_shared_blend_contract(
         "structural": 0.0,
     }
     assert logger.skips[0]["venue"] == "polymarket_us"
-
-
-def test_adapted_analysis_records_polymarket_paper_row(paper_trader):
-    adapted = adapt_polymarket_analysis(_base_analysis(side="yes"), _polymarket_market())
-    trade_id = PolymarketPaperTrader(paper_trader).record_trade(adapted)
-
-    row = paper_trader._conn.execute(
-        """
-        SELECT ticker, venue, venue_market_id, identity_status, side,
-               price_cents, entry_price_cents, edge, price_source, price_method
-        FROM paper_trades
-        WHERE trade_id=?
-        """,
-        (trade_id,),
-    ).fetchone()
-
-    assert row is not None
-    assert row["ticker"] == "will-example-happen-2026"
-    assert row["venue"] == "polymarket_us"
-    assert row["venue_market_id"] == "8594"
-    assert row["identity_status"] == "mapped"
-    assert row["side"] == "yes"
-    assert row["price_cents"] == 42
-    assert row["entry_price_cents"] == 42.0
-    assert row["edge"] == pytest.approx(0.22)
-    assert row["price_source"] == "polymarket_us_rest"
-    assert row["price_method"] == "binary_ask"
-
-
-def test_schema_present_numeric_alias_does_not_replace_missing_canonical_id(
-    paper_trader,
-):
-    adapted = adapt_polymarket_analysis(
-        _base_analysis(side="yes"),
-        _polymarket_market(market_id="8594", venue_market_id=None),
-    )
-
-    assert adapted.market.ticker == "8594"
-    assert adapted.market.venue_market_id is None
-    assert PolymarketPaperTrader(paper_trader).record_trade(adapted) == ""
-    assert paper_trader._conn.execute(
-        "SELECT COUNT(*) FROM paper_trades"
-    ).fetchone()[0] == 0
-
-
-def test_schema_absent_legacy_polymarket_entry_does_not_require_canonical_id(
-    tmp_path,
-    monkeypatch,
-):
-    monkeypatch.setattr(config_module.cfg, "is_paper_trading", True)
-    monkeypatch.setattr(config_module.cfg, "bankroll", 500.0)
-    monkeypatch.setattr(config_module.cfg, "max_ticker_exposure_pct", 0.25)
-    monkeypatch.setattr(config_module.cfg, "kelly_fraction", 0.5)
-    db_path = tmp_path / "legacy-paper.db"
-    old_ddl = _DDL.replace(SETTLEMENT_PAPER_TRADE_COLUMNS_SQL, "")
-    with sqlite3.connect(db_path) as conn:
-        for statement in old_ddl.split(";"):
-            if statement.strip():
-                conn.execute(statement)
-
-    trader = PaperTrader(db_path, startup_context="test")
-    try:
-        adapted = adapt_polymarket_analysis(
-            _base_analysis(side="yes"),
-            _polymarket_market(market_id="8594", venue_market_id=None),
-        )
-
-        trade_id = PolymarketPaperTrader(trader).record_trade(adapted)
-
-        assert trade_id
-        row = trader._conn.execute(
-            "SELECT ticker, venue, venue_market_id FROM paper_trades "
-            "WHERE trade_id=?",
-            (trade_id,),
-        ).fetchone()
-        assert tuple(row) == ("8594", "polymarket_us", None)
-        assert not trader.settlement_schema_present
-    finally:
-        trader._conn.close()

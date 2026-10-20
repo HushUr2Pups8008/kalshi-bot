@@ -3,7 +3,6 @@ from decimal import Decimal
 
 from kalshi.series_metadata import normalize_series_payload
 from kalshi.normalizer import normalize_market_list_entry
-from tasks.market_metadata_snapshot import build_snapshot
 
 
 def test_normalize_series_payload_preserves_real_fields_and_sources():
@@ -104,22 +103,3 @@ def test_market_normalizer_preserves_explicit_contract_fields():
     assert market.price_tick == Decimal("0.0001")
     assert market.fill_role == "taker"
     assert market.outcome_side == "yes"
-
-
-class _SnapshotClient:
-    def get_all_series(self):
-        return [{
-            "ticker": "KXTRUMPIRAN",
-            "title": "Will Trump visit Iran?",
-            "tags": ["Trump", "Iran"],
-            "settlement_sources": [{"name": "Reuters", "url": "https://reuters.com/world"}],
-        }]
-
-
-def test_market_metadata_snapshot_is_shadow_only_and_hashes_series_payload():
-    snapshot = build_snapshot(_SnapshotClient())
-
-    assert snapshot["shadow_only"] is True
-    assert snapshot["schema_version"] == 1
-    assert snapshot["series"]["KXTRUMPIRAN"]["settlement_sources"][0]["domain"] == "reuters.com"
-    assert len(snapshot["payload_hash"]) == 64

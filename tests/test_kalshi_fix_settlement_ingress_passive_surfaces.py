@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from hashlib import sha256
-from io import BytesIO
 import json
 import subprocess
 import sys
@@ -15,7 +14,6 @@ import pytest
 
 from config import BotConfig
 from scripts import botcheck
-from tasks.kalshi_fix_settlement_ingress import capture_verified_ums
 from trading.kalshi_fix_settlement_ingress import (
     KalshiFixSettlementIngressSnapshot,
     KalshiFixSettlementIngressStore,
@@ -336,85 +334,14 @@ def test_inspector_help_runs_directly_outside_repository_root(tmp_path: Path) ->
     assert "--verify-schema" in completed.stdout
 
 
-def test_capture_verified_ums_rejects_file_shaped_inputs_before_ledger_call(
-    tmp_path: Path,
-) -> None:
-    ledger = KalshiFixSettlementIngressStore(tmp_path / "ingress.db")
-    assert ledger.initialize() is True
-
-    for invalid_source in (
-        {"raw": "fix"},
-        "raw-fix",
-        b"raw-fix",
-        tmp_path / "wire.fix",
-        BytesIO(b"raw-fix"),
-        object(),
-    ):
-        with pytest.raises(TypeError):
-            capture_verified_ums(
-                invalid_source,  # type: ignore[arg-type]
-                ledger,
-                datetime(2026, 7, 31, 12, 0, tzinfo=UTC),
-            )
-
-    assert ledger.snapshot().report_count == 0
-
-
-def test_capture_verified_ums_requires_typed_envelope_return(
-    tmp_path: Path,
-) -> None:
-    ledger = KalshiFixSettlementIngressStore(tmp_path / "ingress.db")
-    assert ledger.initialize() is True
-
-    class BadSource:
-        def receive_verified_ums(self) -> object:
-            return {"not": "typed"}
-
-    with pytest.raises(TypeError, match="VerifiedKalshiFixUMSEnvelope"):
-        capture_verified_ums(
-            BadSource(),
-            ledger,
-            datetime(2026, 7, 31, 12, 0, tzinfo=UTC),
-        )
-
-    assert ledger.snapshot().report_count == 0
-
-
-def test_capture_verified_ums_appends_only_a_typed_source_envelope(
-    tmp_path: Path,
-) -> None:
-    ledger = KalshiFixSettlementIngressStore(tmp_path / "ingress.db")
-    assert ledger.initialize() is True
-
-    class TypedSource:
-        def receive_verified_ums(self) -> VerifiedKalshiFixUMSEnvelope:
-            return _typed_envelope()
-
-    result = capture_verified_ums(
-        TypedSource(),
-        ledger,
-        datetime(2026, 7, 31, 12, 0, tzinfo=UTC),
-    )
-
-    assert result.status == "accepted"
-    snapshot = ledger.snapshot()
-    assert snapshot.status == "captured_non_authoritative"
-    assert snapshot.raw_capture == "present"
-    assert snapshot.session_provenance == "present"
-
-
 def test_no_runtime_or_profit_consumers_reference_fix_settlement_ingress() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     main_text = (repo_root / "main.py").read_text(encoding="utf-8")
     paper_trader_text = (repo_root / "trading" / "paper_trader.py").read_text(
         encoding="utf-8"
     )
-    task_text = (
-        repo_root / "tasks" / "kalshi_fix_settlement_ingress.py"
-    ).read_text(encoding="utf-8")
+    task_path = repo_root / "tasks" / "kalshi_fix_settlement_ingress.py"
 
     assert "kalshi_fix_settlement_ingress" not in main_text
     assert "KalshiFixSettlementIngress" not in paper_trader_text
-    assert "PaperTrader" not in task_text
-    assert "settlement_economics" not in task_text
-    assert "outbox" not in task_text
+    assert not task_path.exists()

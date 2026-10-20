@@ -38,7 +38,7 @@ Usage:
 Examples:
   scripts/run_tests.sh
   scripts/run_tests.sh --detach
-  scripts/run_tests.sh tests/test_budget_manager.py -q
+  scripts/run_tests.sh tests/test_politics_decision_golden.py -q
   scripts/run_tests.sh --detach -- python3 -m pytest tests -q
 
 Logs:
