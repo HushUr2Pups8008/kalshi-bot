@@ -226,14 +226,6 @@ def has_reliable_research_source_path(
     )
 
 
-def extract_speech_contract_resolution_phrases(
-    ticker: object,
-    texts: Collection[object],
-) -> tuple[str, ...]:
-    """Extract explicit phrase alternatives from speech/mention contract rules."""
-    return build_speech_contract_spec(ticker, texts).phrases
-
-
 def build_speech_contract_spec(
     ticker: object,
     texts: Collection[object],

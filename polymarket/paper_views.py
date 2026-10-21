@@ -97,10 +97,7 @@ def _list_asks(raw: Mapping[str, Any]) -> tuple[int | None, int | None]:
     prices = _long_book_prices(dict(raw))
     if prices is not None:
         yes_ask, no_ask = prices[1], prices[3]
-        return (
-            yes_ask if type(yes_ask) is int else None,
-            no_ask if type(no_ask) is int else None,
-        )
+        return (yes_ask if type(yes_ask) is int else None, no_ask if type(no_ask) is int else None)
     yes_ask = None
     no_ask = None
     for side in raw.get("marketSides") or []:
@@ -152,11 +149,7 @@ def load_polymarket_paper_markets(client: Any, entries: Sequence[Any]) -> list[d
         except PolymarketOrderBlocked:
             raise
         except Exception as exc:
-            log.warning(
-                "polymarket paper list failed series=%s error_type=%s",
-                series,
-                type(exc).__name__,
-            )
+            log.warning("polymarket paper list failed series=%s error_type=%s", series, type(exc).__name__)
             continue
         ok = 0
         fail = 0
@@ -166,35 +159,20 @@ def load_polymarket_paper_markets(client: Any, entries: Sequence[Any]) -> list[d
             market_slug = str(raw.get("slug") or "").strip()
             reason = _prefilter_reason(series, raw)
             if reason is not None:
-                log.info(
-                    "polymarket paper skip series=%s reason=%s",
-                    series,
-                    reason,
-                )
+                log.info("polymarket paper skip series=%s reason=%s", series, reason)
                 continue
             book, status = _read_book(client, series, market_slug)
             if book is None:
                 fail += 1
                 if status == 429:
-                    log.info(
-                        "polymarket paper skip series=%s reason=book_rate_limited",
-                        series,
-                    )
+                    log.info("polymarket paper skip series=%s reason=book_rate_limited", series)
                 continue
             view = paper_view(raw, series, book)
             if view is None or (view.get("yes_ask") is None and view.get("no_ask") is None):
                 fail += 1
-                log.info(
-                    "polymarket paper skip series=%s reason=partial_book",
-                    series,
-                )
+                log.info("polymarket paper skip series=%s reason=partial_book", series)
                 continue
             ok += 1
             loaded.append(view)
-        log.info(
-            "polymarket paper book series=%s ok=%s fail=%s",
-            series,
-            ok,
-            fail,
-        )
+        log.info("polymarket paper book series=%s ok=%s fail=%s", series, ok, fail)
     return loaded

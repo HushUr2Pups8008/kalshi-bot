@@ -1,10 +1,4 @@
-"""One pace for every Polymarket call.
-
-Retail general limit is 25 requests/s, shared by endpoint, source IP, and
-Cloudflare location. Quote and RFQ limits are tighter. This process does
-not call those endpoints.
-https://docs.polymarket.us/api-reference/rate-limits.md
-"""
+"""25 requests/s for every Polymarket call. https://docs.polymarket.us/api-reference/rate-limits.md"""
 
 from __future__ import annotations
 
@@ -30,7 +24,6 @@ def wait_turn() -> None:
 
 
 def retry_wait_seconds(response: Any) -> float:
-    """At least one second. A Retry-After above five seconds is capped."""
     headers = getattr(response, "headers", None)
     raw = headers.get("Retry-After") if hasattr(headers, "get") else None
     try:
@@ -43,7 +36,6 @@ def retry_wait_seconds(response: Any) -> float:
 
 
 def call_once(send: Callable[[], Any]) -> Any:
-    """Send once. A 429 or 5xx waits, then tries once more. A 404 does not."""
     wait_turn()
     response = send()
     status = getattr(response, "status_code", getattr(response, "code", None))

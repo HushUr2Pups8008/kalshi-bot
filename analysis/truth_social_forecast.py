@@ -415,10 +415,6 @@ _PHRASE_BEFORE_MIDNIGHT_RE = re.compile(
     r"\s+at\s+12:00\s*a\.?m\.?\s*ET",
     flags=re.IGNORECASE,
 )
-_POST_WINDOW_CACHE: dict[
-    tuple[date, date, int], tuple[float, tuple[dict[str, Any], ...] | None]
-] = {}
-_POST_WINDOW_CACHE_LOCK = threading.Lock()
 _PHRASE_MAX_PAGES = 20
 _PHRASE_OBS_CACHE: dict[
     tuple[str, date, date, tuple[str, ...], int],
@@ -500,65 +496,6 @@ def _phrase_in_text(phrase: str, text: str) -> bool:
         return False
     pattern = r"\b" + r"\s+".join(re.escape(token) for token in tokens) + r"\b"
     return re.search(pattern, text.lower()) is not None
-
-
-def _fetch_truth_social_posts_in_window(
-    window_start: date,
-    window_end: date,
-    *,
-    timeout: float,
-    max_pages: int,
-) -> tuple[tuple[dict[str, Any], ...], int, bool] | None:
-    cache_key = (window_start, window_end, max_pages)
-    now = time.monotonic()
-    with _POST_WINDOW_CACHE_LOCK:
-        cached = _POST_WINDOW_CACHE.get(cache_key)
-        if cached is not None and now - cached[0] < _OBSERVATION_CACHE_TTL_SECONDS:
-            rows = cached[1]
-            if rows is None:
-                return None
-            return rows, max_pages, True
-
-    posts: list[dict[str, Any]] = []
-    pages = 0
-    oldest_seen: date | None = None
-    for page in range(1, max_pages + 1):
-        params = urllib.parse.urlencode(
-            {
-                "platform": "truth social",
-                "sort": "date",
-                "sort_order": "desc",
-                "page": page,
-                "format": "json",
-            }
-        )
-        payload = _fetch_json(f"{_ENDPOINT}?{params}", timeout=timeout)
-        if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
-            raise ValueError("Factbase response missing data list")
-        rows = payload["data"]
-        if not rows:
-            break
-        pages = page
-        for record in rows:
-            if not isinstance(record, dict):
-                raise ValueError("Factbase data row was not an object")
-            observed_date = _record_date(record)
-            if observed_date is None:
-                raise ValueError("Factbase data row missing valid date")
-            oldest_seen = (
-                observed_date if oldest_seen is None else min(oldest_seen, observed_date)
-            )
-            if window_start <= observed_date <= window_end:
-                posts.append(record)
-        if oldest_seen is not None and oldest_seen < window_start:
-            break
-    complete = oldest_seen is not None and oldest_seen < window_start
-    packed = tuple(posts)
-    with _POST_WINDOW_CACHE_LOCK:
-        _POST_WINDOW_CACHE[cache_key] = (time.monotonic(), packed if posts else None)
-    if not posts and not complete:
-        return None
-    return packed, pages, complete
 
 
 def fetch_truth_social_phrase(

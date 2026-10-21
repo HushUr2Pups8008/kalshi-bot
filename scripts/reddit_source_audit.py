@@ -131,11 +131,6 @@ class SubStats:
         return self.matches / self.early_fresh if self.early_fresh else 0.0
 
     @property
-    def analysis_rate(self) -> float:
-        # "items that reached analysis" / "items that had a match"
-        return len(self.analyzed_items) / self.matches if self.matches else 0.0
-
-    @property
     def anchor_rate(self) -> float:
         return self.analysis_anchored / self.analysis_rows if self.analysis_rows else 0.0
 

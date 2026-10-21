@@ -87,13 +87,6 @@ def price_rows_for_ticker(client: Any, ticker: str) -> tuple[list[dict[str, Any]
     return merge_price_rows(merged_inputs), errors
 
 
-def fetch_trade_prices(client: Any, ticker: str) -> list[dict[str, Any]]:
-    rows, errors = price_rows_for_ticker(client, ticker)
-    if not rows and errors:
-        return [{"error": "; ".join(str(error["error"]) for error in errors), "ticker": ticker}]
-    return rows
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--markets", type=Path, required=True, help="Resolved markets JSON.")

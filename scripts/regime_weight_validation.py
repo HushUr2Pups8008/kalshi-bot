@@ -169,27 +169,6 @@ def _brier_score(predictions: list[float], outcomes: list[float]) -> float:
     return sum((p - o) ** 2 for p, o in zip(predictions, outcomes)) / len(predictions)
 
 
-def _mean_calibration_error(
-    predictions: list[float],
-    outcomes: list[float],
-    n_bins: int = 5,
-) -> float:
-    """Mean calibration error across equal-width probability bins."""
-    bins: dict[int, list[tuple[float, float]]] = collections.defaultdict(list)
-    for p, o in zip(predictions, outcomes):
-        b = min(int(p * n_bins), n_bins - 1)
-        bins[b].append((p, o))
-    total_error = 0.0
-    total_n = 0
-    for pairs in bins.values():
-        n = len(pairs)
-        mean_p = sum(x[0] for x in pairs) / n
-        mean_o = sum(x[1] for x in pairs) / n
-        total_error += n * abs(mean_p - mean_o)
-        total_n += n
-    return total_error / total_n if total_n > 0 else float("nan")
-
-
 # ── Blend simulation ─────────────────────────────────────────────────────────
 
 

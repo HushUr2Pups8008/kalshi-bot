@@ -19,7 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
-from collections import Counter, defaultdict
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -112,13 +112,6 @@ def fmt_bucket_exposure(value: float | None) -> str:
     if value is None:
         return "$0.00"
     return f"${value:.2f}"
-
-
-def format_counter_lines(counter: Counter[str], top: int) -> list[str]:
-    if not counter:
-        return ["  (none)"]
-    width = max(len(str(count)) for count in counter.values())
-    return [f"  {count:>{width}}  {label}" for label, count in counter.most_common(top)]
 
 
 def format_group_table(rows: list[dict[str, Any]], top: int) -> list[str]:
