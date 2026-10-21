@@ -166,6 +166,90 @@ def test_load_reads_books_and_lets_an_order_block_escape() -> None:
     assert closed is None
 
 
+class _BookError(Exception):
+    def __init__(self, status: int | None) -> None:
+        super().__init__("book")
+        self.response = None if status is None else SimpleNamespace(status_code=status)
+
+
+def test_book_failure_logs_status_and_retries_only_a_transient_status(caplog, monkeypatch) -> None:
+    """404 is a closed or missing book. 429 waits once. The path has no query."""
+    sleeps: list[float] = []
+    monkeypatch.setattr("polymarket.paper_views.time.sleep", sleeps.append)
+    entry = SimpleNamespace(series="PMTRUMPAPPROVE", venue_market="trmpapprv-wk-2026-10-23")
+    book = _book("0.60", "0.30")
+
+    class Missing:
+        def list_event_markets(self, _slug: str):
+            return ({"slug": "parc-missing?token=secret", "status": "MARKET_STATUS_OPEN"},)
+
+        def get_market_book(self, _slug: str):
+            raise _BookError(404)
+
+    with caplog.at_level("WARNING", logger="polymarket_paper"):
+        assert load_polymarket_paper_markets(Missing(), [entry]) == []
+    assert sleeps == []
+    text = "\n".join(caplog.messages)
+    assert "status=404" in text
+    assert "endpoint=/v1/markets/parc-missing/book" in text
+    assert "token" not in text
+    assert "secret" not in text
+    caplog.clear()
+
+    class Limited:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def list_event_markets(self, _slug: str):
+            return ({"slug": "parc-open", "status": "MARKET_STATUS_OPEN"},)
+
+        def get_market_book(self, _slug: str):
+            self.calls += 1
+            if self.calls == 1:
+                raise _BookError(429)
+            return book
+
+    with caplog.at_level("INFO", logger="polymarket_paper"):
+        loaded = load_polymarket_paper_markets(Limited(), [entry])
+    assert sleeps == [1.0]
+    assert loaded[0]["ticker"] == "parc-open"
+    assert "status=429" in "\n".join(caplog.messages)
+    assert "series=PMTRUMPAPPROVE ok=1 fail=0" in "\n".join(caplog.messages)
+
+    class Down:
+        def list_event_markets(self, _slug: str):
+            return (
+                {"slug": "parc-down", "status": "MARKET_STATUS_OPEN"},
+                {"slug": "parc-up", "status": "MARKET_STATUS_OPEN"},
+            )
+
+        def get_market_book(self, slug: str):
+            if slug == "parc-down":
+                raise _BookError(503)
+            return book
+
+    sleeps.clear()
+    caplog.clear()
+    with caplog.at_level("INFO", logger="polymarket_paper"):
+        loaded = load_polymarket_paper_markets(Down(), [entry])
+    assert sleeps == [1.0]
+    assert [row["ticker"] for row in loaded] == ["parc-up"]
+    assert "series=PMTRUMPAPPROVE ok=1 fail=1" in "\n".join(caplog.messages)
+    assert caplog.messages.count("polymarket paper book failed series=PMTRUMPAPPROVE status=503 endpoint=/v1/markets/parc-down/book error_type=_BookError") == 2
+
+    class Order:
+        def list_event_markets(self, _slug: str):
+            return ({"slug": "parc-open", "status": "MARKET_STATUS_OPEN"},)
+
+        def get_market_book(self, _slug: str):
+            raise PolymarketOrderBlocked("blocked")
+
+    sleeps.clear()
+    with pytest.raises(PolymarketOrderBlocked):
+        load_polymarket_paper_markets(Order(), [entry])
+    assert sleeps == []
+
+
 def test_two_cached_scans_queue_a_polymarket_row_without_a_paid_call(tmp_path) -> None:
     market = _quote("PMTRUMPAPPROVE", "trmpapprv-yes", 64, 40, "polymarket_us")
     cache = {

@@ -19,6 +19,12 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.6] - 2026-10-21
+
+### Fixed
+
+- **Polymarket paper book errors log the status and the path.** Each book failure logs the HTTP status and `/v1/markets/{slug}/book` with no query string. A 429 or 5xx waits one second and tries once. A 404 is not retried. The sidecar logs book ok and fail counts per series.
+
 ## [0.37.5] - 2026-10-21
 
 ### Added
