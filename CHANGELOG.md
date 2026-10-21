@@ -23,7 +23,7 @@ request-vs-response status contract that the P-7 author misread.
 
 ### Added
 
-- **Polymarket US is a paper venue.** Two politics events are in the universe as `polymarket_us` paper rows: Trump approval (`trmpapprv-wk-2026-10-23`) and Hormuz (`hormuz-normal`). The read-only gateway lists the event, the book, the rules, and settlement. The taker fee pin from 2026-10-19 17:00 UTC is 0.0695 with no Tier 1 maker rebate, from https://docs.polymarket.us/fees. The July 0.06 record stays so older paper rows still deserialize. Every Polymarket method other than GET, and every order, deposit, transfer, wallet, RFQ, or combo path, raises before a socket. `place_limit_order` still returns an error and does not send HTTP. Live Polymarket orders are a separate task.
+- **Polymarket US is a paper venue.** Two politics events are in the universe as `polymarket_us` paper rows: Trump approval (`trmpapprv-wk-2026-10-23`) and Hormuz (`hormuz-normal`). The read-only gateway lists the event, the book, the rules, and settlement. The taker fee pin from 2026-10-19 17:00 UTC is 0.0695 with no Tier 1 maker rebate, from https://docs.polymarket.us/fees. The July 0.06 record stays so older paper rows still deserialize. Every Polymarket method other than GET raises before a socket. The path is percent-decoded first, so `%6frders` is `orders`. Order, cancel, modify, close-position, preview, batch, deposit, transfer, wallet, RFQ, and combo paths raise before a socket. `place_limit_order` still returns an error and does not send HTTP. Live Polymarket orders are a separate task.
 
 ## [0.37.2] - 2026-10-21
 

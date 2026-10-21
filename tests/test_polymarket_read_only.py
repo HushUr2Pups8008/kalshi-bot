@@ -25,6 +25,13 @@ def test_only_a_plain_get_is_allowed() -> None:
         ("POST", "/v1/markets"),
         ("DELETE", "/v1/orders/abc"),
         ("GET", "/v1/orders"),
+        ("GET", "/v1/%6frders"),
+        ("GET", "/v1/%256frders"),
+        ("GET", "/v1/cancel"),
+        ("GET", "/v1/modify"),
+        ("GET", "/v1/close-position"),
+        ("GET", "/v1/preview"),
+        ("GET", "/v1/batch"),
         ("GET", "/v1/portfolio/deposits"),
         ("GET", "/v1/wallet"),
         ("PUT", "/v1/orders/abc"),
@@ -39,6 +46,12 @@ def test_public_order_paths_do_not_call_the_session() -> None:
     for method, endpoint in (
         ("POST", "/v1/orders"),
         ("GET", "/v1/orders"),
+        ("GET", "/v1/%6frders"),
+        ("GET", "/v1/cancel"),
+        ("GET", "/v1/modify"),
+        ("GET", "/v1/close-position"),
+        ("GET", "/v1/preview"),
+        ("GET", "/v1/batch"),
         ("POST", "/v1/transfers"),
     ):
         with pytest.raises(PolymarketOrderBlocked):
@@ -119,6 +132,10 @@ def test_account_order_paths_do_not_call_the_session() -> None:
         client._request("POST", "/v1/orders")
     with pytest.raises(PolymarketOrderBlocked):
         client._request("GET", "/v1/orders")
+    with pytest.raises(PolymarketOrderBlocked):
+        client._request("GET", "/v1/%6frders")
+    with pytest.raises(PolymarketOrderBlocked):
+        client._request("GET", "/v1/cancel")
     assert client._session.request.call_count == 0
 
 
@@ -126,14 +143,15 @@ def test_authoritative_order_path_does_not_fetch() -> None:
     client = PolymarketPublicClient(base_url="https://gateway.polymarket.us")
     fetcher = MagicMock()
 
-    async def _blocked() -> None:
+    async def _blocked(endpoint: str) -> None:
         await client._get_authoritative_object(
-            "/v1/orders",
+            endpoint,
             timeout_seconds=1,
             fetcher=fetcher,
             provider_name="test",
         )
 
-    with pytest.raises(PolymarketOrderBlocked):
-        asyncio.run(_blocked())
+    for endpoint in ("/v1/orders", "/v1/%6frders", "/v1/cancel", "/v1/close-position"):
+        with pytest.raises(PolymarketOrderBlocked):
+            asyncio.run(_blocked(endpoint))
     assert fetcher.call_count == 0
