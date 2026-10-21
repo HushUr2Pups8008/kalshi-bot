@@ -105,7 +105,7 @@ def test_shipped_paper_series_are_not_live_and_cannot_post():
     politics = _politics()
     entries = {entry.series: entry for entry in get_universe().entries}
     assert tuple(series for series in entries if entries[series].mode == "paper") == (
-        ("KXTRUMPMENTION",) + EXPECTED_PAPER
+        ("KXTRUMPMENTION",) + EXPECTED_PAPER + ("PMTRUMPAPPROVE", "PMHORMUZ")
     )
     assert live_series_tickers() == EXPECTED_LIVE
     for series in EXPECTED_PAPER:
@@ -117,6 +117,15 @@ def test_shipped_paper_series_are_not_live_and_cannot_post():
         market = SimpleNamespace(ticker=f"{series}-26OCT-A", series_ticker=series)
         assert series not in event_news_matcher_reserve_series(config=politics)
         assert event_news_is_reserve_series(market, config=politics) is False
+        assert event_news_live_post_block_reason(market, config=politics) == (
+            "paper_series_no_post"
+        )
+    for series in ("PMTRUMPAPPROVE", "PMHORMUZ"):
+        entry = entries[series]
+        assert entry.venue == "polymarket_us"
+        assert entry.mode == "paper"
+        assert entry.venue_market
+        market = SimpleNamespace(ticker=f"{series}-26OCT-A", series_ticker=series)
         assert event_news_live_post_block_reason(market, config=politics) == (
             "paper_series_no_post"
         )
@@ -507,11 +516,40 @@ def test_missing_universe_admits_nothing_and_logs_once(tmp_path, caplog):
         (
             "- series: KXTRUTHSOCIAL\n"
             "  mode: live\n"
-            "  venue: polymarket_us\n"
+            "  venue: binance\n"
             "  favorite_lo_cents: 36\n"
             "  favorite_hi_cents: 90\n"
-            "  notes: not a kalshi row\n",
+            "  notes: not a known venue\n",
             "bad_venue",
+        ),
+        (
+            "- series: PMTRUMPAPPROVE\n"
+            "  mode: live\n"
+            "  venue: polymarket_us\n"
+            "  venue_market: trmpapprv-wk-2026-10-23\n"
+            "  favorite_lo_cents: 55\n"
+            "  favorite_hi_cents: 99\n"
+            "  notes: polymarket cannot be live\n",
+            "polymarket_not_paper",
+        ),
+        (
+            "- series: PMTRUMPAPPROVE\n"
+            "  mode: paper\n"
+            "  venue: polymarket_us\n"
+            "  favorite_lo_cents: 55\n"
+            "  favorite_hi_cents: 99\n"
+            "  notes: slug required\n",
+            "bad_venue_market",
+        ),
+        (
+            "- series: KXTRUTHSOCIAL\n"
+            "  mode: live\n"
+            "  venue: kalshi\n"
+            "  venue_market: hormuz-normal\n"
+            "  favorite_lo_cents: 36\n"
+            "  favorite_hi_cents: 90\n"
+            "  notes: kalshi has no slug\n",
+            "bad_venue_market",
         ),
     ],
 )

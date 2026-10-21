@@ -8,6 +8,7 @@ import requests
 from config import cfg
 from kalshi import OrderResult
 from polymarket.auth import PolymarketAuth
+from polymarket.read_only import assert_polymarket_read_only
 
 
 class PolymarketAccountClient:
@@ -34,6 +35,7 @@ class PolymarketAccountClient:
         *,
         params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        assert_polymarket_read_only(method, endpoint)
         elapsed = time.monotonic() - self._last_req_time
         if elapsed < self._min_interval:
             time.sleep(self._min_interval - elapsed)

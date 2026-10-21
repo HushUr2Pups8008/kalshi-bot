@@ -18,6 +18,7 @@ from requests import HTTPError
 from config import cfg
 from polymarket.models import PolymarketMarket
 from polymarket.normalizer import normalize_polymarket_market
+from polymarket.read_only import assert_polymarket_read_only
 from trading.venue import Venue
 from trading.orderbook import (
     BinaryMarketBook,
@@ -33,6 +34,16 @@ log = get_logger("polymarket_public")
 _POLYMARKET_AUTHORITATIVE_HOST = "gateway.polymarket.us"
 _AUTHORITATIVE_POLYMARKET_MAX_BYTES = 256 * 1024
 _AUTHORITATIVE_POLYMARKET_SLUG = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
+_EVENT_SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_OPEN_MARKET_STATUS = "MARKET_STATUS_OPEN"
+_SKIP_MARKET_STATUSES = frozenset(
+    {
+        "MARKET_STATUS_CLOSED",
+        "MARKET_STATUS_RESOLVING",
+        "MARKET_STATUS_RESOLVED",
+        "MARKET_STATUS_HALTED",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -145,6 +156,7 @@ class PolymarketPublicClient:
         fetcher: BoundedHttpsFetcher | None,
         provider_name: str,
     ) -> dict[str, Any] | None:
+        assert_polymarket_read_only("GET", endpoint)
         timeout_seconds = _authoritative_timeout_seconds(timeout_seconds)
         base_url = _authoritative_base_url(self._authoritative_base)
         bounded_fetch = fetcher or fetch_bounded_https_ipv4
@@ -246,6 +258,7 @@ class PolymarketPublicClient:
         *,
         params: dict[str, Any] | None = None,
     ) -> dict[str, Any] | list[Any]:
+        assert_polymarket_read_only(method, endpoint)
         elapsed = time.monotonic() - self._last_req_time
         if elapsed < self._min_interval:
             time.sleep(self._min_interval - elapsed)
@@ -265,6 +278,45 @@ class PolymarketPublicClient:
     def get_markets(self, **kwargs: Any) -> tuple[list[PolymarketMarket], str | None]:
         page = self.get_market_page(**kwargs)
         return page.markets, page.cursor
+
+    def list_event_markets(self, event_slug: str) -> tuple[dict[str, Any], ...]:
+        """Open markets on one event. Official GET /v1/events/slug/{slug}."""
+        slug = str(event_slug or "").strip()
+        if _EVENT_SLUG.fullmatch(slug) is None:
+            raise ValueError("bad_event_slug")
+        data = self._request(
+            "GET",
+            f"/v1/events/slug/{urllib.parse.quote(slug, safe='')}",
+        )
+        if not isinstance(data, dict):
+            raise ValueError("event_unreadable")
+        event = data.get("event")
+        if not isinstance(event, dict):
+            raise ValueError("event_unreadable")
+        if str(event.get("slug") or "").strip() != slug:
+            raise ValueError("event_slug_mismatch")
+        raw_markets = event.get("markets")
+        if not isinstance(raw_markets, list):
+            raise ValueError("market_list_missing")
+        open_markets: list[dict[str, Any]] = []
+        for raw in raw_markets:
+            if not isinstance(raw, dict):
+                raise ValueError("market_unreadable")
+            status = raw.get("status")
+            if not isinstance(status, str) or status == "MARKET_STATUS_UNSPECIFIED":
+                raise ValueError("market_status_unknown")
+            if status == _OPEN_MARKET_STATUS:
+                if raw.get("closed") is True:
+                    raise ValueError("market_status_unknown")
+                market_slug = str(raw.get("slug") or "").strip()
+                if _EVENT_SLUG.fullmatch(market_slug) is None:
+                    raise ValueError("bad_event_slug")
+                open_markets.append(raw)
+                continue
+            if status in _SKIP_MARKET_STATUSES:
+                continue
+            raise ValueError("market_status_unknown")
+        return tuple(open_markets)
 
     def get_market_page(self, **kwargs: Any) -> PolymarketMarketPage:
         params = {"limit": kwargs.get("limit", 100), "closed": "false"}

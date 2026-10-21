@@ -28,6 +28,17 @@
       "supporting_artifacts": [],
       "supported_roles": ["taker", "maker"],
       "coefficients": {"taker": "0.06", "maker": "-0.0125"}
+    },
+    {
+      "schedule_id": "polymarket-us-2026-10-19",
+      "venue": "polymarket_us",
+      "effective_from": "2026-10-19T17:00:00+00:00",
+      "effective_to": null,
+      "source_url": "https://docs.polymarket.us/fees",
+      "artifact_sha256": "7ebb36d04b97cc77fda056c4425dd9e296fe29611d044587f64a8f8e20cf1947",
+      "supporting_artifacts": [],
+      "supported_roles": ["taker", "maker"],
+      "coefficients": {"taker": "0.0695", "maker": "0"}
     }
   ]
 }

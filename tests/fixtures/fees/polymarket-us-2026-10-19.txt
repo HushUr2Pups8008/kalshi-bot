@@ -1,0 +1,13 @@
+Source: https://docs.polymarket.us/fees
+
+Effective exchange-wide from 1:00 PM ET, Monday, October 19, 2026.
+
+Fee = Θ × C × p × (1 - p)
+
+Taker Fee. Theta 0.0695. Max (100-lot at p = $0.50) is $1.74.
+Tier 1. Prior calendar-month maker volume below $10,000,000. No maker rebate.
+
+All fees and rebates are rounded to the nearest $0.01 using banker's rounding (round half to even).
+
+Buyer (taker): 0.0695 × 1,000 × 0.10 × 0.90 = $6.26
+Buyer (taker): 0.0695 × 1,000 × 0.50 × 0.50 = $17.38

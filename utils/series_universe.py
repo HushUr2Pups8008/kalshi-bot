@@ -7,6 +7,7 @@ place orders.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
@@ -35,9 +36,11 @@ _ALLOWED_KEYS = frozenset(
         "open_family_lock",
         "x_search",
         "venue",
+        "venue_market",
     }
 )
-_VENUES = frozenset({"kalshi"})
+_VENUES = frozenset({"kalshi", "polymarket_us"})
+_VENUE_MARKET_SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _DEFAULT_MAX_CONTRACTS = 8
 _DEFAULT_EDGE_MIN = "0.04"
 _MENTION_SERIES = "KXTRUMPMENTION"
@@ -63,6 +66,7 @@ class SeriesEntry:
     open_family_lock: bool = False
     x_search: bool = False
     venue: str = "kalshi"
+    venue_market: str = ""
 
     @property
     def favorite_band(self) -> tuple[float, float]:
@@ -343,6 +347,7 @@ def _parse_entries(payload: Any) -> tuple[SeriesEntry, ...]:
         max_contracts = _max_contracts(item.get("max_contracts", _DEFAULT_MAX_CONTRACTS))
         edge_min = _edge_min(item.get("edge_min", _DEFAULT_EDGE_MIN))
         venue = _venue(item.get("venue", "kalshi"))
+        venue_market = _venue_market(venue, str(mode), item.get("venue_market"))
         entries.append(
             SeriesEntry(
                 series=series,
@@ -359,6 +364,7 @@ def _parse_entries(payload: Any) -> tuple[SeriesEntry, ...]:
                 open_family_lock=_flag(item, "open_family_lock"),
                 x_search=_flag(item, "x_search"),
                 venue=venue,
+                venue_market=venue_market,
             )
         )
     if not entries:
@@ -413,3 +419,16 @@ def _venue(value: Any) -> str:
     if venue not in _VENUES:
         raise ValueError("bad_venue")
     return venue
+
+
+def _venue_market(venue: str, mode: str, value: Any) -> str:
+    """Kalshi rows have no slug. Polymarket is paper and needs one slug."""
+    if venue != "polymarket_us":
+        if value not in (None, ""):
+            raise ValueError("bad_venue_market")
+        return ""
+    if mode != "paper":
+        raise ValueError("polymarket_not_paper")
+    if not isinstance(value, str) or _VENUE_MARKET_SLUG.fullmatch(value) is None:
+        raise ValueError("bad_venue_market")
+    return value

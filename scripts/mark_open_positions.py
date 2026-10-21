@@ -38,13 +38,12 @@ from utils.logger import get_logger  # noqa: E402
 from utils.output_paths import PAPER_TRADES_DB as DB_PATH  # noqa: E402
 from trading.fees import (  # noqa: E402
     DIRECT_ACCOUNT_PRECISION,
-    KALSHI_GENERAL_2026_07_07,
-    POLYMARKET_US_2026_07_01,
     FeeContext,
     FeeRole,
     FeeScheduleId,
     FeeUnscorableError,
     fee_coefficient_for,
+    fee_schedule_at,
     quote_fee,
 )
 from trading.venue import Venue, normalize_venue  # noqa: E402
@@ -274,12 +273,9 @@ def _is_canonical_report_id(venue: Venue, venue_market_id: str) -> bool:
     return venue_market_id.isascii() and venue_market_id.isdigit()
 
 
-def _schedule_for_venue(venue: Venue) -> FeeScheduleId:
-    if venue is Venue.KALSHI:
-        return KALSHI_GENERAL_2026_07_07
-    if venue is Venue.POLYMARKET_US:
-        return POLYMARKET_US_2026_07_01
-    raise FeeUnscorableError("unsupported venue")
+def _schedule_for_venue(venue: Venue, timestamp: datetime) -> FeeScheduleId:
+    """The pinned schedule at the mark time. July marks stay on the July pin."""
+    return fee_schedule_at(venue=venue, timestamp=timestamp)
 
 
 def _schedule_descriptor(schedule: FeeScheduleId) -> dict:
@@ -336,7 +332,7 @@ def _report_liquidation_quote(
             reason="unsupported_venue",
             as_of=as_of_text,
         )
-    schedule = _schedule_for_venue(venue)
+    schedule = _schedule_for_venue(venue, as_of)
     if not venue_market_id:
         return _unscorable_liquidation(
             venue=venue.value,
@@ -912,7 +908,7 @@ def compute_open_position_marks(
         schedule_hash = report_quote["fee_schedule_hash"]
         if schedule_name and schedule_hash:
             fee_schedule_hashes[report_venue] = _schedule_descriptor(
-                _schedule_for_venue(normalize_venue(report_venue))
+                _schedule_for_venue(normalize_venue(report_venue), as_of)
             )
         if report_quote["liquidation_status"] == "scorable":
             scorable_cost += decimal_cost

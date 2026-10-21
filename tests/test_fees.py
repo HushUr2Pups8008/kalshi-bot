@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -13,11 +14,13 @@ from trading.fees import (
     KALSHI_GENERAL_2026_07_07,
     NON_DIRECT_ACCOUNT_PRECISION,
     POLYMARKET_US_2026_07_01,
+    POLYMARKET_US_2026_10_19,
     FeeContext,
     FeeRole,
     FeeScheduleId,
     FeeUnscorableError,
     deserialize_fee_schedule,
+    fee_coefficient_for,
     fee_schedule_at,
     fee_schedule_record,
     fee_type_for_schedule,
@@ -76,6 +79,20 @@ def test_pinned_manifest_matches_implemented_schedule_ids():
     assert by_id[POLYMARKET_US_2026_07_01.name]["artifact_sha256"] == (
         POLYMARKET_US_2026_07_01.artifact_sha256
     )
+    assert by_id[POLYMARKET_US_2026_07_01.name]["effective_to"] is None
+    assert by_id[POLYMARKET_US_2026_07_01.name]["coefficients"] == {
+        "taker": "0.06",
+        "maker": "-0.0125",
+    }
+    october = by_id[POLYMARKET_US_2026_10_19.name]
+    excerpt = (
+        FIXTURE_MANIFEST.parent / "polymarket-us-2026-10-19.txt"
+    ).read_bytes()
+    assert october["artifact_sha256"] == hashlib.sha256(excerpt).hexdigest()
+    assert october["artifact_sha256"] == POLYMARKET_US_2026_10_19.artifact_sha256
+    assert october["effective_to"] is None
+    assert october["source_url"] == "https://docs.polymarket.us/fees"
+    assert october["coefficients"] == {"taker": "0.0695", "maker": "0"}
 
 
 @pytest.mark.parametrize(
@@ -90,6 +107,81 @@ def test_fee_schedule_at_returns_exact_pinned_effective_schedule(venue, expected
         venue=venue,
         timestamp=datetime(2026, 7, 14, 12, tzinfo=UTC),
     ) is expected
+
+
+def test_october_polymarket_schedule_replaces_the_open_july_pin():
+    """July rows stay on 0.06. 17:00Z on 2026-10-19 starts taker 0.0695."""
+    july = datetime(2026, 7, 14, 12, tzinfo=UTC)
+    cutoff = POLYMARKET_US_2026_10_19.effective_from
+    assert fee_schedule_at(venue=Venue.POLYMARKET_US, timestamp=july) is (
+        POLYMARKET_US_2026_07_01
+    )
+    assert fee_schedule_at(
+        venue=Venue.POLYMARKET_US,
+        timestamp=cutoff - timedelta(seconds=1),
+    ) is POLYMARKET_US_2026_07_01
+    assert fee_schedule_at(venue=Venue.POLYMARKET_US, timestamp=cutoff) is (
+        POLYMARKET_US_2026_10_19
+    )
+    assert fee_schedule_at(
+        venue=Venue.POLYMARKET_US,
+        timestamp=datetime(2026, 10, 21, 16, tzinfo=UTC),
+    ) is POLYMARKET_US_2026_10_19
+    assert fee_schedule_at(
+        venue=Venue.KALSHI,
+        timestamp=datetime(2026, 10, 21, 16, tzinfo=UTC),
+    ) is KALSHI_GENERAL_2026_07_07
+
+    schedule = POLYMARKET_US_2026_10_19
+    taker = fee_coefficient_for(schedule, FeeRole.TAKER)
+    maker = fee_coefficient_for(schedule, FeeRole.MAKER)
+    assert taker == D("0.0695")
+    assert maker == D("0")
+    at_half = quote_fee(
+        replace(
+            _context(
+                venue=Venue.POLYMARKET_US,
+                quantity="1000",
+                price="0.50",
+                signed_revenue="-500.00",
+                coefficient=str(taker),
+                account_precision=None,
+                timestamp=cutoff,
+            ),
+            schedule_id=schedule,
+        )
+    )
+    at_tenth = quote_fee(
+        replace(
+            _context(
+                venue=Venue.POLYMARKET_US,
+                quantity="1000",
+                price="0.10",
+                signed_revenue="-100.00",
+                coefficient=str(taker),
+                account_precision=None,
+                timestamp=cutoff,
+            ),
+            schedule_id=schedule,
+        )
+    )
+    hundred_lot = quote_fee(
+        replace(
+            _context(
+                venue=Venue.POLYMARKET_US,
+                quantity="100",
+                price="0.50",
+                signed_revenue="-50.00",
+                coefficient=str(taker),
+                account_precision=None,
+                timestamp=cutoff,
+            ),
+            schedule_id=schedule,
+        )
+    )
+    assert at_half.net_fee == D("17.38")
+    assert at_tenth.net_fee == D("6.26")
+    assert hundred_lot.net_fee == D("1.74")
 
 
 def test_fee_schedule_at_rejects_naive_time_gap_and_overlap(monkeypatch):
@@ -113,6 +205,23 @@ def test_fee_schedule_at_rejects_naive_time_gap_and_overlap(monkeypatch):
     monkeypatch.setattr(
         "trading.fees._SUPPORTED_SCHEDULES",
         frozenset((KALSHI_GENERAL_2026_07_07, overlapping)),
+    )
+    with pytest.raises(FeeUnscorableError, match="ambiguous pinned fee schedules"):
+        fee_schedule_at(
+            venue=Venue.KALSHI,
+            timestamp=datetime(2026, 7, 14, 12, tzinfo=UTC),
+        )
+
+    finite = replace(
+        KALSHI_GENERAL_2026_07_07,
+        name="kalshi-finite-overlap",
+        effective_from=datetime.fromisoformat("2026-07-01T00:00:00-04:00"),
+        effective_to=datetime.fromisoformat("2026-08-01T00:00:00-04:00"),
+        artifact_sha256="b" * 64,
+    )
+    monkeypatch.setattr(
+        "trading.fees._SUPPORTED_SCHEDULES",
+        frozenset((KALSHI_GENERAL_2026_07_07, finite)),
     )
     with pytest.raises(FeeUnscorableError, match="ambiguous pinned fee schedules"):
         fee_schedule_at(
@@ -167,7 +276,7 @@ def test_fee_schedule_serialization_rejects_unsupported_descriptor():
 
 @pytest.mark.parametrize(
     "schedule",
-    [KALSHI_GENERAL_2026_07_07, POLYMARKET_US_2026_07_01],
+    [KALSHI_GENERAL_2026_07_07, POLYMARKET_US_2026_07_01, POLYMARKET_US_2026_10_19],
 )
 def test_current_pinned_schedules_use_quadratic_fee_formula(schedule):
     assert fee_type_for_schedule(schedule) == "quadratic"
