@@ -30,6 +30,22 @@ NOW = datetime(2026, 10, 17, 12, 0, tzinfo=timezone.utc)
 _HASH = "a" * 64
 
 
+def _listed(slug: str, yes: str = "0.55", no: str = "0.46") -> dict:
+    """List payload whose quotes sit inside the 36c-90c prefilter."""
+    return {
+        "slug": slug,
+        "status": "MARKET_STATUS_OPEN",
+        "title": "Approve",
+        "description": "rules text",
+        "closeTime": "2026-10-25T00:00:00Z",
+        "volume": "12",
+        "marketSides": [
+            {"long": True, "quote": {"value": yes}},
+            {"long": False, "quote": {"value": no}},
+        ],
+    }
+
+
 def _book(yes_bid: str, no_bid: str) -> BinaryMarketBook:
     return BinaryMarketBook(
         venue=Venue.POLYMARKET_US,
@@ -253,16 +269,7 @@ def test_load_reads_books_and_lets_an_order_block_escape() -> None:
         def list_event_markets(self, slug: str):
             calls.append("list_event_markets")
             assert slug == "trmpapprv-wk-2026-10-23"
-            return (
-                {
-                    "slug": "trmpapprv-yes",
-                    "status": "MARKET_STATUS_OPEN",
-                    "title": "Approve",
-                    "description": "rules text",
-                    "closeTime": "2026-10-25T00:00:00Z",
-                    "volume": "12",
-                },
-            )
+            return (_listed("trmpapprv-yes"),)
 
         def get_market_book(self, slug: str):
             calls.append("get_market_book")
@@ -297,28 +304,26 @@ class _BookError(Exception):
         self.response = None if status is None else SimpleNamespace(status_code=status)
 
 
-def test_book_failure_logs_status_and_retries_only_a_transient_status(caplog, monkeypatch) -> None:
-    """404 is a closed or missing book. 429 waits once. The path has no query."""
-    sleeps: list[float] = []
-    monkeypatch.setattr("polymarket.paper_views.time.sleep", sleeps.append)
+def test_book_failure_logs_status_and_does_not_score_a_missing_book(caplog) -> None:
+    """404 is not a rate-limit skip. A 429 after the shared retry is book_rate_limited."""
     entry = SimpleNamespace(series="PMTRUMPAPPROVE", venue_market="trmpapprv-wk-2026-10-23")
     book = _book("0.60", "0.30")
 
     class Missing:
         def list_event_markets(self, _slug: str):
-            return ({"slug": "parc-missing?token=secret", "status": "MARKET_STATUS_OPEN"},)
+            return (_listed("parc-missing?token=secret"),)
 
         def get_market_book(self, _slug: str):
             raise _BookError(404)
 
     with caplog.at_level("WARNING", logger="polymarket_paper"):
         assert load_polymarket_paper_markets(Missing(), [entry]) == []
-    assert sleeps == []
     text = "\n".join(caplog.messages)
     assert "status=404" in text
     assert "endpoint=/v1/markets/parc-missing/book" in text
     assert "token" not in text
     assert "secret" not in text
+    assert "book_rate_limited" not in text
     caplog.clear()
 
     class Limited:
@@ -326,53 +331,188 @@ def test_book_failure_logs_status_and_retries_only_a_transient_status(caplog, mo
             self.calls = 0
 
         def list_event_markets(self, _slug: str):
-            return ({"slug": "parc-open", "status": "MARKET_STATUS_OPEN"},)
+            return (_listed("parc-open"),)
 
         def get_market_book(self, _slug: str):
             self.calls += 1
-            if self.calls == 1:
-                raise _BookError(429)
-            return book
+            raise _BookError(429)
 
+    limited = Limited()
     with caplog.at_level("INFO", logger="polymarket_paper"):
-        loaded = load_polymarket_paper_markets(Limited(), [entry])
-    assert sleeps == [1.0]
-    assert loaded[0]["ticker"] == "parc-open"
+        assert load_polymarket_paper_markets(limited, [entry]) == []
+    assert limited.calls == 1
     assert "status=429" in "\n".join(caplog.messages)
-    assert "series=PMTRUMPAPPROVE ok=1 fail=0" in "\n".join(caplog.messages)
+    assert "reason=book_rate_limited" in "\n".join(caplog.messages)
+    assert "series=PMTRUMPAPPROVE ok=0 fail=1" in "\n".join(caplog.messages)
 
     class Down:
         def list_event_markets(self, _slug: str):
-            return (
-                {"slug": "parc-down", "status": "MARKET_STATUS_OPEN"},
-                {"slug": "parc-up", "status": "MARKET_STATUS_OPEN"},
-            )
+            return (_listed("parc-down"), _listed("parc-up"))
 
         def get_market_book(self, slug: str):
             if slug == "parc-down":
                 raise _BookError(503)
             return book
 
-    sleeps.clear()
     caplog.clear()
     with caplog.at_level("INFO", logger="polymarket_paper"):
         loaded = load_polymarket_paper_markets(Down(), [entry])
-    assert sleeps == [1.0]
     assert [row["ticker"] for row in loaded] == ["parc-up"]
     assert "series=PMTRUMPAPPROVE ok=1 fail=1" in "\n".join(caplog.messages)
-    assert caplog.messages.count("polymarket paper book failed series=PMTRUMPAPPROVE status=503 endpoint=/v1/markets/parc-down/book error_type=_BookError") == 2
+    assert caplog.messages.count("polymarket paper book failed series=PMTRUMPAPPROVE status=503 endpoint=/v1/markets/parc-down/book error_type=_BookError") == 1
+    assert "reason=book_rate_limited" not in "\n".join(caplog.messages)
 
     class Order:
         def list_event_markets(self, _slug: str):
-            return ({"slug": "parc-open", "status": "MARKET_STATUS_OPEN"},)
+            return (_listed("parc-open"),)
 
         def get_market_book(self, _slug: str):
             raise PolymarketOrderBlocked("blocked")
 
-    sleeps.clear()
     with pytest.raises(PolymarketOrderBlocked):
         load_polymarket_paper_markets(Order(), [entry])
+
+
+def test_prefilter_reads_books_only_inside_the_ask_band(caplog) -> None:
+    """36c-90c passes. Both sides outside the band, a sports prefix, or no list ask does not."""
+    calls: list[str] = []
+
+    class Client:
+        def list_event_markets(self, _slug: str):
+            return (
+                _listed("parc-wide", yes="0.94", no="0.07"),
+                _listed("parc-open"),
+                {"slug": "parc-bare", "status": "MARKET_STATUS_OPEN"},
+                {
+                    "slug": "parc-one-sided",
+                    "status": "MARKET_STATUS_OPEN",
+                    "bestBidQuote": None,
+                    "bestAskQuote": {"value": "0.50"},
+                    "marketSides": [
+                        {"long": True, "quote": {"value": "0.50"}},
+                        {"long": False, "quote": None},
+                    ],
+                },
+            )
+
+        def get_market_book(self, slug: str):
+            calls.append(slug)
+            return _book("0.60", "0.30")
+
+    entry = SimpleNamespace(series="PMTRUMPAPPROVE", venue_market="trmpapprv-wk-2026-10-23")
+    with caplog.at_level("INFO", logger="polymarket_paper"):
+        loaded = load_polymarket_paper_markets(Client(), [entry])
+    assert calls == ["parc-open", "parc-one-sided"]
+    assert [row["ticker"] for row in loaded] == ["parc-open", "parc-one-sided"]
+    text = "\n".join(caplog.messages)
+    assert "reason=near_certain_ask" in text
+    assert "reason=no_list_ask" in text
+    caplog.clear()
+
+    class Sports:
+        def list_event_markets(self, _slug: str):
+            return (_listed("kxnfl-game"),)
+
+        def get_market_book(self, slug: str):
+            raise AssertionError(slug)
+
+    with caplog.at_level("INFO", logger="polymarket_paper"):
+        assert load_polymarket_paper_markets(
+            Sports(),
+            [SimpleNamespace(series="KXNFL", venue_market="kxnfl-week")],
+        ) == []
+    assert "reason=blocklist" in "\n".join(caplog.messages)
+
+
+def test_partial_book_is_not_scored(caplog) -> None:
+    empty = BinaryMarketBook(
+        venue=Venue.POLYMARKET_US,
+        venue_market_id="parc-empty",
+        yes_bids=(),
+        no_bids=(),
+        as_of=NOW,
+        raw_payload_hash=_HASH,
+    )
+
+    class Client:
+        def list_event_markets(self, _slug: str):
+            return (_listed("parc-empty"),)
+
+        def get_market_book(self, _slug: str):
+            return empty
+
+    entry = SimpleNamespace(series="PMTRUMPAPPROVE", venue_market="trmpapprv-wk-2026-10-23")
+    with caplog.at_level("INFO", logger="polymarket_paper"):
+        assert load_polymarket_paper_markets(Client(), [entry]) == []
+    assert "reason=partial_book" in "\n".join(caplog.messages)
+
+
+def test_shared_limiter_honors_retry_after_and_does_not_retry_404(monkeypatch) -> None:
+    """https://docs.polymarket.us/api-reference/rate-limits.md is 25/s. Retry-After is capped at 5s."""
+    import polymarket.rate_limit as rl
+
+    sleeps: list[float] = []
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(rl.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(rl.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    class Resp:
+        def __init__(self, status: int, retry: str | None = None) -> None:
+            self.status_code = status
+            self.headers = {} if retry is None else {"Retry-After": retry}
+
+    rl._next = 0.0
+    calls: list[int] = []
+
+    def send() -> Resp:
+        calls.append(1)
+        if len(calls) == 1:
+            return Resp(429, "2")
+        return Resp(200)
+
+    assert rl.call_once(send).status_code == 200
+    assert sleeps[0] == 2.0
+    assert len(sleeps) == 2
+    assert len(calls) == 2
+    assert rl._INTERVAL == 1.0 / 25
+
+    rl._next = 0.0
+    sleeps.clear()
+    once: list[int] = []
+
+    def missing() -> Resp:
+        once.append(1)
+        return Resp(404)
+
+    assert rl.call_once(missing).status_code == 404
+    assert once == [1]
     assert sleeps == []
+
+    rl._next = 0.0
+    sleeps.clear()
+    seen = {"n": 0}
+
+    def hostile() -> Resp:
+        seen["n"] += 1
+        if seen["n"] == 1:
+            return Resp(429, "90")
+        return Resp(200)
+
+    assert rl.call_once(hostile).status_code == 200
+    assert sleeps[0] == 5.0
+
+    rl._next = 0.0
+    sleeps.clear()
+    seen["n"] = 0
+
+    def bare() -> Resp:
+        seen["n"] += 1
+        if seen["n"] == 1:
+            return Resp(503)
+        return Resp(200)
+
+    assert rl.call_once(bare).status_code == 200
+    assert sleeps[0] == 1.0
 
 
 def test_two_cached_scans_queue_a_polymarket_row_without_a_paid_call(tmp_path) -> None:
@@ -478,16 +618,7 @@ def test_sidecar_scan_does_not_ask_kalshi_for_polymarket_names(monkeypatch, tmp_
         def list_event_markets(self, slug: str):
             self.slugs.append(slug)
             market_slug = "trmpapprv-yes" if slug.startswith("trmp") else "hormuz-yes"
-            return (
-                {
-                    "slug": market_slug,
-                    "status": "MARKET_STATUS_OPEN",
-                    "title": slug,
-                    "description": "rules",
-                    "closeTime": "2026-10-25T00:00:00Z",
-                    "volume": "20",
-                },
-            )
+            return (_listed(market_slug),)
 
         def get_market_book(self, _slug: str):
             return _book("0.60", "0.30")

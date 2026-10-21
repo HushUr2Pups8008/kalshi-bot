@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 from typing import Any
 
 import requests
@@ -8,6 +7,7 @@ import requests
 from config import cfg
 from kalshi import OrderResult
 from polymarket.auth import PolymarketAuth
+from polymarket.rate_limit import call_once
 from polymarket.read_only import assert_polymarket_read_only
 
 
@@ -25,8 +25,6 @@ class PolymarketAccountClient:
             secret_b64=secret_b64 or cfg.polymarket_us_secret,
         )
         self._session = requests.Session()
-        self._last_req_time = 0.0
-        self._min_interval = 1.0 / max(1, cfg.polymarket_us_order_requests_per_second)
 
     def _request(
         self,
@@ -36,20 +34,19 @@ class PolymarketAccountClient:
         params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         assert_polymarket_read_only(method, endpoint)
-        elapsed = time.monotonic() - self._last_req_time
-        if elapsed < self._min_interval:
-            time.sleep(self._min_interval - elapsed)
 
-        headers = {"Accept": "application/json"}
-        headers.update(self._auth.headers(method, endpoint))
-        response = self._session.request(
-            method,
-            self._base + endpoint,
-            headers=headers,
-            params=params,
-            timeout=10,
-        )
-        self._last_req_time = time.monotonic()
+        def send() -> requests.Response:
+            headers = {"Accept": "application/json"}
+            headers.update(self._auth.headers(method, endpoint))
+            return self._session.request(
+                method,
+                self._base + endpoint,
+                headers=headers,
+                params=params,
+                timeout=10,
+            )
+
+        response = call_once(send)
         response.raise_for_status()
         return response.json() if response.text else {}
 

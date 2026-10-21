@@ -19,6 +19,12 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.10] - 2026-10-21
+
+### Fixed
+
+- **Polymarket reads share one 25/s limiter.** The retail general limit is 25 requests/s per source IP ([rate limits](https://docs.polymarket.us/api-reference/rate-limits.md)). A 429 or 5xx waits for Retry-After, at least one second and at most five, then tries once. A 404 is not retried. Paper reads a book only after the list quote passes the ask band, the 91c gate, and the sports blocklist. A missing book is `book_rate_limited` and is not scored. A partial book is not scored.
+
 ## [0.37.9] - 2026-10-21
 
 ### Fixed

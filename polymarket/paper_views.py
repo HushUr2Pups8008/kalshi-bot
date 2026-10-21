@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
-import time
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Mapping, Sequence
 
+from config import MARKET_SERIES_BLOCKLIST_PREFIXES
+from polymarket.normalizer import _long_book_prices, _quote_cents
 from polymarket.read_only import PolymarketOrderBlocked
+from utils.event_news_grok_flags import EVENT_NEWS_BAND_FLOOR_CENTS
 from utils.logger import get_logger
 
 log = get_logger("polymarket_paper")
 
 _OPEN = "MARKET_STATUS_OPEN"
-_TRANSIENT_BOOK_STATUS = frozenset({429, 500, 502, 503, 504})
-_BOOK_RETRY_SECONDS = 1.0
+_CERTAIN_ASK_CENTS = 91
 
 
 def _cents_from_bid(price: Decimal) -> int | None:
@@ -86,24 +87,58 @@ def _log_book_failure(series: str, slug: str, exc: BaseException) -> int | None:
     return status
 
 
-def _read_book(client: Any, series: str, slug: str) -> Any | None:
-    """One book read. A transient status gets one retry after a one-second wait."""
-    try:
-        return client.get_market_book(slug)
-    except PolymarketOrderBlocked:
-        raise
-    except Exception as exc:
-        status = _log_book_failure(series, slug, exc)
-        if status not in _TRANSIENT_BOOK_STATUS:
+def _blocked_name(name: str) -> bool:
+    upper = str(name or "").split("?", 1)[0].strip().upper()
+    return any(upper.startswith(prefix) for prefix in MARKET_SERIES_BLOCKLIST_PREFIXES)
+
+
+def _list_asks(raw: Mapping[str, Any]) -> tuple[int | None, int | None]:
+    """List quotes only. A null top bid falls through to the side quote."""
+    prices = _long_book_prices(dict(raw))
+    if prices is not None:
+        yes_ask, no_ask = prices[1], prices[3]
+        return (
+            yes_ask if type(yes_ask) is int else None,
+            no_ask if type(no_ask) is int else None,
+        )
+    yes_ask = None
+    no_ask = None
+    for side in raw.get("marketSides") or []:
+        if not isinstance(side, dict):
+            continue
+        cents = _quote_cents(side.get("quote"))
+        if side.get("long") is True:
+            yes_ask = cents
+        elif side.get("long") is False:
+            no_ask = cents
+    return yes_ask, no_ask
+
+
+def _prefilter_reason(series: str, raw: Mapping[str, Any]) -> str | None:
+    """Ask band, 91c gate, and the sports blocklist. A missing list ask fails closed."""
+    if _blocked_name(series) or _blocked_name(str(raw.get("slug") or "")):
+        return "blocklist"
+    reasons: list[str] = []
+    for ask in _list_asks(raw):
+        if ask is None:
+            continue
+        if ask < EVENT_NEWS_BAND_FLOOR_CENTS:
+            reasons.append("ask_band")
+        elif ask >= _CERTAIN_ASK_CENTS:
+            reasons.append("near_certain_ask")
+        else:
             return None
-    time.sleep(_BOOK_RETRY_SECONDS)
+    return reasons[0] if reasons else "no_list_ask"
+
+
+def _read_book(client: Any, series: str, slug: str) -> tuple[Any | None, int | None]:
+    """One book read. The shared limiter already retried a 429."""
     try:
-        return client.get_market_book(slug)
+        return client.get_market_book(slug), None
     except PolymarketOrderBlocked:
         raise
     except Exception as exc:
-        _log_book_failure(series, slug, exc)
-        return None
+        return None, _log_book_failure(series, slug, exc)
 
 
 def load_polymarket_paper_markets(client: Any, entries: Sequence[Any]) -> list[dict[str, Any]]:
@@ -129,14 +164,33 @@ def load_polymarket_paper_markets(client: Any, entries: Sequence[Any]) -> list[d
             if not isinstance(raw, dict):
                 continue
             market_slug = str(raw.get("slug") or "").strip()
-            book = _read_book(client, series, market_slug)
+            reason = _prefilter_reason(series, raw)
+            if reason is not None:
+                log.info(
+                    "polymarket paper skip series=%s reason=%s",
+                    series,
+                    reason,
+                )
+                continue
+            book, status = _read_book(client, series, market_slug)
             if book is None:
                 fail += 1
+                if status == 429:
+                    log.info(
+                        "polymarket paper skip series=%s reason=book_rate_limited",
+                        series,
+                    )
+                continue
+            view = paper_view(raw, series, book)
+            if view is None or (view.get("yes_ask") is None and view.get("no_ask") is None):
+                fail += 1
+                log.info(
+                    "polymarket paper skip series=%s reason=partial_book",
+                    series,
+                )
                 continue
             ok += 1
-            view = paper_view(raw, series, book)
-            if view is not None:
-                loaded.append(view)
+            loaded.append(view)
         log.info(
             "polymarket paper book series=%s ok=%s fail=%s",
             series,

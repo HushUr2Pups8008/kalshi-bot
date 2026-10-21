@@ -18,6 +18,7 @@ from requests import HTTPError
 from config import cfg
 from polymarket.models import PolymarketMarket
 from polymarket.normalizer import normalize_polymarket_market
+from polymarket.rate_limit import call_once, retry_wait_seconds, wait_turn
 from polymarket.read_only import assert_polymarket_read_only
 from trading.venue import Venue
 from trading.orderbook import (
@@ -143,10 +144,6 @@ class PolymarketPublicClient:
         )
         self._base = self._authoritative_base.rstrip("/")
         self._session = requests.Session()
-        self._last_req_time = 0.0
-        self._min_interval = 1.0 / max(
-            1, cfg.polymarket_us_public_requests_per_second
-        )
 
     async def _get_authoritative_object(
         self,
@@ -161,8 +158,10 @@ class PolymarketPublicClient:
         base_url = _authoritative_base_url(self._authoritative_base)
         bounded_fetch = fetcher or fetch_bounded_https_ipv4
         url = f"{base_url}{endpoint}"
-        try:
-            raw = await bounded_fetch(
+
+        async def _fetch() -> bytes:
+            wait_turn()
+            return await bounded_fetch(
                 url,
                 canonical_host=_POLYMARKET_AUTHORITATIVE_HOST,
                 provider_name=provider_name,
@@ -170,10 +169,21 @@ class PolymarketPublicClient:
                 timeout=timeout_seconds,
                 max_bytes=_AUTHORITATIVE_POLYMARKET_MAX_BYTES,
             )
+
+        try:
+            raw = await _fetch()
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
                 return None
-            raise
+            if exc.code not in {429, 500, 502, 503, 504}:
+                raise
+            time.sleep(retry_wait_seconds(exc))
+            try:
+                raw = await _fetch()
+            except urllib.error.HTTPError as again:
+                if again.code == 404:
+                    return None
+                raise
         return _bounded_json_object(raw, provider_name=provider_name)
 
     async def get_market_settlement_exact_bounded(
@@ -259,19 +269,18 @@ class PolymarketPublicClient:
         params: dict[str, Any] | None = None,
     ) -> dict[str, Any] | list[Any]:
         assert_polymarket_read_only(method, endpoint)
-        elapsed = time.monotonic() - self._last_req_time
-        if elapsed < self._min_interval:
-            time.sleep(self._min_interval - elapsed)
-
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
-        response = self._session.request(
-            method,
-            self._base + endpoint,
-            headers=headers,
-            params=params,
-            timeout=10,
-        )
-        self._last_req_time = time.monotonic()
+
+        def send() -> requests.Response:
+            return self._session.request(
+                method,
+                self._base + endpoint,
+                headers=headers,
+                params=params,
+                timeout=10,
+            )
+
+        response = call_once(send)
         response.raise_for_status()
         return response.json() if response.text else {}
 
