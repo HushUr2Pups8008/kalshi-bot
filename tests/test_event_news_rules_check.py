@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import json
-from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
 import config as cfg_module
-from scripts.event_news_rules_report import format_rules_report, rules_report
 from utils.event_news_grok_veto import GROK_MODEL, XAI_CHAT_URL
 from utils.event_news_research import EVENT_NEWS_COHORT_ID
 from utils.event_news_rules_check import (
@@ -405,81 +403,6 @@ def test_journal_stores_numeric_usage_cost(monkeypatch, tmp_path) -> None:
     assert row["cost"] == pytest.approx(0.012)
     assert row["prompt_tokens"] == 20
     assert row["completion_tokens"] == 6
-
-
-def test_empty_rules_report_does_not_recommend_live(tmp_path) -> None:
-    report = rules_report(log_path=tmp_path / "missing.jsonl")
-    assert report["n_rows"] == 0
-    assert report["n_flagged"] == 0
-    assert report["n"] == 0
-    assert report["precision"] == "not_measured"
-    assert report["flagged_fee_net"] == "not_measured"
-    assert report["recommend_live"] is False
-    text = format_rules_report(report)
-    assert "recommend live: no" in text
-    assert "at least 20" in text
-
-
-def test_rules_report_recommends_live_only_at_twenty_losing_flags(tmp_path) -> None:
-    path = tmp_path / "rules.jsonl"
-    rows = []
-    outcomes: dict[str, Decimal] = {}
-    for index in range(20):
-        ticker = f"KXTRUTHSOCIAL-RULE-{index}"
-        rows.append(
-            {
-                "ticker": ticker,
-                "mismatch": True,
-                "response_id": f"resp-{index}",
-                "outcome": None,
-            }
-        )
-        outcomes[ticker] = Decimal("-1.00")
-    rows.append(
-        {
-            "ticker": "KXTRUMPSAY-KEEP",
-            "mismatch": False,
-            "response_id": "resp-keep",
-            "outcome": None,
-        }
-    )
-    path.write_text(
-        "".join(json.dumps(row) + "\n" for row in rows),
-        encoding="utf-8",
-    )
-    full = rules_report(log_path=path, outcomes=outcomes)
-    assert full["n_flagged"] == 20
-    assert full["n"] == 20
-    assert full["precision"] == 1.0
-    assert full["flagged_fee_net"] == Decimal("-20.00")
-    assert full["recommend_live"] is True
-
-    short = rules_report(
-        log_path=path,
-        outcomes={ticker: Decimal("-1.00") for ticker in list(outcomes)[:19]},
-    )
-    assert short["n"] == 19
-    assert short["recommend_live"] is False
-
-
-def test_rules_report_uses_a_stored_outcome_when_no_map_is_passed(tmp_path) -> None:
-    path = tmp_path / "rules.jsonl"
-    path.write_text(
-        json.dumps(
-            {
-                "ticker": "KXTRUTHSOCIAL-26OCT03-B129",
-                "mismatch": True,
-                "outcome": "-7.5226",
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    report = rules_report(log_path=path)
-    assert report["n"] == 1
-    assert report["precision"] == 1.0
-    assert report["flagged_fee_net"] == Decimal("-7.5226")
-    assert report["recommend_live"] is False
 
 
 @pytest.mark.asyncio

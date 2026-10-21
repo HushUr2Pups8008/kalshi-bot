@@ -19,6 +19,12 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.8] - 2026-10-21
+
+### Removed
+
+- **Dead scripts with no live, paper, or report caller.** Removed the research decision loop, the fixture-only KBO digest, four pre-wave1 audits, the politics history corpus exporter, and the event-news rules report. Their tests went with them. The decision golden hash is unchanged.
+
 ## [0.37.7] - 2026-10-21
 
 ### Fixed
