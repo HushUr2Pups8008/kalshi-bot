@@ -1566,19 +1566,101 @@ def quote_from_market(market: Any) -> dict[str, Any] | None:
     return view
 
 
-def lowest_yes_quote(markets: Sequence[Any]) -> dict[str, Any] | None:
-    """The market with the lowest YES ask, keeping that market's NO ask."""
-    best: dict[str, Any] | None = None
-    best_ask: int | None = None
-    for market in markets:
-        view = quote_from_market(market)
-        if view is None:
-            continue
-        yes_ask = view["yes_ask"]
-        if best_ask is None or yes_ask < best_ask:
-            best = view
-            best_ask = yes_ask
-    return best
+def _complement_cents(bid: int | None) -> int | None:
+    """NO ask from the YES bid, or YES ask from the NO bid. 100 minus the bid."""
+    if type(bid) is not int or not 1 <= bid <= 99:
+        return None
+    ask = 100 - bid
+    if 1 <= ask <= 99:
+        return ask
+    return None
+
+
+def _report_quote(market: Any) -> dict[str, Any] | None:
+    """One market's asks. A missing NO ask is 100 minus the YES bid."""
+    view = quote_from_market(market)
+    if view is None:
+        yes_only = _market_view(market)
+        if yes_only is None:
+            return None
+        view = dict(yes_only)
+        if type(view.get("yes_ask")) is not int:
+            view["yes_ask"] = _complement_cents(_bid_cents(market, "no"))
+        if type(view.get("yes_ask")) is not int:
+            return None
+    else:
+        view = dict(view)
+    if type(view.get("no_ask")) is not int:
+        derived = _complement_cents(_bid_cents(market, "yes"))
+        if derived is not None:
+            view["no_ask"] = derived
+    return view
+
+
+def _canonical_close(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _plain_number(raw: str) -> str:
+    return format(Decimal(raw).normalize(), "f")
+
+
+def _outcome_key(title: str) -> tuple[str, ...] | None:
+    """The contract's own result. A series name or a slug is not an outcome."""
+    plain = str(title or "").replace("\u2013", "-").replace("\u2014", "-").lower()
+    ranged = re.search(
+        r"(?<!\d)(\d{1,2}(?:\.\d+)?)\s*-\s*(\d{1,2}(?:\.\d+)?)(?!\d)",
+        plain,
+    )
+    if ranged is not None:
+        return ("range", _plain_number(ranged.group(1)), _plain_number(ranged.group(2)))
+    for phrase, kind in (
+        ("more than", "above"),
+        ("greater than", "above"),
+        ("less than", "below"),
+        ("exactly", "exact"),
+        ("below", "below"),
+        ("under", "below"),
+        ("above", "above"),
+        ("over", "above"),
+    ):
+        found = re.search(rf"{phrase}\s+(\d+(?:\.\d+)?)", plain)
+        if found is not None:
+            return (kind, _plain_number(found.group(1)))
+    by_date = re.search(r"\bby\s+([a-z]+)\s+(\d{1,2}),\s*(\d{4})\b", plain)
+    if by_date is not None:
+        return ("by", by_date.group(1), str(int(by_date.group(2))), by_date.group(3))
+    return None
+
+
+def _settlement_source(title: str, rules: str) -> str | None:
+    blob = f"{title}\n{rules}".lower()
+    if "rcp" in blob:
+        return "rcp"
+    if "transit" in blob and "hormuz" in blob:
+        return "hormuz-transit"
+    if "normal" in blob and "hormuz" in blob:
+        return "hormuz-normal"
+    return None
+
+
+def _contract_identity(view: Mapping[str, Any]) -> tuple[Any, ...] | None:
+    """Same close, same outcome, and same settlement source. Otherwise unmatched."""
+    close = _canonical_close(view.get("close_time"))
+    outcome = _outcome_key(str(view.get("title") or ""))
+    source = _settlement_source(str(view.get("title") or ""), str(view.get("rules") or ""))
+    if close is None or outcome is None or source is None:
+        return None
+    return (close, source, outcome)
 
 
 def _pair_edge(yes_view: Mapping[str, Any], no_view: Mapping[str, Any]) -> Decimal | None:
@@ -1594,52 +1676,107 @@ def _pair_edge(yes_view: Mapping[str, Any], no_view: Mapping[str, Any]) -> Decim
     return Decimal(1) - (Decimal(yes_ask) / Decimal(100)) - (Decimal(no_ask) / Decimal(100)) - yes_fee[1] - no_fee[1]
 
 
+def _cross_venue_row(
+    *,
+    now: datetime | None,
+    event: str,
+    pair_series: str,
+    kalshi: Mapping[str, Any] | None,
+    polymarket: Mapping[str, Any] | None,
+    edge_min: Decimal | None,
+) -> dict[str, Any]:
+    best: Decimal | None = None
+    if kalshi is not None and polymarket is not None:
+        for yes_view, no_view in ((kalshi, polymarket), (polymarket, kalshi)):
+            edge = _pair_edge(yes_view, no_view)
+            if edge is not None and (best is None or edge > best):
+                best = edge
+    matched = kalshi is not None and polymarket is not None
+    return {
+        "ts": _stamp(now),
+        "event": event,
+        "pair_series": pair_series,
+        "match": "matched" if matched else "no match",
+        "kalshi_ticker": "" if kalshi is None else str(kalshi.get("ticker") or ""),
+        "polymarket_ticker": "" if polymarket is None else str(polymarket.get("ticker") or ""),
+        "kalshi_yes_cents": None if kalshi is None else kalshi.get("yes_ask"),
+        "polymarket_yes_cents": None if polymarket is None else polymarket.get("yes_ask"),
+        "kalshi_no_cents": None if kalshi is None else kalshi.get("no_ask"),
+        "polymarket_no_cents": None if polymarket is None else polymarket.get("no_ask"),
+        "fee_net_gap": None if best is None else format(best, "f"),
+        "pair_clears": best is not None and edge_min is not None and best >= edge_min,
+    }
+
+
 def cross_venue_report(
     markets: Sequence[Any],
     *,
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
-    """Report-only. Both prices are logged. Nothing here submits an order."""
+    """Report-only pairs that share an outcome, a source, and a close time.
+
+    An unmatched event is "no match". The lowest ask in the event is not a pair.
+    Nothing here submits an order.
+    """
     universe = get_universe()
     if universe.failed:
         return []
-    by_series: dict[str, list[Any]] = {}
+    by_series: dict[str, list[dict[str, Any]]] = {}
     for market in markets:
-        view = quote_from_market(market)
+        view = _report_quote(market)
         if view is None:
             continue
         series = str(view.get("series") or "").strip().upper()
         if series:
-            by_series.setdefault(series, []).append(market)
+            by_series.setdefault(series, []).append(view)
     rows: list[dict[str, Any]] = []
     for entry in universe.entries:
         if entry.venue != _POLYMARKET_US or not entry.pair_series:
             continue
-        kalshi = lowest_yes_quote(by_series.get(entry.pair_series, []))
-        polymarket = lowest_yes_quote(by_series.get(entry.series, []))
-        best: Decimal | None = None
-        if kalshi is not None and polymarket is not None:
-            for yes_view, no_view in ((kalshi, polymarket), (polymarket, kalshi)):
-                edge = _pair_edge(yes_view, no_view)
-                if edge is not None and (best is None or edge > best):
-                    best = edge
         try:
             edge_min = Decimal(entry.edge_min)
         except Exception:
             edge_min = None
-        rows.append(
-            {
-                "ts": _stamp(now),
-                "event": entry.series,
-                "pair_series": entry.pair_series,
-                "kalshi_yes_cents": None if kalshi is None else kalshi.get("yes_ask"),
-                "polymarket_yes_cents": None if polymarket is None else polymarket.get("yes_ask"),
-                "kalshi_no_cents": None if kalshi is None else kalshi.get("no_ask"),
-                "polymarket_no_cents": None if polymarket is None else polymarket.get("no_ask"),
-                "fee_net_gap": None if best is None else format(best, "f"),
-                "pair_clears": best is not None and edge_min is not None and best >= edge_min,
-            }
-        )
+        kalshi_views = by_series.get(entry.pair_series, [])
+        poly_views = by_series.get(entry.series, [])
+        used: set[str] = set()
+        paired: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        for kalshi in kalshi_views:
+            identity = _contract_identity(kalshi)
+            if identity is None:
+                continue
+            found = [
+                item
+                for item in poly_views
+                if item.get("ticker") not in used and _contract_identity(item) == identity
+            ]
+            if len(found) != 1:
+                continue
+            used.add(str(found[0].get("ticker") or ""))
+            paired.append((kalshi, found[0]))
+        if not paired:
+            rows.append(
+                _cross_venue_row(
+                    now=now,
+                    event=entry.series,
+                    pair_series=entry.pair_series,
+                    kalshi=None,
+                    polymarket=None,
+                    edge_min=edge_min,
+                )
+            )
+            continue
+        for kalshi, polymarket in paired:
+            rows.append(
+                _cross_venue_row(
+                    now=now,
+                    event=entry.series,
+                    pair_series=entry.pair_series,
+                    kalshi=kalshi,
+                    polymarket=polymarket,
+                    edge_min=edge_min,
+                )
+            )
     return rows
 
 
