@@ -53,6 +53,7 @@ from utils.event_news_grok_edge import (
     run_paper_exit_watch,
     scorecard_interval,
     stable_scan_probability,
+    write_daily_edge_report,
     write_paper_scorecard,
     _strike_text,
 )
@@ -1975,3 +1976,85 @@ def test_stored_polymarket_settlement_rejects_a_later_flip(tmp_path: Path) -> No
         "SELECT settlement_result FROM paper_candidates"
     ).fetchone()
     assert stuck == ("no",)
+
+
+def test_later_blank_row_cannot_hide_or_flip_a_stored_polymarket_settlement(tmp_path: Path) -> None:
+    """The earliest YES/NO wins. A newer blank row must not score the opposite live price."""
+    db_path = tmp_path / "grok_paper.db"
+    _insert_paper_row(db_path, "paper_candidates", _polymarket_row("parc-flip"))
+    write_paper_scorecard(
+        db_path=db_path,
+        market_lookup=lambda _ticker: {"status": "finalized", "result": "yes"},
+        polymarket_lookup=lambda _ticker: {"slug": "parc-flip", "settlement": 0.0},
+        report_path=tmp_path / "first.md",
+        now=NOW,
+    )
+    later = _polymarket_row("parc-flip", ts="2026-10-18T12:00:00Z")
+    _insert_paper_row(db_path, "paper_candidates", later)
+    second = write_paper_scorecard(
+        db_path=db_path,
+        market_lookup=lambda _ticker: {"status": "finalized", "result": "yes"},
+        polymarket_lookup=lambda _ticker: {"slug": "parc-flip", "settlement": 1.0},
+        report_path=tmp_path / "second.md",
+        now=NOW,
+    )
+    assert "no settled fee-net rows" in second
+    assert "| polymarket_us | PMTRUMPAPPROVE | parc-flip | 1 | unreadable |" in second
+    assert "| polymarket_us | PMTRUMPAPPROVE | parc-flip | 1 | yes |" not in second
+    stored = sqlite3.connect(db_path).execute(
+        "SELECT ts, settlement_result FROM paper_candidates ORDER BY ts ASC, rowid ASC"
+    ).fetchall()
+    assert stored == [("2026-10-17T12:00:00Z", "no"), ("2026-10-18T12:00:00Z", None)]
+
+
+def test_daily_report_does_not_score_a_stored_polymarket_flip(tmp_path: Path) -> None:
+    """A stored NO plus a live 1 is not a hit, and the slug is not sent to Kalshi."""
+    db_path = tmp_path / "grok_paper.db"
+    _insert_paper_row(db_path, "paper_candidates", _polymarket_row("parc-flip"))
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE paper_candidates SET settlement_result = 'no' WHERE ticker = 'parc-flip'"
+        )
+    (tmp_path / "candidates.jsonl").write_text(
+        json.dumps(
+            {
+                "ticker": "parc-flip",
+                "venue": "polymarket_us",
+                "grok_probability": "0.70",
+                "yes_ask_cents": 55,
+                "side": "yes",
+                "ask_cents": 55,
+                "edge_cents": 13,
+                "queued": True,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "comparisons.jsonl").write_text(
+        json.dumps({"ticker": "parc-flip", "grounded_probability": "0.70", "ungrounded_probability": "0.40"})
+        + "\n",
+        encoding="utf-8",
+    )
+    kalshi_calls: list[str] = []
+
+    def market_lookup(ticker: str) -> dict:
+        kalshi_calls.append(ticker)
+        return {"status": "finalized", "result": "yes"}
+
+    text = write_daily_edge_report(
+        candidate_log_path=tmp_path / "candidates.jsonl",
+        comparison_log_path=tmp_path / "comparisons.jsonl",
+        spend_path=tmp_path / "spend.json",
+        market_lookup=market_lookup,
+        polymarket_lookup=lambda _ticker: {"slug": "parc-flip", "settlement": 1.0},
+        report_path=tmp_path / "grok-edge-daily.md",
+        db_path=db_path,
+        now=NOW,
+    )
+    assert kalshi_calls == []
+    assert "n: not enough data" in text
+    stored = sqlite3.connect(db_path).execute(
+        "SELECT settlement_result FROM paper_candidates"
+    ).fetchone()
+    assert stored == ("no",)

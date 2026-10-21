@@ -1107,6 +1107,7 @@ def run_paper_edge_scan(
                     {
                         "ts": _stamp(moment),
                         "ticker": view["ticker"],
+                        "venue": _view_venue(view),
                         "grounded_probability": str(probability),
                         "ungrounded_probability": str(ungrounded.probability),
                         "agree": verdicts_agree(probability, ungrounded.probability),
@@ -1514,6 +1515,7 @@ def write_daily_edge_report(
     report_path: Path = DAILY_REPORT_PATH,
     now: datetime | None = None,
     polymarket_lookup: Callable[[str], Any] | None = None,
+    db_path: Path = PAPER_DB_PATH,
 ) -> str:
     """Join settled GETs to logged probabilities. Does not read or write orders."""
     candidates = _read_jsonl(candidate_log_path)
@@ -1523,6 +1525,7 @@ def write_daily_edge_report(
         (*candidates, *comparisons),
         market_lookup,
         polymarket_lookup=polymarket_lookup,
+        stored=_earliest_polymarket_settlements(db_path),
     )
     joined = _joined_settled_rows(candidates, comparisons, settlements)
     text = _daily_report_text(joined, spend_line, now=now)
@@ -1686,6 +1689,61 @@ def _scorecard_modes() -> dict[str, tuple[str, str]]:
     return {entry.series: (entry.mode, effective_mode(entry)) for entry in universe.entries}
 
 
+def _earliest_polymarket_settlements(db_path: Path) -> dict[str, str]:
+    """First stored YES or NO per Polymarket ticker. A later blank row does not hide it."""
+    if not db_path.is_file():
+        return {}
+    uri = f"file:{db_path.resolve()}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    try:
+        conn.execute("PRAGMA query_only=ON")
+        names = {row[1] for row in conn.execute("PRAGMA table_info(paper_candidates)")}
+        if "ticker" not in names or "venue" not in names or "settlement_result" not in names:
+            return {}
+        rows = conn.execute(
+            """
+            SELECT ticker, settlement_result FROM (
+                SELECT ticker, settlement_result,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY ticker
+                           ORDER BY ts ASC, rowid ASC
+                       ) AS rn
+                FROM paper_candidates
+                WHERE lower(venue) = 'polymarket_us'
+                  AND lower(settlement_result) IN ('yes', 'no')
+            ) WHERE rn = 1
+            """
+        ).fetchall()
+    except sqlite3.Error:
+        return {}
+    finally:
+        conn.close()
+    found: dict[str, str] = {}
+    for ticker, result in rows:
+        text = str(result or "").strip().lower()
+        slug = str(ticker or "").strip()
+        if slug and text in {"yes", "no"}:
+            found[slug] = text
+    return found
+
+
+def _prefer_earliest_settlement(db_path: Path, rows: list[tuple], stored_index: int) -> list[tuple]:
+    """Replace a blank latest settlement with the first YES or NO stored for that ticker."""
+    earliest = _earliest_polymarket_settlements(db_path)
+    if not earliest:
+        return rows
+    adjusted: list[tuple] = []
+    for row in rows:
+        saved = earliest.get(str(row[0] or "").strip())
+        if not saved:
+            adjusted.append(row)
+            continue
+        mutable = list(row)
+        mutable[stored_index] = saved
+        adjusted.append(tuple(mutable))
+    return adjusted
+
+
 def _queued_candidate_rows(db_path: Path) -> list[tuple]:
     if not db_path.is_file():
         return []
@@ -1699,7 +1757,7 @@ def _queued_candidate_rows(db_path: Path) -> list[tuple]:
         series_sql = "series" if "series" in names else "''"
         venue_sql = "COALESCE(venue, 'kalshi')" if "venue" in names else "'kalshi'"
         stored_sql = "settlement_result" if "settlement_result" in names else "NULL"
-        return conn.execute(
+        fetched = conn.execute(
             "SELECT ticker, series, side, ask_cents, grok_probability, venue, "
             "settlement_result FROM ("
             "SELECT ticker, " + series_sql
@@ -1716,6 +1774,7 @@ def _queued_candidate_rows(db_path: Path) -> list[tuple]:
         return []
     finally:
         conn.close()
+    return _prefer_earliest_settlement(db_path, fetched, 6)
 
 
 def settlement_venue(value: Any) -> str:
@@ -1784,7 +1843,7 @@ def _polymarket_candidate_rows(db_path: Path) -> list[tuple]:
             return []
         series_sql = "series" if "series" in names else "''"
         stored_sql = "settlement_result" if "settlement_result" in names else "NULL"
-        return conn.execute(
+        fetched = conn.execute(
             "SELECT ticker, series, queued, settlement_result FROM ("
             "SELECT ticker, " + series_sql + " AS series, queued, "
             + stored_sql
@@ -1796,6 +1855,7 @@ def _polymarket_candidate_rows(db_path: Path) -> list[tuple]:
         return []
     finally:
         conn.close()
+    return _prefer_earliest_settlement(db_path, fetched, 3)
 
 
 def remember_polymarket_settlement(db_path: Path, ticker: str, result: str) -> None:
@@ -1808,6 +1868,18 @@ def remember_polymarket_settlement(db_path: Path, ticker: str, result: str) -> N
             have = {row[1] for row in conn.execute("PRAGMA table_info(paper_candidates)")}
             if "settlement_result" not in have:
                 conn.execute("ALTER TABLE paper_candidates ADD COLUMN settlement_result TEXT")
+            existing = conn.execute(
+                """
+                SELECT settlement_result FROM paper_candidates
+                WHERE ticker = ? AND lower(venue) = 'polymarket_us'
+                  AND lower(settlement_result) IN ('yes', 'no')
+                ORDER BY ts ASC, rowid ASC
+                LIMIT 1
+                """,
+                (ticker,),
+            ).fetchone()
+            if existing is not None and str(existing[0]).strip().lower() != result:
+                return
             conn.execute(
                 """
                 UPDATE paper_candidates
@@ -3071,9 +3143,17 @@ def _settlements_for(
     market_lookup: Callable[[str], Any],
     *,
     polymarket_lookup: Callable[[str], Any] | None = None,
+    stored: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
-    """Settle each logged row on its own venue. Unknown venues are skipped."""
+    """Settle each logged row on its own venue. Unknown venues are skipped.
+
+    A ticker is handled on the first row, including a miss or an error.
+    A later blank venue cannot send that ticker to Kalshi. A stored YES/NO
+    that disagrees with the live price is not scored.
+    """
     found: dict[str, str] = {}
+    seen: set[str] = set()
+    saved_map = stored or {}
     for raw in rows:
         if isinstance(raw, Mapping):
             ticker = str(raw.get("ticker") or "").strip()
@@ -3081,16 +3161,31 @@ def _settlements_for(
         else:
             ticker = str(raw or "").strip()
             venue = ""
-        if not ticker or ticker in found:
+        if not ticker or ticker in seen:
+            continue
+        seen.add(ticker)
+        try:
+            venue_name = settlement_venue(venue)
+        except Exception:
             continue
         try:
             result = resolve_settlement(
-                venue,
+                venue_name,
                 ticker,
                 market_lookup=market_lookup,
                 polymarket_lookup=polymarket_lookup,
             )
         except Exception:
+            continue
+        saved = str(saved_map.get(ticker) or "").strip().lower()
+        if saved not in {"yes", "no"}:
+            saved = ""
+        if (
+            venue_name == _POLYMARKET_US
+            and saved in {"yes", "no"}
+            and result in {"yes", "no"}
+            and saved != result
+        ):
             continue
         if result in {"yes", "no"}:
             found[ticker] = result

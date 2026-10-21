@@ -529,6 +529,17 @@ def test_daily_report_settles_polymarket_on_its_endpoint(tmp_path: Path) -> None
         "".join(json.dumps(row) + "\n" for row in rows),
         encoding="utf-8",
     )
+    (tmp_path / "comparisons.jsonl").write_text(
+        json.dumps(
+            {
+                "ticker": "parc-missing",
+                "grounded_probability": "0.70",
+                "ungrounded_probability": "0.40",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     kalshi_calls: list[str] = []
     poly_calls: list[str] = []
 
@@ -544,7 +555,7 @@ def test_daily_report_settles_polymarket_on_its_endpoint(tmp_path: Path) -> None
 
     text = write_daily_edge_report(
         candidate_log_path=tmp_path / "candidates.jsonl",
-        comparison_log_path=tmp_path / "missing-comparisons.jsonl",
+        comparison_log_path=tmp_path / "comparisons.jsonl",
         spend_path=tmp_path / "spend.json",
         market_lookup=market_lookup,
         polymarket_lookup=polymarket_lookup,
