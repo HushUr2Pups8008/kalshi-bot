@@ -36,9 +36,12 @@ from utils.series_universe import (
 # ask 41c had gross 0.0544 and fee-net 0.0370, and capped dollars was 0,
 # so they never reached the edge gate. No sized row flipped, and fee-net
 # never took a row the flat gate skipped. The flat path stays in this grid
-# as the kill switch. Re-record the hash only when a desk decision changes.
+# as the kill switch.
+# v0.37.3 adds two paper Polymarket series to the same grid. Kalshi gate
+# code for the existing series is unchanged. The hash moved because those
+# two series are now in the rows. use_new false stays.
 POLITICS_DECISION_SHA256 = (
-    "feeca441bdedef98d513fc780c0b8f44938f1f0918354a65cf50e4b64cbd6408"
+    "5885e2afc1f065b2d1209cf47c6c617760d7e2f8b1ce7e6700584ae7b9ed429c"
 )
 
 POLITICS = SimpleNamespace(
@@ -285,6 +288,6 @@ def test_politics_decision_grid_matches_the_desk(monkeypatch) -> None:
     payload = json.dumps(rows, separators=(",", ":"), sort_keys=True).encode("utf-8")
     digest = hashlib.sha256(payload).hexdigest()
 
-    assert series_count == 23
-    assert len(rows) == 2770
+    assert series_count == 25
+    assert len(rows) == 2988
     assert digest == POLITICS_DECISION_SHA256

@@ -61,8 +61,24 @@ POLYMARKET_US_2026_07_01 = FeeScheduleId(
     ),
 )
 
+# Later open-ended schedule. The July record stays effective_to=None so a
+# stored paper row still deserializes to that exact record.
+POLYMARKET_US_2026_10_19 = FeeScheduleId(
+    name="polymarket-us-2026-10-19",
+    venue=Venue.POLYMARKET_US,
+    effective_from=datetime.fromisoformat("2026-10-19T17:00:00+00:00"),
+    effective_to=None,
+    artifact_sha256=(
+        "7ebb36d04b97cc77fda056c4425dd9e296fe29611d044587f64a8f8e20cf1947"
+    ),
+)
+
 _SUPPORTED_SCHEDULES = frozenset(
-    (KALSHI_GENERAL_2026_07_07, POLYMARKET_US_2026_07_01)
+    (
+        KALSHI_GENERAL_2026_07_07,
+        POLYMARKET_US_2026_07_01,
+        POLYMARKET_US_2026_10_19,
+    )
 )
 _SCHEDULE_COEFFICIENTS = {
     KALSHI_GENERAL_2026_07_07: {
@@ -73,15 +89,25 @@ _SCHEDULE_COEFFICIENTS = {
         FeeRole.TAKER: Decimal("0.06"),
         FeeRole.MAKER: Decimal("-0.0125"),
     },
+    POLYMARKET_US_2026_10_19: {
+        FeeRole.TAKER: Decimal("0.0695"),
+        FeeRole.MAKER: Decimal("0"),
+    },
 }
 _SCHEDULE_FEE_TYPES = {
     KALSHI_GENERAL_2026_07_07: "quadratic",
     POLYMARKET_US_2026_07_01: "quadratic",
+    POLYMARKET_US_2026_10_19: "quadratic",
 }
 
 
 def fee_schedule_at(*, venue: Venue, timestamp: datetime) -> FeeScheduleId:
-    """Return the sole pinned schedule effective for a venue and timestamp."""
+    """Return the pinned schedule effective for a venue and timestamp.
+
+    One match returns that schedule. When an older open-ended schedule is
+    still in the pin and a later one has started, the later start wins.
+    The same start, or a finite overlap, stays unscorable.
+    """
     if not isinstance(venue, Venue):
         raise FeeUnscorableError("venue must be a supported Venue")
     if timestamp.tzinfo is None or timestamp.utcoffset() is None:
@@ -99,9 +125,23 @@ def fee_schedule_at(*, venue: Venue, timestamp: datetime) -> FeeScheduleId:
     )
     if not matches:
         raise FeeUnscorableError("no pinned fee schedule is effective at timestamp")
-    if len(matches) != 1:
-        raise FeeUnscorableError("ambiguous pinned fee schedules at timestamp")
-    return matches[0]
+    if len(matches) == 1:
+        return matches[0]
+    ordered = tuple(sorted(matches, key=lambda schedule: schedule.effective_from))
+    latest_from = ordered[-1].effective_from
+    latest = tuple(
+        schedule for schedule in ordered if schedule.effective_from == latest_from
+    )
+    earlier = tuple(
+        schedule for schedule in ordered if schedule.effective_from < latest_from
+    )
+    if (
+        len(latest) == 1
+        and earlier
+        and all(schedule.effective_to is None for schedule in earlier)
+    ):
+        return latest[0]
+    raise FeeUnscorableError("ambiguous pinned fee schedules at timestamp")
 
 
 def fee_schedule_record(schedule_id: FeeScheduleId) -> dict[str, object]:

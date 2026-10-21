@@ -1,7 +1,7 @@
 # Politics series universe. The root is a list. mode live may POST.
 # mode paper is scored and cannot POST. mode off admits nothing.
 # A missing or invalid file admits nothing.
-# venue defaults to kalshi. Only kalshi is accepted in this file.
+# venue defaults to kalshi. polymarket_us is paper only and needs venue_market.
 # Favorite bands are integer cents. The gate converts them to the same
 # half-open prices the desk already uses (90c and 99c stay outside).
 - series: KXTRUTHSOCIAL
@@ -343,3 +343,33 @@
     US Iran nuclear deal. Paper only. Cannot POST. Added by hand
     from the 2026-10-18 discovery report. Not in the live reserve.
     Desk default favorite band, 55c through 99c.
+- series: PMTRUMPAPPROVE
+  venue: polymarket_us
+  venue_market: trmpapprv-wk-2026-10-23
+  mode: paper
+  favorite_lo_cents: 55
+  favorite_hi_cents: 99
+  transcript_skip: false
+  paper_score: false
+  category: politics
+  max_contracts: 8
+  edge_min: "0.04"
+  notes: >-
+    Polymarket US event trmpapprv-wk-2026-10-23, Trump approval.
+    Paper only. The order endpoint is blocked. Band is 55c through 99c.
+    The same event is also listed on Kalshi as KXTRUMPAPPROVE.
+- series: PMHORMUZ
+  venue: polymarket_us
+  venue_market: hormuz-normal
+  mode: paper
+  favorite_lo_cents: 55
+  favorite_hi_cents: 99
+  transcript_skip: false
+  paper_score: false
+  category: politics
+  max_contracts: 8
+  edge_min: "0.04"
+  notes: >-
+    Polymarket US event hormuz-normal, Strait of Hormuz traffic.
+    Paper only. The order endpoint is blocked. Band is 55c through 99c.
+    The same event is also listed on Kalshi paper series.
