@@ -19,6 +19,12 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.9] - 2026-10-21
+
+### Fixed
+
+- **Polymarket paper runs in the sidecar.** Politics keeps `POLYMARKET_US_ENABLED=false`, so its startup line stays `[POLYMARKET_PAPER] inactive`. The sidecar public scan is the paper path. It logs `[POLYMARKET_PAPER] active venue=polymarket_us order_endpoint=blocked` and forces both Polymarket flags false. No order endpoint, signing, deposit, or transfer.
+
 ## [0.37.8] - 2026-10-21
 
 ### Removed

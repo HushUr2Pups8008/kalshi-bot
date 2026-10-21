@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""Paper-only Grok sidecar.
-
-Lists markets, reads positions, and writes logs/state/grok_edge_*.jsonl plus
-logs/state/grok_paper.db. It does not import the executor and it does not
-submit, cancel, or reprice an order. Kalshi access is GET only. Polymarket US
-access is public GET only, and the order endpoint stays blocked. POST and
-DELETE to the Kalshi order endpoints raise while this process is armed.
-"""
+"""Paper-only Grok sidecar. GET only. The Polymarket order endpoint stays blocked."""
 
 from __future__ import annotations
 
@@ -42,6 +35,12 @@ def arm_sidecar_environment() -> None:
     os.environ["EVENT_NEWS_GROK_EXIT_WATCH"] = "true"
     os.environ["EVENT_NEWS_GROK_GROUNDING"] = "true"
     os.environ.setdefault("GROK_DAILY_USD_CAP", "3")
+    os.environ["POLYMARKET_US_ENABLED"] = "false"
+    os.environ["POLYMARKET_US_LIVE_TRADING_ENABLED"] = "false"
+    print(
+        "[POLYMARKET_PAPER] active venue=polymarket_us order_endpoint=blocked",
+        file=sys.stderr,
+    )
 
 
 def _acquire_lock(path: Path):
