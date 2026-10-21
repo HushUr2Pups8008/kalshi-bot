@@ -25,6 +25,7 @@ from utils.event_news_grok_edge import (
     write_cross_venue,
 )
 from utils.event_news_grok_veto import XAI_API_KEY_ENV
+from utils.series_universe import reset_series_universe
 
 NOW = datetime(2026, 10, 17, 12, 0, tzinfo=timezone.utc)
 _HASH = "a" * 64
@@ -155,13 +156,14 @@ def test_cross_venue_matches_the_same_outcome_and_ignores_a_one_cent_tail(tmp_pa
             "polymarket_us",
             title="exactly 38.5",
             rules="RCP average",
-            close_time=close,
+            close_time="2026-11-06T16:00:00Z",
         ),
     ]
     rows = write_cross_venue(markets, path=tmp_path / "cross.jsonl", now=NOW)
     trump_rows = [row for row in rows if row["event"] == "PMTRUMPAPPROVE"]
-    assert len(trump_rows) == 1
-    trump = trump_rows[0]
+    matched_rows = [row for row in trump_rows if row["match"] == "matched"]
+    assert len(matched_rows) == 1
+    trump = matched_rows[0]
     assert trump["match"] == "matched"
     assert trump["kalshi_ticker"] == "KXTRUMPAPPROVE-E38.5"
     assert trump["polymarket_ticker"] == "parc-38pt5"
@@ -172,18 +174,19 @@ def test_cross_venue_matches_the_same_outcome_and_ignores_a_one_cent_tail(tmp_pa
     assert trump["pair_clears"] is True
     assert Decimal(trump["fee_net_gap"]) >= Decimal("0.04")
     assert trump["kalshi_ticker"] != "KXTRUMPAPPROVE-TAIL"
+    tail = next(row for row in trump_rows if row["kalshi_ticker"] == "KXTRUMPAPPROVE-TAIL")
+    assert tail["match"] == "no match"
+    assert tail["reason"] == "no_counterpart"
+    assert tail["fee_net_gap"] is None
     missing = cross_venue_report([markets[0], markets[1]], now=NOW)
-    lone = next(row for row in missing if row["event"] == "PMTRUMPAPPROVE")
-    assert lone["match"] == "no match"
-    assert lone["kalshi_yes_cents"] is None
-    assert lone["polymarket_yes_cents"] is None
-    assert lone["kalshi_ticker"] == ""
-    assert lone["polymarket_ticker"] == ""
-    assert lone["fee_net_gap"] is None
-    assert lone["pair_clears"] is False
-    logged = json.loads((tmp_path / "cross.jsonl").read_text(encoding="utf-8").splitlines()[0])
-    assert logged["kalshi_ticker"] == "KXTRUMPAPPROVE-E38.5"
-    assert "KXTRUMPAPPROVE-TAIL" not in (tmp_path / "cross.jsonl").read_text(encoding="utf-8")
+    missing_rows = [row for row in missing if row["event"] == "PMTRUMPAPPROVE"]
+    assert {row["kalshi_ticker"] for row in missing_rows} == {"KXTRUMPAPPROVE-E38.5", "KXTRUMPAPPROVE-TAIL"}
+    assert {row["reason"] for row in missing_rows} == {"no_counterpart"}
+    assert all(row["match"] == "no match" and row["polymarket_ticker"] == "" for row in missing_rows)
+    assert all(row["fee_net_gap"] is None and row["pair_clears"] is False for row in missing_rows)
+    logged = (tmp_path / "cross.jsonl").read_text(encoding="utf-8")
+    assert "KXTRUMPAPPROVE-E38.5" in logged
+    assert "\"match\": \"matched\"" in logged
 
 
 def test_cross_venue_rejects_a_different_close_source_or_two_matches() -> None:
@@ -210,23 +213,24 @@ def test_cross_venue_rejects_a_different_close_source_or_two_matches() -> None:
         close_time=close,
     )
     mismatched = cross_venue_report([kalshi, poly], now=NOW)
-    row = next(item for item in mismatched if item["event"] == "PMTRUMPAPPROVE")
-    assert row["match"] == "no match"
-    assert row["kalshi_yes_cents"] is None
-    assert row["fee_net_gap"] is None
+    mismatched_rows = [item for item in mismatched if item["event"] == "PMTRUMPAPPROVE"]
+    assert {item["reason"] for item in mismatched_rows} == {"different_settlement_date"}
+    assert {item["match"] for item in mismatched_rows} == {"not comparable"}
+    assert all(item["fee_net_gap"] is None for item in mismatched_rows)
     poly["close_time"] = other
     poly["rules"] = "a different print"
     sourced = cross_venue_report([kalshi, poly], now=NOW)
-    source_row = next(item for item in sourced if item["event"] == "PMTRUMPAPPROVE")
-    assert source_row["match"] == "no match"
-    assert source_row["kalshi_yes_cents"] is None
+    sourced_rows = {item["kalshi_ticker"] or item["polymarket_ticker"]: item for item in sourced}
+    assert sourced_rows["KXTRUMPAPPROVE-E38.5"]["reason"] == "no_counterpart"
+    assert sourced_rows["parc-38pt5"]["reason"] == "unparsed"
+    assert all(item["match"] == "no match" for item in sourced_rows.values())
     twin = dict(poly)
     twin["rules"] = "RCP average"
     twin["ticker"] = "parc-38pt5-b"
     ambiguous = cross_venue_report([kalshi, poly | {"rules": "RCP average"}, twin], now=NOW)
-    ambiguous_row = next(item for item in ambiguous if item["event"] == "PMTRUMPAPPROVE")
+    ambiguous_row = next(item for item in ambiguous if item["kalshi_ticker"] == "KXTRUMPAPPROVE-E38.5")
     assert ambiguous_row["match"] == "no match"
-    assert ambiguous_row["kalshi_yes_cents"] is None
+    assert ambiguous_row["reason"] == "ambiguous"
     assert ambiguous_row["polymarket_ticker"] == ""
 
 
@@ -259,6 +263,63 @@ def test_cross_venue_derives_a_missing_no_ask_from_the_yes_bid() -> None:
     assert trump["kalshi_yes_cents"] == 40
     assert trump["kalshi_no_cents"] == 35
     assert trump["polymarket_no_cents"] == 40
+
+
+def test_pair_map_requires_the_same_source_and_settlement_date(tmp_path) -> None:
+    """A yaml map pairs an unparsed title. It cannot cross a source or a date."""
+    path = tmp_path / "universe.yaml"
+    path.write_text(
+        "\n".join(
+            [
+                "- series: KXSAMPLE",
+                "  mode: paper",
+                "  favorite_lo_cents: 55",
+                "  favorite_hi_cents: 99",
+                "  notes: sample kalshi paper row",
+                "- series: PMSAMPLE",
+                "  venue: polymarket_us",
+                "  venue_market: sample-event",
+                "  pair_series: KXSAMPLE",
+                "  pair_map:",
+                "    KXSAMPLE-A: sample-slug",
+                "  mode: paper",
+                "  favorite_lo_cents: 55",
+                "  favorite_hi_cents: 99",
+                "  notes: sample polymarket paper row",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    reset_series_universe(path)
+    try:
+        close = "2026-11-06T22:00:00Z"
+        kalshi = _quote(
+            "KXSAMPLE", "KXSAMPLE-A", 40, 60,
+            title="approval print", rules="RCP average", close_time=close,
+        )
+        poly = _quote(
+            "PMSAMPLE", "sample-slug", 55, 50, "polymarket_us",
+            title="approval print", rules="RCP average", close_time="2026-11-06T16:00:00Z",
+        )
+        paired = cross_venue_report([kalshi, poly], now=NOW)
+        assert [row["match"] for row in paired] == ["matched"]
+        poly["close_time"] = "2026-12-01T16:00:00Z"
+        dated = cross_venue_report([kalshi, poly], now=NOW)
+        assert {row["reason"] for row in dated} == {"different_settlement_date"}
+        assert {row["match"] for row in dated} == {"not comparable"}
+        poly["close_time"] = "2026-11-06T16:00:00Z"
+        poly["rules"] = "hormuz normal traffic"
+        sourced = cross_venue_report([kalshi, poly], now=NOW)
+        assert {row["reason"] for row in sourced} == {"different_source"}
+        kalshi["title"] = "exactly 38.5"
+        poly["title"] = "exactly 39.2"
+        poly["rules"] = "RCP average"
+        refused = cross_venue_report([kalshi, poly], now=NOW)
+        assert all(row["match"] != "matched" for row in refused)
+        assert {row["reason"] for row in refused} == {"no_counterpart"}
+    finally:
+        reset_series_universe()
 
 
 def test_load_reads_books_and_lets_an_order_block_escape() -> None:
@@ -647,13 +708,11 @@ def test_sidecar_scan_does_not_ask_kalshi_for_polymarket_names(monkeypatch, tmp_
         json.loads(line)
         for line in (tmp_path / "cross.jsonl").read_text(encoding="utf-8").splitlines()
     ]
-    trump = next(row for row in logged if row["event"] == "PMTRUMPAPPROVE")
-    assert trump["match"] == "no match"
-    assert trump["kalshi_yes_cents"] is None
-    assert trump["polymarket_yes_cents"] is None
-    assert trump["kalshi_no_cents"] is None
-    assert trump["polymarket_no_cents"] is None
-    assert trump["fee_net_gap"] is None
+    trump_rows = [row for row in logged if row["event"] == "PMTRUMPAPPROVE"]
+    assert trump_rows
+    assert all(row["match"] != "matched" for row in trump_rows)
+    assert all(row["reason"] for row in trump_rows)
+    assert all(row["fee_net_gap"] is None for row in trump_rows)
 
 
 def test_pnl_venue_column_does_not_change_the_live_total() -> None:

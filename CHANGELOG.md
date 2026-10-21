@@ -19,6 +19,12 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.11] - 2026-10-21
+
+### Fixed
+
+- **Cross-venue rows match on the settlement date.** A pair needs the same source, the same threshold or bracket, and the same settlement date. A different source or date is `not comparable`. A `pair_map` entry can name a pair only when the source and the date already match. Every unmatched market is logged with a reason. The daily RCP market and the weekly bracket stay unmatched. The weekly Hormuz transit market and the year-end normal market stay unmatched.
+
 ## [0.37.10] - 2026-10-21
 
 ### Fixed

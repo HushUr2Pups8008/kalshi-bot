@@ -38,6 +38,7 @@ _ALLOWED_KEYS = frozenset(
         "venue",
         "venue_market",
         "pair_series",
+        "pair_map",
     }
 )
 _VENUES = frozenset({"kalshi", "polymarket_us"})
@@ -69,6 +70,7 @@ class SeriesEntry:
     venue: str = "kalshi"
     venue_market: str = ""
     pair_series: str = ""
+    pair_map: tuple[tuple[str, str], ...] = ()
 
     @property
     def favorite_band(self) -> tuple[float, float]:
@@ -351,6 +353,7 @@ def _parse_entries(payload: Any) -> tuple[SeriesEntry, ...]:
         venue = _venue(item.get("venue", "kalshi"))
         venue_market = _venue_market(venue, str(mode), item.get("venue_market"))
         pair_series = _pair_series(venue, item.get("pair_series"))
+        pair_map = _pair_map(venue, item.get("pair_map"))
         entries.append(
             SeriesEntry(
                 series=series,
@@ -369,6 +372,7 @@ def _parse_entries(payload: Any) -> tuple[SeriesEntry, ...]:
                 venue=venue,
                 venue_market=venue_market,
                 pair_series=pair_series,
+                pair_map=pair_map,
             )
         )
     if not entries:
@@ -427,6 +431,20 @@ def _venue(value: Any) -> str:
     if venue not in _VENUES:
         raise ValueError("bad_venue")
     return venue
+
+
+def _pair_map(venue: str, value: Any) -> tuple[tuple[str, str], ...]:
+    if value in (None, {}):
+        return ()
+    if venue != "polymarket_us" or not isinstance(value, dict):
+        raise ValueError("bad_pair_map")
+    rows = []
+    for key, raw in value.items():
+        slug = raw.strip() if isinstance(raw, str) else ""
+        if not isinstance(key, str) or not key.strip() or _VENUE_MARKET_SLUG.fullmatch(slug) is None:
+            raise ValueError("bad_pair_map")
+        rows.append((key.strip(), slug))
+    return tuple(rows)
 
 
 def _pair_series(venue: str, value: Any) -> str:
