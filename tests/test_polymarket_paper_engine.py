@@ -282,6 +282,7 @@ def test_pair_map_requires_the_same_source_and_settlement_date(tmp_path) -> None
                 "  pair_series: KXSAMPLE",
                 "  pair_map:",
                 "    KXSAMPLE-A: sample-slug",
+                "    KXSAMPLE-B: sample-slug",
                 "  mode: paper",
                 "  favorite_lo_cents: 55",
                 "  favorite_hi_cents: 99",
@@ -302,8 +303,13 @@ def test_pair_map_requires_the_same_source_and_settlement_date(tmp_path) -> None
             "PMSAMPLE", "sample-slug", 55, 50, "polymarket_us",
             title="approval print", rules="RCP average", close_time="2026-11-06T16:00:00Z",
         )
-        paired = cross_venue_report([kalshi, poly], now=NOW)
-        assert [row["match"] for row in paired] == ["matched"]
+        other = _quote(
+            "KXSAMPLE", "KXSAMPLE-B", 40, 60,
+            title="approval print", rules="RCP average", close_time=close,
+        )
+        paired = cross_venue_report([kalshi, other, poly], now=NOW)
+        assert [row["match"] for row in paired if row["match"] == "matched"] == ["matched"]
+        assert sum(row["match"] == "matched" for row in paired) == 1
         poly["close_time"] = "2026-12-01T16:00:00Z"
         dated = cross_venue_report([kalshi, poly], now=NOW)
         assert {row["reason"] for row in dated} == {"different_settlement_date"}

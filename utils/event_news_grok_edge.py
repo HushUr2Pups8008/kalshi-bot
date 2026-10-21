@@ -1787,7 +1787,7 @@ def cross_venue_report(
         for kalshi in kalshi_views:
             slug = explicit.get(str(kalshi.get("ticker") or ""))
             found = [item for item in poly_views if slug and str(item.get("ticker") or "") == slug]
-            if len(found) != 1 or _source_date(kalshi) is None or _source_date(kalshi) != _source_date(found[0]):
+            if len(found) != 1 or str(found[0].get("ticker") or "") in used_p or _source_date(kalshi) is None or _source_date(kalshi) != _source_date(found[0]):
                 continue
             own, other = _contract_identity(kalshi), _contract_identity(found[0])
             if own is not None and other is not None and own != other:
