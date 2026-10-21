@@ -200,17 +200,6 @@ class SourceCredibility:
                 as_of=basis_as_of,
             )
 
-    def _canonical_outcomes_for_source(
-        self,
-        source: str,
-    ) -> tuple[float, float, int] | None:
-        """Return cached delivered directional outcomes, or ``None`` when untrusted."""
-        self._maybe_refresh_canonical_outcomes()
-        with self._canonical_lock:
-            if self._canonical_outcomes is None:
-                return None
-            return self._canonical_outcomes.get(source, (0.0, 0.0, 0))
-
     def _maybe_refresh_canonical_outcomes(self) -> None:
         """Refresh the full canonical aggregate at a bounded cadence."""
         with self._canonical_lock:

@@ -130,18 +130,6 @@ def fmt_ts(value: datetime | None) -> str:
     return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def fmt_avg(values: list[float]) -> str:
-    if not values:
-        return "n/a"
-    return f"{sum(values) / len(values):.4f}"
-
-
-def fmt_median(values: list[float]) -> str:
-    if not values:
-        return "n/a"
-    return f"{median(values):.4f}"
-
-
 def _p95(values: list[float]) -> float | None:
     """Return approximate 95th percentile; requires at least 2 samples."""
     if len(values) < 2:

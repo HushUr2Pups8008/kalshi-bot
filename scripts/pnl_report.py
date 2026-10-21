@@ -247,11 +247,6 @@ def parse_fill_log(text: str) -> list[LogRow]:
     return rows
 
 
-def _fee_cents_text(fee: Decimal) -> str:
-    cents = (fee * Decimal("100")).normalize()
-    return format(cents, "f")
-
-
 def _match_key(ticker: str, side: str, qty: Decimal, price_cents: int) -> tuple[str, str, str, int]:
     return (ticker, side, format(qty.normalize(), "f"), price_cents)
 

@@ -92,17 +92,6 @@ _TIER_RANK: dict[Tier, int] = {t: i for i, t in enumerate(_TIER_ORDER)}
 #      so an accidental reorder is caught.
 
 
-def _has_segment(path: str, segment: str) -> bool:
-    """True if `segment` appears as a complete path component in `path`.
-
-    Avoids the substring-match trap where "tests" would accidentally match
-    "manifests/foo.py". We normalize to forward-slash form first because
-    path strings on Windows may use backslashes.
-    """
-    parts = path.replace("\\", "/").split("/")
-    return segment in parts
-
-
 def _matches_suffix(path: str, suffix: str) -> bool:
     """True if `path` ends with the given suffix (used for *.plist.template
     matches)."""
