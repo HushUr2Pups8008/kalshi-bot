@@ -118,6 +118,8 @@ def test_arm_keeps_an_explicit_dry_run_cap(monkeypatch) -> None:
         "EVENT_NEWS_GROK_EDGE_SCAN",
         "EVENT_NEWS_GROK_EXIT_WATCH",
         "EVENT_NEWS_GROK_GROUNDING",
+        "POLYMARKET_US_ENABLED",
+        "POLYMARKET_US_LIVE_TRADING_ENABLED",
     ):
         monkeypatch.setenv(name, os.environ.get(name, ""))
     monkeypatch.setenv("GROK_DAILY_USD_CAP", "0.50")
@@ -125,6 +127,33 @@ def test_arm_keeps_an_explicit_dry_run_cap(monkeypatch) -> None:
     assert os.environ["GROK_DAILY_USD_CAP"] == "0.50"
     assert os.environ["KALSHI_GROK_PAPER_SIDECAR"] == "true"
     assert os.environ["LIVE_TRADING_ENABLED"] == "false"
+
+
+def test_sidecar_logs_polymarket_paper_active_and_blocks_live(monkeypatch, capsys) -> None:
+    """Politics keeps the blend flag false. This process still runs the public scan."""
+    import os
+
+    for name in (
+        "GROK_DAILY_USD_CAP",
+        "LIVE_TRADING_ENABLED",
+        "KALSHI_GROK_PAPER_SIDECAR",
+        "PAPER_COHORT_ID",
+        "EVENT_NEWS_GROK_EDGE_SCAN",
+        "EVENT_NEWS_GROK_EXIT_WATCH",
+        "EVENT_NEWS_GROK_GROUNDING",
+        "POLYMARKET_US_ENABLED",
+        "POLYMARKET_US_LIVE_TRADING_ENABLED",
+    ):
+        monkeypatch.setenv(name, os.environ.get(name, ""))
+    monkeypatch.setenv("POLYMARKET_US_ENABLED", "true")
+    monkeypatch.setenv("POLYMARKET_US_LIVE_TRADING_ENABLED", "true")
+    arm_sidecar_environment()
+    assert os.environ["POLYMARKET_US_ENABLED"] == "false"
+    assert os.environ["POLYMARKET_US_LIVE_TRADING_ENABLED"] == "false"
+    assert os.environ["LIVE_TRADING_ENABLED"] == "false"
+    assert capsys.readouterr().err.strip() == (
+        "[POLYMARKET_PAPER] active venue=polymarket_us order_endpoint=blocked"
+    )
 
 
 def test_reserve_floor_screen_spends_the_only_nickel(tmp_path: Path) -> None:

@@ -9,6 +9,9 @@ cd "$ROOT"
 export PYTHONPATH="$ROOT"
 
 export LIVE_TRADING_ENABLED=false
+# Public paper scan only. The blend runtime and live trading stay off.
+export POLYMARKET_US_ENABLED=false
+export POLYMARKET_US_LIVE_TRADING_ENABLED=false
 export KALSHI_GROK_PAPER_SIDECAR=true
 export PAPER_COHORT_ID=kalshi-event-news-20260820
 export BOT_RUNTIME_LOCK_NAME=bot_runtime.kalshi-grok-paper.lock
