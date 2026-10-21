@@ -1,9 +1,11 @@
 # Politics series universe. The root is a list. mode live may POST.
 # mode paper is scored and cannot POST. mode off admits nothing.
 # A missing or invalid file admits nothing.
+# venue defaults to kalshi. Only kalshi is accepted in this file.
 # Favorite bands are integer cents. The gate converts them to the same
 # half-open prices the desk already uses (90c and 99c stay outside).
 - series: KXTRUTHSOCIAL
+  venue: kalshi
   mode: live
   favorite_lo_cents: 36
   favorite_hi_cents: 90
@@ -20,6 +22,7 @@
     90c is outside the half-open band. The 0-35c executed-ask
     exclusion is not applied on top of this band.
 - series: KXCANUSDEAL
+  venue: kalshi
   mode: live
   favorite_lo_cents: 55
   favorite_hi_cents: 99
@@ -33,6 +36,7 @@
     99c is outside the half-open band. Asks at or above 91c still
     fail the near-certain gate.
 - series: KXMOCTRUMP25
+  venue: kalshi
   mode: live
   favorite_lo_cents: 55
   favorite_hi_cents: 99
@@ -47,6 +51,7 @@
     the half-open band. Asks at or above 91c still fail the
     near-certain gate.
 - series: KXTRUMPACT
+  venue: kalshi
   mode: live
   favorite_lo_cents: 12
   favorite_hi_cents: 90
@@ -63,6 +68,7 @@
     half-open band. The 0-35c executed-ask exclusion still blocks
     a take and is not folded into this band.
 - series: KXTRUMPSAY
+  venue: kalshi
   mode: live
   favorite_lo_cents: 55
   favorite_hi_cents: 99
@@ -77,6 +83,7 @@
     Exact series KXTRUMPSAY only. KXTRUMPSAYCOUNTRY and the other
     glued siblings do not match. Desk default favorite band.
 - series: KXTRUMPMENTION
+  venue: kalshi
   mode: paper
   favorite_lo_cents: 55
   favorite_hi_cents: 99
@@ -93,6 +100,7 @@
     Paper scoring skips the transcript gate. A run with no probability
     logs veto_not_called and does not call Grok.
 - series: KXAPRPOTUS
+  venue: kalshi
   mode: live
   favorite_lo_cents: 55
   favorite_hi_cents: 99
@@ -107,6 +115,7 @@
     the half-open band. Asks at or above 91c still fail the
     near-certain gate.
 - series: KXPOLLPOTUS
+  venue: kalshi
   mode: live
   favorite_lo_cents: 55
   favorite_hi_cents: 99
@@ -121,6 +130,7 @@
     the half-open band. Asks at or above 91c still fail the
     near-certain gate.
 - series: KXEFFTARIFF
+  venue: kalshi
   mode: live
   favorite_lo_cents: 55
   favorite_hi_cents: 99
@@ -134,6 +144,7 @@
     the half-open band. Asks at or above 91c still fail the
     near-certain gate.
 - series: KXVOTESAVEAMERICA
+  venue: kalshi
   mode: live
   favorite_lo_cents: 55
   favorite_hi_cents: 99
@@ -148,6 +159,7 @@
     the half-open band. Asks at or above 91c still fail the
     near-certain gate.
 - series: KXSBUDGETRES
+  venue: kalshi
   mode: live
   favorite_lo_cents: 55
   favorite_hi_cents: 99
@@ -161,6 +173,7 @@
     the half-open band. Asks at or above 91c still fail the
     near-certain gate.
 - series: KXLEAVECONGRESS
+  venue: kalshi
   mode: live
   favorite_lo_cents: 55
   favorite_hi_cents: 99
@@ -174,6 +187,7 @@
     the half-open band. Asks at or above 91c still fail the
     near-certain gate.
 - series: KXFISAEXTEND
+  venue: kalshi
   mode: live
   favorite_lo_cents: 55
   favorite_hi_cents: 99
@@ -187,6 +201,7 @@
     the half-open band. Asks at or above 91c still fail the
     near-certain gate. The KXFED deny prefix does not match this series.
 - series: KXHORMUZWEEKLY
+  venue: kalshi
   mode: paper
   favorite_lo_cents: 55
   favorite_hi_cents: 99
@@ -200,6 +215,7 @@
     Added by hand from the 2026-10-18 discovery report. Not in the
     live reserve. Desk default favorite band, 55c through 99c.
 - series: KXSUEZWEEKLY
+  venue: kalshi
   mode: paper
   favorite_lo_cents: 55
   favorite_hi_cents: 99
@@ -213,6 +229,7 @@
     Added by hand from the 2026-10-18 discovery report. Not in the
     live reserve. Desk default favorite band, 55c through 99c.
 - series: KXBABELMANDEBWEEKLY
+  venue: kalshi
   mode: paper
   favorite_lo_cents: 55
   favorite_hi_cents: 99
@@ -226,6 +243,7 @@
     Added by hand from the 2026-10-18 discovery report. Not in the
     live reserve. Desk default favorite band, 55c through 99c.
 - series: KXTRUMPUFC
+  venue: kalshi
   mode: paper
   favorite_lo_cents: 55
   favorite_hi_cents: 99
@@ -240,6 +258,7 @@
     Added by hand from the 2026-10-18 discovery report. Not in the
     live reserve. Desk default favorite band, 55c through 99c.
 - series: KXHORMUZMAX
+  venue: kalshi
   mode: paper
   favorite_lo_cents: 55
   favorite_hi_cents: 99
@@ -253,6 +272,7 @@
     Cannot POST. Added by hand from the 2026-10-18 discovery report.
     Not in the live reserve. Desk default favorite band, 55c through 99c.
 - series: KXTRUMPAPPROVE
+  venue: kalshi
   mode: paper
   favorite_lo_cents: 55
   favorite_hi_cents: 99
@@ -267,6 +287,7 @@
     from the 2026-10-18 discovery report. Not in the live reserve.
     Desk default favorite band, 55c through 99c.
 - series: KXTRUMPNOMNUM
+  venue: kalshi
   mode: paper
   favorite_lo_cents: 55
   favorite_hi_cents: 99
@@ -281,6 +302,7 @@
     Cannot POST. Added by hand from the 2026-10-18 discovery report.
     Not in the live reserve. Desk default favorite band, 55c through 99c.
 - series: KXHORMUZPEAK
+  venue: kalshi
   mode: paper
   favorite_lo_cents: 55
   favorite_hi_cents: 99
@@ -294,6 +316,7 @@
     Added by hand from the 2026-10-18 discovery report. Not in the
     live reserve. Desk default favorite band, 55c through 99c.
 - series: KXPANAMAWEEKLY
+  venue: kalshi
   mode: paper
   favorite_lo_cents: 55
   favorite_hi_cents: 99
@@ -307,6 +330,7 @@
     Added by hand from the 2026-10-18 discovery report. Not in the
     live reserve. Desk default favorite band, 55c through 99c.
 - series: KXUSAIRANAGREEMENT
+  venue: kalshi
   mode: paper
   favorite_lo_cents: 55
   favorite_hi_cents: 99

@@ -34,8 +34,10 @@ _ALLOWED_KEYS = frozenset(
         "occupancy_family",
         "open_family_lock",
         "x_search",
+        "venue",
     }
 )
+_VENUES = frozenset({"kalshi"})
 _DEFAULT_MAX_CONTRACTS = 8
 _DEFAULT_EDGE_MIN = "0.04"
 _MENTION_SERIES = "KXTRUMPMENTION"
@@ -60,6 +62,7 @@ class SeriesEntry:
     occupancy_family: bool = False
     open_family_lock: bool = False
     x_search: bool = False
+    venue: str = "kalshi"
 
     @property
     def favorite_band(self) -> tuple[float, float]:
@@ -339,6 +342,7 @@ def _parse_entries(payload: Any) -> tuple[SeriesEntry, ...]:
             raise ValueError("bad_category")
         max_contracts = _max_contracts(item.get("max_contracts", _DEFAULT_MAX_CONTRACTS))
         edge_min = _edge_min(item.get("edge_min", _DEFAULT_EDGE_MIN))
+        venue = _venue(item.get("venue", "kalshi"))
         entries.append(
             SeriesEntry(
                 series=series,
@@ -354,6 +358,7 @@ def _parse_entries(payload: Any) -> tuple[SeriesEntry, ...]:
                 occupancy_family=_flag(item, "occupancy_family"),
                 open_family_lock=_flag(item, "open_family_lock"),
                 x_search=_flag(item, "x_search"),
+                venue=venue,
             )
         )
     if not entries:
@@ -398,3 +403,13 @@ def _edge_min(value: Any) -> str:
     if number < 0 or number > 1:
         raise ValueError("bad_edge_min")
     return format(number, "f")
+
+
+def _venue(value: Any) -> str:
+    """Missing means kalshi. Any other name fails the file closed."""
+    if not isinstance(value, str):
+        raise ValueError("bad_venue")
+    venue = value.strip().lower()
+    if venue not in _VENUES:
+        raise ValueError("bad_venue")
+    return venue
