@@ -29,7 +29,6 @@ from utils.event_news_grok_flags import EVENT_NEWS_BAND_FLOOR_CENTS
 from utils.event_news_grok_veto import GROK_MODEL, XAI_API_KEY_ENV
 from utils.event_news_research import (
     EVENT_NEWS_COHORT_ID,
-    event_news_fee_net_cents,
     event_news_fee_net_edge,
     event_news_paper_score_decision,
     event_news_series_ticker,
@@ -91,7 +90,10 @@ PAPER_DB_PATH = Path("logs/state/grok_paper.db")
 RAW_DIR = Path("logs/state/grok_raw")
 CACHE_PATH = Path("logs/state/grok_edge_cache.json")
 SCREEN_LOG_PATH = Path("logs/state/grok_edge_screen.jsonl")
+CROSS_VENUE_LOG_PATH = Path("logs/state/cross_venue.jsonl")
 DAILY_REPORT_PATH = Path("logs/reports/grok-edge-daily.md")
+_POLYMARKET_US = "polymarket_us"
+_NEAR_CERTAIN_ASK_CENTS = 91
 _CACHE_LOCK = threading.Lock()
 _SETTLED_STATUSES = frozenset({"finalized", "settled", "determined"})
 _DB_LOCK = threading.Lock()
@@ -191,6 +193,51 @@ def _floored_cents(dollars: Decimal) -> int:
     return int((dollars * Decimal(100)).to_integral_value(rounding=ROUND_FLOOR))
 
 
+def _view_venue(view: Mapping[str, Any]) -> str:
+    raw = view.get("venue")
+    if hasattr(raw, "value"):
+        raw = raw.value
+    venue = str(raw or "kalshi").strip().lower()
+    if venue == _POLYMARKET_US:
+        return _POLYMARKET_US
+    return "kalshi"
+
+
+def _fee_net(
+    probability: float | Decimal | str,
+    ask_cents: int,
+    contracts: int = 1,
+    venue: str = "kalshi",
+) -> tuple[Decimal, Decimal, Decimal] | None:
+    """Kalshi stays on event_news_fee_net_edge. Polymarket uses gateway.fee."""
+    if venue != _POLYMARKET_US:
+        return event_news_fee_net_edge(probability, ask_cents, contracts)
+    if isinstance(ask_cents, bool) or type(ask_cents) is not int:
+        return None
+    if isinstance(contracts, bool) or type(contracts) is not int or contracts < 1:
+        return None
+    if ask_cents < 1 or ask_cents > 99:
+        return None
+    try:
+        p_side = Decimal(str(probability))
+    except Exception:
+        return None
+    if not p_side.is_finite() or p_side <= 0 or p_side >= 1:
+        return None
+    price = Decimal(ask_cents) / Decimal(100)
+    quantity = Decimal(contracts)
+    try:
+        from trading.venue_gateway import PolymarketGateway
+
+        fee = PolymarketGateway(None).fee(price, quantity)
+    except Exception:
+        return None
+    if not isinstance(fee, Decimal) or not fee.is_finite() or fee < 0:
+        return None
+    gross = p_side - price
+    return gross, fee, gross - (fee / quantity)
+
+
 def paper_queue_decision(
     *,
     probability: Decimal | None,
@@ -199,6 +246,7 @@ def paper_queue_decision(
     contracts: int = PAPER_QUEUE_CONTRACTS,
     edge_min: Decimal | None = None,
     yes_floor_cents: int = 55,
+    venue: str = "kalshi",
 ) -> tuple[str, int | None]:
     """Return ``(queue, edge)`` or ``(skip_reason, edge)``.
 
@@ -221,7 +269,9 @@ def paper_queue_decision(
         or contracts > HARD_MAX_CONTRACTS
     ):
         return "size_cap", None
-    scored = event_news_fee_net_edge(probability, ask_cents, contracts)
+    if venue == _POLYMARKET_US and ask_cents >= _NEAR_CERTAIN_ASK_CENTS:
+        return "near_certain_ask", None
+    scored = _fee_net(probability, ask_cents, contracts, venue)
     if scored is None or edge_min is None:
         edge = None if scored is None else _floored_cents(scored[2])
         return "bad_edge", edge
@@ -661,10 +711,10 @@ def _next_scans(
     return [*prior, sample][-3:]
 
 
-def _screen_side(probability: Decimal, ask: int | None) -> int | None:
+def _screen_side(probability: Decimal, ask: int | None, venue: str = "kalshi") -> int | None:
     if type(ask) is not int:
         return None
-    scored = event_news_fee_net_edge(probability, ask, PAPER_QUEUE_CONTRACTS)
+    scored = _fee_net(probability, ask, PAPER_QUEUE_CONTRACTS, venue)
     if scored is None:
         return None
     return _floored_cents(scored[2])
@@ -674,10 +724,11 @@ def _screen_edges(
     probability: Decimal,
     yes_ask: int | None,
     no_ask: int | None,
+    venue: str = "kalshi",
 ) -> tuple[int | None, int | None]:
     return (
-        _screen_side(probability, yes_ask),
-        _screen_side(Decimal(1) - probability, no_ask),
+        _screen_side(probability, yes_ask, venue),
+        _screen_side(Decimal(1) - probability, no_ask, venue),
     )
 
 
@@ -692,8 +743,11 @@ def _log_screen(path: Path, record: Mapping[str, Any]) -> None:
 
 
 def _series_prompt(views: Sequence[Mapping[str, Any]], limit: int) -> str:
+    lead = "These Kalshi markets share one series. "
+    if views and _view_venue(views[0]) == _POLYMARKET_US:
+        lead = "These Polymarket US markets share one series. "
     lines = [
-        "These Kalshi markets share one series. Search once for the posts and news they share. "
+        lead + "Search once for the posts and news they share. "
         f"Use at most {limit} sources. "
         "latest_post_id is the newest Truth Social or X post id, or an empty string. "
         "summary is the shared fact. Include the Truth Social post count when these are count buckets. "
@@ -800,6 +854,7 @@ def _ground_series(
         kind="series",
         series=series,
         expected_tickers=tuple(str(view.get("ticker") or "") for view in views),
+        venue=_view_venue(views[0]),
     )
     if result is None or result.skip_reason or not result.detail:
         reason = "malformed" if result is None else (result.skip_reason or "malformed")
@@ -890,6 +945,7 @@ def run_paper_edge_scan(
                     "ts": _stamp(moment),
                     "ticker": view["ticker"],
                     "series": view["series"],
+                    "venue": _view_venue(view),
                     "decision": "cache_hit",
                     "reason": "cache_fresh",
                     "yes_ask": view.get("yes_ask"),
@@ -938,6 +994,7 @@ def run_paper_edge_scan(
             spend_path=spend_path,
             raw_dir=raw_dir,
             now=moment,
+            venue=_view_venue(view),
         )
         held = view["ticker"] in open_set
         yes_edge = no_edge = None
@@ -948,7 +1005,9 @@ def run_paper_edge_scan(
             and ungrounded.probability is not None
         ):
             probability = ungrounded.probability
-            yes_edge, no_edge = _screen_edges(probability, view["yes_ask"], view["no_ask"])
+            yes_edge, no_edge = _screen_edges(
+                probability, view["yes_ask"], view["no_ask"], _view_venue(view)
+            )
         passed = held or (probability is not None and _screen_passes(yes_edge, no_edge))
         reason = "open_position" if held else ("edge" if passed else "below_screen")
         if probability is None and not held:
@@ -963,6 +1022,7 @@ def run_paper_edge_scan(
                 "ts": _stamp(moment),
                 "ticker": view["ticker"],
                 "series": view["series"],
+                "venue": _view_venue(view),
                 "decision": "ground" if passed else "skip",
                 "reason": reason,
                 "ungrounded_probability": None if probability is None else str(probability),
@@ -1469,11 +1529,19 @@ def write_daily_edge_report(
     return text
 
 
-def contract_fee_net_dollars(side: str, ask_cents: int, result_yes: bool) -> Decimal | None:
-    """Settlement dollars for one contract after the exact Kalshi taker fee."""
+def contract_fee_net_dollars(
+    side: str,
+    ask_cents: int,
+    result_yes: bool,
+    venue: str = "kalshi",
+) -> Decimal | None:
+    """Settlement dollars for one contract after that venue's taker fee."""
     if side not in {"yes", "no"}:
         return None
-    scored = event_news_fee_net_edge(Decimal("0.5"), ask_cents, 1)
+    if venue == _POLYMARKET_US:
+        scored = _fee_net(Decimal("0.5"), ask_cents, 1, venue)
+    else:
+        scored = event_news_fee_net_edge(Decimal("0.5"), ask_cents, 1)
     if scored is None:
         return None
     fee = scored[1]
@@ -1482,6 +1550,105 @@ def contract_fee_net_dollars(side: str, ask_cents: int, result_yes: bool) -> Dec
     if won:
         return Decimal(1) - price - fee
     return -price - fee
+
+
+def quote_from_market(market: Any) -> dict[str, Any] | None:
+    """One market's own YES and NO asks. A missing YES ask is not a quote."""
+    view = _market_view(market)
+    yes_ask = None if view is None else view.get("yes_ask")
+    if view is None or type(yes_ask) is not int:
+        return None
+    return view
+
+
+def lowest_yes_quote(markets: Sequence[Any]) -> dict[str, Any] | None:
+    """The market with the lowest YES ask, keeping that market's NO ask."""
+    best: dict[str, Any] | None = None
+    best_ask: int | None = None
+    for market in markets:
+        view = quote_from_market(market)
+        if view is None:
+            continue
+        yes_ask = view["yes_ask"]
+        if best_ask is None or yes_ask < best_ask:
+            best = view
+            best_ask = yes_ask
+    return best
+
+
+def _pair_edge(yes_view: Mapping[str, Any], no_view: Mapping[str, Any]) -> Decimal | None:
+    """1 - YES - NO - each leg's own one-contract taker fee."""
+    yes_ask = yes_view.get("yes_ask")
+    no_ask = no_view.get("no_ask")
+    if type(yes_ask) is not int or type(no_ask) is not int:
+        return None
+    yes_fee = _fee_net(Decimal("0.5"), yes_ask, 1, _view_venue(yes_view))
+    no_fee = _fee_net(Decimal("0.5"), no_ask, 1, _view_venue(no_view))
+    if yes_fee is None or no_fee is None:
+        return None
+    return Decimal(1) - (Decimal(yes_ask) / Decimal(100)) - (Decimal(no_ask) / Decimal(100)) - yes_fee[1] - no_fee[1]
+
+
+def cross_venue_report(
+    markets: Sequence[Any],
+    *,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Report-only. Both prices are logged. Nothing here submits an order."""
+    universe = get_universe()
+    if universe.failed:
+        return []
+    by_series: dict[str, list[Any]] = {}
+    for market in markets:
+        view = quote_from_market(market)
+        if view is None:
+            continue
+        series = str(view.get("series") or "").strip().upper()
+        if series:
+            by_series.setdefault(series, []).append(market)
+    rows: list[dict[str, Any]] = []
+    for entry in universe.entries:
+        if entry.venue != _POLYMARKET_US or not entry.pair_series:
+            continue
+        kalshi = lowest_yes_quote(by_series.get(entry.pair_series, []))
+        polymarket = lowest_yes_quote(by_series.get(entry.series, []))
+        best: Decimal | None = None
+        if kalshi is not None and polymarket is not None:
+            for yes_view, no_view in ((kalshi, polymarket), (polymarket, kalshi)):
+                edge = _pair_edge(yes_view, no_view)
+                if edge is not None and (best is None or edge > best):
+                    best = edge
+        try:
+            edge_min = Decimal(entry.edge_min)
+        except Exception:
+            edge_min = None
+        rows.append(
+            {
+                "ts": _stamp(now),
+                "event": entry.series,
+                "pair_series": entry.pair_series,
+                "kalshi_yes_cents": None if kalshi is None else kalshi.get("yes_ask"),
+                "polymarket_yes_cents": None if polymarket is None else polymarket.get("yes_ask"),
+                "kalshi_no_cents": None if kalshi is None else kalshi.get("no_ask"),
+                "polymarket_no_cents": None if polymarket is None else polymarket.get("no_ask"),
+                "fee_net_gap": None if best is None else format(best, "f"),
+                "pair_clears": best is not None and edge_min is not None and best >= edge_min,
+            }
+        )
+    return rows
+
+
+def write_cross_venue(
+    markets: Sequence[Any],
+    *,
+    path: Path | None = None,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    rows = cross_venue_report(markets, now=now)
+    target = CROSS_VENUE_LOG_PATH if path is None else path
+    for row in rows:
+        _append_jsonl(target, row)
+    return rows
 
 
 def scorecard_interval(values: Sequence[Decimal]) -> dict[str, Decimal | int | None]:
@@ -1528,10 +1695,13 @@ def _queued_candidate_rows(db_path: Path) -> list[tuple]:
         if "ticker" not in names:
             return []
         series_sql = "series" if "series" in names else "''"
+        venue_sql = "COALESCE(venue, 'kalshi')" if "venue" in names else "'kalshi'"
         return conn.execute(
-            "SELECT ticker, series, side, ask_cents, grok_probability FROM ("
+            "SELECT ticker, series, side, ask_cents, grok_probability, venue FROM ("
             "SELECT ticker, " + series_sql
-            + " AS series, side, ask_cents, grok_probability, ROW_NUMBER() OVER ("
+            + " AS series, side, ask_cents, grok_probability, "
+            + venue_sql
+            + " AS venue, ROW_NUMBER() OVER ("
             "PARTITION BY ticker ORDER BY ts DESC, rowid DESC) rn FROM paper_candidates "
             "WHERE queued = 1 AND side IS NOT NULL AND ask_cents IS NOT NULL "
             "AND grok_probability IS NOT NULL) WHERE rn = 1"
@@ -1552,10 +1722,11 @@ def write_paper_scorecard(
     """Per-series fee-net scorecard. Promotion text does not change modes."""
     moment = now or datetime.now(timezone.utc)
     modes = _scorecard_modes()
-    grouped: dict[str, list[tuple[bool, Decimal, Decimal, Decimal]]] = {}
+    grouped: dict[tuple[str, str], list[tuple[bool, Decimal, Decimal, Decimal]]] = {}
     calibration: list[dict[str, Any]] = []
-    for ticker, series, side, ask, probability_text in _queued_candidate_rows(db_path):
+    for ticker, series, side, ask, probability_text, venue in _queued_candidate_rows(db_path):
         name = str(series or "") or str(ticker or "").split("-", 1)[0]
+        venue_name = _view_venue({"venue": venue})
         p_yes = _decimal(probability_text)
         try:
             result = _settlement_result(market_lookup(str(ticker)))
@@ -1568,17 +1739,18 @@ def write_paper_scorecard(
             or not isinstance(ask, int)
         ):
             continue
-        pnl = contract_fee_net_dollars(str(side or ""), ask, result == "yes")
+        pnl = contract_fee_net_dollars(str(side or ""), ask, result == "yes", venue_name)
         if pnl is None:
             continue
         outcome = Decimal(1 if result == "yes" else 0)
-        grouped.setdefault(name, []).append(
+        grouped.setdefault((venue_name, name), []).append(
             ((str(side) == "yes") == (result == "yes"), pnl, p_yes, outcome)
         )
         calibration.append(
             {
                 "ticker": str(ticker or ""),
                 "series": name,
+                "venue": venue_name,
                 "p": format(p_yes, "f"),
                 "outcome": int(outcome),
             }
@@ -1591,13 +1763,13 @@ def write_paper_scorecard(
         "EV is per-contract taker-fee-net. One settled row per ticker. CI is mean +/- 1.96 sample stdev / sqrt(n). n<2 has none.",
         "Brier is the mean squared error of the YES probability against the settlement.",
         "",
-        "| series | mode | n | hits | hit_rate | ev_per_contract | ci95_low | ci95_high | brier | promotion |",
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|---|",
+        "| venue | series | mode | n | hits | hit_rate | ev_per_contract | ci95_low | ci95_high | brier | promotion |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     if not grouped:
-        lines.append("| | | 0 | | | | | | | no settled fee-net rows |")
-    for series in sorted(grouped):
-        samples = grouped[series]
+        lines.append("| | | | 0 | | | | | | | no settled fee-net rows |")
+    for venue_name, series in sorted(grouped):
+        samples = grouped[(venue_name, series)]
         values = [pnl for _hit, pnl, _p, _outcome in samples]
         hits = sum(hit for hit, _pnl, _p, _outcome in samples)
         stats = scorecard_interval(values)
@@ -1612,7 +1784,7 @@ def write_paper_scorecard(
         brier = None if n == 0 else squared / Decimal(n)
         brier_cell = "" if brier is None else format(brier.normalize(), "f")
         lines.append(
-            f"| {series} | {effective or mode} | {n} | {hits} | {_cell(rate)} | "
+            f"| {venue_name} | {series} | {effective or mode} | {n} | {hits} | {_cell(rate)} | "
             f"{_cell(mean)} | {_cell(low)} | {_cell(high)} | {brier_cell} | {label} |"
         )
     text = "\n".join(lines) + "\n"
@@ -1643,8 +1815,34 @@ def _book_field(market: Any, *names: str) -> Any:
     return None
 
 
+def _polymarket_side_block(side: str, ask: Any) -> str | None:
+    """0-35c, the 55c YES floor, and the 91c gate. Size is checked at the queue."""
+    if isinstance(ask, bool) or type(ask) is not int:
+        return "bad_ask"
+    if ask < EVENT_NEWS_BAND_FLOOR_CENTS:
+        return "ask_band"
+    if ask >= _NEAR_CERTAIN_ASK_CENTS:
+        return "near_certain_ask"
+    if side == "yes" and ask < 55:
+        return "yes_floor"
+    return None
+
+
+def _polymarket_book_block(view: Mapping[str, Any]) -> str | None:
+    """Skip Grok only when every side fails a shared guard."""
+    reasons: list[str] = []
+    for side in ("yes", "no"):
+        reason = _polymarket_side_block(side, view.get(f"{side}_ask"))
+        if reason is None:
+            return None
+        reasons.append(reason)
+    return reasons[0] if reasons else "bad_ask"
+
+
 def _paper_gate_reason(market: Any, view: Mapping[str, Any], probability: float | None) -> str | None:
     series = str(view.get("series") or "")
+    if _view_venue(view) == _POLYMARKET_US:
+        return _polymarket_book_block(view)
     if not _paper_only_series(series):
         return None
     scored = SimpleNamespace(
@@ -1711,6 +1909,7 @@ def _store_decision(
         "reason_code": reason,
         "prompt_hash": prompt_hash,
         "model": GROK_MODEL,
+        "venue": _view_venue(view),
     }
     _append_jsonl(candidate_log_path, record)
     _insert_paper_row(db_path, "paper_candidates", record)
@@ -1738,6 +1937,7 @@ def _queue_best_side(
             contracts=PAPER_QUEUE_CONTRACTS,
             edge_min=edge_min,
             yes_floor_cents=yes_floor,
+            venue=_view_venue(view),
         )
         if reason != "queue" or edge is None or ask is None:
             best_reason = reason
@@ -1753,8 +1953,10 @@ def _queue_best_side(
     if best is not None:
         record_side, record_edge, record_ask = best
         sided = call.probability if record_side == "yes" else Decimal(1) - call.probability
-        quoted = event_news_fee_net_cents(sided, record_ask, PAPER_QUEUE_CONTRACTS)
-        record_fee = None if quoted is None else quoted[0]
+        quoted = _fee_net(sided, record_ask, PAPER_QUEUE_CONTRACTS, _view_venue(view))
+        record_fee = None if quoted is None else int(
+            (quoted[1] * Decimal(100)).to_integral_value(rounding=ROUND_CEILING)
+        )
         queued = True
         reason = "queue"
     _store_decision(
@@ -1978,6 +2180,7 @@ def _call_grok(
     raw_dir: Path = RAW_DIR,
     series: str = "",
     expected_tickers: Sequence[str] = (),
+    venue: str = "kalshi",
 ) -> GrokEdgeCall | None:
     env = os.environ if environ is None else environ
     tools = _SCAN_TOOLS if grounded else ()
@@ -2054,6 +2257,7 @@ def _call_grok(
             "cost_usd": format(cost, "f"),
             "cost_source": cost_source,
             "skip_reason": skip,
+            "venue": _POLYMARKET_US if venue == _POLYMARKET_US else "kalshi",
         }
         if search_limit:
             record["max_search_results"] = search_limit
@@ -2197,6 +2401,7 @@ def _market_view(market: Any) -> dict[str, Any] | None:
         title = str(market.get("title") or "")
         rules = str(market.get("rules") or "")
         close = str(market.get("close_time") or "")
+        venue_raw = market.get("venue")
     else:
         ticker = str(getattr(market, "ticker", "") or "").strip()
         series = event_news_series_ticker(market)
@@ -2205,6 +2410,7 @@ def _market_view(market: Any) -> dict[str, Any] | None:
         title = str(getattr(market, "title", "") or "")
         rules = str(getattr(market, "rules_primary", "") or "")
         close = str(getattr(market, "close_time", "") or "")
+        venue_raw = getattr(market, "venue", None)
     if not ticker:
         return None
     return {
@@ -2216,6 +2422,7 @@ def _market_view(market: Any) -> dict[str, Any] | None:
         "title": title,
         "rules": rules,
         "close_time": close,
+        "venue": _view_venue({"venue": venue_raw}),
     }
 
 
@@ -2562,6 +2769,7 @@ def _insert_paper_row(db_path: Path | None, table: str, record: Mapping[str, Any
                     ("prompt_hash", "TEXT"),
                     ("model", "TEXT"),
                     ("reason_code", "TEXT"),
+                    ("venue", "TEXT"),
                 ):
                     if name not in have:
                         conn.execute(f"ALTER TABLE paper_candidates ADD COLUMN {name} {kind}")
@@ -2570,8 +2778,8 @@ def _insert_paper_row(db_path: Path | None, table: str, record: Mapping[str, Any
                     INSERT INTO paper_candidates (
                         ts, ticker, side, ask_cents, yes_ask_cents, grok_probability,
                         edge_cents, sources_json, queued, skip_reason,
-                        series, fee_cents, prompt_hash, model, reason_code
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        series, fee_cents, prompt_hash, model, reason_code, venue
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         str(record.get("ts") or ""),
@@ -2589,6 +2797,7 @@ def _insert_paper_row(db_path: Path | None, table: str, record: Mapping[str, Any
                         record.get("prompt_hash"),
                         record.get("model"),
                         record.get("reason_code"),
+                        _view_venue(record),
                     ),
                 )
             else:

@@ -19,6 +19,12 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.4] - 2026-10-21
+
+### Added
+
+- **Polymarket US paper uses the same gate chain.** The sidecar reads Polymarket books through the public client, scores them with the Polymarket taker fee, and stores the venue on the paper row. The 0-35c band, the 55c YES floor, the 91c gate, and the 8-contract cap apply. Two agreeing Grok scans still queue. The order endpoint stays blocked. A cross-venue line records both prices and the fee-net gap and does not send an order. The scorecard and the P&L report show the venue. Promotion stays report-only: 15 settled rows and a fee-net EV interval above zero.
+
 ## [0.37.3] - 2026-10-21
 
 ### Added

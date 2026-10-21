@@ -37,6 +37,7 @@ _ALLOWED_KEYS = frozenset(
         "x_search",
         "venue",
         "venue_market",
+        "pair_series",
     }
 )
 _VENUES = frozenset({"kalshi", "polymarket_us"})
@@ -67,6 +68,7 @@ class SeriesEntry:
     x_search: bool = False
     venue: str = "kalshi"
     venue_market: str = ""
+    pair_series: str = ""
 
     @property
     def favorite_band(self) -> tuple[float, float]:
@@ -348,6 +350,7 @@ def _parse_entries(payload: Any) -> tuple[SeriesEntry, ...]:
         edge_min = _edge_min(item.get("edge_min", _DEFAULT_EDGE_MIN))
         venue = _venue(item.get("venue", "kalshi"))
         venue_market = _venue_market(venue, str(mode), item.get("venue_market"))
+        pair_series = _pair_series(venue, item.get("pair_series"))
         entries.append(
             SeriesEntry(
                 series=series,
@@ -365,10 +368,15 @@ def _parse_entries(payload: Any) -> tuple[SeriesEntry, ...]:
                 x_search=_flag(item, "x_search"),
                 venue=venue,
                 venue_market=venue_market,
+                pair_series=pair_series,
             )
         )
     if not entries:
         raise ValueError("empty")
+    kalshi_names = {entry.series for entry in entries if entry.venue == "kalshi"}
+    for entry in entries:
+        if entry.pair_series and entry.pair_series not in kalshi_names:
+            raise ValueError("bad_pair")
     return tuple(entries)
 
 
@@ -419,6 +427,18 @@ def _venue(value: Any) -> str:
     if venue not in _VENUES:
         raise ValueError("bad_venue")
     return venue
+
+
+def _pair_series(venue: str, value: Any) -> str:
+    """Optional Kalshi series for a report-only price comparison."""
+    if value in (None, ""):
+        return ""
+    if venue != "polymarket_us" or not isinstance(value, str):
+        raise ValueError("bad_pair")
+    name = value.strip().upper()
+    if not name.isalnum():
+        raise ValueError("bad_pair")
+    return name
 
 
 def _venue_market(venue: str, mode: str, value: Any) -> str:
