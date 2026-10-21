@@ -16,6 +16,8 @@ export EVENT_NEWS_GROK_EDGE_SCAN=true
 export EVENT_NEWS_GROK_EXIT_WATCH=true
 export EVENT_NEWS_GROK_GROUNDING=true
 export GROK_DAILY_USD_CAP=3
+# Same fee-net edge as politics. The flat path stays in code.
+export EVENT_NEWS_UNIFIED_EDGE=true
 
 PY="$ROOT/.venv/bin/python"
 SCRIPT="$ROOT/scripts/grok_paper_sidecar.py"

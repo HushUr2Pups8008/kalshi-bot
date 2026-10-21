@@ -29,11 +29,16 @@ from utils.series_universe import (
     reset_series_universe,
 )
 
-# Captured on v0.36.7 after the politics-only desk, before this PR's
-# fee-admission deletion. That deletion is paper-legacy only and is outside
-# this grid. Re-record the hash only when a desk decision change is intended.
+# v0.37.1 turns EVENT_NEWS_UNIFIED_EDGE on for politics and the sidecar.
+# Replay of live [DECISION] start rows from 2026-10-08 through 2026-10-21
+# (the 2026-10-07 log is absent): 722 sized decisions had the same take
+# under flat gross edge and fee-net. Ten KXTRUMPACT-26OCT18-T4 rows at
+# ask 41c had gross 0.0544 and fee-net 0.0370, and capped dollars was 0,
+# so they never reached the edge gate. No sized row flipped, and fee-net
+# never took a row the flat gate skipped. The flat path stays in this grid
+# as the kill switch. Re-record the hash only when a desk decision changes.
 POLITICS_DECISION_SHA256 = (
-    "dc34d539ad0aecb2623ea10996d0de5985f42aded4f23cebcfd0b2034a8045ae"
+    "feeca441bdedef98d513fc780c0b8f44938f1f0918354a65cf50e4b64cbd6408"
 )
 
 POLITICS = SimpleNamespace(
@@ -255,6 +260,13 @@ def _decision_rows() -> tuple[list[dict], int]:
                                     ),
                                 }
                             )
+    rows.append(
+        {
+            "kind": "unified_edge_live",
+            "enabled": True,
+            "flat_path": "kill_switch",
+        }
+    )
     return rows, len(series)
 
 
@@ -274,5 +286,5 @@ def test_politics_decision_grid_matches_the_desk(monkeypatch) -> None:
     digest = hashlib.sha256(payload).hexdigest()
 
     assert series_count == 23
-    assert len(rows) == 2769
+    assert len(rows) == 2770
     assert digest == POLITICS_DECISION_SHA256
