@@ -132,6 +132,8 @@ def test_shipped_paper_series_are_not_live_and_cannot_post():
         )
     assert entries["PMTRUMPAPPROVE"].pair_series == "KXTRUMPAPPROVE"
     assert entries["PMHORMUZ"].pair_series == "KXHORMUZWEEKLY"
+    assert entries["PMTRUMPAPPROVE"].pair_map == ()
+    assert entries["PMHORMUZ"].pair_map == ()
     assert entries["KXTRUMPAPPROVE"].pair_series == ""
     mention = entries["KXTRUMPMENTION"]
     assert mention.mode == "paper"
@@ -585,6 +587,27 @@ def test_missing_universe_admits_nothing_and_logs_once(tmp_path, caplog):
             "  favorite_hi_cents: 90\n"
             "  notes: kalshi cannot carry a pair\n",
             "bad_pair",
+        ),
+        (
+            "- series: KXTRUTHSOCIAL\n"
+            "  mode: live\n"
+            "  pair_map: {KXTRUTHSOCIAL-1: hormuz-normal}\n"
+            "  favorite_lo_cents: 36\n"
+            "  favorite_hi_cents: 90\n"
+            "  notes: kalshi cannot carry a map\n",
+            "bad_pair_map",
+        ),
+        (
+            "- series: PMTRUMPAPPROVE\n"
+            "  mode: paper\n"
+            "  venue: polymarket_us\n"
+            "  venue_market: trmpapprv-wk-2026-10-23\n"
+            "  pair_series: KXTRUTHSOCIAL\n"
+            "  pair_map: {KXTRUTHSOCIAL-1: NOT A SLUG}\n"
+            "  favorite_lo_cents: 55\n"
+            "  favorite_hi_cents: 99\n"
+            "  notes: map slug must be a slug\n",
+            "bad_pair_map",
         ),
     ],
 )

@@ -1654,13 +1654,41 @@ def _settlement_source(title: str, rules: str) -> str | None:
 
 
 def _contract_identity(view: Mapping[str, Any]) -> tuple[Any, ...] | None:
-    """Same close, same outcome, and same settlement source. Otherwise unmatched."""
+    """Same settlement date, outcome, and source. The clock time is not the date."""
     close = _canonical_close(view.get("close_time"))
     outcome = _outcome_key(str(view.get("title") or ""))
     source = _settlement_source(str(view.get("title") or ""), str(view.get("rules") or ""))
     if close is None or outcome is None or source is None:
         return None
-    return (close, source, outcome)
+    return (close[:10], source, outcome)
+
+
+def _source_date(view: Mapping[str, Any]) -> tuple[str, str] | None:
+    close = _canonical_close(view.get("close_time"))
+    source = _settlement_source(str(view.get("title") or ""), str(view.get("rules") or ""))
+    if close is None or source is None:
+        return None
+    return close[:10], source
+
+
+def _unmatched_reason(view: Mapping[str, Any], others: Sequence[Mapping[str, Any]]) -> str:
+    """A different source or date is not comparable. It is not a failed pair."""
+    left = _source_date(view)
+    if left is None:
+        return "unparsed"
+    other_dates = [item for item in (_source_date(other) for other in others) if item]
+    parts = _contract_identity(view)
+    parsed = [item for item in (_contract_identity(other) for other in others) if item]
+    if parts is not None and sum(item == parts for item in parsed) > 1:
+        return "ambiguous"
+    comparable = [item for item in parsed if parts and item[0] == parts[0] and item[1] == parts[1]]
+    if comparable:
+        return "no_counterpart"
+    if any(item[1] != left[1] for item in other_dates):
+        return "different_source"
+    if any(item[0] != left[0] for item in other_dates):
+        return "different_settlement_date"
+    return "no_counterpart" if parts is not None else "unparsed"
 
 
 def _pair_edge(yes_view: Mapping[str, Any], no_view: Mapping[str, Any]) -> Decimal | None:
@@ -1684,6 +1712,7 @@ def _cross_venue_row(
     kalshi: Mapping[str, Any] | None,
     polymarket: Mapping[str, Any] | None,
     edge_min: Decimal | None,
+    reason: str = "",
 ) -> dict[str, Any]:
     best: Decimal | None = None
     if kalshi is not None and polymarket is not None:
@@ -1692,11 +1721,13 @@ def _cross_venue_row(
             if edge is not None and (best is None or edge > best):
                 best = edge
     matched = kalshi is not None and polymarket is not None
+    label = "matched" if matched else ("not comparable" if reason in ("different_source", "different_settlement_date") else "no match")
     return {
         "ts": _stamp(now),
         "event": event,
         "pair_series": pair_series,
-        "match": "matched" if matched else "no match",
+        "match": label,
+        "reason": reason,
         "kalshi_ticker": "" if kalshi is None else str(kalshi.get("ticker") or ""),
         "polymarket_ticker": "" if polymarket is None else str(polymarket.get("ticker") or ""),
         "kalshi_yes_cents": None if kalshi is None else kalshi.get("yes_ask"),
@@ -1713,11 +1744,7 @@ def cross_venue_report(
     *,
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
-    """Report-only pairs that share an outcome, a source, and a close time.
-
-    An unmatched event is "no match". The lowest ask in the event is not a pair.
-    Nothing here submits an order.
-    """
+    """Report-only. Same source, settlement date, and outcome. A map cannot cross those."""
     universe = get_universe()
     if universe.failed:
         return []
@@ -1739,44 +1766,64 @@ def cross_venue_report(
             edge_min = None
         kalshi_views = by_series.get(entry.pair_series, [])
         poly_views = by_series.get(entry.series, [])
-        used: set[str] = set()
-        paired: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        used_k: set[str] = set()
+        used_p: set[str] = set()
+        explicit = {left: right for left, right in entry.pair_map}
+
+        def _add(left: Mapping[str, Any], right: Mapping[str, Any]) -> None:
+            used_k.add(str(left.get("ticker") or ""))
+            used_p.add(str(right.get("ticker") or ""))
+            rows.append(
+                _cross_venue_row(
+                    now=now,
+                    event=entry.series,
+                    pair_series=entry.pair_series,
+                    kalshi=left,
+                    polymarket=right,
+                    edge_min=edge_min,
+                )
+            )
+
         for kalshi in kalshi_views:
+            slug = explicit.get(str(kalshi.get("ticker") or ""))
+            found = [item for item in poly_views if slug and str(item.get("ticker") or "") == slug]
+            if len(found) != 1 or str(found[0].get("ticker") or "") in used_p or _source_date(kalshi) is None or _source_date(kalshi) != _source_date(found[0]):
+                continue
+            own, other = _contract_identity(kalshi), _contract_identity(found[0])
+            if own is not None and other is not None and own != other:
+                continue
+            _add(kalshi, found[0])
+        for kalshi in kalshi_views:
+            if str(kalshi.get("ticker") or "") in used_k:
+                continue
             identity = _contract_identity(kalshi)
-            if identity is None:
-                continue
             found = [
-                item
-                for item in poly_views
-                if item.get("ticker") not in used and _contract_identity(item) == identity
+                item for item in poly_views
+                if identity and str(item.get("ticker") or "") not in used_p and _contract_identity(item) == identity
             ]
-            if len(found) != 1:
-                continue
-            used.add(str(found[0].get("ticker") or ""))
-            paired.append((kalshi, found[0]))
-        if not paired:
+            if len(found) == 1:
+                _add(kalshi, found[0])
+
+        def _skip(view: Mapping[str, Any], others: Sequence[Mapping[str, Any]], kalshi_side: bool) -> None:
+            ticker = str(view.get("ticker") or "")
+            if ticker in (used_k if kalshi_side else used_p):
+                return
             rows.append(
                 _cross_venue_row(
                     now=now,
                     event=entry.series,
                     pair_series=entry.pair_series,
-                    kalshi=None,
-                    polymarket=None,
+                    kalshi=view if kalshi_side else None,
+                    polymarket=None if kalshi_side else view,
                     edge_min=edge_min,
+                    reason=_unmatched_reason(view, others),
                 )
             )
-            continue
-        for kalshi, polymarket in paired:
-            rows.append(
-                _cross_venue_row(
-                    now=now,
-                    event=entry.series,
-                    pair_series=entry.pair_series,
-                    kalshi=kalshi,
-                    polymarket=polymarket,
-                    edge_min=edge_min,
-                )
-            )
+
+        for kalshi in kalshi_views:
+            _skip(kalshi, poly_views, True)
+        for poly in poly_views:
+            _skip(poly, kalshi_views, False)
     return rows
 
 
@@ -1789,6 +1836,8 @@ def write_cross_venue(
     rows = cross_venue_report(markets, now=now)
     target = CROSS_VENUE_LOG_PATH if path is None else path
     for row in rows:
+        if row.get("reason"):
+            log.info("cross venue unmatched event=%s ticker=%s reason=%s", row["event"], row["kalshi_ticker"] or row["polymarket_ticker"], row["reason"])
         _append_jsonl(target, row)
     return rows
 
