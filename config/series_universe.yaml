@@ -346,6 +346,7 @@
 - series: PMTRUMPAPPROVE
   venue: polymarket_us
   venue_market: trmpapprv-wk-2026-10-23
+  pair_series: KXTRUMPAPPROVE
   mode: paper
   favorite_lo_cents: 55
   favorite_hi_cents: 99
@@ -361,6 +362,7 @@
 - series: PMHORMUZ
   venue: polymarket_us
   venue_market: hormuz-normal
+  pair_series: KXHORMUZWEEKLY
   mode: paper
   favorite_lo_cents: 55
   favorite_hi_cents: 99

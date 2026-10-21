@@ -568,17 +568,19 @@ def _render(
         "",
         "## Trades",
         "",
-        "| ticker | side | qty | price_cents | fee_dollars | payout_dollars | fee_net_dollars |",
-        "| --- | --- | --- | --- | --- | --- | --- |",
+        "| venue | ticker | side | qty | price_cents | fee_dollars | payout_dollars | fee_net_dollars |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for row in sorted(trades):
-        lines.append("| " + " | ".join(row) + " |")
-    lines.extend(["", "## Series", "", "| series | fee_net_dollars |", "| --- | --- |"])
+        lines.append("| kalshi | " + " | ".join(row) + " |")
+    lines.extend(
+        ["", "## Series", "", "| venue | series | fee_net_dollars |", "| --- | --- | --- |"]
+    )
     if series_totals:
         for name in sorted(series_totals):
-            lines.append(f"| {name} | {money(series_totals[name])} |")
+            lines.append(f"| kalshi | {name} | {money(series_totals[name])} |")
     else:
-        lines.append("| none | 0 |")
+        lines.append("| kalshi | none | 0 |")
     lines.extend(
         [
             "",
@@ -611,13 +613,14 @@ def _render(
         lines.append("")
     lines.extend(
         [
-            "| ticker | side | qty | price_cents | resolved | pnl_dollars | series | signal_type |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| venue | ticker | side | qty | price_cents | resolved | pnl_dollars | series | signal_type |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
     )
     for row in sorted(paper_rows, key=lambda item: (str(item.get("ticker")), str(item.get("side")))):
         lines.append(
-            "| {ticker} | {side} | {contracts} | {price_cents} | {resolved} | {pnl_dollars} | {series_ticker} | {signal_type} |".format(
+            "| {venue} | {ticker} | {side} | {contracts} | {price_cents} | {resolved} | {pnl_dollars} | {series_ticker} | {signal_type} |".format(
+                venue=_paper_venue(row),
                 ticker=row.get("ticker") or "",
                 side=row.get("side") or "",
                 contracts=row.get("contracts") if row.get("contracts") is not None else "",
@@ -633,6 +636,13 @@ def _render(
     return "\n".join(lines)
 
 
+def _paper_venue(row: dict) -> str:
+    raw = str(row.get("venue") or "kalshi").strip().lower()
+    if raw == "polymarket_us":
+        return "polymarket_us"
+    return "kalshi"
+
+
 def read_paper(path: Path) -> tuple[list[dict], str | None]:
     if not path.is_file():
         return [], "paper db absent"
@@ -643,10 +653,12 @@ def read_paper(path: Path) -> tuple[list[dict], str | None]:
         return [], "paper db unreadable"
     try:
         conn.row_factory = sqlite3.Row
+        names = {row[1] for row in conn.execute("PRAGMA table_info(paper_trades)")}
+        venue_sql = "venue" if "venue" in names else "'kalshi'"
         found = conn.execute(
-            """
+            f"""
             SELECT ticker, side, contracts, price_cents, resolved,
-                   pnl_dollars, series_ticker, signal_type
+                   pnl_dollars, series_ticker, signal_type, {venue_sql} AS venue
             FROM paper_trades
             """
         ).fetchall()

@@ -3,8 +3,9 @@
 
 Lists markets, reads positions, and writes logs/state/grok_edge_*.jsonl plus
 logs/state/grok_paper.db. It does not import the executor and it does not
-submit, cancel, or reprice an order. Kalshi access is GET only. POST and
-DELETE to the order endpoints raise while this process is armed.
+submit, cancel, or reprice an order. Kalshi access is GET only. Polymarket US
+access is public GET only, and the order endpoint stays blocked. POST and
+DELETE to the Kalshi order endpoints raise while this process is armed.
 """
 
 from __future__ import annotations
@@ -95,12 +96,35 @@ def _position_series(positions) -> tuple[str, ...]:
     return tuple(found)
 
 
-def _run_scan(rest, positions=None, *, now: datetime | None = None) -> dict[str, int]:
+def _polymarket_entries(series_list: tuple[str, ...]):
+    from utils.series_universe import get_universe
+
+    universe = get_universe()
+    if universe.failed:
+        return []
+    wanted = set(series_list)
+    return [
+        entry
+        for entry in universe.entries
+        if entry.series in wanted and entry.venue == "polymarket_us"
+    ]
+
+
+def _run_scan(
+    rest,
+    positions=None,
+    *,
+    now: datetime | None = None,
+    polymarket_client=None,
+    cross_venue_path: Path | None = None,
+) -> dict[str, int]:
     """Fetch politics series only, rank them, and examine the top of that list.
 
-    ``fetched`` is the raw page length. ``politics`` is how many of those
-    markets are open, close within 30 days, and have an ask from 36c to 94c.
-    KXDJI and the research prewarm fallback are not requested.
+    ``fetched`` is the Kalshi page length. Polymarket names are not sent to
+    Kalshi. ``politics`` is how many Kalshi markets are open, close within
+    30 days, and have an ask from 36c to 94c. KXDJI and the research prewarm
+    fallback are not requested. A Polymarket read error does not drop the
+    Kalshi scan. The order endpoint stays blocked.
     """
     from utils.event_news_grok_edge import (
         PAPER_CLOSE_WINDOW,
@@ -110,20 +134,28 @@ def _run_scan(rest, positions=None, *, now: datetime | None = None) -> dict[str,
         politics_scan_series,
         rank_politics_markets,
         run_paper_edge_scan,
+        write_cross_venue,
     )
 
     moment = now or datetime.now(timezone.utc)
     series_list = politics_scan_series(_position_series(positions))
+    entries = _polymarket_entries(series_list)
+    poly_names = {entry.series for entry in entries}
     markets: list = []
     for series in series_list:
+        if series in poly_names:
+            continue
         page, _cursor = rest.get_markets(status="open", series_ticker=series, limit=20)
         markets.extend(page or [])
-    ranked = rank_politics_markets(markets, now=moment, series=series_list, close_window=PAPER_CLOSE_WINDOW)
+    kalshi_allow = tuple(series for series in series_list if series not in poly_names)
+    ranked = rank_politics_markets(
+        markets, now=moment, series=kalshi_allow, close_window=PAPER_CLOSE_WINDOW
+    )
     open_tickers = tuple(row["ticker"] for row in paper_position_rows(positions))
     counts = run_paper_edge_scan(
         ranked,
         live=False,
-        allowlist=series_list,
+        allowlist=kalshi_allow,
         db_path=PAPER_DB_PATH,
         max_markets=SCAN_TOP_N,
         now=moment,
@@ -131,6 +163,61 @@ def _run_scan(rest, positions=None, *, now: datetime | None = None) -> dict[str,
     )
     counts["fetched"] = len(markets)
     counts["politics"] = len(ranked)
+    report = polymarket_client is not None or os.environ.get("KALSHI_GROK_PAPER_SIDECAR") == "true"
+    client = polymarket_client
+    if client is None and report:
+        try:
+            from polymarket.public_client import PolymarketPublicClient
+
+            client = PolymarketPublicClient()
+        except Exception as exc:
+            print(
+                f"grok paper polymarket client failed error_type={type(exc).__name__}",
+                file=sys.stderr,
+            )
+            client = None
+    poly_views: list = []
+    if client is not None and entries:
+        from polymarket.paper_views import load_polymarket_paper_markets
+        from polymarket.read_only import PolymarketOrderBlocked
+
+        try:
+            poly_views = load_polymarket_paper_markets(client, entries)
+        except PolymarketOrderBlocked:
+            raise
+        except Exception as exc:
+            print(
+                f"grok paper polymarket fetch failed error_type={type(exc).__name__}",
+                file=sys.stderr,
+            )
+            poly_views = []
+        poly_ranked = rank_politics_markets(
+            poly_views,
+            now=moment,
+            series=tuple(entry.series for entry in entries),
+            close_window=PAPER_CLOSE_WINDOW,
+        )
+        if poly_ranked:
+            poly_counts = run_paper_edge_scan(
+                poly_ranked,
+                live=False,
+                allowlist=tuple(entry.series for entry in entries),
+                db_path=PAPER_DB_PATH,
+                max_markets=SCAN_TOP_N,
+                now=moment,
+                open_tickers=open_tickers,
+            )
+            for key in (
+                "examined",
+                "queued",
+                "skipped",
+                "screen_skipped",
+                "cache_hits",
+                "grounded_calls",
+            ):
+                counts[key] = counts.get(key, 0) + poly_counts.get(key, 0)
+    if report:
+        write_cross_venue([*markets, *poly_views], path=cross_venue_path, now=moment)
     return counts
 
 
@@ -151,6 +238,8 @@ def run_score_then_scan(
     rest,
     *,
     now: datetime | None = None,
+    polymarket_client=None,
+    cross_venue_path: Path | None = None,
 ) -> tuple[dict[str, int], dict[str, int], BaseException | None]:
     """Score open positions, then scan the ranked politics book.
 
@@ -166,7 +255,13 @@ def run_score_then_scan(
     except Exception as exc:
         score_error = exc
         scores = {"scored": 0, "skipped": 0}
-    scan = _run_scan(rest, positions, now=now)
+    scan = _run_scan(
+        rest,
+        positions,
+        now=now,
+        polymarket_client=polymarket_client,
+        cross_venue_path=cross_venue_path,
+    )
     return scores, scan, score_error
 
 

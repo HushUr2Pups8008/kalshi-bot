@@ -125,10 +125,14 @@ def test_shipped_paper_series_are_not_live_and_cannot_post():
         assert entry.venue == "polymarket_us"
         assert entry.mode == "paper"
         assert entry.venue_market
+        assert entry.pair_series
         market = SimpleNamespace(ticker=f"{series}-26OCT-A", series_ticker=series)
         assert event_news_live_post_block_reason(market, config=politics) == (
             "paper_series_no_post"
         )
+    assert entries["PMTRUMPAPPROVE"].pair_series == "KXTRUMPAPPROVE"
+    assert entries["PMHORMUZ"].pair_series == "KXHORMUZWEEKLY"
+    assert entries["KXTRUMPAPPROVE"].pair_series == ""
     mention = entries["KXTRUMPMENTION"]
     assert mention.mode == "paper"
     assert mention.transcript_skip is True
@@ -550,6 +554,37 @@ def test_missing_universe_admits_nothing_and_logs_once(tmp_path, caplog):
             "  favorite_hi_cents: 90\n"
             "  notes: kalshi has no slug\n",
             "bad_venue_market",
+        ),
+        (
+            "- series: PMTRUMPAPPROVE\n"
+            "  mode: paper\n"
+            "  venue: polymarket_us\n"
+            "  venue_market: trmpapprv-wk-2026-10-23\n"
+            "  pair_series: KXNOTREAL\n"
+            "  favorite_lo_cents: 55\n"
+            "  favorite_hi_cents: 99\n"
+            "  notes: unknown pair\n",
+            "bad_pair",
+        ),
+        (
+            "- series: PMTRUMPAPPROVE\n"
+            "  mode: paper\n"
+            "  venue: polymarket_us\n"
+            "  venue_market: trmpapprv-wk-2026-10-23\n"
+            "  pair_series: KX-NOPE\n"
+            "  favorite_lo_cents: 55\n"
+            "  favorite_hi_cents: 99\n"
+            "  notes: hyphen pair\n",
+            "bad_pair",
+        ),
+        (
+            "- series: KXTRUTHSOCIAL\n"
+            "  mode: live\n"
+            "  pair_series: KXTRUTHSOCIAL\n"
+            "  favorite_lo_cents: 36\n"
+            "  favorite_hi_cents: 90\n"
+            "  notes: kalshi cannot carry a pair\n",
+            "bad_pair",
         ),
     ],
 )

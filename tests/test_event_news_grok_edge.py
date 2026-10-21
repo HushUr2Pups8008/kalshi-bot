@@ -1779,6 +1779,7 @@ def test_scorecard_matches_the_hand_interval_and_promotion(tmp_path: Path) -> No
         report_path=tmp_path / "card.md",
         now=NOW,
     )
+    assert "| venue | series | mode |" in text
     assert "| KXHORMUZWEEKLY | paper | 2 | 1 | 0.5 | -0.0175 | " in text
     assert "| 0.34 |" in text
     calibration = (tmp_path / "card.calibration.jsonl").read_text(encoding="utf-8")
