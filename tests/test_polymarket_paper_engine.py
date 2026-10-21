@@ -85,39 +85,164 @@ def test_polymarket_queue_keeps_the_shared_guards_and_its_own_fee() -> None:
     assert polymarket[0] == "edge"
 
 
-def _quote(series: str, ticker: str, yes_ask: int, no_ask: int, venue: str = "kalshi") -> dict:
+def _quote(
+    series: str,
+    ticker: str,
+    yes_ask: int,
+    no_ask: int | None,
+    venue: str = "kalshi",
+    *,
+    title: str | None = None,
+    rules: str = "rules",
+    close_time: str = "2026-10-20T00:00:00Z",
+) -> dict:
     return {
         "ticker": ticker,
         "series": series,
         "status": "active",
         "yes_ask": yes_ask,
         "no_ask": no_ask,
-        "title": series,
-        "rules": "rules",
-        "close_time": "2026-10-20T00:00:00Z",
+        "title": title if title is not None else series,
+        "rules": rules,
+        "close_time": close_time,
         "venue": venue,
     }
 
 
-def test_cross_venue_logs_prices_and_the_fee_net_gap(tmp_path) -> None:
-    """YES 40 plus the other venue's NO 40 clears 0.04 after both taker fees."""
+def test_cross_venue_matches_the_same_outcome_and_ignores_a_one_cent_tail(tmp_path) -> None:
+    """Same close, outcome, and source pair. A different outcome is not the pair."""
+    close = "2026-11-06T22:00:00Z"
     markets = [
-        _quote("KXTRUMPAPPROVE", "KXTRUMPAPPROVE-A", 40, 70),
-        _quote("PMTRUMPAPPROVE", "trmpapprv-yes", 70, 40, "polymarket_us"),
+        _quote(
+            "KXTRUMPAPPROVE",
+            "KXTRUMPAPPROVE-E38.5",
+            40,
+            70,
+            title="exactly 38.5",
+            rules="RCP average",
+            close_time=close,
+        ),
+        _quote(
+            "KXTRUMPAPPROVE",
+            "KXTRUMPAPPROVE-TAIL",
+            1,
+            99,
+            title="exactly 39.2",
+            rules="RCP average",
+            close_time=close,
+        ),
+        _quote(
+            "PMTRUMPAPPROVE",
+            "parc-38pt5",
+            70,
+            40,
+            "polymarket_us",
+            title="exactly 38.5",
+            rules="RCP average",
+            close_time=close,
+        ),
     ]
     rows = write_cross_venue(markets, path=tmp_path / "cross.jsonl", now=NOW)
-    trump = next(row for row in rows if row["event"] == "PMTRUMPAPPROVE")
+    trump_rows = [row for row in rows if row["event"] == "PMTRUMPAPPROVE"]
+    assert len(trump_rows) == 1
+    trump = trump_rows[0]
+    assert trump["match"] == "matched"
+    assert trump["kalshi_ticker"] == "KXTRUMPAPPROVE-E38.5"
+    assert trump["polymarket_ticker"] == "parc-38pt5"
     assert trump["kalshi_yes_cents"] == 40
     assert trump["polymarket_yes_cents"] == 70
+    assert trump["kalshi_no_cents"] == 70
+    assert trump["polymarket_no_cents"] == 40
     assert trump["pair_clears"] is True
     assert Decimal(trump["fee_net_gap"]) >= Decimal("0.04")
-    missing = cross_venue_report([markets[0]], now=NOW)
+    assert trump["kalshi_ticker"] != "KXTRUMPAPPROVE-TAIL"
+    missing = cross_venue_report([markets[0], markets[1]], now=NOW)
     lone = next(row for row in missing if row["event"] == "PMTRUMPAPPROVE")
-    assert lone["kalshi_yes_cents"] == 40
+    assert lone["match"] == "no match"
+    assert lone["kalshi_yes_cents"] is None
     assert lone["polymarket_yes_cents"] is None
+    assert lone["kalshi_ticker"] == ""
+    assert lone["polymarket_ticker"] == ""
+    assert lone["fee_net_gap"] is None
     assert lone["pair_clears"] is False
     logged = json.loads((tmp_path / "cross.jsonl").read_text(encoding="utf-8").splitlines()[0])
-    assert logged["event"] == rows[0]["event"]
+    assert logged["kalshi_ticker"] == "KXTRUMPAPPROVE-E38.5"
+    assert "KXTRUMPAPPROVE-TAIL" not in (tmp_path / "cross.jsonl").read_text(encoding="utf-8")
+
+
+def test_cross_venue_rejects_a_different_close_source_or_two_matches() -> None:
+    """A 1c ask is not a match when the contract identity differs or is ambiguous."""
+    close = "2026-11-06T22:00:00Z"
+    other = "2026-10-22T16:59:00Z"
+    kalshi = _quote(
+        "KXTRUMPAPPROVE",
+        "KXTRUMPAPPROVE-E38.5",
+        1,
+        99,
+        title="exactly 38.5",
+        rules="RCP average",
+        close_time=other,
+    )
+    poly = _quote(
+        "PMTRUMPAPPROVE",
+        "parc-38pt5",
+        70,
+        40,
+        "polymarket_us",
+        title="exactly 38.5",
+        rules="RCP average",
+        close_time=close,
+    )
+    mismatched = cross_venue_report([kalshi, poly], now=NOW)
+    row = next(item for item in mismatched if item["event"] == "PMTRUMPAPPROVE")
+    assert row["match"] == "no match"
+    assert row["kalshi_yes_cents"] is None
+    assert row["fee_net_gap"] is None
+    poly["close_time"] = other
+    poly["rules"] = "a different print"
+    sourced = cross_venue_report([kalshi, poly], now=NOW)
+    source_row = next(item for item in sourced if item["event"] == "PMTRUMPAPPROVE")
+    assert source_row["match"] == "no match"
+    assert source_row["kalshi_yes_cents"] is None
+    twin = dict(poly)
+    twin["rules"] = "RCP average"
+    twin["ticker"] = "parc-38pt5-b"
+    ambiguous = cross_venue_report([kalshi, poly | {"rules": "RCP average"}, twin], now=NOW)
+    ambiguous_row = next(item for item in ambiguous if item["event"] == "PMTRUMPAPPROVE")
+    assert ambiguous_row["match"] == "no match"
+    assert ambiguous_row["kalshi_yes_cents"] is None
+    assert ambiguous_row["polymarket_ticker"] == ""
+
+
+def test_cross_venue_derives_a_missing_no_ask_from_the_yes_bid() -> None:
+    """The report reads 100 minus the YES bid. The paper gate still requires a printed ask."""
+    close = "2026-11-06T22:00:00Z"
+    kalshi = _quote(
+        "KXTRUMPAPPROVE",
+        "KXTRUMPAPPROVE-E38.5",
+        40,
+        None,
+        title="exactly 38.5",
+        rules="RCP average",
+        close_time=close,
+    )
+    kalshi["yes_bid"] = 65
+    poly = _quote(
+        "PMTRUMPAPPROVE",
+        "parc-38pt5",
+        70,
+        40,
+        "polymarket_us",
+        title="exactly 38.5",
+        rules="RCP average",
+        close_time=close,
+    )
+    rows = cross_venue_report([kalshi, poly], now=NOW)
+    trump = next(row for row in rows if row["event"] == "PMTRUMPAPPROVE")
+    assert trump["match"] == "matched"
+    assert trump["kalshi_yes_cents"] == 40
+    assert trump["kalshi_no_cents"] == 35
+    assert trump["polymarket_no_cents"] == 40
 
 
 def test_load_reads_books_and_lets_an_order_block_escape() -> None:
@@ -392,8 +517,12 @@ def test_sidecar_scan_does_not_ask_kalshi_for_polymarket_names(monkeypatch, tmp_
         for line in (tmp_path / "cross.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     trump = next(row for row in logged if row["event"] == "PMTRUMPAPPROVE")
-    assert trump["kalshi_yes_cents"] == 40
-    assert trump["polymarket_yes_cents"] == 70
+    assert trump["match"] == "no match"
+    assert trump["kalshi_yes_cents"] is None
+    assert trump["polymarket_yes_cents"] is None
+    assert trump["kalshi_no_cents"] is None
+    assert trump["polymarket_no_cents"] is None
+    assert trump["fee_net_gap"] is None
 
 
 def test_pnl_venue_column_does_not_change_the_live_total() -> None:

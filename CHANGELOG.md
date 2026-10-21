@@ -19,6 +19,12 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.7] - 2026-10-21
+
+### Fixed
+
+- **Cross-venue paper report pairs the same outcome.** A Kalshi market matches a Polymarket market only when the close time, the outcome, and the settlement source are the same. Anything else is "no match". The lowest ask is not a pair. A missing NO ask is 100 minus the YES bid. The report does not place an order.
+
 ## [0.37.6] - 2026-10-21
 
 ### Fixed
