@@ -19,6 +19,12 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.2] - 2026-10-21
+
+### Added
+
+- **Venue on the universe, Kalshi only.** Each series row has `venue: kalshi`, and a missing venue is kalshi. Any other venue fails the file closed. `KalshiGateway` lists markets with `status=open`, reads the existing order book, quotes the existing Kalshi taker fee, and returns `rules_primary` and `result`. The politics decision hash is unchanged.
+
 ## [0.37.1] - 2026-10-21
 
 ### Changed

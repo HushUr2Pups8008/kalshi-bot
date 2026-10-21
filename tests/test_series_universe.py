@@ -504,6 +504,15 @@ def test_missing_universe_admits_nothing_and_logs_once(tmp_path, caplog):
             "  notes: edge above 1\n",
             "bad_edge_min",
         ),
+        (
+            "- series: KXTRUTHSOCIAL\n"
+            "  mode: live\n"
+            "  venue: polymarket_us\n"
+            "  favorite_lo_cents: 36\n"
+            "  favorite_hi_cents: 90\n"
+            "  notes: not a kalshi row\n",
+            "bad_venue",
+        ),
     ],
 )
 def test_invalid_universe_admits_nothing(tmp_path, text, reason):
