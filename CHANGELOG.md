@@ -19,6 +19,12 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.1] - 2026-10-21
+
+### Changed
+
+- **Fee-net is on for politics and the sidecar.** `EVENT_NEWS_UNIFIED_EDGE=true` in both start scripts. Replay of live decisions from 2026-10-08 through 2026-10-21 found 722 sized rows where flat gross edge and fee-net agreed, and 10 zero-size rows that never reached the edge gate. Fee-net did not take any row the flat gate skipped. The flat path stays in code so a fee-quote failure can be unset without a release rollback. The other three held flags stay unset. The golden grid records the live default and its hash changed for that row.
+
 ## [0.37.0] - 2026-10-20
 
 ### Removed

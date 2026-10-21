@@ -48,6 +48,10 @@ export NEWS_CONSUMER_WORKERS=4
 # Explicit shared sizing (same numbers freeze uses; listed so they are not silent)
 export KELLY_FRACTION=0.5
 export MIN_EDGE=0.04
+# Fee-net is the live edge check. Replay 2026-10-08 through 2026-10-21:
+# 722 sized decisions agreed, and 10 zero-size rows never reached this gate.
+# The flat path stays in code. Do not export the other three held flags.
+export EVENT_NEWS_UNIFIED_EDGE=true
 export MAX_BET_PCT_BANKROLL=0.15
 export MAX_BET_HARD_CAP=25.00
 export MIN_BET_DOLLARS=2.00

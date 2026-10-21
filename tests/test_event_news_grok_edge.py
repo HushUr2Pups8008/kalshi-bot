@@ -925,11 +925,20 @@ def test_new_flags_do_not_arm_the_live_order_path_or_the_plist() -> None:
         assert "EVENT_NEWS_GROK_GROUNDING" not in text
         assert "KALSHI_GROK_PAPER_SIDECAR" not in text
         assert "GROK_DAILY_USD_CAP" not in text
-        assert "EVENT_NEWS_UNIFIED_EDGE" not in text
+    politics_script = Path("scripts/start_politics_paper.sh").read_text(encoding="utf-8")
+    assert "export EVENT_NEWS_UNIFIED_EDGE=true" in politics_script
+    assert "EVENT_NEWS_EQUITY_LOSS_HALT" not in politics_script
+    assert "EVENT_NEWS_LIVE_TRADABLE_RESEARCH" not in politics_script
+    assert "export EVENT_NEWS_SESSION_HALT" not in politics_script
+    plist = Path("deploy/com.jake.kalshi-bot-politics.plist").read_text(encoding="utf-8")
+    assert "EVENT_NEWS_UNIFIED_EDGE" not in plist
     sidecar_script = Path("scripts/start_grok_paper.sh").read_text(encoding="utf-8")
     assert 'export PYTHONPATH="$ROOT"' in sidecar_script
     assert "PYTHONPATH:+" not in sidecar_script
-    assert "EVENT_NEWS_UNIFIED_EDGE" not in sidecar_script
+    assert "export EVENT_NEWS_UNIFIED_EDGE=true" in sidecar_script
+    assert "EVENT_NEWS_EQUITY_LOSS_HALT" not in sidecar_script
+    assert "EVENT_NEWS_LIVE_TRADABLE_RESEARCH" not in sidecar_script
+    assert "EVENT_NEWS_SESSION_HALT" not in sidecar_script
     assert "LIVE_TRADING_ENABLED=false" in sidecar_script
     assert "KALSHI_GROK_PAPER_SIDECAR=true" in sidecar_script
     assert "EVENT_NEWS_GROK_EDGE_SCAN=true" in sidecar_script
