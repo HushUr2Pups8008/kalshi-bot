@@ -276,15 +276,32 @@ def _run_exit(rest) -> int:
     )
 
 
+def _polymarket_settlement_lookup():
+    """Official settlement GET. Construction failure fails closed with no HTTP."""
+    try:
+        from polymarket.public_client import PolymarketPublicClient
+
+        client = PolymarketPublicClient()
+    except Exception as exc:
+        print(
+            f"grok paper polymarket settlement client failed error_type={type(exc).__name__}",
+            file=sys.stderr,
+        )
+        return None
+    return client.get_market_settlement
+
+
 def _run_daily(rest) -> None:
     from utils.event_news_grok_edge import PAPER_DB_PATH, write_daily_edge_report, write_paper_scorecard
 
-    write_daily_edge_report(market_lookup=rest.get_market)
+    lookup = _polymarket_settlement_lookup()
+    write_daily_edge_report(market_lookup=rest.get_market, polymarket_lookup=lookup)
     day = datetime.now(timezone.utc).strftime("%Y%m%d")
     write_paper_scorecard(
         db_path=PAPER_DB_PATH,
         market_lookup=rest.get_market,
         report_path=Path(f"logs/reports/paper-scorecard-{day}.md"),
+        polymarket_lookup=lookup,
     )
 
 

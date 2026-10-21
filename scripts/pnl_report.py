@@ -274,6 +274,7 @@ def assemble_pnl(
     open_tickers: set[str],
     paper_note: str | None = None,
     now: datetime | None = None,
+    polymarket_rows: list[dict] | None = None,
 ) -> tuple[str, str, list[str]]:
     """Return the report, the possibly backfilled log, and the backfilled tickers."""
     fills, mismatches = fills_since_cohort(fill_rows)
@@ -403,6 +404,7 @@ def assemble_pnl(
         paper_rows=paper_rows,
         paper_note=paper_note,
         backfilled=backfilled,
+        polymarket_rows=polymarket_rows or [],
     )
     return report, new_log, backfilled
 
@@ -557,6 +559,7 @@ def _render(
     paper_rows: list[dict],
     paper_note: str | None,
     backfilled: list[str],
+    polymarket_rows: list[dict] | None = None,
 ) -> str:
     lines = [
         f"# P&L {stamp}",
@@ -631,6 +634,28 @@ def _render(
                 signal_type=row.get("signal_type") or "",
             )
         )
+    if polymarket_rows:
+        lines.extend(
+            [
+                "",
+                "## Polymarket paper rows",
+                "",
+                "Not included in the live fee-net total.",
+                "",
+                "| venue | series | ticker | queued | settlement |",
+                "| --- | --- | --- | --- | --- |",
+            ]
+        )
+        for row in polymarket_rows:
+            lines.append(
+                "| {venue} | {series} | {ticker} | {queued} | {settlement} |".format(
+                    venue=row.get("venue") or "",
+                    series=row.get("series") or "",
+                    ticker=row.get("ticker") or "",
+                    queued=row.get("queued") or "0",
+                    settlement=row.get("settlement") or "",
+                )
+            )
     backfill_text = ", ".join(sorted(set(backfilled))) if backfilled else "none"
     lines.extend(["", "## Backfill", "", f"backfilled_rows: {backfill_text}", ""])
     return "\n".join(lines)
@@ -725,6 +750,12 @@ def run_report(client: object, *, repo: Path, write_fill_log: bool, now: datetim
         log_path = repo / FILL_LOG_RELATIVE
         log_text = log_path.read_text(encoding="utf-8") if log_path.is_file() else ""
         paper_rows, paper_note = read_paper(repo / PAPER_DB_RELATIVE)
+        grok_db = repo / "logs" / "state" / "grok_paper.db"
+        polymarket_rows: list[dict] = []
+        if grok_db.is_file():
+            from utils.event_news_grok_edge import polymarket_observation_rows
+
+            polymarket_rows = polymarket_observation_rows(grok_db)
         report, new_log, tickers = assemble_pnl(
             fill_rows=fill_rows,
             settlement_rows=settlement_rows,
@@ -733,6 +764,7 @@ def run_report(client: object, *, repo: Path, write_fill_log: bool, now: datetim
             open_tickers=open_tickers,
             paper_note=paper_note,
             now=now,
+            polymarket_rows=polymarket_rows,
         )
         wrote = False
         if write_fill_log and new_log != log_text:

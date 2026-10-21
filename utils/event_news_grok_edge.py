@@ -1513,14 +1513,16 @@ def write_daily_edge_report(
     market_lookup: Callable[[str], Any],
     report_path: Path = DAILY_REPORT_PATH,
     now: datetime | None = None,
+    polymarket_lookup: Callable[[str], Any] | None = None,
 ) -> str:
     """Join settled GETs to logged probabilities. Does not read or write orders."""
     candidates = _read_jsonl(candidate_log_path)
     comparisons = _read_jsonl(comparison_log_path)
     spend_line = _spend_line(spend_path)
     settlements = _settlements_for(
-        [row.get("ticker") for row in (*candidates, *comparisons)],
+        (*candidates, *comparisons),
         market_lookup,
+        polymarket_lookup=polymarket_lookup,
     )
     joined = _joined_settled_rows(candidates, comparisons, settlements)
     text = _daily_report_text(joined, spend_line, now=now)
@@ -1696,12 +1698,16 @@ def _queued_candidate_rows(db_path: Path) -> list[tuple]:
             return []
         series_sql = "series" if "series" in names else "''"
         venue_sql = "COALESCE(venue, 'kalshi')" if "venue" in names else "'kalshi'"
+        stored_sql = "settlement_result" if "settlement_result" in names else "NULL"
         return conn.execute(
-            "SELECT ticker, series, side, ask_cents, grok_probability, venue FROM ("
+            "SELECT ticker, series, side, ask_cents, grok_probability, venue, "
+            "settlement_result FROM ("
             "SELECT ticker, " + series_sql
             + " AS series, side, ask_cents, grok_probability, "
             + venue_sql
-            + " AS venue, ROW_NUMBER() OVER ("
+            + " AS venue, "
+            + stored_sql
+            + " AS settlement_result, ROW_NUMBER() OVER ("
             "PARTITION BY ticker ORDER BY ts DESC, rowid DESC) rn FROM paper_candidates "
             "WHERE queued = 1 AND side IS NOT NULL AND ask_cents IS NOT NULL "
             "AND grok_probability IS NOT NULL) WHERE rn = 1"
@@ -1712,32 +1718,229 @@ def _queued_candidate_rows(db_path: Path) -> list[tuple]:
         conn.close()
 
 
+def settlement_venue(value: Any) -> str:
+    """Kalshi or Polymarket US. Blank is the historical Kalshi row. Anything else fails."""
+    text = str(value or "").strip().lower()
+    if text in ("", "kalshi"):
+        return "kalshi"
+    if text == _POLYMARKET_US:
+        return _POLYMARKET_US
+    raise ValueError("unknown_venue")
+
+
+def outcome_from_polymarket_settlement(payload: Any) -> str | None:
+    """Map the official settlement number. 1 is YES and 0 is NO.
+
+    Doc: https://docs.polymarket.us/api-reference/markets/get-market-settlement.md
+    A missing payload is not settled. Any other number fails closed.
+    """
+    if payload is None:
+        return None
+    if not isinstance(payload, Mapping) or "settlement" not in payload:
+        raise ValueError("settlement_unreadable")
+    value = payload.get("settlement")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("settlement_unreadable")
+    number = float(value)
+    if number == 1.0:
+        return "yes"
+    if number == 0.0:
+        return "no"
+    raise ValueError("settlement_unreadable")
+
+
+def resolve_settlement(
+    venue: Any,
+    ticker: str,
+    *,
+    market_lookup: Callable[[str], Any],
+    polymarket_lookup: Callable[[str], Any] | None = None,
+) -> str | None:
+    """YES/NO from the venue that listed the market. Unknown venues raise."""
+    name = settlement_venue(venue)
+    if name == "kalshi":
+        return _settlement_result(market_lookup(ticker))
+    if polymarket_lookup is None:
+        raise ValueError("polymarket_settlement_unavailable")
+    try:
+        payload = polymarket_lookup(ticker)
+    except ValueError as exc:
+        if "settlement not found" in str(exc):
+            return None
+        raise
+    return outcome_from_polymarket_settlement(payload)
+
+
+def _polymarket_candidate_rows(db_path: Path) -> list[tuple]:
+    """Latest Polymarket paper row per ticker, including skips."""
+    if not db_path.is_file():
+        return []
+    uri = f"file:{db_path.resolve()}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    try:
+        conn.execute("PRAGMA query_only=ON")
+        names = {row[1] for row in conn.execute("PRAGMA table_info(paper_candidates)")}
+        if "ticker" not in names or "venue" not in names:
+            return []
+        series_sql = "series" if "series" in names else "''"
+        stored_sql = "settlement_result" if "settlement_result" in names else "NULL"
+        return conn.execute(
+            "SELECT ticker, series, queued, settlement_result FROM ("
+            "SELECT ticker, " + series_sql + " AS series, queued, "
+            + stored_sql
+            + " AS settlement_result, ROW_NUMBER() OVER ("
+            "PARTITION BY ticker ORDER BY ts DESC, rowid DESC) rn "
+            "FROM paper_candidates WHERE venue = 'polymarket_us') WHERE rn = 1"
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
+
+
+def remember_polymarket_settlement(db_path: Path, ticker: str, result: str) -> None:
+    """Store YES/NO once. A later disagreement is left for the reader to reject."""
+    if result not in {"yes", "no"} or not str(ticker or "").strip():
+        return
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with _DB_LOCK:
+        with sqlite3.connect(db_path) as conn:
+            have = {row[1] for row in conn.execute("PRAGMA table_info(paper_candidates)")}
+            if "settlement_result" not in have:
+                conn.execute("ALTER TABLE paper_candidates ADD COLUMN settlement_result TEXT")
+            conn.execute(
+                """
+                UPDATE paper_candidates
+                SET settlement_result = ?
+                WHERE ticker = ? AND venue = 'polymarket_us'
+                  AND (settlement_result IS NULL OR settlement_result = '')
+                """,
+                (result, ticker),
+            )
+
+
+def polymarket_observation_rows(
+    db_path: Path,
+    *,
+    market_lookup: Callable[[str], Any] | None = None,
+    polymarket_lookup: Callable[[str], Any] | None = None,
+) -> list[dict[str, str]]:
+    """Settlement status for Polymarket paper rows. Skips stay out of the EV table."""
+    rows: list[dict[str, str]] = []
+    for ticker, series, queued, stored in _polymarket_candidate_rows(db_path):
+        slug = str(ticker or "")
+        saved = str(stored or "").strip().lower()
+        if saved not in {"yes", "no"}:
+            saved = ""
+        label = "unreadable"
+        if market_lookup is None and polymarket_lookup is None:
+            label = saved or "not settled"
+        else:
+            try:
+                live = resolve_settlement(
+                    _POLYMARKET_US,
+                    slug,
+                    market_lookup=market_lookup or (lambda _ticker: None),
+                    polymarket_lookup=polymarket_lookup,
+                )
+            except Exception:
+                live = "unreadable"
+            if saved in {"yes", "no"} and live in {"yes", "no"} and saved != live:
+                label = "unreadable"
+            elif live in {"yes", "no"}:
+                remember_polymarket_settlement(db_path, slug, live)
+                label = live
+            elif saved in {"yes", "no"}:
+                label = saved
+            elif live is None:
+                label = "not settled"
+        rows.append(
+            {
+                "venue": _POLYMARKET_US,
+                "series": str(series or "") or slug.split("-", 1)[0],
+                "ticker": slug,
+                "queued": "1" if queued else "0",
+                "settlement": label,
+            }
+        )
+    return rows
+
+
+def _polymarket_section(rows: Sequence[Mapping[str, str]]) -> list[str]:
+    if not rows:
+        return []
+    lines = [
+        "",
+        "## Polymarket paper rows",
+        "",
+        "Not in the promotion EV. A skip has no side. Settlement is the official price or not settled.",
+        "",
+        "| venue | series | ticker | queued | settlement |",
+        "|---|---|---|---:|---|",
+    ]
+    for row in rows:
+        lines.append(
+            "| {venue} | {series} | {ticker} | {queued} | {settlement} |".format(
+                venue=row.get("venue") or "",
+                series=row.get("series") or "",
+                ticker=row.get("ticker") or "",
+                queued=row.get("queued") or "0",
+                settlement=row.get("settlement") or "",
+            )
+        )
+    return lines
+
+
 def write_paper_scorecard(
     *,
     db_path: Path,
     market_lookup: Callable[[str], Any],
     report_path: Path,
     now: datetime | None = None,
+    polymarket_lookup: Callable[[str], Any] | None = None,
 ) -> str:
     """Per-series fee-net scorecard. Promotion text does not change modes."""
     moment = now or datetime.now(timezone.utc)
     modes = _scorecard_modes()
     grouped: dict[tuple[str, str], list[tuple[bool, Decimal, Decimal, Decimal]]] = {}
     calibration: list[dict[str, Any]] = []
-    for ticker, series, side, ask, probability_text, venue in _queued_candidate_rows(db_path):
+    for ticker, series, side, ask, probability_text, venue, stored in _queued_candidate_rows(
+        db_path
+    ):
         name = str(series or "") or str(ticker or "").split("-", 1)[0]
-        venue_name = _view_venue({"venue": venue})
-        p_yes = _decimal(probability_text)
         try:
-            result = _settlement_result(market_lookup(str(ticker)))
+            venue_name = settlement_venue(venue)
         except Exception:
             continue
-        if (
-            result is None
-            or p_yes is None
-            or isinstance(ask, bool)
-            or not isinstance(ask, int)
-        ):
+        p_yes = _decimal(probability_text)
+        saved = str(stored or "").strip().lower()
+        if saved not in {"yes", "no"}:
+            saved = ""
+        try:
+            live = resolve_settlement(
+                venue_name,
+                str(ticker),
+                market_lookup=market_lookup,
+                polymarket_lookup=polymarket_lookup,
+            )
+        except Exception:
+            live = "unreadable"
+        if venue_name == _POLYMARKET_US:
+            if saved in {"yes", "no"} and live in {"yes", "no"} and saved != live:
+                continue
+            if live in {"yes", "no"} and not saved:
+                remember_polymarket_settlement(db_path, str(ticker), str(live))
+            if live in {"yes", "no"}:
+                result = saved or str(live)
+            elif saved in {"yes", "no"}:
+                result = saved
+            else:
+                continue
+        elif live not in {"yes", "no"}:
+            continue
+        else:
+            result = live
+        if p_yes is None or isinstance(ask, bool) or not isinstance(ask, int):
             continue
         pnl = contract_fee_net_dollars(str(side or ""), ask, result == "yes", venue_name)
         if pnl is None:
@@ -1787,6 +1990,15 @@ def write_paper_scorecard(
             f"| {venue_name} | {series} | {effective or mode} | {n} | {hits} | {_cell(rate)} | "
             f"{_cell(mean)} | {_cell(low)} | {_cell(high)} | {brier_cell} | {label} |"
         )
+    lines.extend(
+        _polymarket_section(
+            polymarket_observation_rows(
+                db_path,
+                market_lookup=market_lookup,
+                polymarket_lookup=polymarket_lookup,
+            )
+        )
+    )
     text = "\n".join(lines) + "\n"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(text, encoding="utf-8")
@@ -2770,6 +2982,7 @@ def _insert_paper_row(db_path: Path | None, table: str, record: Mapping[str, Any
                     ("model", "TEXT"),
                     ("reason_code", "TEXT"),
                     ("venue", "TEXT"),
+                    ("settlement_result", "TEXT"),
                 ):
                     if name not in have:
                         conn.execute(f"ALTER TABLE paper_candidates ADD COLUMN {name} {kind}")
@@ -2854,20 +3067,32 @@ def _settlement_result(market: Any) -> str | None:
 
 
 def _settlements_for(
-    tickers: Sequence[Any],
+    rows: Sequence[Any],
     market_lookup: Callable[[str], Any],
+    *,
+    polymarket_lookup: Callable[[str], Any] | None = None,
 ) -> dict[str, str]:
+    """Settle each logged row on its own venue. Unknown venues are skipped."""
     found: dict[str, str] = {}
-    for raw in tickers:
-        ticker = str(raw or "").strip()
+    for raw in rows:
+        if isinstance(raw, Mapping):
+            ticker = str(raw.get("ticker") or "").strip()
+            venue = raw.get("venue")
+        else:
+            ticker = str(raw or "").strip()
+            venue = ""
         if not ticker or ticker in found:
             continue
         try:
-            market = market_lookup(ticker)
+            result = resolve_settlement(
+                venue,
+                ticker,
+                market_lookup=market_lookup,
+                polymarket_lookup=polymarket_lookup,
+            )
         except Exception:
             continue
-        result = _settlement_result(market)
-        if result is not None:
+        if result in {"yes", "no"}:
             found[ticker] = result
     return found
 
