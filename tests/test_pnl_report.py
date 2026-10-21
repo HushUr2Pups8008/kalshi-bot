@@ -95,6 +95,33 @@ def test_yes_win_subtracts_the_fill_fee_once_and_hides_ids():
     assert "backfilled_rows: KXTRUMPSAY-26OCT19-ZACH" in report
 
 
+def test_polymarket_rows_do_not_change_the_live_total():
+    """Stored paper settlement is shown by venue and stays out of the running total."""
+    report, _new_log, _tickers = assemble_pnl(
+        fill_rows=[_buy()],
+        settlement_rows=[_settlement()],
+        fill_log_text=_log_line(),
+        paper_rows=[],
+        open_tickers=set(),
+        now=datetime(2026, 10, 20, tzinfo=timezone.utc),
+        polymarket_rows=[
+            {
+                "venue": "polymarket_us",
+                "series": "PMTRUMPAPPROVE",
+                "ticker": "parc-trmpapprv-wk-2026-10-23-37pt7-37pt9",
+                "queued": "0",
+                "settlement": "not settled",
+            }
+        ],
+    )
+    assert "running_total_dollars: 2.7509" in report
+    assert "| KXTRUMPSAY | 2.7509 |" in report
+    assert "## Polymarket paper rows" in report
+    assert "| polymarket_us | PMTRUMPAPPROVE | parc-trmpapprv-wk-2026-10-23-37pt7-37pt9 | 0 | not settled |" in report
+    assert report.index("## Polymarket paper rows") < report.index("## Backfill")
+    assert "Not included in the live fee-net total." in report
+
+
 def test_loss_open_sell_scalar_and_fee_mismatch_stay_fail_closed():
     loss = _buy(ticker="KXTRUMPSAY-26OCT19-MELA")
     open_fill = _buy(

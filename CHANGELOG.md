@@ -19,6 +19,12 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.5] - 2026-10-21
+
+### Added
+
+- **Polymarket paper settlement uses the official endpoint.** Scorecard and daily report rows with venue `polymarket_us` call `GET /v1/markets/{slug}/settlement` (https://docs.polymarket.us/api-reference/markets/get-market-settlement.md). `1` is YES and `0` is NO. A 404 stays not settled and is not sent to Kalshi. A blank venue stays Kalshi. Any other venue is skipped. The first YES/NO is stored. A later blank row does not hide it, and a later disagreement is unreadable and is not written. Skip rows stay out of the promotion EV. The P&L report lists those paper rows by venue and does not add them to the live total.
+
 ## [0.37.4] - 2026-10-21
 
 ### Added

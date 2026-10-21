@@ -482,6 +482,106 @@ def test_daily_report_joins_a_settled_market_and_withholds_a_one_row_interval(tm
     assert "spend: 0.55 USD on 2026-10-17" in text
 
 
+def test_daily_report_settles_polymarket_on_its_endpoint(tmp_path: Path) -> None:
+    """Kalshi GET is only for a Kalshi row. Unknown venues are not settled."""
+    rows = [
+        {
+            "ticker": "KXTRUMPSAY-A",
+            "grok_probability": "0.70",
+            "yes_ask_cents": 55,
+            "side": "yes",
+            "ask_cents": 55,
+            "edge_cents": 13,
+            "queued": True,
+        },
+        {
+            "ticker": "parc-example-yes",
+            "venue": "polymarket_us",
+            "grok_probability": "0.70",
+            "yes_ask_cents": 55,
+            "side": "yes",
+            "ask_cents": 55,
+            "edge_cents": 13,
+            "queued": True,
+        },
+        {
+            "ticker": "parc-missing",
+            "venue": "polymarket_us",
+            "grok_probability": "0.70",
+            "yes_ask_cents": 55,
+            "side": "yes",
+            "ask_cents": 55,
+            "edge_cents": 13,
+            "queued": True,
+        },
+        {
+            "ticker": "OTHER-1",
+            "venue": "other",
+            "grok_probability": "0.70",
+            "yes_ask_cents": 55,
+            "side": "yes",
+            "ask_cents": 55,
+            "edge_cents": 13,
+            "queued": True,
+        },
+    ]
+    (tmp_path / "candidates.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    (tmp_path / "comparisons.jsonl").write_text(
+        json.dumps(
+            {
+                "ticker": "parc-missing",
+                "grounded_probability": "0.70",
+                "ungrounded_probability": "0.40",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    kalshi_calls: list[str] = []
+    poly_calls: list[str] = []
+
+    def market_lookup(ticker: str) -> dict:
+        kalshi_calls.append(ticker)
+        return {"status": "finalized", "result": "yes"}
+
+    def polymarket_lookup(ticker: str) -> dict:
+        poly_calls.append(ticker)
+        if ticker == "parc-missing":
+            raise ValueError(f"Polymarket market {ticker!r} settlement not found")
+        return {"slug": ticker, "settlement": 1.0}
+
+    text = write_daily_edge_report(
+        candidate_log_path=tmp_path / "candidates.jsonl",
+        comparison_log_path=tmp_path / "comparisons.jsonl",
+        spend_path=tmp_path / "spend.json",
+        market_lookup=market_lookup,
+        polymarket_lookup=polymarket_lookup,
+        report_path=tmp_path / "grok-edge-daily.md",
+        now=NOW,
+    )
+    assert kalshi_calls == ["KXTRUMPSAY-A"]
+    assert poly_calls == ["parc-example-yes", "parc-missing"]
+    assert "n: 2" in text
+
+
+def test_settlement_client_failure_prints_the_type_only(capsys, monkeypatch) -> None:
+    class Boom:
+        def __init__(self) -> None:
+            raise RuntimeError("https://secret.example/key")
+
+    monkeypatch.setattr("polymarket.public_client.PolymarketPublicClient", Boom)
+    from scripts.grok_paper_sidecar import _polymarket_settlement_lookup
+
+    assert _polymarket_settlement_lookup() is None
+    err = capsys.readouterr().err
+    assert "error_type=RuntimeError" in err
+    assert "secret" not in err
+    assert "https://" not in err
+
+
 def test_cash_refresh_writes_a_stale_file_and_keeps_a_bad_read(tmp_path: Path) -> None:
     path = tmp_path / "politics_cash_cents.json"
     stale = NOW - timedelta(seconds=7201)
