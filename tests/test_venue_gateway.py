@@ -182,10 +182,10 @@ def test_polymarket_gateway_reads_and_quotes_the_october_fee() -> None:
             "rules_text",
             "settlement",
         }
-        assert gateway.list_markets("PMHORMUZ") == (
+        assert gateway.list_markets("PMTRUMPAPPROVE") == (
             {"slug": "stsc-hormuz-normal-2026-12-31"},
         )
-        assert client.calls[0] == ("event", "hormuz-normal")
+        assert client.calls[0] == ("event", "trmpapprv-wk-2026-10-23")
         assert gateway.order_book("stsc-hormuz-normal-2026-12-31")["slug"] == (
             "stsc-hormuz-normal-2026-12-31"
         )
