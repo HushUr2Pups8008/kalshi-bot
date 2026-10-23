@@ -153,6 +153,8 @@ def test_shipped_paper_series_are_not_live_and_cannot_post():
     assert entries["PMLOLLOST1"].venue_market == "lol-los-t1-2026-10-23"
     assert entries["PMLOLALKC"].venue_market == "lol-al-kc-2026-10-23"
     assert entries["PMNBADALIND"].venue_market == "nba-dal-ind-2026-10-23"
+    assert entries["PMNBADALIND"].market_slugs == ("aec-nba-dal-ind-2026-10-23",)
+    assert all(entry.market_slugs == () for name, entry in entries.items() if name != "PMNBADALIND")
     assert entries["PMUFCIASLUC"].venue_market == "ufc-iasluc-niccal-2026-10-24"
     assert all(entries[series].pair_series == "" for series in _POLYMARKET_ONLY)
     assert entries["KXTRUMPAPPROVE"].pair_series == ""
@@ -635,6 +637,27 @@ def test_missing_universe_admits_nothing_and_logs_once(tmp_path, caplog):
             "  favorite_hi_cents: 99\n"
             "  notes: map slug must be a slug\n",
             "bad_pair_map",
+        ),
+        (
+            "- series: PMNBADALIND\n"
+            "  mode: paper\n"
+            "  venue: polymarket_us\n"
+            "  venue_market: nba-dal-ind-2026-10-23\n"
+            "  market_slugs: []\n"
+            "  favorite_lo_cents: 55\n"
+            "  favorite_hi_cents: 99\n"
+            "  notes: an empty slug list is not a moneyline\n",
+            "bad_market_slugs",
+        ),
+        (
+            "- series: KXTRUTHSOCIAL\n"
+            "  mode: live\n"
+            "  market_slugs:\n"
+            "    - aec-nba-dal-ind-2026-10-23\n"
+            "  favorite_lo_cents: 36\n"
+            "  favorite_hi_cents: 90\n"
+            "  notes: a Kalshi series cannot name a Polymarket slug\n",
+            "bad_market_slugs",
         ),
     ],
 )

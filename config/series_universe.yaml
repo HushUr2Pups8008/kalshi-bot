@@ -422,6 +422,8 @@
 - series: PMNBADALIND
   venue: polymarket_us
   venue_market: nba-dal-ind-2026-10-23
+  market_slugs:
+    - aec-nba-dal-ind-2026-10-23
   mode: paper
   favorite_lo_cents: 55
   favorite_hi_cents: 99
@@ -432,7 +434,8 @@
   edge_min: "0.04"
   notes: >-
     Polymarket US event nba-dal-ind-2026-10-23, Dallas vs Indiana.
-    Paper only. The order endpoint is blocked. Band is 55c through 99c.
+    Paper only. The order endpoint is blocked. Book reads are the
+    moneyline aec-nba-dal-ind-2026-10-23 only. Band is 55c through 99c.
     No exact Kalshi pair. Added from the 2026-10-23 scan.
 - series: PMUFCIASLUC
   venue: polymarket_us

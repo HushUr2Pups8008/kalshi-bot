@@ -361,6 +361,28 @@ def test_load_reads_books_and_lets_an_order_block_escape() -> None:
 
     with pytest.raises(PolymarketOrderBlocked):
         load_polymarket_paper_markets(Blocked(), [entry])
+
+    class Narrow:
+        def __init__(self) -> None:
+            self.books: list[str] = []
+
+        def list_event_markets(self, slug: str):
+            assert slug == "nba-dal-ind-2026-10-23"
+            return (_listed("aec-nba-dal-ind-2026-10-23"), _listed("prop-nba-dal-ind"))
+
+        def get_market_book(self, slug: str):
+            self.books.append(slug)
+            return book
+
+    narrow = Narrow()
+    moneyline = SimpleNamespace(
+        series="PMNBADALIND",
+        venue_market="nba-dal-ind-2026-10-23",
+        market_slugs=("aec-nba-dal-ind-2026-10-23",),
+    )
+    narrowed = load_polymarket_paper_markets(narrow, [moneyline])
+    assert narrow.books == ["aec-nba-dal-ind-2026-10-23"]
+    assert [row["ticker"] for row in narrowed] == ["aec-nba-dal-ind-2026-10-23"]
     closed = paper_view({"status": "MARKET_STATUS_CLOSED", "slug": "trmpapprv-yes"}, "PMTRUMPAPPROVE", book)
     assert closed is None
 

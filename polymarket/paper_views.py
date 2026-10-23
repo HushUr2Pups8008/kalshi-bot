@@ -157,7 +157,7 @@ def load_polymarket_paper_markets(client: Any, entries: Sequence[Any]) -> list[d
             if not isinstance(raw, dict):
                 continue
             market_slug = str(raw.get("slug") or "").strip()
-            reason = _prefilter_reason(series, raw)
+            reason = "market_slug" if (allowed := getattr(entry, "market_slugs", ())) and market_slug not in allowed else _prefilter_reason(series, raw)
             if reason is not None:
                 log.info("polymarket paper skip series=%s reason=%s", series, reason)
                 continue
