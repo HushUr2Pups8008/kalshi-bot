@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.14] - 2026-10-23
+
+### Changed
+- `PMNBADALIND` book reads are the Dallas vs Indiana moneyline `aec-nba-dal-ind-2026-10-23` only. The event slug stays `nba-dal-ind-2026-10-23`. Other markets on that event are not booked. Gates, edge, and Grok rules are unchanged.
+
 ## [0.37.13] - 2026-10-23
 
 ### Changed

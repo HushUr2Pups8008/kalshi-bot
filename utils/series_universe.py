@@ -20,27 +20,12 @@ from utils.logger import get_logger
 log = get_logger("series_universe")
 
 _MODES = frozenset({"live", "paper", "off"})
-_ALLOWED_KEYS = frozenset(
-    {
-        "series",
-        "mode",
-        "favorite_lo_cents",
-        "favorite_hi_cents",
-        "notes",
-        "transcript_skip",
-        "paper_score",
-        "category",
-        "max_contracts",
-        "edge_min",
-        "occupancy_family",
-        "open_family_lock",
-        "x_search",
-        "venue",
-        "venue_market",
-        "pair_series",
-        "pair_map",
-    }
-)
+_ALLOWED_KEYS = frozenset({
+    "series", "mode", "favorite_lo_cents", "favorite_hi_cents", "notes",
+    "transcript_skip", "paper_score", "category", "max_contracts", "edge_min",
+    "occupancy_family", "open_family_lock", "x_search", "venue", "venue_market",
+    "pair_series", "pair_map", "market_slugs",
+})
 _VENUES = frozenset({"kalshi", "polymarket_us"})
 _VENUE_MARKET_SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _DEFAULT_MAX_CONTRACTS = 8
@@ -71,6 +56,7 @@ class SeriesEntry:
     venue_market: str = ""
     pair_series: str = ""
     pair_map: tuple[tuple[str, str], ...] = ()
+    market_slugs: tuple[str, ...] = ()
 
     @property
     def favorite_band(self) -> tuple[float, float]:
@@ -171,7 +157,6 @@ def event_news_prefix_blocked(series: str, prefixes: Sequence[str]) -> bool:
     if not name:
         return False
     if exact_series_in_universe(name):
-
         return False
     return any(name.startswith(str(prefix)) for prefix in prefixes if prefix)
 
@@ -373,6 +358,7 @@ def _parse_entries(payload: Any) -> tuple[SeriesEntry, ...]:
                 venue_market=venue_market,
                 pair_series=pair_series,
                 pair_map=pair_map,
+                market_slugs=_market_slugs(venue, item.get("market_slugs")),
             )
         )
     if not entries:
@@ -470,3 +456,17 @@ def _venue_market(venue: str, mode: str, value: Any) -> str:
     if not isinstance(value, str) or _VENUE_MARKET_SLUG.fullmatch(value) is None:
         raise ValueError("bad_venue_market")
     return value
+
+
+def _market_slugs(venue: str, value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if venue != "polymarket_us" or not isinstance(value, list) or not value:
+        raise ValueError("bad_market_slugs")
+    slugs: list[str] = []
+    for raw in value:
+        slug = raw.strip() if isinstance(raw, str) else ""
+        if slug in slugs or _VENUE_MARKET_SLUG.fullmatch(slug) is None:
+            raise ValueError("bad_market_slugs")
+        slugs.append(slug)
+    return tuple(slugs)
