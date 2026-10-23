@@ -2587,20 +2587,6 @@ class TradeExecutor:
             ),
         ):
             return None
-        veto = await self._wait_off_loop(
-            functools.partial(
-                event_news_grok_veto_allows_live_post,
-                analysis,
-                contracts=contracts,
-            ),
-            timeout=_grok_hard_timeout_s(),
-        )
-        if veto is _OFF_LOOP_TIMEOUT or not veto:
-            log.info(
-                "[LIVE] BLOCKED %s: EVENT_NEWS_GROK_VETO did not return yes; no POST",
-                analysis.market.ticker,
-            )
-            return None
         from utils.series_universe import event_news_live_post_block_reason
 
         universe_block = event_news_live_post_block_reason(analysis.market)
@@ -2614,6 +2600,20 @@ class TradeExecutor:
         if self._live_halted:
             log.info(
                 "[LIVE] BLOCKED %s: session halt latched; no POST",
+                analysis.market.ticker,
+            )
+            return None
+        veto = await self._wait_off_loop(
+            functools.partial(
+                event_news_grok_veto_allows_live_post,
+                analysis,
+                contracts=contracts,
+            ),
+            timeout=_grok_hard_timeout_s(),
+        )
+        if veto is _OFF_LOOP_TIMEOUT or not veto:
+            log.info(
+                "[LIVE] BLOCKED %s: EVENT_NEWS_GROK_VETO did not return yes; no POST",
                 analysis.market.ticker,
             )
             return None
