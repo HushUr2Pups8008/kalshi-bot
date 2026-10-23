@@ -24,7 +24,6 @@ import sys
 
 _MINIMUM_PYTHON = (3, 11)
 
-
 def _ensure_supported_python(version_info=None, stderr=None) -> None:
     if version_info is None:
         version_info = sys.version_info
@@ -43,7 +42,6 @@ def _ensure_supported_python(version_info=None, stderr=None) -> None:
         file=stderr,
     )
     raise SystemExit(1)
-
 
 _ensure_supported_python()
 
@@ -197,7 +195,6 @@ _LEGACY_PENDING_COHORT_LIVE_TRANSITION_BLOCK = (
     "legacy-pending paper cohort remains permanently isolated from live trading"
 )
 
-
 def _configured_paper_cohort_kind() -> str:
     """Return the explicit kind, retaining compatibility with older test configs."""
 
@@ -210,7 +207,6 @@ def _configured_paper_cohort_kind() -> str:
         if str(cohort_id or "").strip().lower() == LEGACY_PAPER_COHORT_ID
         else "active"
     )
-
 
 def _runtime_paper_cohort_from_config(
     *,
@@ -297,7 +293,6 @@ def _bot_runtime_lock_path() -> Path:
         name = "bot_runtime.lock"
     return DATA_DIR / name
 
-
 _BOT_RUNTIME_LOCK = _bot_runtime_lock_path()
 _RUNTIME_PAPER_COHORT_ATTESTATION_PATH = (
     STATE_ROOT / "runtime_paper_cohort_attestation.json"
@@ -316,7 +311,6 @@ _RESEARCH_PREWARM_BLOCKED_SERIES_PREFIXES = tuple(MARKET_SERIES_BLOCKLIST_PREFIX
     "KXMVE",
 )
 
-
 def _research_prewarm_ticker_blocked(ticker: str) -> bool:
     series_ticker = str(ticker or "").strip().split("-", 1)[0]
     if not series_ticker:
@@ -327,7 +321,6 @@ def _research_prewarm_ticker_blocked(ticker: str) -> bool:
         series_ticker,
         _RESEARCH_PREWARM_BLOCKED_SERIES_PREFIXES,
     )
-
 
 def _recent_runtime_research_prewarm_tickers(*, now: datetime | None = None) -> list[str]:
     now_utc = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
@@ -358,7 +351,6 @@ def _recent_runtime_research_prewarm_tickers(*, now: datetime | None = None) -> 
         )
     ]
 
-
 def _validate_startup_observability_probe_record(record: dict, required_fields: tuple[str, ...]) -> list[str]:
     missing = [field for field in required_fields if field not in record]
     if record.get("type") != "SIGNAL_ANALYSIS_DETAIL":
@@ -369,10 +361,8 @@ def _validate_startup_observability_probe_record(record: dict, required_fields: 
         missing.append("is_startup_probe")
     return missing
 
-
 def _startup_probe_matched_tokens() -> list[str]:
     return [" Iran ", "Says"]
-
 
 def _source_priority(source: str) -> int:
     """Lower number = higher priority in the processing queue.
@@ -386,7 +376,6 @@ def _source_priority(source: str) -> int:
         if key.strip().lower() == source_lower:
             return value
     return 2
-
 
 def _is_floor_clamp_suspected(
     llm_direction: str | None,
@@ -449,7 +438,6 @@ def _is_floor_clamp_suspected(
         and raw_probability > (0.95 + EPS)
     )
 
-
 def _early_max_news_age_seconds_for_source(source: str) -> int:
     """Return the freshness threshold (seconds) for a source.
 
@@ -469,14 +457,12 @@ def _early_max_news_age_seconds_for_source(source: str) -> int:
             return value
     return EARLY_MAX_NEWS_AGE_SECONDS
 
-
 def _is_disabled_news_source(source: str) -> bool:
     """Defer to the runtime-overrides module-level helper, which combines
     static DISABLED_NEWS_SOURCES with any runtime-applied disabled set.
     Behavior with no runtime reader registered: identical to pre-Phase-1.
     """
     return is_source_disabled(source)
-
 
 def _account_from_rsshub_url(url: str) -> str:
     """Extract account name from RSSHub URL. e.g. .../user/Kalshi -> 'Kalshi'"""
@@ -487,13 +473,11 @@ def _account_from_rsshub_url(url: str) -> str:
         return parts[-1]
     return parts[0]  # fallback: domain or bare token
 
-
 def _exact_decimal_arg(value: str) -> Decimal:
     try:
         return Decimal(value)
     except (InvalidOperation, ValueError) as exc:
         raise argparse.ArgumentTypeError("must be an exact decimal value") from exc
-
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Kalshi Geopolitical Trading Bot")
@@ -519,10 +503,8 @@ def parse_args() -> argparse.Namespace:
                    help="Force a safe rollover of logs/app/bot.log and logs/app/errors.log, then exit")
     return p.parse_args()
 
-
 def _is_cli_only_command(args: argparse.Namespace) -> bool:
     return bool(args.report or args.credibility or args.resolve or args.go_live or args.rotate_logs)
-
 
 def _log_boot_summary(startup_context: str) -> None:
     level = logging.INFO if startup_context == "runtime" else logging.DEBUG
@@ -538,7 +520,6 @@ def _log_boot_summary(startup_context: str) -> None:
 
     for item in boot_config_lines():
         log.log(level, "[BOOT] config %s", item)
-
 
 def _log_bankroll_summary(
     notional_bankroll: float,
@@ -573,7 +554,6 @@ def _log_bankroll_summary(
                 configured_starting_bankroll,
                 state_location,
             )
-
 
 def _log_polymarket_account_summary(*, client_factory=None):
     from polymarket.account_client import PolymarketAccountClient
@@ -628,7 +608,6 @@ def _log_polymarket_account_summary(*, client_factory=None):
     )
     log.info(status.log_line())
     return status
-
 
 class _RuntimeInstanceGuard:
     """Best-effort singleton guard for the long-running bot runtime.
@@ -805,10 +784,8 @@ class _RuntimeInstanceGuard:
 
         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
-
 def _normalized_evidence_identity(value: str | None) -> str:
     return " ".join((value or "").strip().lower().split())
-
 
 def _evidence_id_for_signal(analysis: SignalAnalysis) -> str:
     """Build a deterministic event ID for idempotent evidence ingestion."""
@@ -823,7 +800,6 @@ def _evidence_id_for_signal(analysis: SignalAnalysis) -> str:
     ]
     digest = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
     return f"ev-{digest[:32]}"
-
 
 def _source_class_for_evidence(source: str) -> str:
     """Map runtime source labels into the evidence source-class contract.
@@ -955,7 +931,6 @@ def _source_class_for_evidence(source: str) -> str:
         return "news"
     return "other"
 
-
 def _news_retrieval_meta(news: NewsItem) -> dict[str, str]:
     meta: dict[str, str] = {}
     for key in ("retrieval_mode", "source_hint_query", "source_hint_domain"):
@@ -963,7 +938,6 @@ def _news_retrieval_meta(news: NewsItem) -> dict[str, str]:
         if isinstance(value, str) and value.strip():
             meta[key] = value.strip()
     return meta
-
 
 def _source_domain(value: object) -> str:
     if not isinstance(value, str) or not value.strip():
@@ -973,7 +947,6 @@ def _source_domain(value: object) -> str:
     domain = (parsed.netloc or parsed.path.split("/", 1)[0]).lower()
     return domain[4:] if domain.startswith("www.") else domain
 
-
 def _settlement_source_match(news: NewsItem, market: object) -> bool | None:
     return evaluate_settlement_source_match(
         source=getattr(news, "source", None),
@@ -981,7 +954,6 @@ def _settlement_source_match(news: NewsItem, market: object) -> bool | None:
         source_hint_domain=getattr(news, "source_hint_domain", None),
         settlement_sources=getattr(market, "settlement_sources", ()) or (),
     )
-
 
 def _counterfactual_llm_eval_context(news: NewsItem, market: object) -> dict[str, object]:
     context: dict[str, object] = {
@@ -1007,7 +979,6 @@ def _counterfactual_llm_eval_context(news: NewsItem, market: object) -> dict[str
         context["settlement_source_urls"] = source_urls
     return context
 
-
 def _signal_to_evidence(analysis: SignalAnalysis) -> Evidence:
     """Convert a fast-lane SignalAnalysis into an Evidence record for accumulation."""
     content = f"{analysis.news_item.headline}|{analysis.market.ticker}"
@@ -1026,7 +997,6 @@ def _signal_to_evidence(analysis: SignalAnalysis) -> Evidence:
         published_ts=published.isoformat() if published is not None else None,
     )
 
-
 def _build_capital_guard_shadow_capture_sink(
     enabled: bool,
     *,
@@ -1036,7 +1006,6 @@ def _build_capital_guard_shadow_capture_sink(
     del enabled, db_path
     return None
 
-
 def _build_g7_skip_evidence_capture_sink(
     enabled: bool,
     *,
@@ -1045,7 +1014,6 @@ def _build_g7_skip_evidence_capture_sink(
     """G7 skip-evidence capture is not on the politics path."""
     del enabled, db_path
     return None
-
 
 def _build_paper_side_calibration_quarantine_runtime(
     enabled: bool,
@@ -1086,7 +1054,6 @@ def _build_paper_side_calibration_quarantine_runtime(
             PolymarketPublicClient() if polymarket_reader is None else polymarket_reader
         ),
     )
-
 
 class TradingBot:
     def __init__(self):
@@ -5018,9 +4985,7 @@ class TradingBot:
             task.cancel()
         self.ws.stop()
 
-
 # ── CLI handlers ──────────────────────────────────────────────────────────────
-
 
 def _manual_settlement_outcome(
     result: str,
@@ -5032,7 +4997,6 @@ def _manual_settlement_outcome(
         expected = "YES, NO, or VOID" if allow_void else "YES or NO"
         raise SystemExit(f"--resolve RESULT must be exactly {expected}")
     return MarketOutcome(result.lower())
-
 
 def _manual_void_refund_contract(
     outcome: MarketOutcome,
@@ -5798,6 +5762,9 @@ def _handle_go_live(paper: PaperTrader) -> None:
         print("Cancelled -- still in paper trading mode.")
 
 
+_PROCESS_EXIT_CODE = 0
+
+
 def _record_politics_handled_stop() -> None:
     """A SIGTERM stop stays down on purpose. Health reads this alert."""
     from utils.event_news_session_halt import write_operator_alert
@@ -5805,9 +5772,20 @@ def _record_politics_handled_stop() -> None:
     write_operator_alert("handled_stop")
 
 
-async def _shutdown(bot: TradingBot) -> None:
+def _record_shutdown(bot: object) -> None:
+    """A loss-limit stop is not a clean handled_stop. Its exit code is 1."""
+    global _PROCESS_EXIT_CODE
+    executor = getattr(bot, "executor", None)
+    if getattr(executor, "_loss_limit_halted", False):
+        _PROCESS_EXIT_CODE = 1
+        log.critical("loss_limit_halt")
+        return
     log.info("Shutdown signal received")
     _record_politics_handled_stop()
+
+
+async def _shutdown(bot: TradingBot) -> None:
+    _record_shutdown(bot)
     bot.stop()
     await bot.cancel_targeted_research_prewarm_tasks()
     try:
@@ -5825,3 +5803,5 @@ if __name__ == "__main__":
         asyncio.run(async_main())
     except (KeyboardInterrupt, asyncio.CancelledError):
         pass
+    if _PROCESS_EXIT_CODE:
+        raise SystemExit(_PROCESS_EXIT_CODE)

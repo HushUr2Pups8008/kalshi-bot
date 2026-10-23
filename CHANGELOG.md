@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.15] - 2026-10-23
+
+### Fixed
+- The politics session-loss check uses equity: cash plus open contracts at the bid, after the taker exit fee. Spending cash on an open position is not a loss. The limit stays 10% of the configured bankroll ($5 on the $50 politics book). An unreadable bid skips the trade and does not seed. A real breach logs `loss_limit_halt`, exits non-zero, and the start script stays down until `logs/state/politics_loss_limit_halt.json` is deleted. `EVENT_NEWS_SESSION_HALT` and `EVENT_NEWS_EQUITY_LOSS_HALT` stay off.
+
 ## [0.37.14] - 2026-10-23
 
 ### Changed

@@ -132,6 +132,7 @@ def _make_executor(
     # Tests that exercise the re-fetch path explicitly should override
     # `rest.get_market.return_value` to a fully-formed market.
     rest.get_market.return_value = None
+    rest.get_open_positions.return_value = []
     paper = MagicMock()
     paper.get_notional_bankroll.return_value = bankroll
     paper.portfolio.open_positions.return_value = []
@@ -1169,6 +1170,7 @@ class TestValidateSkipReasons:
         monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", is_paper)
         monkeypatch.setattr(_cfg_module.cfg, "min_edge", 0.04)
         rest = MagicMock()
+        rest.get_open_positions.return_value = []
         paper = MagicMock()
         paper.get_notional_bankroll.return_value = 500.0
         paper.portfolio.open_positions.return_value = []
@@ -1667,6 +1669,7 @@ def _make_paper_executor(monkeypatch):
 
     rest._request.side_effect = _readable_book
     rest.get_balance.return_value = 500.0
+    rest.get_open_positions.return_value = []
     paper = MagicMock()
     paper.get_notional_bankroll.return_value = 500.0
     paper.portfolio.open_positions.return_value = []

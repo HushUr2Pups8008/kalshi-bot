@@ -75,6 +75,23 @@ curl -sS http://localhost:11434/api/generate \
   -d '{"model":"qwen2.5:7b","prompt":"ok","keep_alive":-1,"stream":false,"options":{"num_predict":1}}' \
   >/tmp/ollama-politics-warmup.json || true
 
+# A loss-limit halt exits non-zero so it is not a clean stop. Exit 0
+# here so launchd SuccessfulExit=false does not start the bot again.
+# Delete logs/state/politics_loss_limit_halt.json to clear it. A failed
+# read stays down too. Do not set EVENT_NEWS_SESSION_HALT in this script.
+set +e
+latched="$(PYTHONPATH="$ROOT" "$ROOT/.venv/bin/python" -c 'from utils.event_news_session_halt import LOSS_LIMIT_LATCH_PATH, halt_latch_present; print("1" if halt_latch_present(LOSS_LIMIT_LATCH_PATH) else "0")')"
+latch_status=$?
+set -e
+if [[ "$latch_status" -ne 0 ]]; then
+  echo "loss_limit_halt check failed status=${latch_status}; not restarting" >&2
+  exit 0
+fi
+if [[ "$latched" == "1" ]]; then
+  echo "loss_limit_halt latched; not restarting" >&2
+  exit 0
+fi
+
 # A crash loop backs off and stops after POLITICS_RESTART_CAP starts in
 # an hour. Exit 75 means the cap wrote an alert; exit 0 here so launchd
 # SuccessfulExit=false leaves the job down. Any other guard failure
