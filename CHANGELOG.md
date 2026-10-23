@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.16] - 2026-10-23
+
+### Fixed
+- The live post path checks the series universe and a latched session halt before the Grok veto. A blocked ticker or a halted session makes no Grok call. The veto, the gate chain, and the decision-grid hash are unchanged.
+
 ## [0.37.15] - 2026-10-23
 
 ### Fixed

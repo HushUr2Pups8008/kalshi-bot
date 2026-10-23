@@ -802,6 +802,81 @@ async def test_live_series_still_reaches_the_mocked_post(monkeypatch, tmp_path):
     rest.place_limit_order.assert_called_once()
 
 
+def _live_post_executor(monkeypatch, tmp_path, ticker: str):
+    """A politics live executor on one ticker. Grok is counted, not called."""
+    path = tmp_path / "universe.yaml"
+    _write_mixed_universe(path)
+    reset_series_universe(path)
+    monkeypatch.setattr("config.cfg.paper_cohort_id", EVENT_NEWS_COHORT_ID)
+    monkeypatch.setattr("config.cfg.is_paper_trading", False)
+    monkeypatch.setattr("config.cfg.bankroll", 500.0)
+    for name in (
+        "EVENT_NEWS_YES_FLOOR_CENTS",
+        "EVENT_NEWS_MAX_RISK_CENTS",
+        "EVENT_NEWS_MAX_EXPOSURE_PCT",
+        "EVENT_NEWS_ONE_PER_FAMILY",
+        "EVENT_NEWS_MAKER_FIRST",
+        "EVENT_NEWS_GROK_RULES_CHECK",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    calls = {"n": 0}
+
+    def _count_grok(*_args, **_kwargs):
+        calls["n"] += 1
+        return True
+
+    monkeypatch.setattr(
+        "utils.event_news_grok_veto.event_news_grok_veto_allows_live_post",
+        _count_grok,
+    )
+    rest = MagicMock()
+    result = MagicMock()
+    result.error = None
+    result.order_id = "not-sent"
+    result.status = "resting"
+    result.filled = 0
+    rest.place_limit_order.return_value = result
+    executor = TradeExecutor(
+        rest,
+        MagicMock(),
+        live_submission_hold_path=tmp_path / "holds.json",
+    )
+    analysis = _make_analysis(ticker=ticker, side="no", yes_price=63)
+    analysis.market.series_ticker = ticker.split("-", 1)[0]
+    return executor, rest, analysis, calls
+
+
+@pytest.mark.asyncio
+async def test_blocked_ticker_makes_zero_grok_calls(monkeypatch, tmp_path):
+    """A universe block is free. It must not spend a Grok veto first."""
+    executor, rest, analysis, calls = _live_post_executor(
+        monkeypatch, tmp_path, "KXTRUTHSOCIAL-26OCT-A"
+    )
+    monkeypatch.setattr(
+        "utils.series_universe.event_news_live_post_block_reason",
+        lambda *_args, **_kwargs: "not_live_series",
+    )
+    with patch("trading.executor.trade_log"):
+        order_id = await executor._execute_live(analysis)
+    assert order_id is None
+    assert calls["n"] == 0
+    rest.place_limit_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_halted_session_makes_zero_grok_calls(monkeypatch, tmp_path):
+    """A latched session halt is free. It must not spend a Grok veto first."""
+    executor, rest, analysis, calls = _live_post_executor(
+        monkeypatch, tmp_path, "KXTRUTHSOCIAL-26OCT-A"
+    )
+    executor._live_halted = True
+    with patch("trading.executor.trade_log"):
+        order_id = await executor._execute_live(analysis)
+    assert order_id is None
+    assert calls["n"] == 0
+    rest.place_limit_order.assert_not_called()
+
+
 def test_candidate_rules_reject_crossed_books_and_inactive_status():
     from datetime import datetime, timedelta, timezone
 
