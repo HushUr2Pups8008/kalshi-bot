@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.12] - 2026-10-23
+
+### Added
+- 30-day venue scan. No Kalshi market shares a settlement date, source, and threshold with a Polymarket US market. The pair table, 8128 Polymarket-only candidates, the Polymarket list, and the Kalshi non-parlay list are in `logs/reports/venue-pairs-20261023.md`. Kalshi parlay pages were not finished.
+
 ## [0.37.11] - 2026-10-21
 
 ### Fixed
