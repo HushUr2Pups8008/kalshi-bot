@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 HALT_LATCH_PATH = Path("logs/state/politics_session_halt.json")
+LOSS_LIMIT_LATCH_PATH = Path("logs/state/politics_loss_limit_halt.json")
 OPERATOR_ALERT_PATH = Path("logs/state/politics_operator_alert.json")
 CASH_CENTS_PATH = Path("logs/state/politics_cash_cents.json")
 SESSION_HALT_DOLLAR_CAP = 10.0

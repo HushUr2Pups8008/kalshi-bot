@@ -58,12 +58,10 @@ _UNVERIFIED_ORDER_IDS = frozenset({"unknown", "none", "null"})
 _PAPER_ENTRY_COHORT_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}$")
 _PAPER_ENTRY_LIFECYCLE_RE = re.compile(r"lc-[0-9a-f]{32}$")
 
-
 def _is_verified_order_id(order_id: object) -> bool:
     return (
         isinstance(order_id, str) and bool(order_id.strip()) and order_id.strip().lower() not in _UNVERIFIED_ORDER_IDS
     )
-
 
 def _fee_net_paper_entry_request_id(analysis: SignalAnalysis) -> str | None:
     """Build the retry-stable fee-net entry key from durable execution lineage."""
@@ -79,7 +77,6 @@ def _fee_net_paper_entry_request_id(analysis: SignalAnalysis) -> str | None:
     ):
         return None
     return f"paper-entry:v1:{cohort_id}:{lifecycle_id}"
-
 
 def classify_skip_category(reason: str | None) -> str:
     """Stable high-level bucket for executor SKIPPED reasons."""
@@ -104,10 +101,8 @@ def classify_skip_category(reason: str | None) -> str:
         return "research"
     return "other"
 
-
 def _is_research_paper_review_signal(signal_meta: dict[str, Any]) -> bool:
     return str(signal_meta.get("research_admission_status") or "") == "decision_grade_candidate"
-
 
 def _event_news_official_p_may_live(signal_meta: dict[str, Any]) -> bool:
     """Politics official-p decision-grade may live-POST; generic LLM review may not."""
@@ -116,15 +111,12 @@ def _event_news_official_p_may_live(signal_meta: dict[str, Any]) -> bool:
         return True
     return str(signal_meta.get("source_lane") or "") == "research_official_p"
 
-
 def _position_market_ticker(position: Any) -> str:
     if isinstance(position, dict):
         return str(position.get("ticker") or position.get("market_ticker") or "").strip()
     return str(getattr(position, "ticker", "") or "").strip()
 
-
 _LIVE_POSITIONS_UNSET = object()
-
 
 def _positive_dollars(value: Any) -> float | None:
     """A usable cash read. None, bool, non-finite, and <= 0 do not seed."""
@@ -134,7 +126,6 @@ def _positive_dollars(value: Any) -> float | None:
     if number != number or number == float("inf") or number <= 0:
         return None
     return number
-
 
 def _position_is_open(position: Any) -> bool:
     if isinstance(position, dict):
@@ -150,7 +141,6 @@ def _position_is_open(position: Any) -> bool:
         return bool(_position_market_ticker(position))
     return True
 
-
 def _live_http_result(result: Any) -> str:
     status = getattr(result, "http_status", None)
     error = getattr(result, "error", None)
@@ -160,14 +150,12 @@ def _live_http_result(result: Any) -> str:
         return f"{status} {error}".strip()
     return str(error)
 
-
 def _is_live_business_reject(result: Any) -> bool:
     status = getattr(result, "http_status", None)
     if status in _LIVE_BUSINESS_REJECT_STATUSES:
         return True
     error = str(getattr(result, "error", "") or "").lower()
     return any(token in error for token in _LIVE_BUSINESS_REJECT_TOKENS)
-
 
 def _detail_number(value: Any) -> Decimal | None:
     if isinstance(value, bool) or value is None:
@@ -180,17 +168,14 @@ def _detail_number(value: Any) -> Decimal | None:
         return None
     return number
 
-
 def _detail_number_text(value: Decimal) -> str:
     integral = value.to_integral()
     if value == integral:
         return str(int(integral))
     return format(value.normalize(), "f")
 
-
 def _detail_cents_text(dollars: Decimal) -> str:
     return _detail_number_text(dollars * Decimal("100"))
-
 
 def fill_log_detail_from_receipts(
     *,
@@ -259,7 +244,6 @@ def fill_log_detail_from_receipts(
         "order_id": order_id,
     }
 
-
 def fetch_live_fill_detail(rest: Any, order_id: str, side: str) -> dict[str, str | None]:
     """Read fill detail after a 201. A failed GET leaves the columns blank.
 
@@ -301,7 +285,6 @@ def fetch_live_fill_detail(rest: Any, order_id: str, side: str) -> dict[str, str
             ",".join(reasons) or "empty",
         )
     return detail
-
 
 def append_live_fill_log(
     *,
@@ -353,7 +336,6 @@ def append_live_fill_log(
             exc_info=True,
         )
 
-
 def _skip_headline(analysis: SignalAnalysis) -> str:
     news = getattr(analysis, "news_item", None)
     headline = getattr(news, "headline", None)
@@ -364,7 +346,6 @@ def _skip_headline(analysis: SignalAnalysis) -> str:
         return title[:80]
     ticker = getattr(getattr(analysis, "market", None), "ticker", None)
     return str(ticker or "research")[:80]
-
 
 def _skip_source(analysis: SignalAnalysis) -> str:
     news = getattr(analysis, "news_item", None)
@@ -378,7 +359,6 @@ def _skip_source(analysis: SignalAnalysis) -> str:
             return trigger
     return "research"
 
-
 def _requires_decision_grade_research_paper_admission(
     analysis: SignalAnalysis,
     signal_meta: dict[str, Any],
@@ -390,7 +370,6 @@ def _requires_decision_grade_research_paper_admission(
         return False
     magnitude = getattr(analysis, "llm_magnitude", None)
     return magnitude is not None and str(magnitude).strip().lower() not in {"", "none"}
-
 
 def _correlated_exposure_prefix(market: Any) -> str:
     """Return the per-prefix cap key identifying a market's correlated-exposure family.
@@ -435,7 +414,6 @@ def _correlated_exposure_prefix(market: Any) -> str:
         return ticker.split("-", 1)[0]
     return ticker.split("-", 1)[0]
 
-
 class _OffLoopCall:
     """One off-loop decision. Abandoning it drops a late mutation."""
 
@@ -452,13 +430,10 @@ class _OffLoopCall:
         with self._lock:
             return not self._abandoned
 
-
 class _OffLoopTimeout:
     """The hard timeout fired. Callers must not place an order."""
 
-
 _OFF_LOOP_TIMEOUT = _OffLoopTimeout()
-
 
 def _grok_hard_timeout_s() -> float:
     """Stay above the veto request timeout so a late success still decides."""
@@ -466,13 +441,11 @@ def _grok_hard_timeout_s() -> float:
 
     return float(GROK_TIMEOUT_SECONDS) + 5.0
 
-
 def _rules_hard_timeout_s() -> float:
     """Cover the 5s source fetch plus the Grok request timeout."""
     from utils.event_news_grok_veto import GROK_TIMEOUT_SECONDS
 
     return float(GROK_TIMEOUT_SECONDS) + 15.0
-
 
 def _kalshi_read_hard_timeout_s(reads: int = 3) -> float:
     """Cover each GET's 10s socket timeout and its four attempts.
@@ -481,7 +454,6 @@ def _kalshi_read_hard_timeout_s(reads: int = 3) -> float:
     that does not finish skips the order.
     """
     return 45.0 * reads + 15.0
-
 
 class TradeExecutor:
     """Routes validated trade signals to paper or live execution."""
@@ -508,6 +480,7 @@ class TradeExecutor:
         # log cannot move the live cash halt.
         self._equity_halt_seed: Optional[float] = None
         self._live_halted: bool = False
+        self._loss_limit_halted: bool = False
         self._shutdown_callback: Optional[Callable] = None
         # Paper rows are queued from the admit gate and from a live
         # decision. The lock keeps those rows ordered. The live consumer
@@ -536,6 +509,7 @@ class TradeExecutor:
             log.error("%s", EVENT_NEWS_FLAGS_FATAL)
         self._seed_cooldowns_from_db()
         self._arm_persisted_session_halt()
+        self._arm_loss_limit_latch()
 
     def set_shutdown_callback(self, cb: Callable) -> None:
         """Register a callback that is invoked when the live loss limit is breached."""
@@ -677,30 +651,19 @@ class TradeExecutor:
         )
         return f"{mode} HALTED: session loss limit reached -- all trading suspended"
 
-    def _check_live_loss_limit(self, balance: float) -> bool:
-        """
-        Track session-start Kalshi balance and return True if the loss limit is breached.
-        First call seeds the baseline; subsequent calls compare against it.
-        None, bool, and <= 0 do not seed. The politics flag uses equity instead.
-        Paper and live both track the same cash reading.
-        """
-        usable = _positive_dollars(balance)
-        if usable is None:
-            return False
-        if not self._offloop_current():
+    def _check_live_loss_limit(self, equity: float) -> bool:
+        """Seed on the first positive equity. True at the bankroll loss limit."""
+        usable = _positive_dollars(equity)
+        if usable is None or not self._offloop_current():
             return False
         if self._session_start_balance is None:
             self._session_start_balance = usable
             log.info(
-                "[LOSS_LIMIT] Session start balance recorded: $%.2f (halt at $%.2f loss, limit=%.0f%%)",
-                usable,
-                cfg.bankroll * cfg.live_loss_limit_pct,
-                cfg.live_loss_limit_pct * 100,
+                "[LOSS_LIMIT] Session start equity recorded: $%.2f (halt at $%.2f loss, limit=%.0f%%)",
+                usable, cfg.bankroll * cfg.live_loss_limit_pct, cfg.live_loss_limit_pct * 100,
             )
             return False
-        loss = self._session_start_balance - usable
-        limit = cfg.bankroll * cfg.live_loss_limit_pct
-        return loss >= limit
+        return self._session_start_balance - usable >= cfg.bankroll * cfg.live_loss_limit_pct
 
     def _equity_loss_halt_enabled(self) -> bool:
         """Unset is off. Exact true or 1 arms the same equity halt on paper and live."""
@@ -718,11 +681,9 @@ class TradeExecutor:
         except Exception:
             log.warning("[EQUITY_HALT] balance read failed")
             return None
-        if not isinstance(payload, dict):
+        if not isinstance(payload, dict) or "portfolio_value" not in payload:
             return None
         cash = self._cents_field(payload.get("balance"))
-        if "portfolio_value" not in payload:
-            return None
         portfolio_value = self._cents_field(payload.get("portfolio_value"))
         if cash is None or portfolio_value is None:
             return None
@@ -730,9 +691,7 @@ class TradeExecutor:
 
     @staticmethod
     def _cents_field(value: Any) -> int | None:
-        if isinstance(value, bool) or not isinstance(value, int):
-            return None
-        if value < 0:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             return None
         return value
 
@@ -740,9 +699,10 @@ class TradeExecutor:
         """Seed on the first good equity. Do not latch and do not shut down."""
         from utils.event_news_session_halt import session_halt_loss_line
 
-        if bankroll is None or equity is None:
-            return "unreadable"
-        if equity != equity or equity <= 0 or equity == float("inf"):
+        if (
+            bankroll is None or equity is None or equity != equity
+            or equity <= 0 or equity == float("inf")
+        ):
             return "unreadable"
         if self._equity_halt_seed is None:
             if not self._offloop_current():
@@ -794,28 +754,80 @@ class TradeExecutor:
             return "LIVE HALTED: session loss limit reached -- all trading suspended"
         return None
 
-    def _shadow_equity_loss_halt(self, *, cash_halted: bool) -> None:
-        """Log the cash decision against mark-to-market equity. Never blocks."""
-        try:
+    def _arm_loss_limit_latch(self) -> None:
+        """A real loss halt stays down. This file is not the session-halt latch."""
+        from utils import event_news_session_halt as halt
 
-            if self._is_paper:
-                return
-            if self._equity_loss_halt_enabled():
-                return
-            bankroll = self._configured_starting_bankroll()
-            equity = self._read_mtm_equity_dollars()
-            decision = self._observe_equity_halt(equity, bankroll)
-            bankroll_text = "unreadable" if bankroll is None else f"{bankroll:.2f}"
-            equity_text = "unreadable" if equity is None else f"{equity:.2f}"
-            log.info(
-                "[EQUITY_HALT] shadow old=%s new=%s sizing_bankroll=%s equity=%s",
-                "halt" if cash_halted else "pass",
-                decision,
-                bankroll_text,
-                equity_text,
-            )
+        if halt.halt_latch_present(halt.LOSS_LIMIT_LATCH_PATH):
+            self._live_halted = True
+            self._loss_limit_halted = True
+            log.critical("loss_limit_halt latch present -- no new orders")
+
+    def _session_equity_dollars(self, cash: float) -> float | None:
+        """Cash plus open contracts at the bid, after the taker exit fee."""
+        status, rows = self._read_live_position_rows()
+        if status != "ok" or not isinstance(rows, list):
+            return None
+        mark = Decimal(0)
+        for row in rows:
+            part = self._bid_proceeds(row)
+            if part is None:
+                return None
+            mark += part
+        equity = cash + float(mark)
+        return equity if equity == equity and 0 < equity < float("inf") else None
+
+    def _bid_proceeds(self, row: object) -> Decimal | None:
+        """Exit value of one position. Zero size is zero. A bad book is None."""
+        if not isinstance(row, dict) or "position_fp" not in row:
+            return None
+        raw = str(row.get("position_fp") or "").strip()
+        if raw in {"", "0", "0.0", "0.00"}:
+            return Decimal(0)
+        try:
+            count = Decimal(raw)
         except Exception:
-            log.info("[EQUITY_HALT] shadow_unreadable")
+            return None
+        if not count.is_finite():
+            return None
+        if count == 0:
+            return Decimal(0)
+        ticker = str(row.get("ticker") or "").strip()
+        getter = getattr(self._rest, "get_market_orderbook", None)
+        if not ticker or not callable(getter):
+            return None
+        try:
+            book = getter(ticker)
+            levels = book.yes_bids if count > 0 else book.no_bids
+        except Exception:
+            return None
+        if not isinstance(levels, (list, tuple)):
+            return None
+        from trading.venue_gateway import KalshiGateway
+
+        gateway = KalshiGateway(None)
+        remaining, gross, fee = abs(count), Decimal(0), Decimal(0)
+        try:
+            for level in levels:
+                if remaining <= 0:
+                    break
+                price, quantity = level.price, level.quantity
+                if (
+                    not isinstance(price, Decimal) or not isinstance(quantity, Decimal)
+                    or not price.is_finite() or not quantity.is_finite()
+                    or not (Decimal(0) < price < 1) or quantity <= 0
+                ):
+                    return None
+                take = quantity if quantity < remaining else remaining
+                gross += take * price
+                fee += gateway.fee(price, take)
+                remaining -= take
+        except Exception:
+            return None
+        proceeds = gross - fee
+        if remaining > 0 or not proceeds.is_finite() or proceeds < 0:
+            return None
+        return proceeds
 
     def _seed_cooldowns_from_db(self) -> None:
         """
@@ -1529,7 +1541,6 @@ class TradeExecutor:
         if analysis.capped_dollars <= 0:
             return "capped_dollars=0 (below minimum bet size)"
 
-
         edge_skip = self._event_news_edge_skip(
             analysis,
             ask_cents=(
@@ -1569,7 +1580,6 @@ class TradeExecutor:
         price_ceil = 97
         if yes_price < price_floor or yes_price > price_ceil:
             return f"price {yes_price:.1f}c is near limit (too illiquid)"
-
 
         chain_reason = self._event_news_chain_reason(
             analysis,
@@ -1731,22 +1741,30 @@ class TradeExecutor:
             if equity_reason is not None:
                 return equity_reason
         else:
-            cash_halted = self._check_live_loss_limit(usable)
-            self._shadow_equity_loss_halt(cash_halted=cash_halted)
-            if cash_halted:
+            equity = self._session_equity_dollars(usable)
+            if equity is None:
+                log.warning("[LOSS_LIMIT] equity unreadable; skip and do not seed")
+                return "live equity unreadable"
+            if self._check_live_loss_limit(equity):
                 if not self._offloop_current():
-                    return "live balance unreadable"
+                    return "live equity unreadable"
                 self._live_halted = True
-                loss = self._session_start_balance - usable
+                self._loss_limit_halted = True
+                loss = float(self._session_start_balance) - equity
+                limit = cfg.bankroll * cfg.live_loss_limit_pct
                 log.critical(
-                    "LIVE LOSS LIMIT BREACHED -- halting all trading. "
-                    "Session loss $%.2f >= limit $%.2f (%.0f%% of $%.2f bankroll). "
-                    "Restart bot to reset.",
-                    loss,
-                    cfg.bankroll * cfg.live_loss_limit_pct,
-                    cfg.live_loss_limit_pct * 100,
-                    cfg.bankroll,
+                    "loss_limit_halt session loss $%.2f >= limit $%.2f (%.0f%% of $%.2f bankroll)",
+                    loss, limit, cfg.live_loss_limit_pct * 100, cfg.bankroll,
                 )
+                try:
+                    from utils import event_news_session_halt as halt
+
+                    halt.write_halt_latch(
+                        seed_equity=float(self._session_start_balance),
+                        loss=loss, line=limit, path=halt.LOSS_LIMIT_LATCH_PATH,
+                    )
+                except Exception:
+                    log.critical("loss_limit_halt latch_write_failed")
                 self._invoke_shutdown_callback()
                 return "LIVE HALTED: session loss limit reached -- all trading suspended"
         if analysis.capped_dollars > usable * 0.9:

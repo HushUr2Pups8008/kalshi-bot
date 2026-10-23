@@ -188,6 +188,14 @@ def pytest_unconfigure(config: object) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _isolate_loss_limit_latch(monkeypatch, tmp_path):
+    """A breached loss limit must not leave a latch in the live state dir."""
+    from utils import event_news_session_halt as halt
+
+    monkeypatch.setattr(halt, "LOSS_LIMIT_LATCH_PATH", tmp_path / "loss_limit_halt.json")
+
+
+@pytest.fixture(autouse=True)
 def _reset_governance_global_reader():
     """Ensure tests cannot leak runtime-overrides global-reader state.
 
