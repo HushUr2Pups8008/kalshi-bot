@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.13] - 2026-10-23
+
+### Changed
+- Polymarket paper universe. Removed `PMHORMUZ` because its only open market settles on 2027-01-01, outside 30 days. Added six paper series with an empty `pair_series` and no `pair_map`: `PMUFCPETYAN`, `PMUFCKODSTE`, `PMLOLLOST1`, `PMLOLALKC`, `PMNBADALIND`, and `PMUFCIASLUC`. There were no exact cross-venue pairs. `PMTRUMPAPPROVE` stays. Gates, edge, and Grok rules are unchanged. The decision-grid hash moved only because those series names entered and left the grid.
+
 ## [0.37.12] - 2026-10-23
 
 ### Added

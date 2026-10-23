@@ -701,14 +701,31 @@ def test_sidecar_scan_does_not_ask_kalshi_for_polymarket_names(monkeypatch, tmp_
         polymarket_client=client,
         cross_venue_path=tmp_path / "cross.jsonl",
     )
-    assert "PMTRUMPAPPROVE" not in seen
+    polymarket_series = (
+        "PMTRUMPAPPROVE",
+        "PMUFCPETYAN",
+        "PMUFCKODSTE",
+        "PMLOLLOST1",
+        "PMLOLALKC",
+        "PMNBADALIND",
+        "PMUFCIASLUC",
+    )
     assert "PMHORMUZ" not in seen
+    assert all(series not in seen for series in polymarket_series)
     assert seen
     assert all(name == name.upper() for name in seen)
-    assert client.slugs == ["trmpapprv-wk-2026-10-23", "hormuz-normal"]
+    assert client.slugs == [
+        "trmpapprv-wk-2026-10-23",
+        "ufc-petyan-merdva-2026-10-24",
+        "ufc-kodste-noagug-2026-10-24",
+        "lol-los-t1-2026-10-23",
+        "lol-al-kc-2026-10-23",
+        "nba-dal-ind-2026-10-23",
+        "ufc-iasluc-niccal-2026-10-24",
+    ]
     assert len(scans) == 2
     assert "PMTRUMPAPPROVE" not in scans[0][1]
-    assert scans[1][1] == ("PMTRUMPAPPROVE", "PMHORMUZ")
+    assert scans[1][1] == polymarket_series
     assert scans[0][2] is False and scans[1][2] is False
     logged = [
         json.loads(line)
