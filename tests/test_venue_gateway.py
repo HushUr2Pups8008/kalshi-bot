@@ -48,7 +48,7 @@ def test_shipped_rows_are_kalshi_and_a_missing_venue_stays_kalshi(tmp_path) -> N
     reset_series_universe()
     try:
         entries = get_universe().entries
-        assert len(entries) == 25
+        assert len(entries) == 30
         assert {entry.venue for entry in entries if entry.series.startswith("KX")} == {
             "kalshi"
         }
@@ -59,7 +59,12 @@ def test_shipped_rows_are_kalshi_and_a_missing_venue_stays_kalshi(tmp_path) -> N
         }
         assert polymarket == {
             "PMTRUMPAPPROVE": "trmpapprv-wk-2026-10-23",
-            "PMHORMUZ": "hormuz-normal",
+            "PMUFCPETYAN": "ufc-petyan-merdva-2026-10-24",
+            "PMUFCKODSTE": "ufc-kodste-noagug-2026-10-24",
+            "PMLOLLOST1": "lol-los-t1-2026-10-23",
+            "PMLOLALKC": "lol-al-kc-2026-10-23",
+            "PMNBADALIND": "nba-dal-ind-2026-10-23",
+            "PMUFCIASLUC": "ufc-iasluc-niccal-2026-10-24",
         }
         assert all(
             entry.mode == "paper"
@@ -177,10 +182,10 @@ def test_polymarket_gateway_reads_and_quotes_the_october_fee() -> None:
             "rules_text",
             "settlement",
         }
-        assert gateway.list_markets("PMHORMUZ") == (
+        assert gateway.list_markets("PMTRUMPAPPROVE") == (
             {"slug": "stsc-hormuz-normal-2026-12-31"},
         )
-        assert client.calls[0] == ("event", "hormuz-normal")
+        assert client.calls[0] == ("event", "trmpapprv-wk-2026-10-23")
         assert gateway.order_book("stsc-hormuz-normal-2026-12-31")["slug"] == (
             "stsc-hormuz-normal-2026-12-31"
         )

@@ -52,6 +52,14 @@ EXPECTED_PAPER = (
     "KXPANAMAWEEKLY",
     "KXUSAIRANAGREEMENT",
 )
+_POLYMARKET_ONLY = (
+    "PMUFCPETYAN",
+    "PMUFCKODSTE",
+    "PMLOLLOST1",
+    "PMLOLALKC",
+    "PMNBADALIND",
+    "PMUFCIASLUC",
+)
 EXPECTED_LIVE = (
     "KXTRUTHSOCIAL",
     "KXCANUSDEAL",
@@ -105,7 +113,10 @@ def test_shipped_paper_series_are_not_live_and_cannot_post():
     politics = _politics()
     entries = {entry.series: entry for entry in get_universe().entries}
     assert tuple(series for series in entries if entries[series].mode == "paper") == (
-        ("KXTRUMPMENTION",) + EXPECTED_PAPER + ("PMTRUMPAPPROVE", "PMHORMUZ")
+        ("KXTRUMPMENTION",)
+        + EXPECTED_PAPER
+        + ("PMTRUMPAPPROVE",)
+        + _POLYMARKET_ONLY
     )
     assert live_series_tickers() == EXPECTED_LIVE
     for series in EXPECTED_PAPER:
@@ -120,20 +131,30 @@ def test_shipped_paper_series_are_not_live_and_cannot_post():
         assert event_news_live_post_block_reason(market, config=politics) == (
             "paper_series_no_post"
         )
-    for series in ("PMTRUMPAPPROVE", "PMHORMUZ"):
+    for series in ("PMTRUMPAPPROVE",) + _POLYMARKET_ONLY:
         entry = entries[series]
         assert entry.venue == "polymarket_us"
         assert entry.mode == "paper"
         assert entry.venue_market
-        assert entry.pair_series
+        assert entry.favorite_band == (0.55, 0.99)
+        assert entry.max_contracts == 8
+        assert entry.edge_min == "0.04"
+        assert entry.paper_score is False
+        assert entry.pair_map == ()
         market = SimpleNamespace(ticker=f"{series}-26OCT-A", series_ticker=series)
         assert event_news_live_post_block_reason(market, config=politics) == (
             "paper_series_no_post"
         )
+    assert "PMHORMUZ" not in entries
     assert entries["PMTRUMPAPPROVE"].pair_series == "KXTRUMPAPPROVE"
-    assert entries["PMHORMUZ"].pair_series == "KXHORMUZWEEKLY"
-    assert entries["PMTRUMPAPPROVE"].pair_map == ()
-    assert entries["PMHORMUZ"].pair_map == ()
+    assert entries["PMTRUMPAPPROVE"].venue_market == "trmpapprv-wk-2026-10-23"
+    assert entries["PMUFCPETYAN"].venue_market == "ufc-petyan-merdva-2026-10-24"
+    assert entries["PMUFCKODSTE"].venue_market == "ufc-kodste-noagug-2026-10-24"
+    assert entries["PMLOLLOST1"].venue_market == "lol-los-t1-2026-10-23"
+    assert entries["PMLOLALKC"].venue_market == "lol-al-kc-2026-10-23"
+    assert entries["PMNBADALIND"].venue_market == "nba-dal-ind-2026-10-23"
+    assert entries["PMUFCIASLUC"].venue_market == "ufc-iasluc-niccal-2026-10-24"
+    assert all(entries[series].pair_series == "" for series in _POLYMARKET_ONLY)
     assert entries["KXTRUMPAPPROVE"].pair_series == ""
     mention = entries["KXTRUMPMENTION"]
     assert mention.mode == "paper"
@@ -161,7 +182,13 @@ def test_shipped_caps_families_and_x_search_match_todays_desk():
     entries = {entry.series: entry for entry in get_universe().entries}
     assert all(entry.max_contracts == 8 for entry in entries.values())
     assert all(entry.edge_min == "0.04" for entry in entries.values())
-    assert all(entry.category == "politics" for entry in entries.values())
+    assert {entry.category for entry in entries.values()} == {"politics", "sports"}
+    assert all(entries[series].category == "sports" for series in _POLYMARKET_ONLY)
+    assert all(
+        entry.category == "politics"
+        for series, entry in entries.items()
+        if series not in _POLYMARKET_ONLY
+    )
     assert tuple(
         series for series, entry in entries.items() if entry.occupancy_family
     ) == ("KXTRUTHSOCIAL", "KXTRUMPACT", "KXTRUMPSAY")

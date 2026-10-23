@@ -359,19 +359,93 @@
     Polymarket US event trmpapprv-wk-2026-10-23, Trump approval.
     Paper only. The order endpoint is blocked. Band is 55c through 99c.
     The same event is also listed on Kalshi as KXTRUMPAPPROVE.
-- series: PMHORMUZ
+- series: PMUFCPETYAN
   venue: polymarket_us
-  venue_market: hormuz-normal
-  pair_series: KXHORMUZWEEKLY
+  venue_market: ufc-petyan-merdva-2026-10-24
   mode: paper
   favorite_lo_cents: 55
   favorite_hi_cents: 99
   transcript_skip: false
   paper_score: false
-  category: politics
+  category: sports
   max_contracts: 8
   edge_min: "0.04"
   notes: >-
-    Polymarket US event hormuz-normal, Strait of Hormuz traffic.
+    Polymarket US event ufc-petyan-merdva-2026-10-24, Petr Yan vs Merab
+    Dvalishvili. Paper only. The order endpoint is blocked. Band is 55c
+    through 99c. No exact Kalshi pair. Added from the 2026-10-23 scan.
+- series: PMUFCKODSTE
+  venue: polymarket_us
+  venue_market: ufc-kodste-noagug-2026-10-24
+  mode: paper
+  favorite_lo_cents: 55
+  favorite_hi_cents: 99
+  transcript_skip: false
+  paper_score: false
+  category: sports
+  max_contracts: 8
+  edge_min: "0.04"
+  notes: >-
+    Polymarket US event ufc-kodste-noagug-2026-10-24, Kody Steele vs Noah
+    Gugnon. Paper only. The order endpoint is blocked. Band is 55c
+    through 99c. No exact Kalshi pair. Added from the 2026-10-23 scan.
+- series: PMLOLLOST1
+  venue: polymarket_us
+  venue_market: lol-los-t1-2026-10-23
+  mode: paper
+  favorite_lo_cents: 55
+  favorite_hi_cents: 99
+  transcript_skip: false
+  paper_score: false
+  category: sports
+  max_contracts: 8
+  edge_min: "0.04"
+  notes: >-
+    Polymarket US event lol-los-t1-2026-10-23, LOS vs T1. Paper only.
+    The order endpoint is blocked. Band is 55c through 99c. No exact
+    Kalshi pair. Added from the 2026-10-23 scan.
+- series: PMLOLALKC
+  venue: polymarket_us
+  venue_market: lol-al-kc-2026-10-23
+  mode: paper
+  favorite_lo_cents: 55
+  favorite_hi_cents: 99
+  transcript_skip: false
+  paper_score: false
+  category: sports
+  max_contracts: 8
+  edge_min: "0.04"
+  notes: >-
+    Polymarket US event lol-al-kc-2026-10-23, Anyone's Legend vs Karmine.
     Paper only. The order endpoint is blocked. Band is 55c through 99c.
-    The same event is also listed on Kalshi paper series.
+    No exact Kalshi pair. Added from the 2026-10-23 scan.
+- series: PMNBADALIND
+  venue: polymarket_us
+  venue_market: nba-dal-ind-2026-10-23
+  mode: paper
+  favorite_lo_cents: 55
+  favorite_hi_cents: 99
+  transcript_skip: false
+  paper_score: false
+  category: sports
+  max_contracts: 8
+  edge_min: "0.04"
+  notes: >-
+    Polymarket US event nba-dal-ind-2026-10-23, Dallas vs Indiana.
+    Paper only. The order endpoint is blocked. Band is 55c through 99c.
+    No exact Kalshi pair. Added from the 2026-10-23 scan.
+- series: PMUFCIASLUC
+  venue: polymarket_us
+  venue_market: ufc-iasluc-niccal-2026-10-24
+  mode: paper
+  favorite_lo_cents: 55
+  favorite_hi_cents: 99
+  transcript_skip: false
+  paper_score: false
+  category: sports
+  max_contracts: 8
+  edge_min: "0.04"
+  notes: >-
+    Polymarket US event ufc-iasluc-niccal-2026-10-24, Iasmin Lucindo vs
+    Nicolle Caliari. Paper only. The order endpoint is blocked. Band is
+    55c through 99c. No exact Kalshi pair. Added from the 2026-10-23 scan.

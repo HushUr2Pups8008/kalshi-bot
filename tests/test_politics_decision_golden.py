@@ -40,8 +40,11 @@ from utils.series_universe import (
 # v0.37.3 adds two paper Polymarket series to the same grid. Kalshi gate
 # code for the existing series is unchanged. The hash moved because those
 # two series are now in the rows. use_new false stays.
+# v0.37.13 removes PMHORMUZ and adds six paper Polymarket series. Rows for
+# every series that stayed are unchanged. Each new series matches the
+# PMTRUMPAPPROVE gate rows aside from its name. use_new false stays.
 POLITICS_DECISION_SHA256 = (
-    "5885e2afc1f065b2d1209cf47c6c617760d7e2f8b1ce7e6700584ae7b9ed429c"
+    "c8f55388b5f53e2257df2065fa109c29d80f9bf78333e3e3bd0e630e662f93fa"
 )
 
 POLITICS = SimpleNamespace(
@@ -288,6 +291,6 @@ def test_politics_decision_grid_matches_the_desk(monkeypatch) -> None:
     payload = json.dumps(rows, separators=(",", ":"), sort_keys=True).encode("utf-8")
     digest = hashlib.sha256(payload).hexdigest()
 
-    assert series_count == 25
-    assert len(rows) == 2988
+    assert series_count == 30
+    assert len(rows) == 3533
     assert digest == POLITICS_DECISION_SHA256
