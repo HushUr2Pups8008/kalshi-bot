@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.26] - 2026-10-23
+
+### Removed
+- Offline close-day audits nothing in the desks runs: distribution analysis, LLM throughput, the pre-wave call projection, source-class evolution, the parse-error retro audit, the coverage audit, and the calibration aggregator. The calibration drift smoke check stays because the wave smoke scripts still run it.
+
 ## [0.37.25] - 2026-10-23
 
 ### Removed
