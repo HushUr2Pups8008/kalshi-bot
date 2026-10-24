@@ -91,52 +91,6 @@ def _mark_ready(deliverable: str) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# I-1 — corpus builder
-# --------------------------------------------------------------------------- #
-
-
-def test_i1_corpus_builder_readiness() -> None:
-    """I-1: build_corpus + BuildResult + UnregisteredRegimeError + load_registered_regimes."""
-    mod = _import("scripts.edge_replay.build_corpus")
-
-    _assert_callable_has_params(
-        mod.build_corpus,
-        {
-            "start_utc",
-            "end_utc",
-            "market_families",
-            "cohort_tag",
-            "regime_label",
-            "output_path",
-            "include_contamination",
-        },
-        func_name="build_corpus",
-    )
-    _assert_dataclass_fields(
-        mod.BuildResult,
-        {
-            "output_path",
-            "row_count",
-            "corpus_window_start_utc",
-            "corpus_window_end_utc",
-            "cohort_tag",
-            "regime_label",
-            "in_period_validation_only",
-        },
-        cls_name="BuildResult",
-    )
-    _assert_exception_subclass(
-        mod.UnregisteredRegimeError, ValueError, cls_name="UnregisteredRegimeError"
-    )
-    _assert_callable_has_params(
-        mod.load_registered_regimes,
-        {"doc_path"},
-        func_name="load_registered_regimes",
-    )
-    _mark_ready("I-1")
-
-
-# --------------------------------------------------------------------------- #
 # I-2 — LLM replay cache
 # --------------------------------------------------------------------------- #
 
@@ -506,7 +460,6 @@ def test_framework_readiness_summary() -> None:
     up to the per-deliverable test's status to disambiguate.
     """
     expected = {
-        "I-1",
         "I-2",
         "I-3",
         "I-4",

@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.24] - 2026-10-23
+
+### Removed
+- The offline corpus builder and the runtime-corpus materializer. No desk imports them. Live LLM capture and the contamination marker stay.
+
 ## [0.37.23] - 2026-10-23
 
 ### Removed
