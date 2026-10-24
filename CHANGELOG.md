@@ -19,6 +19,13 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.28] - 2026-10-23
+
+### Removed
+- The unused public market-data reader. `is_safe_kalshi_identifier` stays because the REST client and the paper trader still reject a ticker before they put it in a path.
+- The unused executed-price skip provenance builder. Live skip records stay.
+- The unused `emit_opportunity` logger and the unread `KALSHI_OPPORTUNITY_LOG` example key. The capital-guard flag and `GOVERNANCE_*` keys stay because botcheck, the politics start script, and the governance jobs still use them.
+
 ## [0.37.27] - 2026-10-23
 
 ### Removed
