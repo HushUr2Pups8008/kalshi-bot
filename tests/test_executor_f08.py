@@ -23,11 +23,8 @@ from trading.executor import TradeExecutor
 # ---------------------------------------------------------------------------
 
 def _make_live_executor(monkeypatch):
-    """Live mode so the flat edge check runs before the F-08 price gate.
-
-    Paper and live both use the flat edge check when the unified-edge flag
-    is off, so a missing executed price still reaches the price_unavailable
-    strings.
+    """Live mode. A missing executed price still reaches price_unavailable
+    before fee-net, in paper and in live.
     """
     monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", False)
     monkeypatch.setattr(_cfg_module.cfg, "live_trading_enabled", False)

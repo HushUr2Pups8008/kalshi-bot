@@ -25,8 +25,6 @@ from utils.event_news_research import (
     event_news_fee_net_edge,
     event_news_paper_score_decision,
     event_news_score_edge,
-    event_news_shadow_edge,
-    event_news_unified_edge_enabled,
     event_news_official_p_ready,
     event_news_missing_snapshot_ask,
     event_news_non_politics_series,
@@ -895,37 +893,10 @@ def test_fee_net_edge_is_quote_fee_and_yaml_minimum_is_politics_only():
     )
     assert thin is not None
     assert thin["new_take"] is False
-    assert event_news_unified_edge_enabled({}) is False
-    assert event_news_unified_edge_enabled({"EVENT_NEWS_UNIFIED_EDGE": "false"}) is False
-    assert event_news_unified_edge_enabled({"EVENT_NEWS_UNIFIED_EDGE": "0"}) is False
-    assert event_news_unified_edge_enabled({"EVENT_NEWS_UNIFIED_EDGE": "true"}) is True
-    assert event_news_unified_edge_enabled({"EVENT_NEWS_UNIFIED_EDGE": "1"}) is True
-
-
-def test_shadow_logs_only_when_the_flat_check_disagrees(caplog):
-    politics = _politics_config()
-    market = SimpleNamespace(
-        ticker="KXTRUTHSOCIAL-26AUG22-B230",
-        series_ticker="KXTRUTHSOCIAL",
+    assert (
+        event_news_admission_gate_reason(book, force_side="yes", config=politics)
+        == "unified_edge_unreadable"
     )
-    scored = event_news_score_edge(
-        market, yes_probability=0.60, side="yes", ask_cents=55, config=politics,
-    )
-    assert scored is not None and scored["new_take"] is False
-    with caplog.at_level(logging.INFO, logger="event_news_research"):
-        event_news_shadow_edge(
-            market, "yes", 55, scored, old_edge=0.05, old_take=True,
-        )
-        event_news_shadow_edge(
-            market, "yes", 55, scored, old_edge=0.02, old_take=False,
-        )
-    lines = [record.message for record in caplog.records if "EVENT_NEWS_UNIFIED_EDGE" in record.message]
-    assert len(lines) == 1
-    assert "ticker=KXTRUTHSOCIAL-26AUG22-B230" in lines[0]
-    assert "side=yes" in lines[0]
-    assert "ask=55" in lines[0]
-    assert "old=take" in lines[0]
-    assert "new=skip" in lines[0]
 
 
 def test_paper_score_logs_a_veto_or_stays_pending(caplog):
@@ -1284,8 +1255,12 @@ def test_official_p_ready_and_admission_gate_politics_only():
         is False
     )
     assert event_news_admission_gate_reason(
-        t240, edge=0.12, force_side="no", config=politics
+        t240, force_side="no", config=politics, probability=0.05
     ) is None
+    assert (
+        event_news_admission_gate_reason(t240, force_side="no", config=politics)
+        == "unified_edge_unreadable"
+    )
 
 
 def test_executed_side_excluded_band_skips_t4_shaped_no_and_admits_favorites():
@@ -1334,7 +1309,7 @@ def test_executed_side_excluded_band_skips_t4_shaped_no_and_admits_favorites():
     )
     assert (
         event_news_admission_gate_reason(
-            t4, edge=0.65, force_side="no", config=politics
+            t4, force_side="no", config=politics, probability=0.02
         )
         == "executed_ask_in_excluded_band"
     )
@@ -1345,25 +1320,25 @@ def test_executed_side_excluded_band_skips_t4_shaped_no_and_admits_favorites():
     assert event_news_executed_side_skip_reason(t8, "no", config=politics) is None
     assert (
         event_news_admission_gate_reason(
-            t8, edge=0.16, force_side="no", config=politics
+            t8, force_side="no", config=politics, probability=0.10
         )
         is None
     )
     assert event_news_executed_side_skip_reason(ts_no, "no", config=politics) is None
     assert (
         event_news_admission_gate_reason(
-            ts_no, edge=0.24, force_side="no", config=politics
+            ts_no, force_side="no", config=politics, probability=0.10
         )
         is None
     )
     assert (
         event_news_gate_chain_reason(
-            t4, side="no", edge=0.65, config=politics
+            t4, side="no", config=politics
         )
         == "executed_ask_in_excluded_band"
     )
-    assert event_news_gate_chain_reason(t8, side="no", edge=0.16, config=politics) is None
-    assert event_news_gate_chain_reason(ts_no, side="no", edge=0.24, config=politics) is None
+    assert event_news_gate_chain_reason(t8, side="no", config=politics) is None
+    assert event_news_gate_chain_reason(ts_no, side="no", config=politics) is None
     paper_series = SimpleNamespace(
         ticker="KXHORMUZWEEKLY-26OCT-A",
         series_ticker="KXHORMUZWEEKLY",

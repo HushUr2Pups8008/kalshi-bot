@@ -499,7 +499,6 @@ class ResearchPaperAdmissionBridge:
                     open_tickers = []
             gate_reason = event_news_admission_gate_reason(
                 market,
-                edge=current_signal.estimated_edge,
                 force_side=current_signal.side,
                 open_tickers=open_tickers,
                 probability=current_signal.estimated_probability,

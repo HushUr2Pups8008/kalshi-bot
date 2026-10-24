@@ -29,22 +29,14 @@ from utils.series_universe import (
     reset_series_universe,
 )
 
-# v0.37.1 turns EVENT_NEWS_UNIFIED_EDGE on for politics and the sidecar.
-# Replay of live [DECISION] start rows from 2026-10-08 through 2026-10-21
-# (the 2026-10-07 log is absent): 722 sized decisions had the same take
-# under flat gross edge and fee-net. Ten KXTRUMPACT-26OCT18-T4 rows at
-# ask 41c had gross 0.0544 and fee-net 0.0370, and capped dollars was 0,
-# so they never reached the edge gate. No sized row flipped, and fee-net
-# never took a row the flat gate skipped. The flat path stays in this grid
-# as the kill switch.
-# v0.37.3 adds two paper Polymarket series to the same grid. Kalshi gate
-# code for the existing series is unchanged. The hash moved because those
-# two series are now in the rows. use_new false stays.
+# v0.37.18 removes the flat edge path. Fee-net is the only edge. The grid
+# no longer loops use_new or old_take, so the hash moved. The remaining
+# edge rows match the v0.37.17 rows where the fee-net flag was on.
 # v0.37.13 removes PMHORMUZ and adds six paper Polymarket series. Rows for
 # every series that stayed are unchanged. Each new series matches the
-# PMTRUMPAPPROVE gate rows aside from its name. use_new false stays.
+# PMTRUMPAPPROVE gate rows aside from its name.
 POLITICS_DECISION_SHA256 = (
-    "c8f55388b5f53e2257df2065fa109c29d80f9bf78333e3e3bd0e630e662f93fa"
+    "326b6fc9a8d34e49dec6b6822fa7a67b0fcbfb1f5c3f5bd8d4afed53510d699c"
 )
 
 POLITICS = SimpleNamespace(
@@ -221,56 +213,48 @@ def _decision_rows() -> tuple[list[dict], int]:
         for ask in edge_asks:
             for side in SIDES:
                 for probability in edge_ps:
-                    for use_new in (False, True):
-                        for old_take in (False, True):
-                            market = Market(name, ask)
-                            analysis = SimpleNamespace(
-                                side=side,
-                                estimated_probability=probability,
-                                market=market,
-                                edge=0.05 if old_take else 0.01,
-                            )
-                            skip = TradeExecutor._event_news_edge_skip(
-                                SimpleNamespace(_is_paper=use_new),
-                                analysis,
-                                ask_cents=ask,
-                                gross_edge=float(analysis.edge),
-                                old_take=old_take,
-                                contracts=1,
-                                use_new=use_new,
-                                shadow=False,
-                            )
-                            scored = event_news_score_edge(
-                                market,
-                                yes_probability=probability,
-                                side=side,
-                                ask_cents=ask,
-                                contracts=1,
-                                config=POLITICS,
-                            )
-                            rows.append(
-                                {
-                                    "kind": "edge",
-                                    "series": name,
-                                    "ask": ask,
-                                    "side": side,
-                                    "p": probability,
-                                    "use_new": use_new,
-                                    "old_take": old_take,
-                                    "skip": skip,
-                                    "new_take": None if scored is None else scored["new_take"],
-                                    "fee_net": (
-                                        None
-                                        if scored is None or scored["fee_net"] is None
-                                        else _dec(scored["fee_net"])
-                                    ),
-                                }
-                            )
+                    market = Market(name, ask)
+                    analysis = SimpleNamespace(
+                        side=side,
+                        estimated_probability=probability,
+                        market=market,
+                        edge=0.01,
+                    )
+                    skip = TradeExecutor._event_news_edge_skip(
+                        SimpleNamespace(),
+                        analysis,
+                        ask_cents=ask,
+                        contracts=1,
+                    )
+                    scored = event_news_score_edge(
+                        market,
+                        yes_probability=probability,
+                        side=side,
+                        ask_cents=ask,
+                        contracts=1,
+                        config=POLITICS,
+                    )
+                    rows.append(
+                        {
+                            "kind": "edge",
+                            "series": name,
+                            "ask": ask,
+                            "side": side,
+                            "p": probability,
+                            "skip": skip,
+                            "new_take": None if scored is None else scored["new_take"],
+                            "fee_net": (
+                                None
+                                if scored is None or scored["fee_net"] is None
+                                else _dec(scored["fee_net"])
+                            ),
+                        }
+                    )
     rows.append(
         {
             "kind": "unified_edge_live",
             "enabled": True,
-            "flat_path": "kill_switch",
+            "flat_path": "removed",
         }
     )
     return rows, len(series)
@@ -292,5 +276,5 @@ def test_politics_decision_grid_matches_the_desk(monkeypatch) -> None:
     digest = hashlib.sha256(payload).hexdigest()
 
     assert series_count == 30
-    assert len(rows) == 3533
+    assert len(rows) == 3425
     assert digest == POLITICS_DECISION_SHA256

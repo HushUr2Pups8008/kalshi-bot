@@ -1369,17 +1369,10 @@ class TradeExecutor:
             )
             return None
         self._event_news_log_paper_maker(analysis, plan, paper_shadow=True)
-        try:
-            edge_value = float(analysis.edge)
-        except (TypeError, ValueError):
-            return None
         edge_skip = self._event_news_edge_skip(
             analysis,
             ask_cents=plan.price_cents if type(plan.price_cents) is int else None,
-            gross_edge=edge_value,
-            old_take=abs(edge_value) >= cfg.min_edge,
             contracts=plan.contracts if type(plan.contracts) is int else 0,
-            shadow=False,
         )
         if edge_skip:
             log.info(
@@ -1536,10 +1529,23 @@ class TradeExecutor:
     def _validate(self, analysis: SignalAnalysis) -> Optional[str]:
         """Return skip reason, or None if the trade should proceed."""
         self._live_position_cache = _LIVE_POSITIONS_UNSET
-        effective_min_edge = self._min_edge_threshold(analysis)
+        # A malformed readiness override fails closed. It does not change yaml edge_min.
+        self._min_edge_threshold(analysis)
 
         if analysis.capped_dollars <= 0:
             return "capped_dollars=0 (below minimum bet size)"
+
+        # F-08 runs before fee-net. A missing executed price must name
+        # price_unavailable. Fee-net would also skip, and would hide the field.
+        # The side selector must set this field. Falling back to the YES midpoint
+        # masked producer bugs and caused the F-06 ALARM.
+        if analysis.executed_price_cents is None:
+            if not analysis.market.price_available:
+                return "price_unavailable: market.price_available=False"
+            return (
+                "price_unavailable: executed_price_cents is None despite "
+                "price_available=True (side selector did not set canonical price)"
+            )
 
         edge_skip = self._event_news_edge_skip(
             analysis,
@@ -1548,13 +1554,8 @@ class TradeExecutor:
                 if type(analysis.executed_price_cents) is int
                 else None
             ),
-            gross_edge=float(analysis.edge),
-            old_take=abs(analysis.edge) >= effective_min_edge,
             contracts=1,
-            shadow=not self._is_paper,
         )
-        if edge_skip == "old_skip":
-            return f"edge {analysis.edge:+.4f} below min_edge {effective_min_edge}"
         if edge_skip:
             return edge_skip
 
@@ -1562,20 +1563,8 @@ class TradeExecutor:
             return f"market status={analysis.market.status}"
 
         # Price sanity is the live band for paper and live.
-        # P-5 LD-10: prefer the executed-side ask cents (canonical post-P0).
-        # F-08: fail-closed when executed_price_cents is None — the side selector
-        # must always populate this field for any tradeable candidate. Falling back
-        # to the YES midpoint silently masked producer-side bugs and caused the
-        # F-06 ALARM (4 opportunities, 0 SQL trades, 11.5h gap).
-        if analysis.executed_price_cents is not None:
-            yes_price = float(analysis.executed_price_cents)
-        elif not analysis.market.price_available:
-            return "price_unavailable: market.price_available=False"
-        else:
-            return (
-                "price_unavailable: executed_price_cents is None despite "
-                "price_available=True (side selector did not set canonical price)"
-            )
+        # P-5 LD-10: the executed-side ask cents are canonical post-P0.
+        yes_price = float(analysis.executed_price_cents)
         price_floor = 3
         price_ceil = 97
         if yes_price < price_floor or yes_price > price_ceil:
@@ -2110,27 +2099,11 @@ class TradeExecutor:
         analysis: SignalAnalysis,
         *,
         ask_cents: int | None,
-        gross_edge: float,
-        old_take: bool,
         contracts: int = 1,
-        use_new: bool | None = None,
-        shadow: bool = True,
     ) -> str | None:
-        """Skip reason for one politics edge check.
+        """Skip when fee-net is below yaml edge_min. Unreadable fee fails closed."""
+        from utils.event_news_research import event_news_score_edge
 
-        With EVENT_NEWS_UNIFIED_EDGE off, paper and live both keep the
-        caller's flat comparison and return ``old_skip``. The flag is the
-        only switch onto fee-net versus the yaml edge_min. A disagreement
-        is shadow-logged when the caller asks for it.
-        """
-        from utils.event_news_research import (
-            event_news_score_edge,
-            event_news_shadow_edge,
-            event_news_unified_edge_enabled,
-        )
-
-        if use_new is None:
-            use_new = event_news_unified_edge_enabled()
         side = str(getattr(analysis, "side", "") or "").strip().lower()
         try:
             yes_probability = float(analysis.estimated_probability)
@@ -2144,17 +2117,6 @@ class TradeExecutor:
             ask_cents=posted,
             contracts=contracts,
         )
-        if shadow:
-            event_news_shadow_edge(
-                analysis.market,
-                side,
-                posted,
-                scored,
-                old_edge=gross_edge,
-                old_take=old_take,
-            )
-        if not use_new:
-            return None if old_take else "old_skip"
         if scored is None or not scored["readable"]:
             return "unified_edge_unreadable"
         if not scored["new_take"]:
@@ -3039,7 +3001,6 @@ class TradeExecutor:
             analysis,
             execution_plan,
             str(maker_order_id),
-            side,
         )
         return str(maker_order_id)
 
@@ -3048,7 +3009,6 @@ class TradeExecutor:
         analysis: SignalAnalysis,
         execution_plan: FinalExecutionTerms,
         maker_order_id: str,
-        side: str,
     ) -> None:
         """The 180s wait must not hold the order queue."""
         from utils.event_news_desk_flags import event_news_maker_wait_s
@@ -3059,7 +3019,6 @@ class TradeExecutor:
                     analysis,
                     execution_plan,
                     maker_order_id,
-                    side,
                 ),
                 name="event-news-maker-wait",
             )
@@ -3097,7 +3056,6 @@ class TradeExecutor:
         analysis: SignalAnalysis,
         execution_plan: FinalExecutionTerms,
         maker_order_id: str,
-        side: str,
     ) -> Optional[str]:
         """Cancel and maybe take after the maker rest. Same orders as before."""
         from utils.event_news_desk_flags import event_news_maker_wait_s
@@ -3154,30 +3112,15 @@ class TradeExecutor:
             log_skip=True,
         ):
             return maker_order_id if filled_count > 0 else None
-        estimated = float(getattr(analysis, "estimated_probability", 0.0) or 0.0)
-        market_p = fresh / 100.0
-        edge = (estimated - market_p) if side == "yes" else ((1.0 - estimated) - market_p)
         edge_skip = self._event_news_edge_skip(
             analysis,
             ask_cents=fresh,
-            gross_edge=edge,
-            old_take=edge > self._min_edge_threshold(analysis),
             contracts=1,
-            shadow=True,
         )
-        if edge_skip == "old_skip":
-            log.info(
-                "[EVENT_NEWS_MAKER] edge_gone ticker=%s edge=%s ask=%s",
-                analysis.market.ticker,
-                edge,
-                fresh,
-            )
-            return maker_order_id if filled_count > 0 else None
         if edge_skip:
             log.info(
-                "[EVENT_NEWS_MAKER] edge_gone ticker=%s edge=%s ask=%s reason=%s",
+                "[EVENT_NEWS_MAKER] edge_gone ticker=%s ask=%s reason=%s",
                 analysis.market.ticker,
-                edge,
                 fresh,
                 edge_skip,
             )
