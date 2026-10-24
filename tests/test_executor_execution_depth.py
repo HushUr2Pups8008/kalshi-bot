@@ -144,7 +144,108 @@ async def test_paper_execution_requires_full_yes_depth_for_rounded_contract_coun
 
 
 @pytest.mark.asyncio
-async def test_paper_execution_fails_closed_one_contract_short(monkeypatch):
+async def test_paper_execution_sizes_down_to_available_contracts(monkeypatch):
+    """Seven lots at 60c still clear 0.04 fee-net, so the order is 7, not a skip."""
+    executor, rest, paper = _executor(monkeypatch, paper_mode=True)
+    analysis = _analysis(side="yes")
+    rest.get_market_orderbook.return_value = _book(
+        analysis.market.ticker,
+        no_bids=(BookLevel(Decimal("0.40"), Decimal("7")),),
+    )
+
+    result = await executor.execute(analysis)
+
+    assert result == "paper-depth-1"
+    paper.record_trade.assert_called_once_with(
+        analysis,
+        execution_terms=FinalExecutionTerms(
+            price_cents=60,
+            contracts=7,
+            cost_dollars=4.2,
+        ),
+    )
+    depth = analysis.signal_meta["final_execution_depth"]
+    assert depth["status"] == "sized_down"
+    assert depth["requested_contracts"] == 8
+    assert depth["available_contracts"] == 7.0
+    assert depth["sized_contracts"] == 7
+    assert depth["cost_dollars"] == 4.2
+    assert Decimal(depth["fee_net"]) >= Decimal("0.04")
+
+
+@pytest.mark.asyncio
+async def test_paper_no_size_down_uses_the_no_probability(monkeypatch):
+    """NO probability is 1 minus the YES probability. A 0.10 YES read is a 0.90 NO."""
+    executor, rest, paper = _executor(monkeypatch, paper_mode=True)
+    analysis = _analysis(side="no")
+    rest.get_market_orderbook.return_value = _book(
+        analysis.market.ticker,
+        yes_bids=(BookLevel(Decimal("0.40"), Decimal("7")),),
+    )
+
+    result = await executor.execute(analysis)
+
+    assert result == "paper-depth-1"
+    assert paper.record_trade.call_args.kwargs["execution_terms"] == FinalExecutionTerms(
+        price_cents=60,
+        contracts=7,
+        cost_dollars=4.2,
+    )
+    assert Decimal(analysis.signal_meta["final_execution_depth"]["fee_net"]) >= Decimal("0.04")
+
+
+@pytest.mark.asyncio
+async def test_live_execution_sizes_down_the_posted_count(monkeypatch, tmp_path):
+    """The live order count is the book, still inside the 8-contract cap."""
+    executor, rest, _paper = _executor(monkeypatch, paper_mode=False)
+    executor._live_submission_holds._path = tmp_path / "holds.json"
+    analysis = _analysis(side="yes")
+    rest.get_market_orderbook.return_value = _book(
+        analysis.market.ticker,
+        no_bids=(BookLevel(Decimal("0.40"), Decimal("7.9")),),
+    )
+    monkeypatch.setattr(
+        "utils.event_news_grok_veto.event_news_grok_veto_allows_live_post",
+        lambda *_args, **_kwargs: True,
+    )
+    rest.place_limit_order.return_value = SimpleNamespace(
+        error=None,
+        order_id="live-depth-7",
+        status="resting",
+        filled=0,
+    )
+
+    result = await executor.execute(analysis)
+
+    assert result == "live-depth-7"
+    assert rest.place_limit_order.call_args.kwargs["count"] == 7
+    assert rest.place_limit_order.call_args.kwargs["limit_price"] == 60
+    assert analysis.signal_meta["final_execution_depth"]["sized_contracts"] == 7
+    assert Decimal(analysis.signal_meta["final_execution_depth"]["fee_net"]) >= Decimal("0.04")
+
+
+@pytest.mark.asyncio
+async def test_depth_below_one_contract_still_skips(monkeypatch):
+    executor, rest, paper = _executor(monkeypatch, paper_mode=True)
+    analysis = _analysis(side="yes")
+    rest.get_market_orderbook.return_value = _book(
+        analysis.market.ticker,
+        no_bids=(BookLevel(Decimal("0.40"), Decimal("0.50")),),
+    )
+
+    result = await executor.execute(analysis)
+
+    assert result is None
+    paper.record_trade.assert_not_called()
+    assert analysis.signal_meta["final_execution_depth"]["status"] == "insufficient"
+    assert analysis.signal_meta["final_execution_depth"]["available_contracts"] == 0.5
+    assert "sized_contracts" not in analysis.signal_meta["final_execution_depth"]
+
+
+@pytest.mark.asyncio
+async def test_depth_size_down_skips_below_the_minimum_bet(monkeypatch):
+    """7 * 60c is $4.20. A $5 minimum bet leaves that short book untraded."""
+    monkeypatch.setattr(config_module.cfg, "min_bet_dollars", 5.0)
     executor, rest, paper = _executor(monkeypatch, paper_mode=True)
     analysis = _analysis(side="yes")
     rest.get_market_orderbook.return_value = _book(
@@ -156,17 +257,48 @@ async def test_paper_execution_fails_closed_one_contract_short(monkeypatch):
 
     assert result is None
     paper.record_trade.assert_not_called()
-    assert analysis.signal_meta["final_execution_depth"] == {
-        "source": "kalshi_orderbook",
-        "status": "insufficient",
-        "side": "yes",
-        "limit_price": 0.6,
-        "requested_contracts": 8,
-        "available_contracts": 7.0,
-        "available_notional": 4.2,
-        "as_of": "2026-07-29T16:30:00+00:00",
-        "raw_payload_hash": "e" * 64,
-    }
+    depth = analysis.signal_meta["final_execution_depth"]
+    assert depth["status"] == "insufficient"
+    assert depth["reason"] == "below_min_bet"
+    assert depth["sized_contracts"] == 7
+
+
+@pytest.mark.asyncio
+async def test_depth_size_down_skips_when_fee_net_is_below_four_cents(monkeypatch):
+    executor, _rest, paper = _executor(monkeypatch, paper_mode=True)
+    analysis = _analysis(side="yes")
+    analysis.estimated_probability = 0.62
+    executor._rest.get_market_orderbook.return_value = _book(
+        analysis.market.ticker,
+        no_bids=(BookLevel(Decimal("0.40"), Decimal("7")),),
+    )
+
+    plan, reason = await executor._final_execution_plan(analysis)
+
+    assert plan is None
+    assert reason == "G8_execution_depth_below_fee_net"
+    paper.record_trade.assert_not_called()
+    depth = analysis.signal_meta["final_execution_depth"]
+    assert depth["reason"] == "below_fee_net"
+    assert Decimal(depth["fee_net"]) < Decimal("0.04")
+
+
+@pytest.mark.asyncio
+async def test_depth_size_down_fails_closed_when_the_fee_is_unreadable(monkeypatch):
+    executor, _rest, paper = _executor(monkeypatch, paper_mode=True)
+    analysis = _analysis(side="yes")
+    analysis.estimated_probability = None
+    executor._rest.get_market_orderbook.return_value = _book(
+        analysis.market.ticker,
+        no_bids=(BookLevel(Decimal("0.40"), Decimal("7")),),
+    )
+
+    plan, reason = await executor._final_execution_plan(analysis)
+
+    assert plan is None
+    assert reason == "G8_execution_depth_fee_unreadable"
+    paper.record_trade.assert_not_called()
+    assert analysis.signal_meta["final_execution_depth"]["reason"] == "fee_unreadable"
 
 
 @pytest.mark.asyncio

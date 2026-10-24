@@ -17,7 +17,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 from numbers import Real
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
@@ -1776,7 +1776,7 @@ class TradeExecutor:
         self,
         analysis: SignalAnalysis,
     ) -> tuple[FinalExecutionTerms | None, str | None]:
-        """Fail closed unless the final Kalshi order has full fresh executable depth."""
+        """Size a short Kalshi book down when one lot still clears the bet and fee-net."""
 
         try:
             plan = final_execution_terms(
@@ -1843,14 +1843,23 @@ class TradeExecutor:
 
         self._set_final_execution_depth_meta(analysis, record)
         if available_contracts < Decimal(plan.contracts):
-            log.warning(
-                "[EXECUTION_DEPTH] %s insufficient side=%s requested=%d available=%s",
-                analysis.market.ticker,
-                analysis.side,
-                plan.contracts,
+            requested = plan.contracts
+            plan, depth_reason = self._event_news_depth_sized_plan(
+                analysis,
+                plan,
                 available_contracts,
+                record,
             )
-            return None, "G8_execution_depth_insufficient"
+            if depth_reason is not None or plan is None:
+                log.warning(
+                    "[EXECUTION_DEPTH] %s insufficient side=%s requested=%d available=%s reason=%s",
+                    analysis.market.ticker,
+                    analysis.side,
+                    requested,
+                    available_contracts,
+                    depth_reason,
+                )
+                return None, depth_reason or "G8_execution_depth_insufficient"
         from utils.event_news_grok_flags import event_news_requote_band_check_enabled
         from utils.event_news_research import (
             event_news_fresh_ask_cents,
@@ -1863,6 +1872,96 @@ class TradeExecutor:
             analysis._event_news_final_ask_cents = fresh_cents
             analysis._event_news_final_ask_invalid = fresh_invalid
         return plan, None
+
+    def _event_news_depth_sized_plan(
+        self,
+        analysis: SignalAnalysis,
+        plan: FinalExecutionTerms,
+        available_contracts: Decimal,
+        record: dict[str, object],
+    ) -> tuple[FinalExecutionTerms | None, str | None]:
+        """Return a smaller plan, or a skip reason when the short book cannot trade.
+
+        The lot is the whole contracts available at the executable price, and
+        it stays within the 8-contract cap. A lot below 1 contract, a cost
+        below ``cfg.min_bet_dollars``, or a fee-net below 0.04 does not trade.
+        An unreadable fee fails closed.
+        """
+        from utils.event_news_research import (
+            EVENT_NEWS_MAX_CONTRACTS,
+            event_news_fee_net_edge,
+        )
+
+        sized = int(available_contracts.to_integral_value(rounding=ROUND_DOWN))
+        sized = min(sized, int(plan.contracts), EVENT_NEWS_MAX_CONTRACTS)
+        if sized < 1:
+            record["status"] = "insufficient"
+            self._set_final_execution_depth_meta(analysis, record)
+            return None, "G8_execution_depth_insufficient"
+        cost_cents = sized * int(plan.price_cents)
+        cost_dollars = cost_cents / 100.0
+        if Decimal(cost_cents) < Decimal(str(cfg.min_bet_dollars)) * Decimal(100):
+            record["status"] = "insufficient"
+            record["sized_contracts"] = sized
+            record["reason"] = "below_min_bet"
+            self._set_final_execution_depth_meta(analysis, record)
+            return None, "G8_execution_depth_below_min_bet"
+        side = str(getattr(analysis, "side", "") or "").strip().lower()
+        try:
+            yes_p = Decimal(str(getattr(analysis, "estimated_probability", None)))
+        except Exception:
+            yes_p = None
+        if yes_p is None or not yes_p.is_finite():
+            p_side: Decimal | None = None
+        elif side == "yes":
+            p_side = yes_p
+        elif side == "no":
+            p_side = Decimal(1) - yes_p
+        else:
+            p_side = None
+        scored = (
+            event_news_fee_net_edge(p_side, int(plan.price_cents), sized)
+            if p_side is not None
+            else None
+        )
+        if scored is None:
+            record["status"] = "insufficient"
+            record["sized_contracts"] = sized
+            record["reason"] = "fee_unreadable"
+            self._set_final_execution_depth_meta(analysis, record)
+            return None, "G8_execution_depth_fee_unreadable"
+        fee_net = scored[2]
+        if fee_net < Decimal("0.04"):
+            record["status"] = "insufficient"
+            record["sized_contracts"] = sized
+            record["fee_net"] = format(fee_net, "f")
+            record["reason"] = "below_fee_net"
+            self._set_final_execution_depth_meta(analysis, record)
+            return None, "G8_execution_depth_below_fee_net"
+        record["status"] = "sized_down"
+        record["sized_contracts"] = sized
+        record["cost_dollars"] = cost_dollars
+        record["fee_net"] = format(fee_net, "f")
+        self._set_final_execution_depth_meta(analysis, record)
+        log.info(
+            "[EXECUTION_DEPTH] %s sized_down side=%s requested=%d available=%s "
+            "sized=%d fee_net=%s cost=%.2f",
+            analysis.market.ticker,
+            analysis.side,
+            plan.contracts,
+            available_contracts,
+            sized,
+            format(fee_net, "f"),
+            cost_dollars,
+        )
+        return (
+            FinalExecutionTerms(
+                price_cents=int(plan.price_cents),
+                contracts=sized,
+                cost_dollars=cost_dollars,
+            ),
+            None,
+        )
 
     def _set_final_execution_depth_meta(
         self,
