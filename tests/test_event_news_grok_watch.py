@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
 import requests
 
 import config as _cfg_module
@@ -17,7 +16,6 @@ from utils.event_news_grok_watch import (
     event_news_watch_series_record,
     run_event_news_grok_watch_once,
 )
-from utils.event_news_research import EVENT_NEWS_COHORT_ID
 
 _SECRET = "xai-watch-key-do-not-log"
 _NOW = datetime(2026, 10, 11, 20, 0, tzinfo=timezone.utc)
@@ -50,11 +48,6 @@ class _Response:
 
     def json(self):
         return {"choices": [{"message": {"content": self._text}}]}
-
-
-@pytest.fixture
-def politics_cohort(monkeypatch):
-    monkeypatch.setattr(_cfg_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
 
 
 def test_contradict_does_not_call_place_limit_order(politics_cohort, caplog, tmp_path):

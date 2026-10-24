@@ -58,6 +58,8 @@ from kalshi.series_metadata import SettlementSource
 from tasks.research_dossier import ResearchDossierStore
 from utils.research_gaps import research_gap_query_intent, research_questions_for_skip
 
+pytestmark = pytest.mark.usefixtures("_reset_generic_search_circuit")
+
 
 def _rss_search(query: ResearchQuery, **kwargs) -> list[ResearchEvidence]:
     return asyncio.run(_async_rss_search(query, **kwargs))
@@ -141,13 +143,6 @@ def _block_unmocked_research_http(monkeypatch):
         raise AssertionError("research-gate tests must inject search_provider; real HTTP is blocked")
 
     monkeypatch.setattr(urllib.request, "urlopen", fail_urlopen)
-
-
-@pytest.fixture(autouse=True)
-def _reset_generic_search_circuit() -> None:
-    research_gate_module._reset_generic_search_circuit_for_tests()
-    yield
-    research_gate_module._reset_generic_search_circuit_for_tests()
 
 
 def test_crude_oil_query_pack_targets_resolution_and_contradictions():

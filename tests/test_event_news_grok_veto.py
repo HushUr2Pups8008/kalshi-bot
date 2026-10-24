@@ -78,13 +78,6 @@ def _chat_payload(text: str) -> dict:
     return {"choices": [{"message": {"content": text}}]}
 
 
-@pytest.fixture
-def politics_cohort(monkeypatch):
-    monkeypatch.setattr(_cfg_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
-    monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", False)
-    monkeypatch.setattr(_cfg_module.cfg, "llm_excluded_price_bands", [(0.00, 0.35)])
-
-
 def test_packet_fields_from_analysis(politics_cohort):
     packet = event_news_grok_veto_packet(_analysis(), contracts=8)
     assert packet.ticker == "KXTRUTHSOCIAL-26OCT17-B129"

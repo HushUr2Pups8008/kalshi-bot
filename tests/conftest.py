@@ -235,3 +235,24 @@ def isolated_match_feedback_weights(monkeypatch):
         "analysis.match_feedback.load_verified_weights",
         lambda *args, **kwargs: {},
     )
+
+
+@pytest.fixture
+def politics_cohort(monkeypatch):
+    """Politics Grok tests share one cohort pin, live mode, and the 0-35c band."""
+    import config as cfg_module
+    from utils.event_news_research import EVENT_NEWS_COHORT_ID
+
+    monkeypatch.setattr(cfg_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
+    monkeypatch.setattr(cfg_module.cfg, "is_paper_trading", False)
+    monkeypatch.setattr(cfg_module.cfg, "llm_excluded_price_bands", [(0.00, 0.35)])
+
+
+@pytest.fixture
+def _reset_generic_search_circuit():
+    """Opt-in reset for the process-wide generic search circuit."""
+    from analysis import research_gate as research_gate_module
+
+    research_gate_module._reset_generic_search_circuit_for_tests()
+    yield
+    research_gate_module._reset_generic_search_circuit_for_tests()

@@ -10,7 +10,6 @@ from urllib import request as urllib_request
 import pytest
 import requests
 
-import config as _cfg_module
 from analysis.research_gate import (
     _BAD_OFFICIAL_FETCHES,
     _append_grok_source_evidence,
@@ -25,7 +24,6 @@ from analysis.truth_social_forecast import (
 from utils.event_news_grok_source import event_news_grok_source_evidence
 from utils.event_news_grok_veto import GROK_MAX_TOKENS, GROK_MODEL, GROK_TIMEOUT_SECONDS
 from utils.event_news_research import (
-    EVENT_NEWS_COHORT_ID,
     event_news_google_counter_not_required,
     event_news_has_structured_official_metric,
     event_news_official_p_ready,
@@ -66,12 +64,6 @@ class _Response:
 
 def _chat(text: str) -> _Response:
     return _Response(200, {"choices": [{"message": {"content": text}}]})
-
-
-@pytest.fixture
-def politics_cohort(monkeypatch):
-    monkeypatch.setattr(_cfg_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
-    monkeypatch.setattr(_cfg_module.cfg, "llm_excluded_price_bands", [(0.00, 0.35)])
 
 
 def _run(text: str, market=None, **kwargs):
