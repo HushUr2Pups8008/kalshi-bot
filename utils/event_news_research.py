@@ -631,14 +631,6 @@ def event_news_crossed_asks(market: Any, *, config: Any = None) -> str | None:
     return "crossed_asks"
 
 
-def event_news_unified_edge_enabled(
-    environ: Mapping[str, str] | None = None,
-) -> bool:
-    """Exact true or 1. Unset, false, and 0 keep the flat live edge check."""
-    source = os.environ if environ is None else environ
-    return str(source.get("EVENT_NEWS_UNIFIED_EDGE", "")).strip().lower() in {"true", "1"}
-
-
 def event_news_fee_net_edge(
     probability: float | Decimal | str,
     ask_cents: int,
@@ -743,42 +735,6 @@ def event_news_score_edge(
     }
 
 
-def event_news_shadow_edge(
-    market: Any,
-    side: str,
-    ask: int | None,
-    scored: Mapping[str, Any] | None,
-    *,
-    old_edge: float,
-    old_take: bool,
-) -> None:
-    """Log one line when the flat live check and the fee-net check disagree."""
-    new_take = False if scored is None else bool(scored.get("new_take"))
-    if bool(old_take) == new_take:
-        return
-
-    def _fmt(value: Any) -> str:
-        if value is None:
-            return ""
-        if isinstance(value, Decimal):
-            return format(value, "f")
-        return str(value)
-
-    log.info(
-        "[EVENT_NEWS_UNIFIED_EDGE] shadow ticker=%s side=%s ask=%s p=%s fee=%s "
-        "old_edge=%s new_edge=%s old=%s new=%s",
-        getattr(market, "ticker", ""),
-        side,
-        "" if ask is None else ask,
-        "" if scored is None else _fmt(scored.get("probability")),
-        "" if scored is None else _fmt(scored.get("fee")),
-        old_edge,
-        "" if scored is None else _fmt(scored.get("fee_net")),
-        "take" if old_take else "skip",
-        "take" if new_take else "skip",
-    )
-
-
 def event_news_series_ticker(market: Any) -> str:
     raw = getattr(market, "series_ticker", "")
     if isinstance(raw, str):
@@ -858,7 +814,6 @@ def event_news_gate_chain_reason(
     market: Any,
     *,
     side: str | None = None,
-    edge: float | None = None,
     limit_cents: int | None = None,
     fresh_ask_cents: int | None = None,
     fresh_ask_invalid: bool = False,
@@ -866,7 +821,6 @@ def event_news_gate_chain_reason(
     config: Any = None,
     environ: Mapping[str, str] | None = None,
     live: bool = True,
-    min_edge_base: float = 0.02,
     veto_reason: str | None = None,
     halt_reason: str | None = None,
     purpose: str = "order",
@@ -961,7 +915,6 @@ def event_news_gate_chain_reason(
         )
         if desk:
             return desk
-    del edge, min_edge_base
     if veto_reason:
         return str(veto_reason)
     if halt_reason:
@@ -1499,7 +1452,6 @@ def event_news_official_p_ready(
 def event_news_admission_gate_reason(
     market: Any,
     *,
-    edge: float | None = None,
     force_side: str | None = None,
     open_tickers: list[str] | tuple[str, ...] | None = None,
     config: Any = None,
@@ -1507,21 +1459,20 @@ def event_news_admission_gate_reason(
     live: bool = True,
     probability: float | None = None,
 ) -> str | None:
-    """Admission is the gate chain. Family runs only when open tickers are passed.
+    """Admission is the gate chain, then fee-net at one contract.
 
-    Flag off does not apply a second edge formula. Flag on requires fee-net
-    at or above the yaml edge_min and shadow-logs a disagreement with flat 0.04.
+    Family runs only when open tickers are passed. An unreadable fee or a
+    missing yaml edge_min returns unified_edge_unreadable.
     """
     reason = event_news_gate_chain_reason(
         market,
         side=force_side,
-        edge=edge,
         open_tickers=open_tickers,
         config=config,
         environ=environ,
         live=live,
     )
-    if reason or not event_news_unified_edge_enabled(environ):
+    if reason:
         return reason
     yes_ask, no_ask = snapshot_ask_cents(market)
     side_name = str(force_side or "").strip().lower()
@@ -1533,15 +1484,6 @@ def event_news_admission_gate_reason(
         ask_cents=ask if type(ask) is int else None,
         contracts=1,
         config=config,
-    )
-    try:
-        old_edge = float(edge) if edge is not None else 0.0
-    except (TypeError, ValueError):
-        old_edge = 0.0
-    old_take = edge is not None and abs(old_edge) >= 0.04
-    event_news_shadow_edge(
-        market, side_name, ask if type(ask) is int else None, scored,
-        old_edge=old_edge, old_take=old_take,
     )
     if scored is not None and scored["new_take"]:
         return None

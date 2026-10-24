@@ -703,9 +703,7 @@ def test_same_book_paper_and_live_share_edge_size_and_fee(monkeypatch) -> None:
     low_live.estimated_probability = 0.53
     paper_skip = paper_ex._validate(low_paper)
     live_skip = live_ex._validate(low_live)
-    assert paper_skip == live_skip
-    assert paper_skip is not None
-    assert "below min_edge" in paper_skip
+    assert paper_skip == live_skip == "below_fee_net_min_edge"
 
     fee_paper = event_news_fee_net_edge(0.90, 60, 8)
     fee_live = event_news_fee_net_edge(0.90, 60, 8)

@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.18] - 2026-10-23
+
+### Changed
+- Fee-net is the only edge. The flat edge path and `EVENT_NEWS_UNIFIED_EDGE` are gone. An unreadable fee still skips as `unified_edge_unreadable`. The decision grid hash moved because the flat on/off rows are gone. The remaining edge rows match v0.37.17 with the fee-net flag on.
+
 ## [0.37.17] - 2026-10-23
 
 ### Changed

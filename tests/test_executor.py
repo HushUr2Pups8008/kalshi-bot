@@ -1042,10 +1042,10 @@ class TestValidateSkipReasons:
         assert reason == "capped_dollars=0 (below minimum bet size)"
 
     def test_edge_below_threshold_skips(self, monkeypatch):
+        """0.51 at the 60c YES ask is not a 0.04 fee-net edge."""
         ex, _, _ = _make_executor(monkeypatch)
         reason = ex._validate(_make_analysis(edge=0.01, estimated_prob=0.51))
-        assert reason is not None
-        assert "below min_edge" in reason
+        assert reason == "below_fee_net_min_edge"
 
     def test_closed_market_skips(self, monkeypatch):
         ex, _, _ = _make_executor(monkeypatch)
@@ -1055,10 +1055,11 @@ class TestValidateSkipReasons:
         assert reason == "market status=closed"
 
     def test_near_limit_price_skips(self, monkeypatch):
+        """p=0.90 cannot clear 0.04 after fees at 98c, so fee-net returns first."""
         ex, _, _ = _make_executor(monkeypatch)
         analysis = _make_analysis(yes_price=98.0)
         reason = ex._validate(analysis)
-        assert reason == "price 98.0c is near limit (too illiquid)"
+        assert reason == "below_fee_net_min_edge"
 
     def test_live_cooldown_skips(self, monkeypatch):
         ex, _, _ = _make_executor(monkeypatch)
@@ -1127,19 +1128,19 @@ class TestValidateSkipReasons:
     @pytest.mark.parametrize(
         ("yes_price", "is_paper", "expected_skip"),
         [
-            # Paper and live share the 3c/97c band. Inside it, 3c and 97c
-            # die on the 91c near-certain gate. Outside it, the price check
-            # returns before that gate.
+            # Paper and live share the 3c/97c band. At 2c, p=0.90 still
+            # clears fee-net and the price check returns. At 97c and 98c,
+            # p=0.90 cannot clear 0.04 after fees, so fee-net returns first.
             (3.0, True, "near_certain_ask"),
             (2.0, True, "price 2.0c is near limit (too illiquid)"),
-            (97.0, True, "near_certain_ask"),
-            (98.0, True, "price 98.0c is near limit (too illiquid)"),
+            (97.0, True, "below_fee_net_min_edge"),
+            (98.0, True, "below_fee_net_min_edge"),
             (1.0, True, "price 1.0c is near limit (too illiquid)"),
-            (99.0, True, "price 99.0c is near limit (too illiquid)"),
+            (99.0, True, "below_fee_net_min_edge"),
             (3.0, False, "near_certain_ask"),
             (2.0, False, "price 2.0c is near limit (too illiquid)"),
-            (97.0, False, "near_certain_ask"),
-            (98.0, False, "price 98.0c is near limit (too illiquid)"),
+            (97.0, False, "below_fee_net_min_edge"),
+            (98.0, False, "below_fee_net_min_edge"),
         ],
     )
     def test_price_boundary_behavior(self, monkeypatch, yes_price, is_paper, expected_skip):
@@ -1158,15 +1159,16 @@ class TestValidateSkipReasons:
 
     @pytest.mark.parametrize("is_paper", [True, False])
     @pytest.mark.parametrize(
-        ("edge", "should_skip"),
+        ("estimated_prob", "should_skip"),
         [
-            (0.04, False),
-            (0.039, True),
-            (-0.04, False),
-            (-0.039, True),
+            # 0.90 at the 60c YES ask clears yaml 0.04 after the taker fee.
+            # 0.62 is 2c of gross edge before the fee, so fee-net stays under 0.04.
+            # The flat edge number does not decide.
+            (0.90, False),
+            (0.62, True),
         ],
     )
-    def test_edge_threshold_boundary(self, monkeypatch, edge, is_paper, should_skip):
+    def test_edge_threshold_boundary(self, monkeypatch, estimated_prob, is_paper, should_skip):
         monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", is_paper)
         monkeypatch.setattr(_cfg_module.cfg, "min_edge", 0.04)
         rest = MagicMock()
@@ -1179,15 +1181,14 @@ class TestValidateSkipReasons:
         ex = TradeExecutor(rest, paper)
         rest.get_balance.return_value = 100.0
         analysis = _make_analysis(
-            edge=edge,
-            estimated_prob=0.50 + edge,
+            edge=0.01,
+            estimated_prob=estimated_prob,
             yes_price=60.0,
             capped_dollars=4.80,
         )
         reason = ex._validate(analysis)
         if should_skip:
-            assert reason is not None
-            assert "below min_edge" in reason
+            assert reason == "below_fee_net_min_edge"
         else:
             assert reason is None
 
@@ -1385,7 +1386,7 @@ class TestBlendedCandidateCompatibility:
         ex._execute_paper.assert_not_called()
         assert (
             trade_log_mock.log_skipped.call_args.kwargs["reason"]
-            == "not_reserve_series"
+            == "unified_edge_unreadable"
         )
         assert trade_log_mock.log_skipped.call_args.kwargs["venue"] == "polymarket_us"
 
@@ -1422,8 +1423,7 @@ class TestBlendedCandidateCompatibility:
         ex._execute_paper.assert_not_called()
         trade_log_mock.log_skipped.assert_called_once()
         kwargs = trade_log_mock.log_skipped.call_args.kwargs
-        assert kwargs["reason"].startswith("edge ")
-        assert "below min_edge" in kwargs["reason"]
+        assert kwargs["reason"] == "unified_edge_unreadable"
         assert kwargs["venue"] == "polymarket_us"
         assert kwargs["side"] == candidate.side
         assert kwargs["signal_meta"] == candidate.signal_meta
@@ -1483,8 +1483,8 @@ class TestBlendedCandidateCompatibility:
         ex._execute_paper.assert_not_called()
         trade_log_mock.log_skipped.assert_called_once()
         kwargs = trade_log_mock.log_skipped.call_args.kwargs
-        # 0.62 versus the 61c YES ask is +0.01, under the shared 0.04 min edge.
-        assert "below min_edge" in kwargs["reason"]
+        # 0.62 at the politics YES ask is under yaml 0.04 after the taker fee.
+        assert kwargs["reason"] == "below_fee_net_min_edge"
         assert kwargs["min_edge_threshold"] == pytest.approx(0.04)
         assert kwargs["signal_meta"] == candidate.signal_meta
         assert kwargs["venue"] == "kalshi"
@@ -1554,7 +1554,7 @@ class TestStructuredBoundaryLogging:
 
         assert trade_id is None
         trade_log_mock.log_skipped.assert_called_once_with(
-            reason="edge +0.0100 below min_edge 0.04",
+            reason="below_fee_net_min_edge",
             skip_category="other",
             ticker=analysis.market.ticker,
             headline=analysis.news_item.headline[:80],
@@ -1873,16 +1873,19 @@ class TestPaperResearchAdmission:
 
 class TestPaperFeeAdmission:
     @pytest.mark.asyncio
-    async def test_politics_paper_uses_the_same_flat_edge_as_live(
+    async def test_politics_paper_uses_the_same_fee_net_edge_as_live(
         self,
         monkeypatch,
     ):
-        """Flag off: analysis.edge 0.02 is below 0.04 for paper and for live."""
+        """0.51 at 60c is under yaml 0.04 after fees for paper and for live.
+
+        A flat edge of 0.02 does not decide.
+        """
         paper_ex, _, paper = _make_paper_executor(monkeypatch)
         monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
         analysis = _make_analysis(
             edge=0.02,
-            estimated_prob=0.90,
+            estimated_prob=0.51,
             yes_price=60.0,
             capped_dollars=0.60,
         )
@@ -1893,9 +1896,7 @@ class TestPaperFeeAdmission:
         live_rest.get_open_positions.return_value = []
         live_reason = live_ex._validate(analysis)
 
-        assert paper_reason == live_reason
-        assert paper_reason is not None
-        assert "below min_edge" in paper_reason
+        assert paper_reason == live_reason == "below_fee_net_min_edge"
         paper.record_trade.assert_not_called()
 
     @pytest.mark.asyncio
@@ -1924,8 +1925,8 @@ class TestPaperFeeAdmission:
 
     @pytest.mark.asyncio
     @pytest.mark.asyncio
-    async def test_kalshi_paper_entry_ignores_an_unscorable_fee_schedule(self, monkeypatch):
-        """Flag off: a fee-schedule failure does not change the flat edge decision."""
+    async def test_kalshi_paper_entry_fails_closed_on_an_unscorable_fee_schedule(self, monkeypatch):
+        """An unreadable fee schedule skips. It does not record a paper trade."""
         executor, _, paper = _make_paper_executor(monkeypatch)
         monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
         terms = FinalExecutionTerms(price_cents=60, contracts=1, cost_dollars=0.60)
@@ -1946,15 +1947,19 @@ class TestPaperFeeAdmission:
             capped_dollars=0.60,
         )
 
-        with patch("trading.executor.trade_log"):
+        with patch("trading.executor.trade_log") as trade_log_mock:
             trade_id = await executor.execute(analysis)
 
-        assert trade_id == "paper-trade-id"
-        paper.record_trade.assert_called_once_with(analysis, execution_terms=terms)
+        assert trade_id is None
+        paper.record_trade.assert_not_called()
+        assert (
+            trade_log_mock.log_skipped.call_args.kwargs["reason"]
+            == "unified_edge_unreadable"
+        )
 
     @pytest.mark.asyncio
-    async def test_kalshi_paper_entry_ignores_a_failed_fee_quote(self, monkeypatch):
-        """Flag off: a fee-quote failure does not change the flat edge decision."""
+    async def test_kalshi_paper_entry_fails_closed_on_a_failed_fee_quote(self, monkeypatch):
+        """An unreadable fee quote skips. It does not record a paper trade."""
         executor, _, paper = _make_paper_executor(monkeypatch)
         monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
         terms = FinalExecutionTerms(price_cents=60, contracts=1, cost_dollars=0.60)
@@ -1972,11 +1977,15 @@ class TestPaperFeeAdmission:
             capped_dollars=0.60,
         )
 
-        with patch("trading.executor.trade_log"):
+        with patch("trading.executor.trade_log") as trade_log_mock:
             trade_id = await executor.execute(analysis)
 
-        assert trade_id == "paper-trade-id"
-        paper.record_trade.assert_called_once_with(analysis, execution_terms=terms)
+        assert trade_id is None
+        paper.record_trade.assert_not_called()
+        assert (
+            trade_log_mock.log_skipped.call_args.kwargs["reason"]
+            == "unified_edge_unreadable"
+        )
 
     @pytest.mark.asyncio
     async def test_non_kalshi_paper_entry_bypasses_kalshi_fee_admission(self, monkeypatch):
@@ -2839,8 +2848,8 @@ class TestPerPrefixPositionCap:
 
         assert _correlated_exposure_prefix(a.market) == "ewc-usse-me"
         reason = ex._validate(a)
-        assert reason == "not_reserve_series", (
-            f"a non-reserve Polymarket book must die before the prefix cap; got: {reason}"
+        assert reason == "unified_edge_unreadable", (
+            f"a book with no yaml edge_min fails closed before the prefix cap; got: {reason}"
         )
 
     def test_pm_tagged_market_with_kx_ticker_does_not_crash(self):
