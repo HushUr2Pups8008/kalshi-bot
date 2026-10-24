@@ -726,14 +726,23 @@ def test_index_captures_by_row_id_missing_file_returns_empty(tmp_path: Path):
     assert index_captures_by_row_id(tmp_path / "does-not-exist.jsonl") == {}
 
 
-def test_capture_cache_key_fields_match_gate_cache_columns():
-    """Drift guard: the 13-field key the corpus builder stamps
-    (CAPTURE_CACHE_KEY_FIELDS) MUST equal the key the replay gate looks up
-    (llm_cache._CACHE_KEY_COLUMNS), in the same order. If they drift, the gate's
-    cache-coverage check silently misses every stamped row -> a real corpus
-    would falsely read as 0% covered. These are hand-maintained duplicates in
-    two modules; this test is the only thing pinning them together."""
+def test_capture_cache_key_fields_stay_the_thirteen_field_contract():
+    """index_captures_by_row_id keeps only these fields. A dropped or reordered
+    field changes which capture rows can be joined back to a trade."""
     from scripts.edge_replay.llm_capture import CAPTURE_CACHE_KEY_FIELDS
-    from scripts.edge_replay.llm_cache import _CACHE_KEY_COLUMNS
 
-    assert tuple(CAPTURE_CACHE_KEY_FIELDS) == tuple(_CACHE_KEY_COLUMNS)
+    assert tuple(CAPTURE_CACHE_KEY_FIELDS) == (
+        "row_id",
+        "prompt_template_hash",
+        "prompt_filled_hash",
+        "model_id",
+        "model_digest",
+        "ollama_version",
+        "endpoint_type",
+        "seed",
+        "temperature",
+        "num_ctx",
+        "sampler_options_hash",
+        "hardware_backend_class",
+        "response_hash",
+    )
