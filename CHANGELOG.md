@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.17] - 2026-10-23
+
+### Changed
+- A short Kalshi book sizes the order down to the whole contracts available at the executable price. The size stays at or below 8 contracts, at or above the minimum bet, and at or above a 0.04 fee-net edge at that size. Less than 1 contract, a cost under the minimum bet, or an unreadable fee skips.
+
 ## [0.37.16] - 2026-10-23
 
 ### Fixed
