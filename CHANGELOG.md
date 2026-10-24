@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.20] - 2026-10-23
+
+### Changed
+- One loss check remains. Equity is cash plus the bid after the taker exit fee. The limit stays 10% of the configured bankroll ($5 on the $50 politics book). The session-halt flag, the portfolio-value equity-halt flag, and the $10 fallback line are gone. An unreadable bid skips and does not seed. A breach still exits non-zero, and the start script stays down until `logs/state/politics_loss_limit_halt.json` is deleted.
+
 ## [0.37.19] - 2026-10-23
 
 ### Changed

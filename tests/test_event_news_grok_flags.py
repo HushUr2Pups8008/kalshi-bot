@@ -1804,8 +1804,8 @@ def test_boot_line_prints_resolved_flag_values(monkeypatch, tmp_path, caplog):
         " RULES_CHECK live=off paper=on"
         " EDGE_SCAN live=off paper=on"
         " EXIT_WATCH live=off paper=on"
-        " SESSION_HALT live=off paper=on"
     )
+    assert "SESSION_HALT" not in line
     assert "[EVENT_NEWS_FLAGS] FATAL band guard off in LIVE" not in caplog.text
 
 
@@ -1835,8 +1835,8 @@ def test_boot_line_defaults_band_on_and_the_other_four_off(monkeypatch, tmp_path
         " RULES_CHECK live=off paper=on"
         " EDGE_SCAN live=off paper=on"
         " EXIT_WATCH live=off paper=on"
-        " SESSION_HALT live=off paper=on"
     )
+    assert "SESSION_HALT" not in _boot_line(caplog)
     assert "[EVENT_NEWS_FLAGS] FATAL band guard off in LIVE" not in caplog.text
 
 

@@ -27,8 +27,6 @@ EVENT_NEWS_MAKER_WAIT_S = "EVENT_NEWS_MAKER_WAIT_S"
 EVENT_NEWS_GROK_RULES_CHECK = "EVENT_NEWS_GROK_RULES_CHECK"
 EVENT_NEWS_GROK_EDGE_SCAN = "EVENT_NEWS_GROK_EDGE_SCAN"
 EVENT_NEWS_GROK_EXIT_WATCH = "EVENT_NEWS_GROK_EXIT_WATCH"
-EVENT_NEWS_SESSION_HALT = "EVENT_NEWS_SESSION_HALT"
-EVENT_NEWS_EQUITY_LOSS_HALT = "EVENT_NEWS_EQUITY_LOSS_HALT"
 EVENT_NEWS_LIVE_TRADABLE_RESEARCH = "EVENT_NEWS_LIVE_TRADABLE_RESEARCH"
 
 DEFAULT_YES_FLOOR_CENTS = 55
@@ -44,7 +42,6 @@ _DESK_FLAG_NAMES = (
     EVENT_NEWS_ONE_PER_FAMILY,
     EVENT_NEWS_MAKER_FIRST,
     EVENT_NEWS_GROK_RULES_CHECK,
-    EVENT_NEWS_SESSION_HALT,
 )
 
 
@@ -72,18 +69,6 @@ def event_news_desk_flag_enabled(
     if raw.isdigit():
         return int(raw) > 0
     return parse_bool_text(raw)
-
-
-def event_news_equity_loss_halt_enabled(
-    environ: Mapping[str, str] | None = None,
-) -> bool:
-    """Off for paper and live unless the env is exactly true or 1.
-
-    This name is not a desk flag. An unset value, ``0``, and ``false`` keep
-    the cash loss limit. ``0`` must not enable the halt.
-    """
-    raw = _raw_flag(EVENT_NEWS_EQUITY_LOSS_HALT, environ)
-    return raw in {"true", "1"}
 
 
 def event_news_live_tradable_research_enabled(
@@ -306,5 +291,4 @@ def event_news_desk_flags_boot_suffix(
         f" RULES_CHECK {pair(EVENT_NEWS_GROK_RULES_CHECK)}"
         f" EDGE_SCAN {pair(EVENT_NEWS_GROK_EDGE_SCAN)}"
         f" EXIT_WATCH {pair(EVENT_NEWS_GROK_EXIT_WATCH)}"
-        f" SESSION_HALT {pair(EVENT_NEWS_SESSION_HALT)}"
     )
