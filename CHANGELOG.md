@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.25] - 2026-10-23
+
+### Removed
+- The offline replay gate, its LLM cache, the tier classifier, the OOS registry, the manual CI entry, the scorer forensics audit, and the politics desk replay simulation. No desk, launchd job, or scorecard imports them. Live LLM capture, the contamination marker, and the counterfactual scorer stay.
+
 ## [0.37.24] - 2026-10-23
 
 ### Removed

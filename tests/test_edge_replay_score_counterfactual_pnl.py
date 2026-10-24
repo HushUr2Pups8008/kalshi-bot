@@ -1,7 +1,6 @@
 import pytest
 
 from scripts.edge_replay.score_counterfactual_pnl import bootstrap_ci, score_candidate, summarize_scores
-from scripts.edge_replay.scorer_forensics_audit import market_implied_win_prob
 
 
 def test_score_candidate_scores_yes_contract_against_resolution():
@@ -424,23 +423,3 @@ def test_score_candidate_canonical_and_legacy_keys_produce_identical_pnl():
     assert canonical_scored["would_have_traded"] is True
     assert legacy_scored["would_have_traded"] is True
     assert canonical_scored["counterfactual_pnl"] == pytest.approx(0.60)
-
-
-# F-11 P1-C fallback test: scorer_forensics_audit.market_implied_win_prob
-# must accept legacy ``market_yes_price`` key for pre-bounce corpus rows.
-def test_market_implied_win_prob_accepts_legacy_market_yes_price_key():
-    """F-11 P1-C: market_implied_win_prob() in scorer_forensics_audit reads
-    price via _entry_price_cents(), which falls back to market_yes_price for
-    pre-bounce rows. Regression: must not return None for legacy records.
-    """
-    legacy_row = {"side": "yes", "market_yes_price": 40.0}  # no entry_price_cents
-    canonical_row = {"side": "yes", "entry_price_cents": 40.0}  # canonical key
-
-    prob_legacy = market_implied_win_prob(legacy_row)
-    prob_canonical = market_implied_win_prob(canonical_row)
-
-    assert prob_legacy is not None, "legacy market_yes_price key must be accepted via fallback"
-    assert prob_canonical is not None, "canonical entry_price_cents key must work"
-    assert abs(prob_legacy - prob_canonical) < 1e-9, (
-        "both keys must produce the same probability for identical price"
-    )
