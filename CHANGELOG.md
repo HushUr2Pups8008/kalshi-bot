@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.19] - 2026-10-23
+
+### Changed
+- Two same-day Grok scans that differ by more than 0.10 get one grounded tie-break when the daily cap still fits. The median of the three queues. If the last two still differ by more than 0.10, the market skips as `prob_unstable` and is not scanned again that day. The model, temperature, and $3 cap are unchanged.
+
 ## [0.37.18] - 2026-10-23
 
 ### Changed

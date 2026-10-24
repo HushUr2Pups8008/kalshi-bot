@@ -650,9 +650,10 @@ def _cache_fresh(
     count = len(scans) if isinstance(scans, list) else 0
     if count < 2:
         return False
-    # Two scans that disagree stay cached so the next cycle does not pay again.
+    # Two disagreeing scans are not fresh: one grounded tie-break is still due.
+    # Three scans stay cached even when the last two still disagree.
     if stable_scan_probability(scans) is None:
-        return True
+        return count >= 3
     return _decimal(row.get("prob")) is not None
 
 
@@ -697,6 +698,69 @@ def _prior_scans(row: Mapping[str, Any] | None, now: datetime) -> list[dict[str,
     if legacy is None:
         return []
     return [{"prob": format(legacy, "f"), "post_id": str(row.get("post_id") or "")}]
+
+
+def _tie_break_due(
+    row: Mapping[str, Any] | None,
+    view: Mapping[str, Any],
+    fingerprint: str | None,
+    now: datetime,
+) -> bool:
+    """True when two same-day scans disagree and the quote context has not moved.
+
+    An ask move, a new post id, or a new UTC day is a full rescan, not this one
+    grounded sample. Three scans are never due another sample.
+    """
+    if not row:
+        return False
+    cached_at = _parse_utc(row.get("ts"))
+    if cached_at is None or _day(cached_at) != _day(now):
+        return False
+    sources = row.get("sources")
+    if not isinstance(sources, list) or not sources:
+        return False
+    if fingerprint is not None and str(row.get("post_id") or "") != fingerprint:
+        return False
+    if _ask_moved(row.get("yes_ask"), view.get("yes_ask")):
+        return False
+    if _ask_moved(row.get("no_ask"), view.get("no_ask")):
+        return False
+    scans = _prior_scans(row, now)
+    if len(scans) != 2:
+        return False
+    return stable_scan_probability(scans) is None
+
+
+def _tie_break_budget_ok(
+    spend_path: Path,
+    call_log_path: Path,
+    environ: Mapping[str, str] | None,
+    now: datetime | None,
+) -> bool:
+    """True when one grounded reserve still fits. An unreadable ledger does not."""
+    env = os.environ if environ is None else environ
+    cap = _daily_cap(env)
+    reserve = call_reserve_usd(call_log_path, grounded=True)
+    if reserve <= 0 or cap < 0:
+        return False
+    today = _day(now)
+    try:
+        existing = (
+            json.loads(spend_path.read_text(encoding="utf-8"))
+            if spend_path.exists()
+            else {}
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    if not isinstance(existing, dict):
+        return False
+    if existing.get("date") != today:
+        spent = Decimal("0")
+    else:
+        spent = _decimal(existing.get("spent_usd"))
+        if spent is None or spent < 0:
+            return False
+    return spent + reserve <= cap
 
 
 def _next_scans(
@@ -894,9 +958,13 @@ def run_paper_edge_scan(
     screen_log_path: Path = SCREEN_LOG_PATH,
     post_lookup: Callable[[], str | None] | None = None,
 ) -> dict[str, int]:
-    """Queue at most ``max_markets`` paper rows. Two same-day scans within 0.10, or skip prob_unstable.
+    """Queue at most ``max_markets`` paper rows.
 
-    A changed post id does not waive that gap. Ungrounded probabilities never queue.
+    Two same-day scans within 0.10 queue their median. A wider pair gets one
+    grounded tie-break when the daily cap still fits. The median of the three
+    queues, or the market skips as prob_unstable and is not scanned again that
+    day. A changed post id does not waive that gap. Ungrounded probabilities
+    never queue.
     """
     counts = {
         "examined": 0,
@@ -982,6 +1050,39 @@ def run_paper_edge_scan(
             else:
                 counts["skipped"] += 1
             continue
+        if _tie_break_due(cached, view, fingerprint, moment):
+            counts["examined"] += 1
+            affordable = _tie_break_budget_ok(
+                spend_path, call_log_path, environ, moment
+            )
+            _log_screen(
+                screen_log_path,
+                {
+                    "ts": _stamp(moment),
+                    "ticker": view["ticker"],
+                    "series": view["series"],
+                    "venue": _view_venue(view),
+                    "decision": "ground" if affordable else "skip",
+                    "reason": "tie_break" if affordable else "prob_unstable",
+                    "yes_ask": view.get("yes_ask"),
+                    "no_ask": view.get("no_ask"),
+                    "post_id": fingerprint,
+                },
+            )
+            if affordable:
+                pending.append(
+                    {
+                        "view": view,
+                        "ungrounded": None,
+                        "market": market,
+                        "tie_break": True,
+                    }
+                )
+            else:
+                _skip(view, "prob_unstable")
+            if counts["examined"] >= max_markets:
+                break
+            continue
         counts["examined"] += 1
         ungrounded = _call_grok(
             ticker=view["ticker"],
@@ -1055,6 +1156,13 @@ def run_paper_edge_scan(
         grouped[series].append(item)
     for series in series_order:
         items = grouped[series]
+        tie_only = bool(items) and all(item.get("tie_break") for item in items)
+        if tie_only and not _tie_break_budget_ok(
+            spend_path, call_log_path, environ, moment
+        ):
+            for item in items:
+                _skip(item["view"], "prob_unstable")
+            continue
         parsed = _ground_series(
             [item["view"] for item in items],
             environ=environ,
@@ -1072,6 +1180,8 @@ def run_paper_edge_scan(
             if isinstance(parsed, dict):
                 reason = str(parsed.get("skip_reason") or "malformed")
                 prompt_hash = str(parsed.get("prompt_hash") or "")
+            if tie_only and reason == "spend_cap":
+                reason = "prob_unstable"
             for item in items:
                 _skip(item["view"], reason, prompt_hash=prompt_hash)
             continue
@@ -1385,16 +1495,29 @@ def score_open_positions(
         cached = _cache_get(cache_path, ticker)
         if _cache_fresh(cached, view, fingerprint, moment):
             counts["cache_hits"] += 1
-            reused = _cached_call(view, cached or {})
+            cached_scans = cached.get("scans") if isinstance(cached, Mapping) else None
+            unstable = (
+                stable_scan_probability(
+                    cached_scans if isinstance(cached_scans, list) else []
+                )
+                is None
+            )
+            reused = None if unstable else _cached_call(view, cached or {})
             probability = None if reused is None else reused.probability
             sources = () if reused is None else reused.sources
+            if unstable:
+                skip_reason = "prob_unstable"
+            elif probability is None:
+                skip_reason = "cache_empty"
+            else:
+                skip_reason = None
             record = _score_record(
                 ticker=ticker,
                 side=side,
                 ask=ask,
                 probability=probability,
                 sources=sources,
-                skip_reason=None if probability is not None else "cache_empty",
+                skip_reason=skip_reason,
                 floor=floor,
                 now=moment,
             )
@@ -1416,6 +1539,45 @@ def score_open_positions(
                 counts["scored"] += 1
             _append_jsonl(score_log_path, record)
             _insert_paper_row(db_path, "position_scores", record)
+            continue
+        if _tie_break_due(cached, view, fingerprint, moment):
+            if not _tie_break_budget_ok(spend_path, call_log_path, environ, moment):
+                record = _score_record(
+                    ticker=ticker,
+                    side=side,
+                    ask=ask,
+                    probability=None,
+                    sources=(),
+                    skip_reason="prob_unstable",
+                    floor=floor,
+                    now=moment,
+                )
+                counts["skipped"] += 1
+                _append_jsonl(score_log_path, record)
+                _insert_paper_row(db_path, "position_scores", record)
+                continue
+            _log_screen(
+                screen_log_path,
+                {
+                    "ts": _stamp(moment),
+                    "ticker": ticker,
+                    "series": view["series"],
+                    "decision": "ground",
+                    "reason": "tie_break",
+                    "yes_ask": view.get("yes_ask"),
+                    "no_ask": view.get("no_ask"),
+                    "post_id": fingerprint,
+                },
+            )
+            pending.append(
+                {
+                    "view": view,
+                    "side": side,
+                    "ask": ask,
+                    "ticker": ticker,
+                    "tie_break": True,
+                }
+            )
             continue
         _call_grok(
             ticker=ticker,
@@ -1453,6 +1615,25 @@ def score_open_positions(
         grouped[series].append(item)
     for series in series_order:
         items = grouped[series]
+        tie_only = bool(items) and all(item.get("tie_break") for item in items)
+        if tie_only and not _tie_break_budget_ok(
+            spend_path, call_log_path, environ, moment
+        ):
+            for item in items:
+                record = _score_record(
+                    ticker=item["ticker"],
+                    side=item["side"],
+                    ask=item["ask"],
+                    probability=None,
+                    sources=(),
+                    skip_reason="prob_unstable",
+                    floor=floor,
+                    now=moment,
+                )
+                counts["skipped"] += 1
+                _append_jsonl(score_log_path, record)
+                _insert_paper_row(db_path, "position_scores", record)
+            continue
         parsed = _ground_series(
             [item["view"] for item in items],
             environ=environ,
@@ -1476,6 +1657,71 @@ def score_open_positions(
             row = by_ticker.get(item["ticker"])
             probability = None if row is None else _decimal(row.get("prob"))
             confidence = None if row is None else _decimal(row.get("confidence"))
+            if item.get("tie_break"):
+                if probability is None or not sources:
+                    reason = "malformed"
+                    if isinstance(parsed, dict) and parsed.get("skip_reason"):
+                        reason = str(parsed.get("skip_reason") or "malformed")
+                    if reason == "spend_cap":
+                        reason = "prob_unstable"
+                    record = _score_record(
+                        ticker=item["ticker"],
+                        side=item["side"],
+                        ask=item["ask"],
+                        probability=None,
+                        sources=(),
+                        skip_reason=reason,
+                        floor=floor,
+                        now=moment,
+                    )
+                    counts["skipped"] += 1
+                else:
+                    scans = _next_scans(
+                        cache_path,
+                        item["view"],
+                        probability,
+                        fingerprint,
+                        moment,
+                    )
+                    decision = stable_scan_probability(scans)
+                    _remember_grounded(
+                        cache_path,
+                        item["view"],
+                        probability,
+                        confidence,
+                        sources,
+                        fingerprint,
+                        summary,
+                        moment,
+                        scans,
+                    )
+                    if decision is None:
+                        record = _score_record(
+                            ticker=item["ticker"],
+                            side=item["side"],
+                            ask=item["ask"],
+                            probability=None,
+                            sources=(),
+                            skip_reason="prob_unstable",
+                            floor=floor,
+                            now=moment,
+                        )
+                        counts["skipped"] += 1
+                    else:
+                        record = _score_record(
+                            ticker=item["ticker"],
+                            side=item["side"],
+                            ask=item["ask"],
+                            probability=decision,
+                            sources=sources,
+                            skip_reason=None,
+                            floor=floor,
+                            now=moment,
+                        )
+                        counts["scored"] += 1
+                _append_jsonl(score_log_path, record)
+                _insert_paper_row(db_path, "position_scores", record)
+                continue
             record = _score_record(
                 ticker=item["ticker"],
                 side=item["side"],
