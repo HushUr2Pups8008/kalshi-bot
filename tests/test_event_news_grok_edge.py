@@ -51,6 +51,7 @@ from utils.event_news_grok_edge import (
     rank_politics_markets,
     run_paper_edge_scan,
     run_paper_exit_watch,
+    score_open_positions,
     scorecard_interval,
     stable_scan_probability,
     write_daily_edge_report,
@@ -1261,8 +1262,14 @@ def test_one_grounded_scan_does_not_queue(tmp_path: Path) -> None:
     assert Decimal(queued["grok_probability"]) == Decimal("0.70")
 
 
-def test_wide_gap_stays_unstable_and_does_not_pay_again(tmp_path: Path) -> None:
-    """0.20 then 0.70 is not a decision. The same asks and post do not buy a third call."""
+def _scan_probs(path: Path) -> list[str]:
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    scans = stored["tickers"]["KXTRUMPSAY-26OCT20-TEST"]["scans"]
+    return [str(row["prob"]) for row in scans]
+
+
+def test_wide_gap_gets_one_grounded_tie_break_then_stops(tmp_path: Path) -> None:
+    """0.20 then 0.70 is not a decision. One grounded 0.40 still skips, and the next cycle is free."""
     calls: list[dict] = []
     first = _scan(
         tmp_path,
@@ -1273,6 +1280,7 @@ def test_wide_gap_stays_unstable_and_does_not_pay_again(tmp_path: Path) -> None:
     )
     assert first["queued"] == 0
     assert first["grounded_calls"] == 1
+    assert len(calls) == 2
     skipped = _rows(tmp_path / "candidates.jsonl")[0]
     assert skipped["skip_reason"] == "prob_unstable"
     assert Decimal(skipped["grok_probability"]) == Decimal("0.70")
@@ -1280,15 +1288,294 @@ def test_wide_gap_stays_unstable_and_does_not_pay_again(tmp_path: Path) -> None:
     second = _scan(
         tmp_path,
         [_market()],
-        _poster(later),
+        _poster(later, grounded_prob="0.40"),
+        {XAI_API_KEY_ENV: "test-key"},
+        prior_prob=None,
+    )
+    assert len(later) == 1
+    assert "tools" in later[0]["payload"]
+    assert later[0]["payload"]["temperature"] == 0
+    assert later[0]["payload"]["model"] == GROK_MODEL
+    assert second["queued"] == 0
+    assert second["cache_hits"] == 0
+    assert second["grounded_calls"] == 1
+    assert _rows(tmp_path / "candidates.jsonl")[-1]["skip_reason"] == "prob_unstable"
+    assert _scan_probs(tmp_path / "cache.json") == ["0.20", "0.70", "0.40"]
+    again: list[dict] = []
+    third = _scan(
+        tmp_path,
+        [_market()],
+        _poster(again, grounded_prob="0.90"),
+        {XAI_API_KEY_ENV: "test-key"},
+        prior_prob=None,
+    )
+    assert again == []
+    assert third["cache_hits"] == 1
+    assert third["queued"] == 0
+    assert third["grounded_calls"] == 0
+    assert _rows(tmp_path / "candidates.jsonl")[-1]["skip_reason"] == "prob_unstable"
+    assert _scan_probs(tmp_path / "cache.json") == ["0.20", "0.70", "0.40"]
+
+
+def test_tie_break_queues_the_median_of_three(tmp_path: Path) -> None:
+    """0.20, 0.70, then 0.68. The last two are within 0.10, so the queue is 0.68."""
+    _scan(
+        tmp_path,
+        [_market()],
+        _poster([]),
+        {XAI_API_KEY_ENV: "test-key"},
+        prior_prob="0.20",
+    )
+    later: list[dict] = []
+    second = _scan(
+        tmp_path,
+        [_market()],
+        _poster(later, grounded_prob="0.68"),
+        {XAI_API_KEY_ENV: "test-key"},
+        prior_prob=None,
+    )
+    assert len(later) == 1
+    assert "tools" in later[0]["payload"]
+    assert second["queued"] == 1
+    assert second["grounded_calls"] == 1
+    queued = _rows(tmp_path / "candidates.jsonl")[-1]
+    assert queued["queued"] is True
+    assert Decimal(queued["grok_probability"]) == Decimal("0.68")
+    assert _scan_probs(tmp_path / "cache.json") == ["0.20", "0.70", "0.68"]
+    again: list[dict] = []
+    third = _scan(
+        tmp_path,
+        [_market()],
+        _poster(again),
+        {XAI_API_KEY_ENV: "test-key"},
+        prior_prob=None,
+    )
+    assert again == []
+    assert third["cache_hits"] == 1
+    assert third["queued"] == 1
+    assert third["grounded_calls"] == 0
+
+
+def test_tie_break_skips_when_the_cap_does_not_fit(tmp_path: Path) -> None:
+    """A ledger already at $3 buys no third scan and writes no call row."""
+    _scan(
+        tmp_path,
+        [_market()],
+        _poster([]),
+        {XAI_API_KEY_ENV: "test-key", GROK_DAILY_USD_CAP: "3"},
+        prior_prob="0.20",
+    )
+    (tmp_path / "spend.json").write_text(
+        json.dumps({"date": "2026-10-17", "spent_usd": "3"}) + "\n",
+        encoding="utf-8",
+    )
+    logged = len(_rows(tmp_path / "calls.jsonl"))
+    later: list[dict] = []
+    second = _scan(
+        tmp_path,
+        [_market()],
+        _poster(later, grounded_prob="0.68"),
+        {XAI_API_KEY_ENV: "test-key", GROK_DAILY_USD_CAP: "3"},
+        prior_prob=None,
+    )
+    assert later == []
+    assert len(_rows(tmp_path / "calls.jsonl")) == logged
+    assert second["queued"] == 0
+    assert second["grounded_calls"] == 0
+    assert second["cache_hits"] == 0
+    assert _rows(tmp_path / "candidates.jsonl")[-1]["skip_reason"] == "prob_unstable"
+    assert _scan_probs(tmp_path / "cache.json") == ["0.20", "0.70"]
+    retry: list[dict] = []
+    third = _scan(
+        tmp_path,
+        [_market()],
+        _poster(retry, grounded_prob="0.68"),
+        {XAI_API_KEY_ENV: "test-key", GROK_DAILY_USD_CAP: "3"},
+        prior_prob=None,
+    )
+    assert retry == []
+    assert third["grounded_calls"] == 0
+    assert _scan_probs(tmp_path / "cache.json") == ["0.20", "0.70"]
+
+
+def test_tie_break_fails_closed_when_the_ledger_is_unreadable(tmp_path: Path) -> None:
+    """Garbage in the spend file is not a reason to buy the third scan."""
+    _scan(
+        tmp_path,
+        [_market()],
+        _poster([]),
+        {XAI_API_KEY_ENV: "test-key"},
+        prior_prob="0.20",
+    )
+    (tmp_path / "spend.json").write_text("not-json\n", encoding="utf-8")
+    logged = len(_rows(tmp_path / "calls.jsonl"))
+    later: list[dict] = []
+    second = _scan(
+        tmp_path,
+        [_market()],
+        _poster(later, grounded_prob="0.68"),
         {XAI_API_KEY_ENV: "test-key"},
         prior_prob=None,
     )
     assert later == []
-    assert second["cache_hits"] == 1
-    assert second["queued"] == 0
+    assert len(_rows(tmp_path / "calls.jsonl")) == logged
     assert second["grounded_calls"] == 0
+    assert second["queued"] == 0
     assert _rows(tmp_path / "candidates.jsonl")[-1]["skip_reason"] == "prob_unstable"
+    assert _scan_probs(tmp_path / "cache.json") == ["0.20", "0.70"]
+
+
+def test_malformed_tie_break_does_not_consume_the_one_sample(tmp_path: Path) -> None:
+    """A bad third reply leaves the two scans in place. The parser's one retry is not a new sample."""
+    _scan(
+        tmp_path,
+        [_market()],
+        _poster([]),
+        {XAI_API_KEY_ENV: "test-key"},
+        prior_prob="0.20",
+    )
+
+    bad: list[dict] = []
+
+    def post(url, json, headers, timeout):  # noqa: A002
+        bad.append({"payload": json})
+        return _Response({"output_text": "nope"})
+
+    failed = _scan(
+        tmp_path,
+        [_market()],
+        post,
+        {XAI_API_KEY_ENV: "test-key"},
+        prior_prob=None,
+    )
+    assert len(bad) == 2
+    assert all("tools" in row["payload"] for row in bad)
+    assert failed["queued"] == 0
+    assert failed["grounded_calls"] == 1
+    assert _scan_probs(tmp_path / "cache.json") == ["0.20", "0.70"]
+    later: list[dict] = []
+    second = _scan(
+        tmp_path,
+        [_market()],
+        _poster(later, grounded_prob="0.40"),
+        {XAI_API_KEY_ENV: "test-key"},
+        prior_prob=None,
+    )
+    assert len(later) == 1
+    assert "tools" in later[0]["payload"]
+    assert second["queued"] == 0
+    assert _rows(tmp_path / "candidates.jsonl")[-1]["skip_reason"] == "prob_unstable"
+    assert _scan_probs(tmp_path / "cache.json") == ["0.20", "0.70", "0.40"]
+    again: list[dict] = []
+    third = _scan(
+        tmp_path,
+        [_market()],
+        _poster(again),
+        {XAI_API_KEY_ENV: "test-key"},
+        prior_prob=None,
+    )
+    assert again == []
+    assert third["cache_hits"] == 1
+    assert third["grounded_calls"] == 0
+
+
+def test_ask_move_or_new_post_is_a_full_rescan(tmp_path: Path) -> None:
+    """A 5c ask move or a new post id pays for the screen and the grounded call."""
+    moved = tmp_path / "moved"
+    moved.mkdir()
+    _scan(
+        moved,
+        [_market()],
+        _poster([]),
+        {XAI_API_KEY_ENV: "test-key"},
+        prior_prob="0.20",
+    )
+    ask_calls: list[dict] = []
+    _scan(
+        moved,
+        [_market(yes_ask=60)],
+        _poster(ask_calls, grounded_prob="0.40"),
+        {XAI_API_KEY_ENV: "test-key"},
+        prior_prob=None,
+    )
+    assert len(ask_calls) == 2
+    assert "tools" not in ask_calls[0]["payload"]
+    assert "tools" in ask_calls[1]["payload"]
+
+    posted = tmp_path / "posted"
+    posted.mkdir()
+    _scan(
+        posted,
+        [_market()],
+        _poster([]),
+        {XAI_API_KEY_ENV: "test-key"},
+        prior_prob="0.20",
+    )
+    post_calls: list[dict] = []
+    counts = _scan(
+        posted,
+        [_market()],
+        _poster(post_calls, grounded_prob="0.40"),
+        {XAI_API_KEY_ENV: "test-key"},
+        prior_prob=None,
+        post_lookup=lambda: "post-2",
+    )
+    assert len(post_calls) == 2
+    assert "tools" not in post_calls[0]["payload"]
+    assert "tools" in post_calls[1]["payload"]
+    assert counts["queued"] == 0
+    assert _rows(posted / "candidates.jsonl")[-1]["skip_reason"] == "prob_unstable"
+
+
+def test_open_position_tie_break_is_one_call_and_the_scan_does_not_repeat(
+    tmp_path: Path,
+) -> None:
+    """The position score spends the one tie-break. The scan behind it does not pay again."""
+    _scan(
+        tmp_path,
+        [_market()],
+        _poster([]),
+        {XAI_API_KEY_ENV: "test-key"},
+        prior_prob="0.20",
+    )
+    paths = _paths(tmp_path)
+    calls: list[dict] = []
+    scored = score_open_positions(
+        [{"ticker": "KXTRUMPSAY-26OCT20-TEST", "position_fp": "8"}],
+        live=False,
+        market_lookup=lambda ticker: _market(),
+        environ={XAI_API_KEY_ENV: "test-key"},
+        post=_poster(calls, grounded_prob="0.68"),
+        now=NOW,
+        call_log_path=paths["call_log_path"],
+        score_log_path=tmp_path / "scores.jsonl",
+        spend_path=paths["spend_path"],
+        cache_path=paths["cache_path"],
+        screen_log_path=paths["screen_log_path"],
+        post_lookup=lambda: "post-1",
+    )
+    assert len(calls) == 1
+    assert "tools" in calls[0]["payload"]
+    assert calls[0]["payload"]["temperature"] == 0
+    assert scored["grounded_calls"] == 1
+    assert scored["scored"] == 1
+    score_row = _rows(tmp_path / "scores.jsonl")[-1]
+    assert score_row["decision"] == "take"
+    assert Decimal(score_row["grok_probability"]) == Decimal("0.68")
+    assert _scan_probs(paths["cache_path"]) == ["0.20", "0.70", "0.68"]
+    again: list[dict] = []
+    queued = _scan(
+        tmp_path,
+        [_market()],
+        _poster(again),
+        {XAI_API_KEY_ENV: "test-key"},
+        prior_prob=None,
+    )
+    assert again == []
+    assert queued["cache_hits"] == 1
+    assert queued["grounded_calls"] == 0
+    assert queued["queued"] == 1
+    assert Decimal(_rows(tmp_path / "candidates.jsonl")[-1]["grok_probability"]) == Decimal("0.68")
 
 
 def test_two_scans_queue_their_median(tmp_path: Path) -> None:
