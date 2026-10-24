@@ -6,6 +6,11 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+if [[ -x "$ROOT/.venv/bin/python" ]]; then
+  "$ROOT/.venv/bin/python" "$ROOT/scripts/rotate_launchd_logs.py" \
+    "$ROOT/logs/app/politics.launchd.stdout.log" \
+    "$ROOT/logs/app/politics.launchd.stderr.log" || true
+fi
 
 # Desk isolation
 export PAPER_COHORT_ID=kalshi-event-news-20260820

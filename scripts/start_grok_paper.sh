@@ -7,6 +7,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 export PYTHONPATH="$ROOT"
+if [[ -x "$ROOT/.venv/bin/python" ]]; then
+  "$ROOT/.venv/bin/python" "$ROOT/scripts/rotate_launchd_logs.py" \
+    "$ROOT/logs/app/grok_paper.launchd.stdout.log" \
+    "$ROOT/logs/app/grok_paper.launchd.stderr.log" || true
+fi
 
 export LIVE_TRADING_ENABLED=false
 # Public paper scan only. The blend runtime and live trading stay off.

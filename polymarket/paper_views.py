@@ -128,6 +128,14 @@ def _prefilter_reason(series: str, raw: Mapping[str, Any]) -> str | None:
     return reasons[0] if reasons else "no_list_ask"
 
 
+def _book_read_cap(entry: Any) -> int:
+    """Named slugs set the cap. A series with no slug list reads one book."""
+    allowed = getattr(entry, "market_slugs", ()) or ()
+    if isinstance(allowed, (tuple, list)) and len(allowed) > 0:
+        return len(allowed)
+    return 1
+
+
 def _read_book(client: Any, series: str, slug: str) -> tuple[Any | None, int | None]:
     """One book read. The shared limiter already retried a 429."""
     try:
@@ -153,6 +161,8 @@ def load_polymarket_paper_markets(client: Any, entries: Sequence[Any]) -> list[d
             continue
         ok = 0
         fail = 0
+        reads = 0
+        cap = _book_read_cap(entry)
         for raw in markets:
             if not isinstance(raw, dict):
                 continue
@@ -161,6 +171,10 @@ def load_polymarket_paper_markets(client: Any, entries: Sequence[Any]) -> list[d
             if reason is not None:
                 log.info("polymarket paper skip series=%s reason=%s", series, reason)
                 continue
+            if reads >= cap:
+                log.info("polymarket paper skip series=%s reason=book_cap", series)
+                continue
+            reads += 1
             book, status = _read_book(client, series, market_slug)
             if book is None:
                 fail += 1
