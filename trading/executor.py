@@ -1535,6 +1535,18 @@ class TradeExecutor:
         if analysis.capped_dollars <= 0:
             return "capped_dollars=0 (below minimum bet size)"
 
+        # F-08 runs before fee-net. A missing executed price must name
+        # price_unavailable. Fee-net would also skip, and would hide the field.
+        # The side selector must set this field. Falling back to the YES midpoint
+        # masked producer bugs and caused the F-06 ALARM.
+        if analysis.executed_price_cents is None:
+            if not analysis.market.price_available:
+                return "price_unavailable: market.price_available=False"
+            return (
+                "price_unavailable: executed_price_cents is None despite "
+                "price_available=True (side selector did not set canonical price)"
+            )
+
         edge_skip = self._event_news_edge_skip(
             analysis,
             ask_cents=(
@@ -1551,20 +1563,8 @@ class TradeExecutor:
             return f"market status={analysis.market.status}"
 
         # Price sanity is the live band for paper and live.
-        # P-5 LD-10: prefer the executed-side ask cents (canonical post-P0).
-        # F-08: fail-closed when executed_price_cents is None — the side selector
-        # must always populate this field for any tradeable candidate. Falling back
-        # to the YES midpoint silently masked producer-side bugs and caused the
-        # F-06 ALARM (4 opportunities, 0 SQL trades, 11.5h gap).
-        if analysis.executed_price_cents is not None:
-            yes_price = float(analysis.executed_price_cents)
-        elif not analysis.market.price_available:
-            return "price_unavailable: market.price_available=False"
-        else:
-            return (
-                "price_unavailable: executed_price_cents is None despite "
-                "price_available=True (side selector did not set canonical price)"
-            )
+        # P-5 LD-10: the executed-side ask cents are canonical post-P0.
+        yes_price = float(analysis.executed_price_cents)
         price_floor = 3
         price_ceil = 97
         if yes_price < price_floor or yes_price > price_ceil:
