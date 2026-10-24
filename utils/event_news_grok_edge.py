@@ -248,12 +248,7 @@ def paper_queue_decision(
     yes_floor_cents: int = 55,
     venue: str = "kalshi",
 ) -> tuple[str, int | None]:
-    """Return ``(queue, edge)`` or ``(skip_reason, edge)``.
-
-    YES needs the floor. Every side needs an ask above the 0-35c band.
-    Size above 8 is a skip, not a clamp that still queues. The gate is
-    fee-net dollars versus yaml edge_min. The returned edge is floored cents.
-    """
+    """Return (queue, edge) or (skip_reason, edge). Fee-net must clear yaml edge_min."""
     if probability is None:
         return "no_probability", None
     if ask_cents is None or isinstance(ask_cents, bool) or not isinstance(ask_cents, int):
@@ -650,8 +645,6 @@ def _cache_fresh(
     count = len(scans) if isinstance(scans, list) else 0
     if count < 2:
         return False
-    # Two disagreeing scans are not fresh: one grounded tie-break is still due.
-    # Three scans stay cached even when the last two still disagree.
     if stable_scan_probability(scans) is None:
         return count >= 3
     return _decimal(row.get("prob")) is not None
@@ -706,11 +699,7 @@ def _tie_break_due(
     fingerprint: str | None,
     now: datetime,
 ) -> bool:
-    """True when two same-day scans disagree and the quote context has not moved.
-
-    An ask move, a new post id, or a new UTC day is a full rescan, not this one
-    grounded sample. Three scans are never due another sample.
-    """
+    """True when two same-day scans disagree and the quote has not moved."""
     if not row:
         return False
     cached_at = _parse_utc(row.get("ts"))
@@ -739,7 +728,7 @@ def _tie_break_budget_ok(
 ) -> bool:
     """True when one grounded reserve still fits. An unreadable ledger does not."""
     env = os.environ if environ is None else environ
-    cap = _daily_cap(env)
+    cap = _call_cap(_daily_cap(env), "series")
     reserve = call_reserve_usd(call_log_path, grounded=True)
     if reserve <= 0 or cap < 0:
         return False
@@ -958,14 +947,7 @@ def run_paper_edge_scan(
     screen_log_path: Path = SCREEN_LOG_PATH,
     post_lookup: Callable[[], str | None] | None = None,
 ) -> dict[str, int]:
-    """Queue at most ``max_markets`` paper rows.
-
-    Two same-day scans within 0.10 queue their median. A wider pair gets one
-    grounded tie-break when the daily cap still fits. The median of the three
-    queues, or the market skips as prob_unstable and is not scanned again that
-    day. A changed post id does not waive that gap. Ungrounded probabilities
-    never queue.
-    """
+    """Queue at most max_markets paper rows. Ungrounded probabilities never queue."""
     counts = {
         "examined": 0,
         "queued": 0,
@@ -1305,7 +1287,11 @@ def paper_position_rows(positions: Sequence[Any] | None) -> list[dict[str, str]]
             continue
         if count == 0.0:
             continue
-        rows.append({"ticker": ticker, "side": "no" if count < 0 else "yes"})
+        item = {"ticker": ticker, "side": "no" if count < 0 else "yes"}
+        if isinstance(row, Mapping) and row.get("market_exposure_dollars") is not None:
+            item["market_exposure_dollars"] = row.get("market_exposure_dollars")
+            item["position_fp"] = raw
+        rows.append(item)
     return rows
 
 
@@ -1491,7 +1477,7 @@ def score_open_positions(
         except Exception:
             market = None
         view = _position_view(ticker, market)
-        ask = view["yes_ask" if side == "yes" else "no_ask"]
+        ask = _mark_cents(market, side, position)
         cached = _cache_get(cache_path, ticker)
         if _cache_fresh(cached, view, fingerprint, moment):
             counts["cache_hits"] += 1
@@ -2220,11 +2206,7 @@ def settlement_venue(value: Any) -> str:
 
 
 def outcome_from_polymarket_settlement(payload: Any) -> str | None:
-    """Map the official settlement number. 1 is YES and 0 is NO.
-
-    Doc: https://docs.polymarket.us/api-reference/markets/get-market-settlement.md
-    A missing payload is not settled. Any other number fails closed.
-    """
+    """1 is YES and 0 is NO. A missing payload is not settled. Any other number fails closed."""
     if payload is None:
         return None
     if not isinstance(payload, Mapping) or "settlement" not in payload:
@@ -2899,6 +2881,7 @@ def _call_grok(
     venue: str = "kalshi",
 ) -> GrokEdgeCall | None:
     env = os.environ if environ is None else environ
+    cap = _call_cap(_daily_cap(env), kind)
     tools = _SCAN_TOOLS if grounded else ()
     search_limit = grok_max_search_results(env) if grounded else 0
     tool_series = series or (ticker.split("-", 1)[0] if ticker else "")
@@ -2907,7 +2890,6 @@ def _call_grok(
     )
     system_text = system + (_search_limit_sentence(search_limit) if grounded else "")
     prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
-    cap = _daily_cap(env)
 
     def _finish(
         skip: str | None,
@@ -3158,25 +3140,54 @@ def _market_prompt(view: Mapping[str, Any]) -> str:
     )
 
 
-def _bid_cents(market: Any, side: str) -> int | None:
+def _quote_cents(market: Any, side: str, quote: str) -> int | None:
     if market is None:
         return None
-    if isinstance(market, Mapping):
-        raw = market.get("yes_bid" if side == "yes" else "no_bid")
-    else:
-        name = "yes_bid_cents" if side == "yes" else "no_bid_cents"
-        alt = "yes_bid" if side == "yes" else "no_bid"
-        raw = getattr(market, name, None)
-        if raw is None:
-            raw = getattr(market, alt, None)
-    cents = _int_or_none(raw)
-    if cents is None:
-        return None
-    if isinstance(raw, float) and raw <= 1:
-        cents = int(round(raw * 100))
-    if 1 <= cents <= 99:
-        return cents
+    names = (f"{side}_{quote}_cents", f"{side}_{quote}_dollars", f"{side}_{quote}")
+    for name in names:
+        raw = market.get(name) if isinstance(market, Mapping) else getattr(market, name, None)
+        cents = _ask_cents(raw)
+        if cents is not None:
+            return cents
     return None
+
+
+def _mark_cents(market: Any, side: str, row: Any) -> int | None:
+    """Executable ask, else live bid, else exposure over size. Size 0 is not an ask."""
+    size_name = f"{side}_ask_size_fp"
+    if isinstance(market, Mapping):
+        size = market.get(size_name)
+    else:
+        size = None if market is None else getattr(market, size_name, None)
+    try:
+        empty = size is not None and float(size) == 0.0
+    except (TypeError, ValueError):
+        empty = False
+    ask = None if empty else _quote_cents(market, side, "ask")
+    if ask is not None:
+        return ask
+    bid = _quote_cents(market, side, "bid")
+    if bid is not None:
+        return bid
+    if not isinstance(row, Mapping):
+        return None
+    try:
+        count = abs(float(row.get("position_fp", row.get("position"))))
+        cents = int(round(float(row["market_exposure_dollars"]) / count * 100))
+    except (TypeError, ValueError, KeyError, ZeroDivisionError):
+        return None
+    return cents if 1 <= cents <= 99 else None
+
+
+def _bid_cents(market: Any, side: str) -> int | None:
+    return _quote_cents(market, side, "bid")
+
+
+def _call_cap(cap: Decimal, kind: str) -> Decimal:
+    """Series and scans leave $1 when the cap is above $1. Exit keeps the whole cap."""
+    if kind == "exit" or cap <= 1:
+        return cap
+    return cap - 1
 
 
 def _response_text(body: Mapping[str, Any]) -> str:
@@ -3577,12 +3588,7 @@ def _settlements_for(
     polymarket_lookup: Callable[[str], Any] | None = None,
     stored: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
-    """Settle each logged row on its own venue. Unknown venues are skipped.
-
-    A ticker is handled on the first row, including a miss or an error.
-    A later blank venue cannot send that ticker to Kalshi. A stored YES/NO
-    that disagrees with the live price is not scored.
-    """
+    """Settle each row on its own venue. A later blank venue cannot send that ticker to Kalshi."""
     found: dict[str, str] = {}
     seen: set[str] = set()
     saved_map = stored or {}

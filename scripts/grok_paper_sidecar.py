@@ -23,11 +23,7 @@ def refuse_live_trading() -> None:
 
 
 def arm_sidecar_environment() -> None:
-    """Force paper-only flags before config or the Kalshi client is imported.
-
-    An explicit cap, including the $0.50 dry-run, is left in place. The
-    installed start script sets the cap to 3 before this process starts.
-    """
+    """Force paper flags before import. An explicit cap is left in place."""
     os.environ["LIVE_TRADING_ENABLED"] = "false"
     os.environ["KALSHI_GROK_PAPER_SIDECAR"] = "true"
     os.environ["PAPER_COHORT_ID"] = COHORT_ID
@@ -117,14 +113,7 @@ def _run_scan(
     polymarket_client=None,
     cross_venue_path: Path | None = None,
 ) -> dict[str, int]:
-    """Fetch politics series only, rank them, and examine the top of that list.
-
-    ``fetched`` is the Kalshi page length. Polymarket names are not sent to
-    Kalshi. ``politics`` is how many Kalshi markets are open, close within
-    30 days, and have an ask from 36c to 94c. KXDJI and the research prewarm
-    fallback are not requested. A Polymarket read error does not drop the
-    Kalshi scan. The order endpoint stays blocked.
-    """
+    """Fetch politics series and examine the top. The order endpoint stays blocked."""
     from utils.event_news_grok_edge import (
         PAPER_CLOSE_WINDOW,
         PAPER_DB_PATH,
@@ -240,11 +229,7 @@ def run_score_then_scan(
     polymarket_client=None,
     cross_venue_path: Path | None = None,
 ) -> tuple[dict[str, int], dict[str, int], BaseException | None]:
-    """Score open positions, then scan the ranked politics book.
-
-    A score or positions failure still scans. This does not arm the process
-    and it does not import the executor. Callers print the score error.
-    """
+    """Score open positions, then scan. A score failure still scans."""
     positions: list = []
     scores = {"scored": 0, "skipped": 0}
     score_error: BaseException | None = None
@@ -325,6 +310,16 @@ def _print_once(scan: dict[str, int], scores: dict[str, int], before: str | None
     print(json.dumps(payload, sort_keys=True))
 
 
+def _wait_until(deadline: float, sleep=None, clock=None) -> float:
+    sleep = time.sleep if sleep is None else sleep
+    clock = time.monotonic if clock is None else clock
+    now = clock()
+    if now < deadline:
+        sleep(deadline - now)
+        now = clock()
+    return now
+
+
 def main(argv: list[str] | None = None) -> int:
     refuse_live_trading()
     arm_sidecar_environment()
@@ -359,16 +354,15 @@ def main(argv: list[str] | None = None) -> int:
                     )
             except Exception as exc:
                 print(f"grok paper scan failed error_type={type(exc).__name__}", file=sys.stderr)
-            now_mono = time.monotonic()
-            if now_mono >= next_exit:
-                try:
-                    _run_exit(rest)
-                except Exception as exc:
-                    print(
-                        f"grok paper exit failed error_type={type(exc).__name__}",
-                        file=sys.stderr,
-                    )
-                next_exit = now_mono + 3600
+            now_mono = _wait_until(next_exit)
+            try:
+                _run_exit(rest)
+            except Exception as exc:
+                print(
+                    f"grok paper exit failed error_type={type(exc).__name__}",
+                    file=sys.stderr,
+                )
+            next_exit = now_mono + 3600
             day = datetime.now(timezone.utc).date().isoformat()
             if day != report_day:
                 try:

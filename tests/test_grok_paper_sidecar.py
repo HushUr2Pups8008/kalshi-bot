@@ -207,6 +207,56 @@ def test_reserve_floor_screen_spends_the_only_nickel(tmp_path: Path) -> None:
     assert not (tmp_path / "comparisons.jsonl").exists()
 
 
+def test_exit_watch_waits_out_the_sixty_seconds_before_the_long_sleep(monkeypatch) -> None:
+    """A scan that finishes early still runs the exit watch at the 60-second mark."""
+    import kalshi.rest_client as rest_client
+    import scripts.grok_paper_sidecar as sidecar
+
+    order: list[object] = []
+    clock = {"t": 1000.0}
+
+    def sleep(seconds: float) -> None:
+        order.append(("sleep", seconds))
+        clock["t"] += seconds
+        if seconds >= 300:
+            raise SystemExit(0)
+
+    monkeypatch.setattr(sidecar.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(sidecar.time, "sleep", sleep)
+    monkeypatch.setattr(sidecar, "refuse_live_trading", lambda: None)
+    monkeypatch.setattr(sidecar, "arm_sidecar_environment", lambda: None)
+    monkeypatch.setattr(
+        sidecar,
+        "_acquire_lock",
+        lambda path: type("Lock", (), {"close": lambda self: None})(),
+    )
+    monkeypatch.setattr(
+        sidecar,
+        "run_score_then_scan",
+        lambda rest, **kwargs: order.append("scan") or ({}, {}, None),
+    )
+    monkeypatch.setattr(sidecar, "_run_exit", lambda rest: order.append("exit"))
+    monkeypatch.setattr(sidecar, "_run_daily", lambda rest: order.append("daily"))
+    monkeypatch.setattr(rest_client, "KalshiRestClient", lambda: object())
+    with pytest.raises(SystemExit):
+        sidecar.main([])
+    sleeps = [item for item in order if isinstance(item, tuple)]
+    assert order[0] == "scan"
+    assert sleeps[0] == ("sleep", 60)
+    assert order.index("exit") < order.index(sleeps[1])
+    assert sleeps[1][1] > 60
+
+
+def test_wait_until_sleeps_only_the_remainder() -> None:
+    import scripts.grok_paper_sidecar as sidecar
+
+    slept: list[float] = []
+    assert sidecar._wait_until(10, sleep=slept.append, clock=lambda: 10) == 10
+    assert slept == []
+    assert sidecar._wait_until(10, sleep=slept.append, clock=lambda: 4) == 4
+    assert slept == [6]
+
+
 def test_sidecar_source_does_not_use_the_prewarm_fallback() -> None:
     source = (ROOT / "scripts" / "grok_paper_sidecar.py").read_text(encoding="utf-8")
     assert "event_news_matcher_reserve_series" not in source

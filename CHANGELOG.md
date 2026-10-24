@@ -19,6 +19,15 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.31] - 2026-10-24
+
+### Fixed
+- Open-position scores no longer treat an empty-book YES ask of `"1.0000"` (size `0.00`) as a missing integer. The mark is the executable ask, otherwise the live bid in integer cents, otherwise exposure divided by size. The 99c bid is the mark for that empty book.
+- The paper sidecar waits out the first 60 seconds and then runs the exit watch. A scan that finishes earlier no longer sleeps the whole scan interval before the first exit pass.
+
+### Changed
+- Paper series and scan calls stop once today's Grok spend passes $2 on the $3 cap, so the last dollar stays available for exit calls. The cap stays $3. A configured cap of $1 or less is not reduced.
+
 ## [0.37.30] - 2026-10-24
 
 ### Removed

@@ -432,9 +432,9 @@ def test_timeout_keeps_the_reserve_and_does_not_queue(tmp_path: Path) -> None:
 
 
 def test_spend_cap_skips_before_the_post(tmp_path: Path) -> None:
-    """The cheap screen still runs. A grounded reserve that does not fit is not posted."""
+    """The cheap screen still fits under $2. The grounded series reserve does not."""
     (tmp_path / "spend.json").write_text(
-        json.dumps({"date": "2026-10-17", "spent_usd": "2.60"}) + "\n",
+        json.dumps({"date": "2026-10-17", "spent_usd": "1.90"}) + "\n",
         encoding="utf-8",
     )
     history = {
@@ -865,6 +865,223 @@ def json_dumps_contrary(contrary: bool) -> str:
             "sources": ["https://example.test/contrary"],
         }
     )
+
+
+def _empty_yes_book(ticker: str) -> dict:
+    """Live shape: YES ask is the string 1.0000 with size 0.00. The bid is 0.9900."""
+    return {
+        "ticker": ticker,
+        "series": ticker.split("-", 1)[0],
+        "status": "active",
+        "yes_ask_dollars": "1.0000",
+        "yes_ask_size_fp": "0.00",
+        "yes_bid_dollars": "0.9900",
+        "no_ask_dollars": "0.0100",
+        "no_bid_dollars": "0.0000",
+        "title": ticker,
+        "rules": "",
+        "close_time": "2026-10-24T23:00:00Z",
+    }
+
+
+def test_empty_book_string_ask_uses_the_bid_integer(tmp_path: Path) -> None:
+    """A $1.00 empty ask is not an integer quote. The score uses the 99c bid."""
+    from utils.event_news_grok_edge import _mark_cents
+
+    t6 = {
+        "ticker": "KXTRUMPACT-26OCT18-T6",
+        "position_fp": "8.00",
+        "market_exposure_dollars": "5.350000",
+    }
+    t240 = {
+        "ticker": "KXTRUTHSOCIAL-26OCT24-T240",
+        "position_fp": "8.00",
+        "market_exposure_dollars": "4.880000",
+    }
+    book = _empty_yes_book(t6["ticker"])
+    assert _mark_cents(book, "yes", t6) == 99
+    assert type(_mark_cents(book, "yes", t6)) is int
+    assert _mark_cents({"yes_ask": 55, "yes_bid": 50}, "yes", t6) == 55
+    assert _mark_cents({}, "yes", t240) == 61
+    assert _mark_cents({}, "yes", t6) == 67
+    quoted = SimpleNamespace(yes_ask_cents=100, yes_bid_cents=99, yes_ask_size_fp="0.00")
+    assert _mark_cents(quoted, "yes", t6) == 99
+    _seed_cache(
+        tmp_path / "cache.json",
+        t6["ticker"],
+        series="KXTRUMPACT",
+        yes_ask=None,
+        no_ask=None,
+    )
+    calls: list[int] = []
+
+    def post(url, json, headers, timeout):  # noqa: A002
+        calls.append(1)
+        raise AssertionError("no paid call")
+
+    scored = score_open_positions(
+        [t6],
+        live=False,
+        market_lookup=lambda ticker: book,
+        environ={XAI_API_KEY_ENV: "test-key", "GROK_DAILY_USD_CAP": "3"},
+        post=post,
+        now=NOW,
+        call_log_path=tmp_path / "calls.jsonl",
+        score_log_path=tmp_path / "scores.jsonl",
+        spend_path=tmp_path / "spend.json",
+        cache_path=tmp_path / "cache.json",
+        screen_log_path=tmp_path / "screen.jsonl",
+        post_lookup=lambda: "post-1",
+    )
+    assert calls == []
+    row = _rows(tmp_path / "scores.jsonl")[0]
+    assert row["ask_cents"] == 99
+    assert type(row["ask_cents"]) is int
+    assert row["skip_reason"] != "bad_ask"
+    assert scored["scored"] == 1
+
+
+def test_exit_watch_logs_both_open_books_without_a_paid_call(tmp_path: Path) -> None:
+    """One mocked contrary pass writes both open positions. The ask string is not the bid."""
+    books = {
+        "KXTRUMPACT-26OCT18-T6": _empty_yes_book("KXTRUMPACT-26OCT18-T6"),
+        "KXTRUTHSOCIAL-26OCT24-T240": SimpleNamespace(
+            yes_ask_cents=100,
+            yes_bid_cents=99,
+            yes_ask_size_fp="0.00",
+        ),
+    }
+    calls: list[str] = []
+
+    def post(url, json, headers, timeout):  # noqa: A002
+        calls.append(url)
+        return _Response(
+            {"output_text": json_dumps_contrary(True), "citations": ["https://example.test/contrary"]}
+        )
+
+    logged = run_paper_exit_watch(
+        [
+            {"ticker": "KXTRUMPACT-26OCT18-T6", "side": "yes"},
+            {"ticker": "KXTRUTHSOCIAL-26OCT24-T240", "side": "yes"},
+        ],
+        live=False,
+        market_lookup=lambda ticker: books[ticker],
+        environ={XAI_API_KEY_ENV: "test-key", "GROK_DAILY_USD_CAP": "3"},
+        post=post,
+        call_log_path=tmp_path / "calls.jsonl",
+        exit_log_path=tmp_path / "grok_edge_exits.jsonl",
+        spend_path=tmp_path / "spend.json",
+        raw_dir=tmp_path / "raw",
+        now=NOW,
+    )
+    assert logged == 2
+    assert len(calls) == 2
+    rows = _rows(tmp_path / "grok_edge_exits.jsonl")
+    assert [row["ticker"] for row in rows] == [
+        "KXTRUMPACT-26OCT18-T6",
+        "KXTRUTHSOCIAL-26OCT24-T240",
+    ]
+    assert [row["bid_cents"] for row in rows] == [99, 99]
+    assert all(type(row["bid_cents"]) is int and row["paper_only"] is True for row in rows)
+
+
+def test_series_and_scans_leave_one_dollar_for_exit(tmp_path: Path) -> None:
+    """Past $2, series and scans do not post. An exit call still fits under the $3 cap."""
+    from utils.event_news_grok_edge import _call_grok
+
+    spend = tmp_path / "spend.json"
+    spend.write_text(
+        json.dumps({"date": "2026-10-17", "spent_usd": "2.01"}) + "\n",
+        encoding="utf-8",
+    )
+    calls: list[str] = []
+
+    def post(url, json, headers, timeout):  # noqa: A002
+        calls.append("post")
+        return _Response(
+            {"output_text": json_dumps_contrary(True), "citations": ["https://example.test/contrary"]}
+        )
+
+    env = {XAI_API_KEY_ENV: "test-key", GROK_DAILY_USD_CAP: "3"}
+    series = _call_grok(
+        ticker="KXTRUMPACT",
+        prompt="series",
+        system="s",
+        grounded=False,
+        environ=env,
+        post=post,
+        call_log_path=tmp_path / "series.jsonl",
+        spend_path=spend,
+        raw_dir=tmp_path / "raw",
+        now=NOW,
+        kind="series",
+    )
+    scan = _call_grok(
+        ticker="KXTRUMPACT-26OCT18-T6",
+        prompt="scan",
+        system="s",
+        grounded=False,
+        environ=env,
+        post=post,
+        call_log_path=tmp_path / "scan.jsonl",
+        spend_path=spend,
+        raw_dir=tmp_path / "raw",
+        now=NOW,
+        kind="scan",
+    )
+    assert series is not None and series.skip_reason == "spend_cap"
+    assert scan is not None and scan.skip_reason == "spend_cap"
+    assert calls == []
+    exited = _call_grok(
+        ticker="KXTRUMPACT-26OCT18-T6",
+        prompt="exit",
+        system="s",
+        grounded=False,
+        environ=env,
+        post=post,
+        call_log_path=tmp_path / "exit.jsonl",
+        spend_path=spend,
+        raw_dir=tmp_path / "raw",
+        now=NOW,
+        kind="exit",
+    )
+    assert calls == ["post"]
+    assert exited is not None and exited.skip_reason != "spend_cap"
+    small_calls: list[str] = []
+
+    def small_post(url, json, headers, timeout):  # noqa: A002
+        small_calls.append("post")
+        text = json.dumps(
+            {
+                "markets": [
+                    {
+                        "ticker": "KXTRUMPACT",
+                        "prob": "0.50",
+                        "confidence": "0.80",
+                        "rationale": "n",
+                    }
+                ],
+                "sources": ["https://example.test/s"],
+                "summary": "n",
+            }
+        )
+        return _Response({"output_text": text, "citations": ["https://example.test/s"]})
+
+    small = _call_grok(
+        ticker="KXTRUMPACT",
+        prompt="series",
+        system="s",
+        grounded=False,
+        environ={XAI_API_KEY_ENV: "test-key", GROK_DAILY_USD_CAP: "0.30"},
+        post=small_post,
+        call_log_path=tmp_path / "small.jsonl",
+        spend_path=tmp_path / "small-spend.json",
+        raw_dir=tmp_path / "raw",
+        now=NOW,
+        kind="series",
+    )
+    assert small_calls == ["post"]
+    assert small is not None and small.skip_reason != "spend_cap"
 
 
 def test_missing_bid_does_not_invent_an_exit(tmp_path: Path) -> None:
