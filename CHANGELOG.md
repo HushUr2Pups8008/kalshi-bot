@@ -19,6 +19,16 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.30] - 2026-10-24
+
+### Removed
+- `scripts/performance_analysis.py`. Its trade-history P&L overlaps `scripts/pnl_report.py`, and its per-source section overlaps `scripts/source_scorecard.py`. The health job already skipped it. Kelly shadow, subreddit candidates, and go-live readiness were not read by the health verdict.
+- Offline edge-replay smoke runners and the Python they alone called: the full replay, the cycle-16d replay, the calibration diagnostic, and their dataset, price, and audit helpers. `scripts/pre_day7_smoke.sh` no longer calls the full replay. The counterfactual scorer, the post-fix readiness check, live LLM capture, and the contamination marker stay.
+
+### Changed
+- The health job reads `logs/state/politics_loss_limit_halt.json`. A latched file is still a red verdict. It records whether today's `logs/reports/pnl-YYYYMMDD.md` exists and does not run a second P&L script.
+- `botcheck`, `daily_review`, and `decision_funnel_summary` stay. `make botcheck` is still the process check, and its launchd output does not belong in the fill-log P&L file. The health job still runs the daily review. The funnel is still the pipeline-impact and research-admission attribution. `trading/kalshi_fix_settlement_ingress.py` stays because botcheck reads it.
+
 ## [0.37.29] - 2026-10-24
 
 ### Changed

@@ -2424,7 +2424,7 @@ def _build_daily_review_from_paths(
     lines.append("")
     lines.append("  Deep-dive scripts (run separately when investigating):")
     lines.append("    scripts/trade_log_summary.py               -- raw event/skip/rejection counts")
-    lines.append("    scripts/performance_analysis.py            -- full trade-history P&L + calibration")
+    lines.append("    scripts/pnl_report.py                     -- fee-net P&L")
     lines.append("    scripts/pipeline_impact_audit.py           -- before/after pipeline change audit")
     lines.append("    scripts/replay_dossier.py                  -- dossier trajectory replay")
     lines.append("    scripts/regime_weight_validation.py        -- S4.4 regime weight back-check")

@@ -241,7 +241,7 @@ class KeywordStats:
     def summary(self) -> list[tuple[str, str, int, float, float]]:
         """
         Return sorted list of (keyword, series_ticker, n, accuracy, multiplier)
-        for all pairs with >= MIN_SAMPLES. Used by performance_analysis.py.
+        for all pairs with >= MIN_SAMPLES.
         """
         self._maybe_refresh()
         rows = []
