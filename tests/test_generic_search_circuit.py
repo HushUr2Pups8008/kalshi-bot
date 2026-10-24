@@ -23,12 +23,7 @@ from analysis.generic_search_circuit import (
 )
 from analysis.research_gate import ResearchEvidence, ResearchQuery, default_search_provider
 
-
-@pytest.fixture(autouse=True)
-def _reset_generic_search_circuit() -> None:
-    research_gate_module._reset_generic_search_circuit_for_tests()
-    yield
-    research_gate_module._reset_generic_search_circuit_for_tests()
+pytestmark = pytest.mark.usefixtures("_reset_generic_search_circuit")
 
 
 def _valid_rsa_pem() -> str:
