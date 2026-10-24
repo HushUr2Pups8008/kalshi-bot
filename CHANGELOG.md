@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.21] - 2026-10-23
+
+### Removed
+- The Kalshi execution ledger, its collector, and `scripts/reconcile_kalshi_execution_ledger.py`. No running desk, launchd job, or scorecard imports them. The governance package stays.
+
 ## [0.37.20] - 2026-10-23
 
 ### Changed
