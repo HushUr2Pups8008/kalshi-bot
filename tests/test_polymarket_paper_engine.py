@@ -435,20 +435,53 @@ def test_book_failure_logs_status_and_does_not_score_a_missing_book(caplog) -> N
     assert "series=PMTRUMPAPPROVE ok=0 fail=1" in "\n".join(caplog.messages)
 
     class Down:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
         def list_event_markets(self, _slug: str):
             return (_listed("parc-down"), _listed("parc-up"))
 
         def get_market_book(self, slug: str):
+            self.calls.append(slug)
             if slug == "parc-down":
                 raise _BookError(503)
             return book
 
+    down = Down()
     caplog.clear()
     with caplog.at_level("INFO", logger="polymarket_paper"):
-        loaded = load_polymarket_paper_markets(Down(), [entry])
-    assert [row["ticker"] for row in loaded] == ["parc-up"]
-    assert "series=PMTRUMPAPPROVE ok=1 fail=1" in "\n".join(caplog.messages)
+        loaded = load_polymarket_paper_markets(down, [entry])
+    assert down.calls == ["parc-down"]
+    assert loaded == []
+    assert "series=PMTRUMPAPPROVE ok=0 fail=1" in "\n".join(caplog.messages)
+    assert "reason=book_cap" in "\n".join(caplog.messages)
     assert caplog.messages.count("polymarket paper book failed series=PMTRUMPAPPROVE status=503 endpoint=/v1/markets/parc-down/book error_type=_BookError") == 1
+    assert "reason=book_rate_limited" not in "\n".join(caplog.messages)
+
+    class NamedDown:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def list_event_markets(self, _slug: str):
+            return (_listed("parc-down"), _listed("parc-up"))
+
+        def get_market_book(self, slug: str):
+            self.calls.append(slug)
+            if slug == "parc-down":
+                raise _BookError(503)
+            return book
+
+    named = NamedDown()
+    named_entry = SimpleNamespace(
+        series="PMTRUMPAPPROVE",
+        venue_market="trmpapprv-wk-2026-10-23",
+        market_slugs=("parc-down", "parc-up"),
+    )
+    caplog.clear()
+    with caplog.at_level("INFO", logger="polymarket_paper"):
+        named_loaded = load_polymarket_paper_markets(named, [named_entry])
+    assert named.calls == ["parc-down", "parc-up"]
+    assert [row["ticker"] for row in named_loaded] == ["parc-up"]
     assert "reason=book_rate_limited" not in "\n".join(caplog.messages)
 
     class Order:
@@ -488,7 +521,11 @@ def test_prefilter_reads_books_only_inside_the_ask_band(caplog) -> None:
             calls.append(slug)
             return _book("0.60", "0.30")
 
-    entry = SimpleNamespace(series="PMTRUMPAPPROVE", venue_market="trmpapprv-wk-2026-10-23")
+    entry = SimpleNamespace(
+        series="PMTRUMPAPPROVE",
+        venue_market="trmpapprv-wk-2026-10-23",
+        market_slugs=("parc-wide", "parc-open", "parc-bare", "parc-one-sided"),
+    )
     with caplog.at_level("INFO", logger="polymarket_paper"):
         loaded = load_polymarket_paper_markets(Client(), [entry])
     assert calls == ["parc-open", "parc-one-sided"]
@@ -534,6 +571,26 @@ def test_partial_book_is_not_scored(caplog) -> None:
     with caplog.at_level("INFO", logger="polymarket_paper"):
         assert load_polymarket_paper_markets(Client(), [entry]) == []
     assert "reason=partial_book" in "\n".join(caplog.messages)
+
+
+def test_unscoped_series_reads_one_book_per_cycle(caplog) -> None:
+    """No slug list still must not book the rest of the event."""
+    calls: list[str] = []
+
+    class Client:
+        def list_event_markets(self, _slug: str):
+            return (_listed("parc-main"), _listed("parc-prop"), _listed("parc-total"))
+
+        def get_market_book(self, slug: str):
+            calls.append(slug)
+            return _book("0.60", "0.30")
+
+    entry = SimpleNamespace(series="PMTRUMPAPPROVE", venue_market="trmpapprv-wk-2026-10-23")
+    with caplog.at_level("INFO", logger="polymarket_paper"):
+        loaded = load_polymarket_paper_markets(Client(), [entry])
+    assert calls == ["parc-main"]
+    assert [row["ticker"] for row in loaded] == ["parc-main"]
+    assert caplog.messages.count("polymarket paper skip series=PMTRUMPAPPROVE reason=book_cap") == 2
 
 
 def test_shared_limiter_honors_retry_after_and_does_not_retry_404(monkeypatch) -> None:

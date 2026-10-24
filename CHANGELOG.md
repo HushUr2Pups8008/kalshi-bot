@@ -19,6 +19,13 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.29] - 2026-10-24
+
+### Changed
+- Five Polymarket paper series book the moneyline only: `PMUFCPETYAN`, `PMUFCKODSTE`, `PMLOLLOST1`, `PMLOLALKC`, and `PMUFCIASLUC`. A series with no slug list reads at most one book per cycle. `PMNBADALIND` stays on its moneyline. `PMTRUMPAPPROVE` has no single moneyline, so it stays unscoped and takes that one-book cap. The order endpoint stays blocked.
+- `deploy/com.jake.kalshi-grok-paper.plist.template` matches the installed sidecar label. It has no secrets. `LIVE_TRADING_ENABLED` stays false and the daily Grok cap stays $3.
+- Politics and sidecar start scripts copytruncate their launchd stdout and stderr logs above 20 MiB and keep five archives.
+
 ## [0.37.28] - 2026-10-23
 
 ### Removed

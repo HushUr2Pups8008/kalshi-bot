@@ -153,8 +153,22 @@ def test_shipped_paper_series_are_not_live_and_cannot_post():
     assert entries["PMLOLLOST1"].venue_market == "lol-los-t1-2026-10-23"
     assert entries["PMLOLALKC"].venue_market == "lol-al-kc-2026-10-23"
     assert entries["PMNBADALIND"].venue_market == "nba-dal-ind-2026-10-23"
+    assert entries["PMUFCPETYAN"].market_slugs == ("aec-ufc-petyan-merdva-2026-10-24",)
+    assert entries["PMUFCKODSTE"].market_slugs == ("aec-ufc-kodste-noagug-2026-10-24",)
+    assert entries["PMLOLLOST1"].market_slugs == ("aec-lol-los-t1-2026-10-23",)
+    assert entries["PMLOLALKC"].market_slugs == ("aec-lol-al-kc-2026-10-23",)
     assert entries["PMNBADALIND"].market_slugs == ("aec-nba-dal-ind-2026-10-23",)
-    assert all(entry.market_slugs == () for name, entry in entries.items() if name != "PMNBADALIND")
+    assert entries["PMUFCIASLUC"].market_slugs == ("aec-ufc-iasluc-niccal-2026-10-24",)
+    assert entries["PMTRUMPAPPROVE"].market_slugs == ()
+    scoped = {
+        "PMUFCPETYAN",
+        "PMUFCKODSTE",
+        "PMLOLLOST1",
+        "PMLOLALKC",
+        "PMNBADALIND",
+        "PMUFCIASLUC",
+    }
+    assert all(entry.market_slugs == () for name, entry in entries.items() if name not in scoped)
     assert entries["PMUFCIASLUC"].venue_market == "ufc-iasluc-niccal-2026-10-24"
     assert all(entries[series].pair_series == "" for series in _POLYMARKET_ONLY)
     assert entries["KXTRUMPAPPROVE"].pair_series == ""
