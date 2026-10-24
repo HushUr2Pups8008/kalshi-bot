@@ -24,6 +24,7 @@ request-vs-response status contract that the P-7 author misread.
 ### Removed
 - `scripts/performance_analysis.py`. Its trade-history P&L overlaps `scripts/pnl_report.py`, and its per-source section overlaps `scripts/source_scorecard.py`. The health job already skipped it. Kelly shadow, subreddit candidates, and go-live readiness were not read by the health verdict.
 - Offline edge-replay smoke runners and the Python they alone called: the full replay, the cycle-16d replay, the calibration diagnostic, and their dataset, price, and audit helpers. `scripts/pre_day7_smoke.sh` no longer calls the full replay. The counterfactual scorer, the post-fix readiness check, live LLM capture, and the contamination marker stay.
+- `PAPER_MIN_MATCH_SCORE` and `PERFORMANCE_REPORT_MAX_SUBREDDIT_ROWS` from `.env.example`. Nothing reads those environment names. The match-score constant stays in code. The p0 gate no longer runs the deleted replay-corpus test. Live pricing tests stay.
 
 ### Changed
 - The health job reads `logs/state/politics_loss_limit_halt.json`. A latched file is still a red verdict. It records whether today's `logs/reports/pnl-YYYYMMDD.md` exists and does not run a second P&L script.
