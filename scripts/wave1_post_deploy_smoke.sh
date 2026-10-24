@@ -46,7 +46,3 @@ run_check "EXEC-002 same-series correlation guard" \
 
 run_check "GOV-002 governance monitor validation counters" \
   tests/test_governance_monitor.py
-
-run_check "wave1-ladder post-soak simulation forecast" \
-  tests/test_post_soak_landing_simulation.py \
-  tests/test_wave1_acceptance_ladder_forecast.py

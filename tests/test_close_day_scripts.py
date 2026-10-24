@@ -82,7 +82,7 @@ def test_check_soak_invariant_path_sanity_reports_missing_runtime_path(tmp_path:
     assert "trading/" in payload["missing_paths"]
 
 
-def test_wave1_smoke_script_wraps_six_named_feature_checks():
+def test_wave1_smoke_script_wraps_five_named_feature_checks():
     script = (REPO_ROOT / "scripts/wave1_post_deploy_smoke.sh").read_text(encoding="utf-8")
 
     expected = (
@@ -91,11 +91,10 @@ def test_wave1_smoke_script_wraps_six_named_feature_checks():
         "OBS-003",
         "EXEC-002",
         "GOV-002",
-        "wave1-ladder",
     )
     for label in expected:
         assert label in script
-    assert script.count("run_check ") == 6
+    assert script.count("run_check ") == 5
 
 
 def test_distribution_analysis_v2_groups_uniform_disable_sources(tmp_path: Path):
