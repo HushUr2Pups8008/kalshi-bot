@@ -1,10 +1,10 @@
-"""Politics session-halt state.
+"""Politics loss-limit latch and cash file.
 
-The latch keeps a tripped halt across a restart so a new process cannot
-seed a fresh baseline and trade. The only reset is deleting the latch
-file. A new process does not clear it. A new UTC date resets the cash
-file's start cents, keeps the previous last cents as ``prev_cents``,
-and does not clear the latch.
+The latch keeps a tripped loss limit across a restart so a new process
+cannot seed a fresh baseline and trade. The only reset is deleting
+``logs/state/politics_loss_limit_halt.json``. A new process does not
+clear it. A new UTC date resets the cash file's start cents, keeps the
+previous last cents as ``prev_cents``, and does not clear the latch.
 
 The cash file is integer cents for the health check. Tests monkeypatch
 the path constants.
@@ -20,20 +20,13 @@ from numbers import Real
 from pathlib import Path
 from typing import Any, Callable
 
-HALT_LATCH_PATH = Path("logs/state/politics_session_halt.json")
 LOSS_LIMIT_LATCH_PATH = Path("logs/state/politics_loss_limit_halt.json")
 OPERATOR_ALERT_PATH = Path("logs/state/politics_operator_alert.json")
 CASH_CENTS_PATH = Path("logs/state/politics_cash_cents.json")
-SESSION_HALT_DOLLAR_CAP = 10.0
 CASH_DROP_CENTS = 500
 CASH_STALE_SECONDS = 7200
 
 log = logging.getLogger(__name__)
-
-
-def session_halt_loss_line(seed_equity: float, loss_limit_pct: float) -> float:
-    """min(percent of the seeded session equity, $10)."""
-    return min(float(loss_limit_pct) * float(seed_equity), SESSION_HALT_DOLLAR_CAP)
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -58,7 +51,7 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def halt_latch_present(path: Path | None = None) -> bool:
-    data = _read_json(path or HALT_LATCH_PATH)
+    data = _read_json(path or LOSS_LIMIT_LATCH_PATH)
     return bool(data and data.get("halted") is True)
 
 
@@ -71,7 +64,7 @@ def write_halt_latch(
 ) -> None:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     _write_json(
-        path or HALT_LATCH_PATH,
+        path or LOSS_LIMIT_LATCH_PATH,
         {
             "halted": True,
             "line": line,

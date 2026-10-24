@@ -69,7 +69,7 @@ def test_boot_suffix_prints_live_off_and_paper_on() -> None:
     assert "RULES_CHECK live=off paper=on" in line
     assert "EDGE_SCAN live=off paper=on" in line
     assert "EXIT_WATCH live=off paper=on" in line
-    assert "SESSION_HALT live=off paper=on" in line
+    assert "SESSION_HALT" not in line
 
 
 def test_risk_cap_example_89c_uses_the_600_cent_paper_default() -> None:

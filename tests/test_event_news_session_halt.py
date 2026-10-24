@@ -1,4 +1,4 @@
-"""Session halt uses the first successful equity read and ignores a bad balance."""
+"""The loss check uses the first successful equity read and ignores a bad balance."""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ import config as cfg_module
 from kalshi.rest_client import KalshiRestClient
 from tests.test_executor import _make_analysis, _make_executor
 from utils.event_news_research import EVENT_NEWS_COHORT_ID
-from utils.event_news_session_halt import session_halt_loss_line
 
 _DESK_TICKER = "KXAPRPOTUS-26OCT17-HALT"
 
@@ -34,16 +33,8 @@ import utils.event_news_session_halt as halt
 
 def _enable(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(cfg_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
-    monkeypatch.setenv("EVENT_NEWS_SESSION_HALT", "true")
-    monkeypatch.setattr(halt, "HALT_LATCH_PATH", tmp_path / "halt.json")
     monkeypatch.setattr(halt, "CASH_CENTS_PATH", tmp_path / "cash.json")
     monkeypatch.setattr(halt, "OPERATOR_ALERT_PATH", tmp_path / "alert.json")
-
-
-def test_halt_line_is_percent_of_seeded_equity_capped_at_ten_dollars() -> None:
-    # 10% of $29.20 is $2.92. A $200 book caps at $10, not 10% of cfg.bankroll.
-    assert session_halt_loss_line(29.20, 0.10) == pytest.approx(2.92)
-    assert session_halt_loss_line(200.0, 0.10) == pytest.approx(10.0)
 
 
 def test_get_balance_failure_returns_none_not_zero() -> None:
@@ -60,48 +51,7 @@ def test_get_balance_uses_integer_cents() -> None:
     assert client.get_balance() == pytest.approx(29.20)
 
 
-def test_seed_of_29_20_falling_to_19_halts_without_shutdown(monkeypatch, tmp_path):
-    _enable(monkeypatch, tmp_path)
-    ex, rest, _ = _make_executor(monkeypatch, bankroll=500.0, loss_limit_pct=0.10)
-    rest.get_open_positions.return_value = []
-    rest.get_balance.side_effect = [29.20, 19.0]
-    callback = MagicMock()
-    ex.set_shutdown_callback(callback)
-    analysis = _desk_analysis(capped_dollars=2.0)
-
-    assert ex._validate(analysis) is None
-    assert ex._session_start_balance == pytest.approx(29.20)
-    reason = ex._validate(analysis)
-
-    assert reason == "LIVE HALTED: session loss limit reached -- all trading suspended"
-    assert ex._live_halted is True
-    callback.assert_not_called()
-    rest.place_limit_order.assert_not_called()
-    latch = json.loads((tmp_path / "halt.json").read_text(encoding="utf-8"))
-    assert latch["halted"] is True
-    assert latch["line"] == pytest.approx(2.92)
-
-
-def test_open_cost_is_part_of_session_equity(monkeypatch, tmp_path):
-    # Cash stays $10. The loss is the drop in position cost, 19.20 to 9.00.
-    _enable(monkeypatch, tmp_path)
-    ex, rest, _ = _make_executor(monkeypatch, bankroll=500.0, loss_limit_pct=0.10)
-    rest.get_balance.return_value = 10.0
-    rest.get_open_positions.side_effect = [
-        [{"ticker": "KXTRUMPSAY-26OCT19-GOLF", "position_fp": "8.00", "market_exposure_dollars": "19.20"}],
-        [{"ticker": "KXTRUMPSAY-26OCT19-GOLF", "position_fp": "8.00", "market_exposure_dollars": "9.00"}],
-    ]
-    analysis = _desk_analysis(capped_dollars=2.0)
-
-    assert ex._validate(analysis) is None
-    assert ex._session_start_balance == pytest.approx(29.20)
-    reason = ex._validate(analysis)
-
-    assert reason is not None
-    assert "HALTED" in reason
-
-
-def test_small_drop_under_the_equity_line_does_not_halt(monkeypatch, tmp_path):
+def test_small_drop_under_the_bankroll_line_does_not_halt(monkeypatch, tmp_path):
     _enable(monkeypatch, tmp_path)
     ex, rest, _ = _make_executor(monkeypatch, bankroll=500.0, loss_limit_pct=0.10)
     rest.get_open_positions.return_value = []
@@ -174,46 +124,23 @@ def test_positions_get_failure_does_not_seed(monkeypatch, tmp_path):
     assert not (tmp_path / "halt.json").exists()
 
 
-def test_nan_open_cost_does_not_seed(monkeypatch, tmp_path):
-    _enable(monkeypatch, tmp_path)
-    ex, rest, _ = _make_executor(monkeypatch, bankroll=500.0, loss_limit_pct=0.10)
-    rest.get_balance.side_effect = [29.20, 29.20]
-    rest.get_open_positions.side_effect = [
-        [{
-            "ticker": "KXTRUMPSAY-26OCT19-GOLF",
-            "position_fp": "8.00",
-            "market_exposure_dollars": "nan",
-        }],
-        [],
-    ]
-    callback = MagicMock()
-    ex.set_shutdown_callback(callback)
-    analysis = _desk_analysis(capped_dollars=2.0)
-
-    reason = ex._validate(analysis)
-
-    assert reason == "live equity unreadable"
-    assert ex._session_start_balance is None
-    assert ex._live_halted is False
-    callback.assert_not_called()
-    assert ex._validate(analysis) is None
-    assert ex._session_start_balance == pytest.approx(29.20)
-
-
 def test_latch_blocks_a_new_executor_without_a_new_baseline(monkeypatch, tmp_path):
+    """A drop past 10% of the configured bankroll latches the next process."""
     _enable(monkeypatch, tmp_path)
     ex, rest, _ = _make_executor(monkeypatch, bankroll=500.0, loss_limit_pct=0.10)
     rest.get_open_positions.return_value = []
-    rest.get_balance.side_effect = [29.20, 19.0]
+    rest.get_balance.side_effect = [500.0, 440.0]
     analysis = _desk_analysis(capped_dollars=2.0)
-    ex._validate(analysis)
+    assert ex._validate(analysis) is None
     assert "HALTED" in (ex._validate(analysis) or "")
 
     restarted, restarted_rest, _ = _make_executor(
         monkeypatch, bankroll=500.0, loss_limit_pct=0.10
     )
+    restarted_rest.get_open_positions.return_value = []
 
     assert restarted._live_halted is True
+    assert restarted._loss_limit_halted is True
     reason = restarted._validate(_desk_analysis(capped_dollars=2.0))
     assert reason is not None
     assert "HALTED" in reason
@@ -481,7 +408,7 @@ def test_start_script_runs_the_guard_before_exec_and_stays_down_on_cap() -> None
 
 
 def _paper_executor(monkeypatch, bankrolls):
-    """Paper event-news executor. Callers own EVENT_NEWS_SESSION_HALT."""
+    """Paper event-news executor on the same equity loss check."""
     from trading.executor import TradeExecutor
 
     monkeypatch.setattr(cfg_module.cfg, "is_paper_trading", True)
@@ -506,24 +433,6 @@ def _paper_executor(monkeypatch, bankrolls):
     return executor, rest, paper
 
 
-def test_unset_session_halt_is_off_for_paper_and_live(monkeypatch, tmp_path):
-    from utils.event_news_desk_flags import (
-        EVENT_NEWS_SESSION_HALT,
-        event_news_desk_flag_enabled,
-    )
-
-    _enable(monkeypatch, tmp_path)
-    monkeypatch.delenv("EVENT_NEWS_SESSION_HALT", raising=False)
-    paper, _rest, _paper_book = _paper_executor(monkeypatch, [50.0])
-    live, _live_rest, _live_paper = _make_executor(monkeypatch, bankroll=500.0, loss_limit_pct=0.10)
-    monkeypatch.setattr(cfg_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
-
-    assert event_news_desk_flag_enabled(EVENT_NEWS_SESSION_HALT, live=False) is True
-    assert event_news_desk_flag_enabled(EVENT_NEWS_SESSION_HALT, live=True) is False
-    assert paper._session_halt_enabled() is False
-    assert live._session_halt_enabled() is False
-
-
 def _paper_analysis():
     """Ask and last agree. An unset MagicMock last price floats to 1.0 on 3.14.
 
@@ -538,7 +447,7 @@ def _paper_analysis():
 
 
 def test_paper_notional_drop_does_not_halt_when_cash_holds(monkeypatch, tmp_path):
-    """Unset session halt. A paper-book drop is not a second loss line."""
+    """A paper-book drop is not a second loss line."""
     _enable(monkeypatch, tmp_path)
     monkeypatch.delenv("EVENT_NEWS_SESSION_HALT", raising=False)
     executor, rest, paper = _paper_executor(monkeypatch, [50.0, 10.0])
@@ -553,31 +462,6 @@ def test_paper_notional_drop_does_not_halt_when_cash_holds(monkeypatch, tmp_path
     rest.place_limit_order.assert_not_called()
     assert not (tmp_path / "halt.json").exists()
     paper.get_notional_bankroll.assert_not_called()
-
-
-def test_paper_cash_drop_trips_the_shared_halt_when_the_flag_is_on(monkeypatch, tmp_path):
-    """Exact true arms the same cash equity halt on a paper executor."""
-    _enable(monkeypatch, tmp_path)
-    executor, rest, _paper = _paper_executor(monkeypatch, [50.0])
-    rest.get_balance.side_effect = [50.0, 40.0]
-    rest.get_open_positions.return_value = []
-    callback = MagicMock()
-    executor.set_shutdown_callback(callback)
-    analysis = _paper_analysis()
-
-    assert executor._validate(analysis) is None
-    assert executor._session_start_balance == pytest.approx(50.0)
-    reason = executor._validate(analysis)
-
-    assert reason == "LIVE HALTED: session loss limit reached -- all trading suspended"
-    assert executor._live_halted is True
-    assert session_halt_loss_line(50.0, 0.10) == pytest.approx(5.0)
-    callback.assert_not_called()
-    rest.place_limit_order.assert_not_called()
-    latch = json.loads((tmp_path / "halt.json").read_text(encoding="utf-8"))
-    assert latch["halted"] is True
-    assert latch["line"] == pytest.approx(5.0)
-    assert latch["seed_equity"] == pytest.approx(50.0)
 
 
 def test_paper_unreadable_cash_does_not_seed(monkeypatch, tmp_path):
@@ -597,20 +481,30 @@ def test_paper_unreadable_cash_does_not_seed(monkeypatch, tmp_path):
     rest.place_limit_order.assert_not_called()
 
 
-def test_paper_halt_clears_only_when_the_latch_file_is_removed(monkeypatch, tmp_path):
+def test_loss_limit_latch_clears_only_when_the_file_is_removed(monkeypatch, tmp_path):
+    """A $10 drop on the $50 book stays down until the loss-limit file is deleted."""
     from datetime import datetime, timezone
 
     _enable(monkeypatch, tmp_path)
     executor, rest, _paper = _paper_executor(monkeypatch, [50.0])
+    monkeypatch.setattr(cfg_module.cfg, "bankroll", 50.0)
     rest.get_balance.side_effect = [50.0, 40.0]
     rest.get_open_positions.return_value = []
+    callback = MagicMock()
+    executor.set_shutdown_callback(callback)
     analysis = _paper_analysis()
     assert executor._validate(analysis) is None
     assert "HALTED" in (executor._validate(analysis) or "")
+    callback.assert_called_once()
+    latch_path = halt.LOSS_LIMIT_LATCH_PATH
+    latch = json.loads(latch_path.read_text(encoding="utf-8"))
+    assert latch["halted"] is True
+    assert latch["line"] == pytest.approx(5.0)
 
     restarted, restarted_rest, _restarted_paper = _paper_executor(monkeypatch, [80.0])
     restarted_rest.get_open_positions.return_value = []
     assert restarted._live_halted is True
+    assert restarted._loss_limit_halted is True
     reason = restarted._validate(analysis)
     assert reason == "LIVE HALTED: session loss limit reached -- all trading suspended"
     restarted_rest.get_balance.assert_not_called()
@@ -625,15 +519,14 @@ def test_paper_halt_clears_only_when_the_latch_file_is_removed(monkeypatch, tmp_
     still_rest.get_open_positions.return_value = []
     assert still_latched._live_halted is True
     assert "HALTED" in (still_latched._validate(analysis) or "")
-    assert json.loads((tmp_path / "halt.json").read_text(encoding="utf-8"))["halted"] is True
+    assert json.loads(latch_path.read_text(encoding="utf-8"))["halted"] is True
 
-    (tmp_path / "halt.json").unlink()
+    latch_path.unlink()
     cleared, cleared_rest, _cleared_paper = _paper_executor(monkeypatch, [50.0])
     cleared_rest.get_balance.return_value = 50.0
     cleared_rest.get_open_positions.return_value = []
     assert cleared._live_halted is False
     assert cleared._validate(analysis) is None
     assert cleared._session_start_balance == pytest.approx(50.0)
-    assert cleared._live_halted is False
     cleared_rest.place_limit_order.assert_not_called()
-    assert not (tmp_path / "halt.json").exists()
+    assert not latch_path.exists()
