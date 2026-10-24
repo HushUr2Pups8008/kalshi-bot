@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.23] - 2026-10-23
+
+### Removed
+- Unused operator scripts: politics funnel, governance cadence audit, the research prewarm runner, and the research ticker probe. The in-process research prewarm task stays. Two simulation harnesses that the sims-smoke check does not import are gone, and the wave1 post-deploy smoke no longer calls them.
+
 ## [0.37.22] - 2026-10-23
 
 ### Removed
