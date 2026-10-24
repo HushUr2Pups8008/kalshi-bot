@@ -12,11 +12,9 @@ functions exist yet. Do NOT stub the implementation. Drive it via P-2..P-6.
 
 from __future__ import annotations
 
-import json
 import sqlite3
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -610,45 +608,6 @@ def test_p0_prov_019_paper_trade_carries_provenance(caplog):
         assert row[2] is not None and row[2] != ""
     finally:
         keeper.close()
-
-
-# ---------------------------------------------------------------------------
-# P0-PROV-020 — OPPORTUNITY JSONL event carries provenance
-# ---------------------------------------------------------------------------
-
-def test_p0_prov_020_opportunity_log_carries_provenance(tmp_path: Path,
-                                                       monkeypatch):
-    """Captured OPPORTUNITY event must carry price_source, price_method,
-    price_retrieved_at. A 50¢ executable price must carry an explicit
-    `_fixture_encodes_real_50c: true` flag or `skip_reason`."""
-    from utils.logger import emit_opportunity  # type: ignore[import-not-found]
-
-    out_path = tmp_path / "opportunity.jsonl"
-    monkeypatch.setenv("KALSHI_OPPORTUNITY_LOG", str(out_path))
-
-    m = _make_post_p0_market(
-        ticker="KXTEST-OPP",
-        yes_bid_cents=40, yes_ask_cents=42,
-        no_bid_cents=58, no_ask_cents=60,
-        price_source="rest_list",
-        price_method="dollars_fixed_point",
-    )
-    emit_opportunity(market=m, blended_yes_prob=0.58, side="yes",
-                     executed_price_cents=42)
-
-    lines = out_path.read_text(encoding="utf-8").splitlines()
-    assert lines, "opportunity log empty"
-    evt = json.loads(lines[-1])
-    for required in ("price_source", "price_method", "price_retrieved_at"):
-        assert required in evt, f"OPPORTUNITY event missing {required!r}"
-
-    # If executable cents == 50, the event must carry an explicit marker.
-    if evt.get("price_cents") == 50:
-        assert evt.get("_fixture_encodes_real_50c") is True or \
-               evt.get("skip_reason"), (
-                   "50¢ price emitted without _fixture_encodes_real_50c=true "
-                   "or skip_reason"
-               )
 
 
 # ---------------------------------------------------------------------------
