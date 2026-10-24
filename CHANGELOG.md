@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.22] - 2026-10-23
+
+### Removed
+- The research profit-validation loop, the decision-grade repair script, the research rollout gate, and the multi-agent workflow script. No running desk, launchd job, or scorecard imports them. The live research prewarm task stays.
+
 ## [0.37.21] - 2026-10-23
 
 ### Removed
