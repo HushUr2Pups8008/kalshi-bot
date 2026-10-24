@@ -53,7 +53,6 @@ persisted ID requires a separate reviewed repair task.
 | `observability_completeness_review.py` | Observability completeness review for Stage 4.2. |
 | `audit_open_paper_settlements.py` | Exact-identity, read-only authoritative receipt audit for unresolved Kalshi and Polymarket paper lots. Reports receipt hashes and pending/error states; never resolves trades or writes the database. |
 | `paper_performance_drilldown.py` | Paper trading performance drilldown from `data/paper_trades.db`. |
-| `performance_analysis.py` | Performance analysis over trade history. |
 | `pipeline_impact_audit.py` | Before/after audit for recent pipeline-quality changes. |
 | `replay_dossier.py` | Dossier replay utility. |
 | `research_ticker.py` | Repeatable one-ticker politics research/decision replay. Pins `--yes-ask`/`--no-ask`, scores both sides, optional `--llm`. Never orders; temp dossier by default. |

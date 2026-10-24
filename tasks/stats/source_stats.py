@@ -243,7 +243,7 @@ class SourceStats:
     def get_all(self) -> list[dict]:
         """
         Return all source records (DB + pending) as a list of dicts, sorted by
-        signal rate descending.  Used by performance_analysis.py.
+        signal rate descending.
         """
         all_sources = set(self._db_cache.keys()) | set(self._pending.keys())
         rows = []

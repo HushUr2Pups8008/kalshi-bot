@@ -114,8 +114,6 @@ LOG_DIR="$OUTPUT_ROOT/app"
 HEALTH_REPORT_DIR="$OUTPUT_ROOT/reports/health"
 DAILY_REVIEW_SCRIPT="$REPO_ROOT/scripts/daily_review.py"
 DAILY_REVIEW_DIR="$OUTPUT_ROOT/reports/daily"
-PERFORMANCE_SCRIPT="$REPO_ROOT/scripts/performance_analysis.py"
-PERFORMANCE_REPORT_DIR="$OUTPUT_ROOT/reports/performance"
 TRADES_LOG="$OUTPUT_ROOT/trades/live/trades.jsonl"
 ERRORS_LOG="$LOG_DIR/errors.log"
 BOT_LOG="$LOG_DIR/bot.log"
@@ -163,7 +161,7 @@ else
     REPORT="$HEALTH_REPORT_DIR/bothealth_${DATE_ONLY}.md"
 fi
 
-mkdir -p "$LOG_DIR" "$DAILY_REVIEW_DIR" "$PERFORMANCE_REPORT_DIR"
+mkdir -p "$LOG_DIR" "$DAILY_REVIEW_DIR"
 if [[ "$DRY_RUN" != "1" ]]; then
     mkdir -p "$HEALTH_REPORT_DIR"
 fi
@@ -442,7 +440,7 @@ else:
     log_state = "stale" if age >= 1800 else "fresh"
 halt = "clear"
 try:
-    data = json.loads((state_dir / "politics_session_halt.json").read_text(encoding="utf-8"))
+    data = json.loads((state_dir / "politics_loss_limit_halt.json").read_text(encoding="utf-8"))
     if isinstance(data, dict) and data.get("halted") is True:
         halt = "latched"
 except (OSError, UnicodeError, json.JSONDecodeError):
@@ -939,14 +937,18 @@ if [[ "$RUN_DAILY_REVIEW" == "1" ]]; then
     codeblock_end
 fi
 
-# ── 11. Performance analysis report ───────────────────────────────────────────
-PERFORMANCE_STATUS="not_requested"
-PERFORMANCE_REPORT=""
+# ── 11. Fee-net P&L ───────────────────────────────────────────────────────────
+# The fill-log job writes logs/reports/pnl-YYYYMMDD.md. Health only records
+# whether that file exists. It does not run a second P&L script.
 if [[ "$RUN_DAILY_REVIEW" == "1" ]]; then
-    section "11. Performance analysis report"
+    section "11. Fee-net P&L"
     codeblock_start
-    printf 'performance_analysis=skipped reason=unscoped_db_and_log\n' >>"$REPORT"
-    PERFORMANCE_STATUS="scope_skipped"
+    PNL_REPORT="$REPO_ROOT/logs/reports/pnl-$(date -u +%Y%m%d).md"
+    if [[ -f "$PNL_REPORT" ]]; then
+        printf 'pnl_report present=yes path=%s\n' "$PNL_REPORT" >>"$REPORT"
+    else
+        printf 'pnl_report present=no path=%s\n' "$PNL_REPORT" >>"$REPORT"
+    fi
     codeblock_end
 fi
 
@@ -958,7 +960,7 @@ section "Verdict"
     elif (( BOT_ALIVE == 0 )); then
         VERDICT="**RED** — bot not running"
     elif [[ "$POLITICS_HALT" == "latched" ]]; then
-        VERDICT="**RED** — session halt latched"
+        VERDICT="**RED** — loss limit latched"
     elif [[ "$POLITICS_LOG" == "stale" ]]; then
         VERDICT="**RED** — no log lines for 30 min"
     elif [[ "$POLITICS_CASH" == "stale" ]]; then

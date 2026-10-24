@@ -14,7 +14,6 @@ import scripts.daily_review as daily_review
 import scripts.decision_funnel_summary as decision_funnel_summary
 import scripts.freshness_diagnostics as freshness_diagnostics
 import scripts.match_quality_diagnostics as match_quality_diagnostics
-import scripts.performance_analysis as performance_analysis
 import scripts.pipeline_impact_audit as pipeline_impact_audit
 import scripts.signal_edge_diagnostics as signal_edge_diagnostics
 from tasks.stats import edge_series
@@ -94,9 +93,6 @@ class TestReportArtifactDefaults:
 
     def test_daily_review_tier_state_lands_in_derived_state(self):
         assert daily_review.SOURCE_TIER_STATE_PATH.parent == output_paths.DERIVED_STATE_DIR
-
-    def test_performance_analysis_lands_in_performance_reports_dir(self):
-        assert performance_analysis.REPORTS_DIR == output_paths.PERFORMANCE_REPORTS_DIR
 
     def test_edge_series_lands_in_derived_state(self):
         assert edge_series._PATH_DEFAULT.parent == output_paths.DERIVED_STATE_DIR

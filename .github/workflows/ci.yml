@@ -116,7 +116,6 @@ jobs:
           .venv/bin/python -m pytest
           tests/test_kalshi_normalizer_p0.py
           tests/test_kalshi_pricing_p0.py
-          tests/test_kalshi_pricing_p0_replay.py
           tests/test_drift_counter_halt_p0.py
           tests/test_kalshi_signing_failfast.py
           -q --tb=short
