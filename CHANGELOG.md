@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.27] - 2026-10-23
+
+### Removed
+- Offline report scripts nothing in the desks runs: the generic-search circuit report, the LLM eval runner, the research-timeout replay CLI, and the politics Grok fee-net harness. The live generic-search circuit, the research-timeout replay the research gate uses, and the grounding-off pin stay.
+
 ## [0.37.26] - 2026-10-23
 
 ### Removed
