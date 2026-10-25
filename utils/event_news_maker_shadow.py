@@ -1,9 +1,4 @@
-"""Hypothetical resting bid for a paper candidate. No order is placed or rested.
-
-The bid is the existing maker-first price: one cent under the ask, never
-through the 36c band. A later tape replay asks whether a public trade
-printed through that bid. The test is optimistic and not queue-aware.
-"""
+"""Hypothetical resting bid. No order is placed. The tape test is not queue-aware."""
 
 from __future__ import annotations
 
@@ -27,7 +22,6 @@ from utils.event_news_grok_flags import EVENT_NEWS_BAND_FLOOR_CENTS
 
 
 def resting_bid_cents(ask_cents: object) -> int | None:
-    """One cent under the ask, or None when that bid would cross the band."""
     if isinstance(ask_cents, bool) or not isinstance(ask_cents, int):
         return None
     return event_news_maker_limit_cents(
@@ -36,7 +30,6 @@ def resting_bid_cents(ask_cents: object) -> int | None:
 
 
 def yes_price_cents(raw: object) -> int | None:
-    """Whole cents from a public trade price. A fractional cent is refused."""
     try:
         cents = Decimal(str(raw)) * 100
     except Exception:
@@ -67,7 +60,6 @@ def first_fill_cents(
     side: str,
     limit_cents: int,
 ) -> int | None:
-    """YES price of the first trade that reaches the bid. Caller supplies time order."""
     if isinstance(limit_cents, bool) or not isinstance(limit_cents, int):
         return None
     for trade in trades:
@@ -86,7 +78,6 @@ def quoted_fee(
     venue: Venue,
     when: datetime,
 ) -> Decimal | None:
-    """Pinned fee for one new hypothetical order. None when the quote is unscorable."""
     if isinstance(price_cents, bool) or not isinstance(price_cents, int):
         return None
     if price_cents < 1 or price_cents > 99:
@@ -127,7 +118,6 @@ def fee_saved(
     venue: Venue,
     when: datetime,
 ) -> Decimal | None:
-    """Taker fee at the ask minus maker fee at the resting bid, in dollars."""
     taker = quoted_fee(ask_cents, contracts, FeeRole.TAKER, venue, when)
     maker = quoted_fee(limit_cents, contracts, FeeRole.MAKER, venue, when)
     if taker is None or maker is None:
@@ -142,7 +132,6 @@ def settled_fee_net(
     fee: Decimal,
     contracts: int,
 ) -> Decimal | None:
-    """Dollars if that bid had filled. The caller uses zero when it did not."""
     if result not in {"yes", "no"} or side not in {"yes", "no"}:
         return None
     if not isinstance(fee, Decimal) or not fee.is_finite():
