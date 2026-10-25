@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.35] - 2026-10-25
+
+### Added
+- The paper sidecar writes one shadow row per KXTRUTHSOCIAL and KXTRUMPACT market. The probability is a negative binomial on the public post or action count so far, the time left, and the rate on earlier days. Poisson is used only when that sample is not overdispersed. The feed is Factbase JSON or the White House presidential-actions RSS. A failed fetch writes a row with no probability. The row is not a queue and it does not call Grok. It is not promoted: no settled shadow sample has 15 rows.
+
 ## [0.37.34] - 2026-10-25
 
 ### Changed
