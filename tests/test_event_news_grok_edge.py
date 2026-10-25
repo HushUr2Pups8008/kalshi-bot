@@ -19,7 +19,9 @@ from config import cfg
 from main import TradingBot
 from utils.event_news_desk_flags import (
     EVENT_NEWS_GROK_EDGE_SCAN,
+    EVENT_NEWS_GROK_EXIT_PAID,
     EVENT_NEWS_GROK_EXIT_WATCH,
+    EVENT_NEWS_GROK_KALSHI_SERIES,
     _DESK_FLAG_NAMES,
     event_news_any_live_desk_flag,
 )
@@ -1229,6 +1231,73 @@ def test_missing_bid_does_not_invent_an_exit(tmp_path: Path) -> None:
     assert calls == []
 
 
+def test_paid_exit_off_logs_the_mark_and_does_not_post(tmp_path: Path) -> None:
+    """Two cycles both write marks. The exit cache does not skip a free mark."""
+    books = {
+        "KXTRUMPACT-26OCT18-T6": _empty_yes_book("KXTRUMPACT-26OCT18-T6"),
+        "KXTRUTHSOCIAL-26OCT24-T240": SimpleNamespace(
+            yes_ask_cents=100,
+            yes_bid_cents=99,
+            yes_ask_size_fp="0.00",
+        ),
+    }
+    calls: list[dict] = []
+    positions = [
+        {"ticker": "KXTRUMPACT-26OCT18-T6", "side": "yes"},
+        {"ticker": "KXTRUTHSOCIAL-26OCT24-T240", "side": "yes"},
+    ]
+    marks = tmp_path / "grok_edge_marks.jsonl"
+    exits = tmp_path / "grok_edge_exits.jsonl"
+    kwargs = {
+        "live": False,
+        "market_lookup": lambda ticker: books[ticker],
+        "environ": {
+            XAI_API_KEY_ENV: "test-key",
+            "GROK_DAILY_USD_CAP": "3",
+            EVENT_NEWS_GROK_EXIT_PAID: "false",
+        },
+        "post": _poster(calls),
+        "call_log_path": tmp_path / "calls.jsonl",
+        "exit_log_path": exits,
+        "mark_log_path": marks,
+        "spend_path": tmp_path / "spend.json",
+        "now": NOW,
+    }
+    assert run_paper_exit_watch(positions, **kwargs) == 2
+    assert run_paper_exit_watch(positions, **kwargs) == 2
+    assert calls == []
+    assert not exits.exists()
+    rows = _rows(marks)
+    assert len(rows) == 4
+    assert [row["ticker"] for row in rows] == [
+        "KXTRUMPACT-26OCT18-T6",
+        "KXTRUTHSOCIAL-26OCT24-T240",
+        "KXTRUMPACT-26OCT18-T6",
+        "KXTRUTHSOCIAL-26OCT24-T240",
+    ]
+    assert all(row["paid"] is False and row["bid_cents"] == 99 for row in rows)
+
+
+def test_paid_exit_off_does_not_invent_a_mark_without_a_bid(tmp_path: Path) -> None:
+    calls: list[dict] = []
+    marks = tmp_path / "grok_edge_marks.jsonl"
+    logged = run_paper_exit_watch(
+        [{"ticker": "KXTRUMPSAY-26OCT20-TEST", "side": "yes"}],
+        live=False,
+        market_lookup=lambda ticker: {"yes_bid": 0},
+        environ={XAI_API_KEY_ENV: "test-key", EVENT_NEWS_GROK_EXIT_PAID: "false"},
+        post=_poster(calls),
+        call_log_path=tmp_path / "calls.jsonl",
+        exit_log_path=tmp_path / "exits.jsonl",
+        mark_log_path=marks,
+        spend_path=tmp_path / "spend.json",
+        now=NOW,
+    )
+    assert logged == 0
+    assert calls == []
+    assert not marks.exists()
+
+
 def test_position_rows_use_the_signed_count() -> None:
     rows = paper_position_rows(
         [
@@ -1257,6 +1326,8 @@ def test_scan_interval_cannot_drop_below_five_minutes() -> None:
 def test_new_flags_do_not_arm_the_live_order_path_or_the_plist() -> None:
     assert EVENT_NEWS_GROK_EDGE_SCAN not in _DESK_FLAG_NAMES
     assert EVENT_NEWS_GROK_EXIT_WATCH not in _DESK_FLAG_NAMES
+    assert EVENT_NEWS_GROK_KALSHI_SERIES not in _DESK_FLAG_NAMES
+    assert EVENT_NEWS_GROK_EXIT_PAID not in _DESK_FLAG_NAMES
     assert event_news_any_live_desk_flag(
         {EVENT_NEWS_GROK_EDGE_SCAN: "true", EVENT_NEWS_GROK_EXIT_WATCH: "true"}
     ) is False
@@ -1270,6 +1341,8 @@ def test_new_flags_do_not_arm_the_live_order_path_or_the_plist() -> None:
         assert "EVENT_NEWS_GROK_EDGE_SCAN" not in text
         assert "EVENT_NEWS_GROK_EXIT_WATCH" not in text
         assert "EVENT_NEWS_GROK_GROUNDING" not in text
+        assert "EVENT_NEWS_GROK_KALSHI_SERIES" not in text
+        assert "EVENT_NEWS_GROK_EXIT_PAID" not in text
         assert "KALSHI_GROK_PAPER_SIDECAR" not in text
         assert "GROK_DAILY_USD_CAP" not in text
     politics_script = Path("scripts/start_politics_paper.sh").read_text(encoding="utf-8")
@@ -1295,6 +1368,8 @@ def test_new_flags_do_not_arm_the_live_order_path_or_the_plist() -> None:
     assert "EVENT_NEWS_GROK_EDGE_SCAN=true" in sidecar_script
     assert "EVENT_NEWS_GROK_EXIT_WATCH=true" in sidecar_script
     assert "EVENT_NEWS_GROK_GROUNDING=true" in sidecar_script
+    assert "EVENT_NEWS_GROK_KALSHI_SERIES=false" in sidecar_script
+    assert "EVENT_NEWS_GROK_EXIT_PAID=false" in sidecar_script
     assert "GROK_DAILY_USD_CAP=3" in sidecar_script
     assert "bot_runtime.kalshi-grok-paper.lock" in sidecar_script
     assert "bot_runtime.kalshi-event-news-20260820.lock" not in sidecar_script

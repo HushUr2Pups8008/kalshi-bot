@@ -29,6 +29,8 @@ def arm_sidecar_environment() -> None:
     os.environ["EVENT_NEWS_GROK_EDGE_SCAN"] = "true"
     os.environ["EVENT_NEWS_GROK_EXIT_WATCH"] = "true"
     os.environ["EVENT_NEWS_GROK_GROUNDING"] = "true"
+    os.environ["EVENT_NEWS_GROK_KALSHI_SERIES"] = "false"
+    os.environ["EVENT_NEWS_GROK_EXIT_PAID"] = "false"
     os.environ.setdefault("GROK_DAILY_USD_CAP", "3")
     os.environ["POLYMARKET_US_ENABLED"] = "false"
     os.environ["POLYMARKET_US_LIVE_TRADING_ENABLED"] = "false"
@@ -311,6 +313,25 @@ def _run_daily(rest) -> None:
         polymarket_lookup=lookup,
     )
 
+def _log_scan_cycle(scores: dict, scan: dict) -> None:
+    grounded = int(scan.get("grounded_calls", 0) or 0) + int(scores.get("grounded_calls", 0) or 0)
+    series = os.environ.get("EVENT_NEWS_GROK_KALSHI_SERIES", "")
+    print(
+        f"grok paper scan kalshi_series={series} grounded_calls={grounded}",
+        file=sys.stderr,
+    )
+
+def _log_exit_cycle(logged: object) -> None:
+    from utils.event_news_desk_flags import (
+        EVENT_NEWS_GROK_EXIT_PAID,
+        event_news_desk_flag_enabled,
+    )
+
+    if event_news_desk_flag_enabled(EVENT_NEWS_GROK_EXIT_PAID, live=False):
+        return
+    count = logged if isinstance(logged, int) else 0
+    print(f"grok paper exit logged={count} paid_calls=0", file=sys.stderr)
+
 def _print_once(scan: dict[str, int], scores: dict[str, int], before: str | None, after: str | None) -> None:
     from utils.event_news_grok_edge import CALL_LOG_PATH
 
@@ -360,6 +381,7 @@ def main(argv: list[str] | None = None) -> int:
                     f"grok paper score failed error_type={type(score_error).__name__}",
                     file=sys.stderr,
                 )
+            _log_scan_cycle(scores, scan)
             _print_once(scan, scores, before, _spent(SPEND_PATH))
             return 0
         next_exit = time.monotonic() + 60
@@ -372,16 +394,19 @@ def main(argv: list[str] | None = None) -> int:
                         f"grok paper score failed error_type={type(score_error).__name__}",
                         file=sys.stderr,
                     )
+                _log_scan_cycle(_scores, _scan)
             except Exception as exc:
                 print(f"grok paper scan failed error_type={type(exc).__name__}", file=sys.stderr)
             now_mono = _wait_until(next_exit)
             try:
-                _run_exit(rest)
+                _logged = _run_exit(rest)
             except Exception as exc:
                 print(
                     f"grok paper exit failed error_type={type(exc).__name__}",
                     file=sys.stderr,
                 )
+            else:
+                _log_exit_cycle(_logged)
             next_exit = now_mono + 3600
             day = datetime.now(timezone.utc).date().isoformat()
             if day != report_day:

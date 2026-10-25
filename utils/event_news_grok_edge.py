@@ -20,7 +20,9 @@ import requests
 
 from utils.event_news_desk_flags import (
     EVENT_NEWS_GROK_EDGE_SCAN,
+    EVENT_NEWS_GROK_EXIT_PAID,
     EVENT_NEWS_GROK_EXIT_WATCH,
+    EVENT_NEWS_GROK_KALSHI_SERIES,
     HARD_MAX_CONTRACTS,
     event_news_desk_flag_enabled,
     event_news_yes_floor_cents,
@@ -90,6 +92,7 @@ CALL_LOG_PATH = Path("logs/state/grok_edge_calls.jsonl")
 CANDIDATE_LOG_PATH = Path("logs/state/grok_edge_candidates.jsonl")
 COMPARISON_LOG_PATH = Path("logs/state/grok_edge_comparisons.jsonl")
 EXIT_LOG_PATH = Path("logs/state/grok_edge_exits.jsonl")
+MARK_LOG_PATH = EXIT_LOG_PATH.with_name("grok_edge_marks.jsonl")
 POSITION_SCORE_LOG_PATH = Path("logs/state/grok_edge_position_scores.jsonl")
 SPEND_PATH = Path("logs/state/grok_edge_spend.json")
 PAPER_DB_PATH = Path("logs/state/grok_paper.db")
@@ -204,6 +207,16 @@ def _view_venue(view: Mapping[str, Any]) -> str:
     if venue == _POLYMARKET_US:
         return _POLYMARKET_US
     return "kalshi"
+
+def _kalshi_series_paid(view: Mapping[str, Any], environ: Mapping[str, str] | None) -> bool:
+    """Polymarket paper scans ignore the Kalshi series switch."""
+    if _view_venue(view) == _POLYMARKET_US:
+        return True
+    return event_news_desk_flag_enabled(
+        EVENT_NEWS_GROK_KALSHI_SERIES,
+        live=False,
+        environ=environ,
+    )
 
 def _fee_net(
     probability: float | Decimal | str,
@@ -993,6 +1006,35 @@ def run_paper_edge_scan(
             else:
                 counts["skipped"] += 1
             continue
+        if not _kalshi_series_paid(view, environ):
+            counts["examined"] += 1
+            _log_screen(
+                screen_log_path,
+                {
+                    "ts": _stamp(moment),
+                    "ticker": view["ticker"],
+                    "series": view["series"],
+                    "venue": _view_venue(view),
+                    "decision": "skip",
+                    "reason": "kalshi_series_off",
+                    "yes_ask": view.get("yes_ask"),
+                    "no_ask": view.get("no_ask"),
+                    "post_id": fingerprint,
+                },
+            )
+            _store_decision(
+                view,
+                reason="kalshi_series_off",
+                candidate_log_path=candidate_log_path,
+                db_path=db_path,
+                now=moment,
+                ask=view["yes_ask"],
+            )
+            counts["screen_skipped"] += 1
+            counts["skipped"] += 1
+            if counts["examined"] >= max_markets:
+                break
+            continue
         if _tie_break_due(cached, view, fingerprint, moment):
             counts["examined"] += 1
             affordable = _tie_break_budget_ok(
@@ -1270,6 +1312,7 @@ def run_paper_exit_watch(
     post: Callable[..., Any] | None = None,
     call_log_path: Path = CALL_LOG_PATH,
     exit_log_path: Path = EXIT_LOG_PATH,
+    mark_log_path: Path = MARK_LOG_PATH,
     spend_path: Path = SPEND_PATH,
     raw_dir: Path = RAW_DIR,
     now: datetime | None = None,
@@ -1282,6 +1325,11 @@ def run_paper_exit_watch(
     ):
         return 0
     logged = 0
+    paid = event_news_desk_flag_enabled(
+        EVENT_NEWS_GROK_EXIT_PAID,
+        live=False,
+        environ=environ,
+    )
     exit_cache_path = exit_log_path.with_suffix(".cache.json")
     for position in positions:
         ticker = str(position.get("ticker") or "").strip()
@@ -1293,6 +1341,20 @@ def run_paper_exit_watch(
         if bid is None:
             continue
         ask, close = _quote_cents(market, side, "ask"), _book_field(market, "close_time", "expected_expiration_time")
+        if not paid:
+            _append_jsonl(
+                mark_log_path,
+                {
+                    "ts": _stamp(now),
+                    "ticker": ticker,
+                    "side": side,
+                    "bid_cents": bid,
+                    "ask_cents": ask,
+                    "paid": False,
+                },
+            )
+            logged += 1
+            continue
         key = f"{ticker}|{side}"
         cached_exit = _cache_get(exit_cache_path, key) or {}
         moved = _ask_moved(cached_exit.get("bid_cents"), bid) or _ask_moved(cached_exit.get("ask_cents"), ask)
@@ -1491,6 +1553,21 @@ def score_open_positions(
             continue
         if blocked := _paper_gate_reason(market, view, None, now=moment):
             record = _score_record(ticker=ticker, side=side, ask=ask, probability=None, sources=(), skip_reason=blocked, floor=floor, now=moment)
+            counts["skipped"] += 1
+            _append_jsonl(score_log_path, record)
+            _insert_paper_row(db_path, "position_scores", record)
+            continue
+        if not _kalshi_series_paid(view, environ):
+            record = _score_record(
+                ticker=ticker,
+                side=side,
+                ask=ask,
+                probability=None,
+                sources=(),
+                skip_reason="kalshi_series_off",
+                floor=floor,
+                now=moment,
+            )
             counts["skipped"] += 1
             _append_jsonl(score_log_path, record)
             _insert_paper_row(db_path, "position_scores", record)
