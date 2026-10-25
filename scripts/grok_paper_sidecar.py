@@ -114,6 +114,23 @@ def _refresh_fee_net(rest) -> None:
     if cache_settlement_fee_net(rows) is None:
         print("grok paper pnl window failed error_type=ValueError", file=sys.stderr)
 
+def _countable_shadow(markets, rest, moment: datetime) -> int:
+    """Free count probability beside the scan. It does not queue or call Grok."""
+    from utils.countable_series_shadow import record_countable_shadow
+
+    try:
+        return record_countable_shadow(
+            markets,
+            now=moment,
+            rules_for=getattr(rest, "get_market", None),
+        )
+    except Exception as exc:
+        print(
+            f"grok paper countable shadow failed error_type={type(exc).__name__}",
+            file=sys.stderr,
+        )
+        return 0
+
 def _run_scan(
     rest,
     positions=None,
@@ -159,6 +176,7 @@ def _run_scan(
         now=moment,
         open_tickers=open_tickers,
     )
+    counts["countable_shadow"] = _countable_shadow(markets, rest, moment)
     counts["fetched"] = len(markets)
     counts["politics"] = len(ranked)
     report = polymarket_client is not None or os.environ.get("KALSHI_GROK_PAPER_SIDECAR") == "true"
