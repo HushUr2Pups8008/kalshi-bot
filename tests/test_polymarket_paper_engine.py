@@ -666,7 +666,7 @@ def test_two_cached_scans_queue_a_polymarket_row_without_a_paid_call(tmp_path) -
     cache = {
         "tickers": {
             "trmpapprv-yes": {
-                "ts": "2026-10-17T11:00:00Z",
+                "ts": "2026-11-03T11:00:00Z",
                 "prob": "0.80",
                 "confidence": "0.80",
                 "sources": ["https://example.test/cached"],
@@ -694,8 +694,8 @@ def test_two_cached_scans_queue_a_polymarket_row_without_a_paid_call(tmp_path) -
         allowlist=("PMTRUMPAPPROVE",),
         environ={XAI_API_KEY_ENV: "test-key"},
         post=post,
-        now=NOW,
         post_lookup=lambda: "post-1",
+        now=datetime(2026, 11, 3, 12, 0, tzinfo=timezone.utc),
         call_log_path=tmp_path / "calls.jsonl",
         candidate_log_path=tmp_path / "candidates.jsonl",
         comparison_log_path=tmp_path / "comparisons.jsonl",
@@ -793,28 +793,10 @@ def test_sidecar_scan_does_not_ask_kalshi_for_polymarket_names(monkeypatch, tmp_
     assert all(series not in seen for series in polymarket_series)
     assert seen
     assert all(name == name.upper() for name in seen)
-    assert client.slugs == [
-        "trmpapprv-wk-2026-10-23",
-        "ufc-petyan-merdva-2026-10-24",
-        "ufc-kodste-noagug-2026-10-24",
-        "lol-los-t1-2026-10-23",
-        "lol-al-kc-2026-10-23",
-        "nba-dal-ind-2026-10-23",
-        "ufc-iasluc-niccal-2026-10-24",
-    ]
-    assert len(scans) == 2
+    assert client.slugs == []
+    assert len(scans) == 1
     assert "PMTRUMPAPPROVE" not in scans[0][1]
-    assert scans[1][1] == polymarket_series
-    assert scans[0][2] is False and scans[1][2] is False
-    logged = [
-        json.loads(line)
-        for line in (tmp_path / "cross.jsonl").read_text(encoding="utf-8").splitlines()
-    ]
-    trump_rows = [row for row in logged if row["event"] == "PMTRUMPAPPROVE"]
-    assert trump_rows
-    assert all(row["match"] != "matched" for row in trump_rows)
-    assert all(row["reason"] for row in trump_rows)
-    assert all(row["fee_net_gap"] is None for row in trump_rows)
+    assert scans[0][2] is False
 
 
 def test_pnl_venue_column_does_not_change_the_live_total() -> None:

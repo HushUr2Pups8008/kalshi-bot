@@ -21,7 +21,6 @@ def refuse_live_trading() -> None:
     if live == "true":
         raise SystemExit(2)
 
-
 def arm_sidecar_environment() -> None:
     """Force paper flags before import. An explicit cap is left in place."""
     os.environ["LIVE_TRADING_ENABLED"] = "false"
@@ -37,7 +36,6 @@ def arm_sidecar_environment() -> None:
         "[POLYMARKET_PAPER] active venue=polymarket_us order_endpoint=blocked",
         file=sys.stderr,
     )
-
 
 def _acquire_lock(path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -58,7 +56,6 @@ def _acquire_lock(path: Path):
         raise SystemExit(0)
     return handle
 
-
 def _spent(path: Path) -> str | None:
     if not path.is_file():
         return None
@@ -77,7 +74,6 @@ def _spent(path: Path) -> str | None:
         return None
     return format(number, "f")
 
-
 def _position_series(positions) -> tuple[str, ...]:
     """Series prefixes of open positions. Names outside the yaml set are dropped later."""
     from utils.event_news_grok_edge import paper_position_rows
@@ -89,7 +85,6 @@ def _position_series(positions) -> tuple[str, ...]:
         if series and series not in found:
             found.append(series)
     return tuple(found)
-
 
 def _polymarket_entries(series_list: tuple[str, ...]):
     from utils.series_universe import get_universe
@@ -104,6 +99,20 @@ def _polymarket_entries(series_list: tuple[str, ...]):
         if entry.series in wanted and entry.venue == "polymarket_us"
     ]
 
+def _refresh_fee_net(rest) -> None:
+    from scripts.pnl_report import collect_pages
+    from utils.event_news_grok_edge import cache_settlement_fee_net
+
+    try:
+        rows = collect_pages(
+            lambda cursor: rest.list_settlements_page(limit=200, cursor=cursor),
+            what="settlements",
+        )
+    except Exception as exc:
+        print(f"grok paper pnl window failed error_type={type(exc).__name__}", file=sys.stderr)
+        return
+    if cache_settlement_fee_net(rows) is None:
+        print("grok paper pnl window failed error_type=ValueError", file=sys.stderr)
 
 def _run_scan(
     rest,
@@ -125,8 +134,9 @@ def _run_scan(
         write_cross_venue,
     )
 
+    _refresh_fee_net(rest)
     moment = now or datetime.now(timezone.utc)
-    series_list = politics_scan_series(_position_series(positions))
+    series_list = politics_scan_series(_position_series(positions), now=moment)
     entries = _polymarket_entries(series_list)
     poly_names = {entry.series for entry in entries}
     markets: list = []
@@ -208,7 +218,6 @@ def _run_scan(
         write_cross_venue([*markets, *poly_views], path=cross_venue_path, now=moment)
     return counts
 
-
 def _run_scores(rest, positions=None) -> dict[str, int]:
     from utils.event_news_grok_edge import PAPER_DB_PATH, score_open_positions
 
@@ -220,7 +229,6 @@ def _run_scores(rest, positions=None) -> dict[str, int]:
         market_lookup=rest.get_market,
         db_path=PAPER_DB_PATH,
     )
-
 
 def run_score_then_scan(
     rest,
@@ -248,7 +256,6 @@ def run_score_then_scan(
     )
     return scores, scan, score_error
 
-
 def _run_exit(rest) -> int:
     from utils.event_news_grok_edge import paper_position_rows, run_paper_exit_watch
 
@@ -258,7 +265,6 @@ def _run_exit(rest) -> int:
         live=False,
         market_lookup=rest.get_market,
     )
-
 
 def _polymarket_settlement_lookup():
     """Official settlement GET. Construction failure fails closed with no HTTP."""
@@ -274,7 +280,6 @@ def _polymarket_settlement_lookup():
         return None
     return client.get_market_settlement
 
-
 def _run_daily(rest) -> None:
     from utils.event_news_grok_edge import PAPER_DB_PATH, write_daily_edge_report, write_paper_scorecard
 
@@ -287,7 +292,6 @@ def _run_daily(rest) -> None:
         report_path=Path(f"logs/reports/paper-scorecard-{day}.md"),
         polymarket_lookup=lookup,
     )
-
 
 def _print_once(scan: dict[str, int], scores: dict[str, int], before: str | None, after: str | None) -> None:
     from utils.event_news_grok_edge import CALL_LOG_PATH
@@ -309,7 +313,6 @@ def _print_once(scan: dict[str, int], scores: dict[str, int], before: str | None
     }
     print(json.dumps(payload, sort_keys=True))
 
-
 def _wait_until(deadline: float, sleep=None, clock=None) -> float:
     sleep = time.sleep if sleep is None else sleep
     clock = time.monotonic if clock is None else clock
@@ -318,7 +321,6 @@ def _wait_until(deadline: float, sleep=None, clock=None) -> float:
         sleep(deadline - now)
         now = clock()
     return now
-
 
 def main(argv: list[str] | None = None) -> int:
     refuse_live_trading()

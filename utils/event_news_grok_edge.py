@@ -50,6 +50,12 @@ XAI_RESPONSES_URL = "https://api.x.ai/v1/responses"
 GROK_EDGE_TIMEOUT_SECONDS = 20.0
 GROK_DAILY_USD_CAP = "GROK_DAILY_USD_CAP"
 DEFAULT_DAILY_USD_CAP = Decimal("3")
+_HARD_USD_CAP = Decimal("3")
+_PAPER_FLOOR_USD = Decimal("0.75")
+_PROFIT_SHARE = Decimal("0.25")
+_PNL_CACHE_NAME = "grok_settled_fee_net.json"
+_PM_PAUSE_UNTIL = datetime(2026, 11, 3, tzinfo=timezone.utc)
+_SETTLED_RESULTS = frozenset({"yes", "no", "determined", "finalized", "settled"})
 EVENT_NEWS_GROK_EDGE_SCAN_MINUTES = "EVENT_NEWS_GROK_EDGE_SCAN_MINUTES"
 DEFAULT_SCAN_MINUTES = 180
 MEASURED_CYCLE_COST_USD = Decimal("0.30324255")
@@ -183,14 +189,11 @@ class GrokEdgeCall:
     skip_reason: str | None
     detail: str = ""
 
-
 def _yaml_edge_min(series: str) -> Decimal | None:
     return market_edge_min(SimpleNamespace(series_ticker=series, ticker=series))
 
-
 def _floored_cents(dollars: Decimal) -> int:
     return int((dollars * Decimal(100)).to_integral_value(rounding=ROUND_FLOOR))
-
 
 def _view_venue(view: Mapping[str, Any]) -> str:
     raw = view.get("venue")
@@ -200,7 +203,6 @@ def _view_venue(view: Mapping[str, Any]) -> str:
     if venue == _POLYMARKET_US:
         return _POLYMARKET_US
     return "kalshi"
-
 
 def _fee_net(
     probability: float | Decimal | str,
@@ -235,7 +237,6 @@ def _fee_net(
         return None
     gross = p_side - price
     return gross, fee, gross - (fee / quantity)
-
 
 def paper_queue_decision(
     *,
@@ -274,16 +275,25 @@ def paper_queue_decision(
         return "edge", edge
     return "queue", edge
 
-
 def verdicts_agree(left: Decimal, right: Decimal) -> bool:
     return abs(left - right) <= AGREE_ABS
 
+def _polymarket_paused(series: str, now: datetime | None = None) -> bool:
+    name = str(series or "").strip().upper()
+    moment = now or datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return name.startswith("PM") and moment.astimezone(timezone.utc) < _PM_PAUSE_UNTIL
 
-def politics_scan_series(extra: Sequence[str] = ()) -> tuple[str, ...]:
+def politics_scan_series(extra: Sequence[str] = (), now: datetime | None = None) -> tuple[str, ...]:
     universe = get_universe()
     if universe.failed:
         return ()
-    allowed = [entry.series for entry in universe.entries if entry.mode != "off"]
+    allowed = [
+        entry.series
+        for entry in universe.entries
+        if entry.mode != "off" and not _polymarket_paused(entry.series, now)
+    ]
     allowed_set = set(allowed)
     seen: list[str] = []
     for raw in (*allowed, *extra):
@@ -292,7 +302,6 @@ def politics_scan_series(extra: Sequence[str] = ()) -> tuple[str, ...]:
             continue
         seen.append(series)
     return tuple(seen)
-
 
 def _parse_utc(value: Any) -> datetime | None:
     if isinstance(value, datetime):
@@ -311,7 +320,6 @@ def _parse_utc(value: Any) -> datetime | None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
 
-
 def _ask_cents(raw: Any) -> int | None:
     if isinstance(raw, bool) or raw is None:
         return None
@@ -327,12 +335,10 @@ def _ask_cents(raw: Any) -> int | None:
         return cents
     return None
 
-
 def _market_asks(market: Any) -> tuple[int | None, int | None]:
     if isinstance(market, Mapping):
         return _ask_cents(market.get("yes_ask")), _ask_cents(market.get("no_ask"))
     return snapshot_ask_cents(market)
-
 
 def _market_liquidity(market: Any) -> Decimal:
     names = ("liquidity_dollars", "volume_fp", "volume_24h_fp", "volume", "open_interest")
@@ -342,7 +348,6 @@ def _market_liquidity(market: Any) -> Decimal:
         if number is not None and number > 0:
             return number
     return Decimal("0")
-
 
 def _market_identity(market: Any) -> tuple[str, str, str, datetime | None]:
     if isinstance(market, Mapping):
@@ -361,7 +366,6 @@ def _market_identity(market: Any) -> tuple[str, str, str, datetime | None]:
         series = ticker.split("-", 1)[0]
     return ticker, series, status, close
 
-
 def rank_politics_markets(
     markets: Sequence[Any],
     *,
@@ -370,7 +374,7 @@ def rank_politics_markets(
     close_window: timedelta | None = None,
 ) -> list[Any]:
     """36c-94c asks inside the close window. Response status ``open`` is not tradeable."""
-    allowed = {item.strip().upper() for item in (series or politics_scan_series()) if item.strip()}
+    allowed = {item.strip().upper() for item in (series or politics_scan_series(now=now)) if item.strip()}
     window_end = now + (SCAN_CLOSE_WINDOW if close_window is None else close_window)
     ranked: list[tuple[Decimal, datetime, str, Any]] = []
     for market in markets:
@@ -392,7 +396,6 @@ def rank_politics_markets(
         ranked.append((-_market_liquidity(market), close, ticker, market))
     ranked.sort(key=lambda item: (item[0], item[1], item[2]))
     return [item[3] for item in ranked]
-
 
 def comparison_summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     usable = [row for row in rows if _pair(row) is not None]
@@ -424,7 +427,6 @@ def comparison_summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "status": "ok" if settled else "not_enough_data",
     }
 
-
 def brier_report(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     scored = [
         (probability, outcome)
@@ -454,7 +456,6 @@ def brier_report(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         })
     return {"status": "ok", "n": len(scored), "brier": brier, "buckets": buckets}
 
-
 def ev_by_edge_bucket(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     groups: dict[str, list[Decimal]] = {"below_8": [], "8_11": [], "12_19": [], "20_plus": []}
     for row in rows:
@@ -479,7 +480,6 @@ def ev_by_edge_bucket(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         buckets.append(item)
     return {"status": "ok", "buckets": buckets}
 
-
 def exit_versus_hold(
     *, side: str, bid_cents: int, settlement_yes: bool, contracts: int, entry_ask_cents: int,
 ) -> dict[str, int] | None:
@@ -494,12 +494,10 @@ def exit_versus_hold(
     entry_cost = quantity * Decimal(entry_ask_cents) / Decimal(100) + entry[1]
     exit_proceeds = quantity * Decimal(bid_cents) / Decimal(100) - exited[1]
     held = quantity * Decimal(1 if (side == "yes") == settlement_yes else 0)
-
     def _cents(dollars: Decimal) -> int:
         return int((dollars * Decimal(100)).to_integral_value(rounding=ROUND_HALF_UP))
 
     return {"exit_cents": _cents(exit_proceeds - entry_cost), "hold_cents": _cents(held - entry_cost)}
-
 
 def grok_max_search_results(environ: Mapping[str, str] | None = None) -> int:
     env = os.environ if environ is None else environ
@@ -511,14 +509,11 @@ def grok_max_search_results(environ: Mapping[str, str] | None = None) -> int:
         return DEFAULT_MAX_SEARCH_RESULTS
     return min(value, MAX_SEARCH_RESULTS_CAP)
 
-
 def _search_turns(limit: int) -> int:
     return 2 if limit <= 8 else 3
 
-
 def _trump_x_series(series: str) -> bool:
     return any(series_ticker_matches(series, name) for name in x_search_series())
-
 
 def _grounded_tool_payload(
     series: str,
@@ -536,14 +531,12 @@ def _grounded_tool_payload(
         x_tool["allowed_x_handles"] = list(TRUMP_X_HANDLES)
     return [{"type": "web_search"}, x_tool], _search_turns(limit)
 
-
 def _search_limit_sentence(limit: int) -> str:
     return (
         f" Use at most {limit} sources. "
         f"Set web_search num_results and x_keyword_search limit to {limit} or less. "
         "Do not fetch threads or user profiles. Do not search twice."
     )
-
 
 def latest_truth_social_fingerprint(timeout: float = 8.0) -> str | None:
     try:
@@ -578,7 +571,6 @@ def latest_truth_social_fingerprint(timeout: float = 8.0) -> str | None:
     stamp = str(record.get("date") or "").strip()
     return url or stamp or None
 
-
 def _read_cache(path: Path) -> dict[str, Any]:
     try:
         data = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
@@ -590,11 +582,9 @@ def _read_cache(path: Path) -> dict[str, Any]:
         data["tickers"] = {}
     return data
 
-
 def _cache_get(path: Path, ticker: str) -> dict[str, Any] | None:
     row = _read_cache(path)["tickers"].get(ticker)
     return row if isinstance(row, dict) else None
-
 
 def _cache_put(path: Path, ticker: str, row: Mapping[str, Any]) -> None:
     with _CACHE_LOCK:
@@ -605,14 +595,12 @@ def _cache_put(path: Path, ticker: str, row: Mapping[str, Any]) -> None:
         except OSError:
             return
 
-
 def _ask_moved(old: Any, new: Any) -> bool:
     if isinstance(old, bool) or isinstance(new, bool):
         return False
     if not isinstance(old, int) or not isinstance(new, int):
         return False
     return abs(old - new) >= ASK_MOVE_CENTS
-
 
 def _cache_fresh(
     row: Mapping[str, Any] | None,
@@ -642,7 +630,6 @@ def _cache_fresh(
         return count >= 3
     return _decimal(row.get("prob")) is not None
 
-
 def stable_scan_probability(scans: Sequence[Mapping[str, Any]]) -> Decimal | None:
     probs: list[Decimal] = []
     for row in scans:
@@ -663,7 +650,6 @@ def stable_scan_probability(scans: Sequence[Mapping[str, Any]]) -> Decimal | Non
         return ordered[middle]
     return (ordered[middle - 1] + ordered[middle]) / Decimal(2)
 
-
 def _prior_scans(row: Mapping[str, Any] | None, now: datetime) -> list[dict[str, Any]]:
     if not row:
         return []
@@ -682,7 +668,6 @@ def _prior_scans(row: Mapping[str, Any] | None, now: datetime) -> list[dict[str,
     if legacy is None:
         return []
     return [{"prob": format(legacy, "f"), "post_id": str(row.get("post_id") or "")}]
-
 
 def _tie_break_due(
     row: Mapping[str, Any] | None,
@@ -709,7 +694,6 @@ def _tie_break_due(
         return False
     return stable_scan_probability(scans) is None
 
-
 def _tie_break_budget_ok(
     spend_path: Path,
     call_log_path: Path,
@@ -718,7 +702,7 @@ def _tie_break_budget_ok(
 ) -> bool:
     """True when one grounded reserve still fits. An unreadable ledger does not."""
     env = os.environ if environ is None else environ
-    cap = _call_cap(_daily_cap(env), "series")
+    cap = _call_cap(_daily_cap(env), "series", _trailing_fee_net(spend_path, now))
     reserve = call_reserve_usd(call_log_path, grounded=True)
     if reserve <= 0 or cap < 0:
         return False
@@ -741,7 +725,6 @@ def _tie_break_budget_ok(
             return False
     return spent + reserve <= cap
 
-
 def _next_scans(
     path: Path,
     view: Mapping[str, Any],
@@ -753,7 +736,6 @@ def _next_scans(
     sample = {"prob": format(probability, "f"), "post_id": fingerprint or ""}
     return [*prior, sample][-3:]
 
-
 def _screen_side(probability: Decimal, ask: int | None, venue: str = "kalshi") -> int | None:
     if type(ask) is not int:
         return None
@@ -761,7 +743,6 @@ def _screen_side(probability: Decimal, ask: int | None, venue: str = "kalshi") -
     if scored is None:
         return None
     return _floored_cents(scored[2])
-
 
 def _screen_edges(
     probability: Decimal,
@@ -774,16 +755,13 @@ def _screen_edges(
         _screen_side(Decimal(1) - probability, no_ask, venue),
     )
 
-
 def _screen_passes(yes_edge: int | None, no_edge: int | None) -> bool:
     return (yes_edge is not None and yes_edge >= SCREEN_EDGE_CENTS) or (
         no_edge is not None and no_edge >= SCREEN_EDGE_CENTS
     )
 
-
 def _log_screen(path: Path, record: Mapping[str, Any]) -> None:
     _append_jsonl(path, record)
-
 
 def _series_prompt(views: Sequence[Mapping[str, Any]], limit: int) -> str:
     lead = "These Kalshi markets share one series. "
@@ -799,7 +777,6 @@ def _series_prompt(views: Sequence[Mapping[str, Any]], limit: int) -> str:
     for view in views:
         lines.append(_market_prompt(view))
     return "\n".join(lines)
-
 
 def _cached_call(view: Mapping[str, Any], row: Mapping[str, Any]) -> GrokEdgeCall | None:
     probability = _decimal(row.get("prob"))
@@ -825,7 +802,6 @@ def _cached_call(view: Mapping[str, Any], row: Mapping[str, Any]) -> GrokEdgeCal
         skip_reason=None,
         detail="cache",
     )
-
 
 def _remember_grounded(
     path: Path,
@@ -857,7 +833,6 @@ def _remember_grounded(
         },
     )
 
-
 def _ground_miss(reason: str, prompt_hash: str = "") -> dict[str, Any]:
     return {
         "skip_reason": reason,
@@ -866,7 +841,6 @@ def _ground_miss(reason: str, prompt_hash: str = "") -> dict[str, Any]:
         "summary": "",
         "prompt_hash": prompt_hash,
     }
-
 
 def _ground_series(
     views: Sequence[Mapping[str, Any]],
@@ -915,7 +889,6 @@ def _ground_series(
     parsed["prompt_hash"] = result.prompt_hash
     return parsed
 
-
 def run_paper_edge_scan(
     markets: Sequence[Any],
     *,
@@ -956,7 +929,6 @@ def run_paper_edge_scan(
     fingerprint = latest_truth_social_fingerprint() if post_lookup is None else post_lookup()
     open_set = {str(ticker).strip() for ticker in open_tickers if str(ticker).strip()}
     pending: list[dict[str, Any]] = []
-
     def _skip(view, reason, *, prompt_hash="", probability=None, sources=()):
         _store_decision(
             view, reason=reason, candidate_log_path=candidate_log_path, db_path=db_path,
@@ -968,7 +940,7 @@ def run_paper_edge_scan(
         view = _market_view(market)
         if view is None or view["series"] not in allowed or view["status"] != "active":
             continue
-        quote_block = _paper_gate_reason(market, view, None)
+        quote_block = _paper_gate_reason(market, view, None, now=moment)
         if quote_block:
             _skip(view, quote_block)
             continue
@@ -999,7 +971,7 @@ def run_paper_edge_scan(
             reused = _cached_call(view, cached or {})
             cached_block = None
             if reused is not None and reused.probability is not None:
-                cached_block = _paper_gate_reason(market, view, float(reused.probability))
+                cached_block = _paper_gate_reason(market, view, float(reused.probability), now=moment)
             if cached_block:
                 _skip(
                     view,
@@ -1229,7 +1201,7 @@ def run_paper_edge_scan(
                 cost_usd=Decimal("0"),
                 skip_reason=None,
             )
-            blocked = _paper_gate_reason(item.get("market"), view, float(decision))
+            blocked = _paper_gate_reason(item.get("market"), view, float(decision), now=moment)
             if blocked:
                 _skip(
                     view,
@@ -1251,7 +1223,6 @@ def run_paper_edge_scan(
             else:
                 counts["skipped"] += 1
     return counts
-
 
 def paper_position_rows(positions: Sequence[Any] | None) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
@@ -1281,7 +1252,6 @@ def paper_position_rows(positions: Sequence[Any] | None) -> list[dict[str, str]]
         rows.append(item)
     return rows
 
-
 def edge_scan_interval_seconds(environ: Mapping[str, str] | None = None) -> int:
     env = os.environ if environ is None else environ
     raw = str(env.get(EVENT_NEWS_GROK_EDGE_SCAN_MINUTES) or "").strip()
@@ -1289,7 +1259,6 @@ def edge_scan_interval_seconds(environ: Mapping[str, str] | None = None) -> int:
     if minutes < MIN_SCAN_MINUTES:
         minutes = MIN_SCAN_MINUTES
     return minutes * 60
-
 
 def run_paper_exit_watch(
     positions: Sequence[Mapping[str, Any]],
@@ -1371,7 +1340,6 @@ def run_paper_exit_watch(
         logged += 1
     return logged
 
-
 def _position_view(ticker: str, market: Any) -> dict[str, Any]:
     view = _market_view(market) if market is not None else None
     if view is not None and view.get("ticker"):
@@ -1388,7 +1356,6 @@ def _position_view(ticker: str, market: Any) -> dict[str, Any]:
         "rules": "",
         "close_time": "",
     }
-
 
 def _score_record(
     *,
@@ -1434,7 +1401,6 @@ def _score_record(
         }
     )
     return record
-
 
 def score_open_positions(
     positions: Sequence[Any] | None,
@@ -1522,7 +1488,7 @@ def score_open_positions(
             _append_jsonl(score_log_path, record)
             _insert_paper_row(db_path, "position_scores", record)
             continue
-        if blocked := _paper_gate_reason(market, view, None):
+        if blocked := _paper_gate_reason(market, view, None, now=moment):
             record = _score_record(ticker=ticker, side=side, ask=ask, probability=None, sources=(), skip_reason=blocked, floor=floor, now=moment)
             counts["skipped"] += 1
             _append_jsonl(score_log_path, record)
@@ -1739,7 +1705,6 @@ def score_open_positions(
             _insert_paper_row(db_path, "position_scores", record)
     return counts
 
-
 def write_daily_edge_report(
     *,
     candidate_log_path: Path = CANDIDATE_LOG_PATH,
@@ -1750,11 +1715,12 @@ def write_daily_edge_report(
     now: datetime | None = None,
     polymarket_lookup: Callable[[str], Any] | None = None,
     db_path: Path = PAPER_DB_PATH,
+    call_log_path: Path = CALL_LOG_PATH,
 ) -> str:
     """Join settled GETs to logged probabilities. Does not read or write orders."""
     candidates = _read_jsonl(candidate_log_path)
     comparisons = _read_jsonl(comparison_log_path)
-    spend_line = _spend_line(spend_path)
+    spend_line = _spend_line(spend_path) + "\n" + _profit_share_line(spend_path, call_log_path, now)
     settlements = _settlements_for(
         (*candidates, *comparisons),
         market_lookup,
@@ -1766,7 +1732,6 @@ def write_daily_edge_report(
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(text, encoding="utf-8")
     return text
-
 
 def contract_fee_net_dollars(
     side: str,
@@ -1789,14 +1754,12 @@ def contract_fee_net_dollars(
         return Decimal(1) - price - fee
     return -price - fee
 
-
 def quote_from_market(market: Any) -> dict[str, Any] | None:
     view = _market_view(market)
     yes_ask = None if view is None else view.get("yes_ask")
     if view is None or type(yes_ask) is not int:
         return None
     return view
-
 
 def _complement_cents(bid: int | None) -> int | None:
     if type(bid) is not int or not 1 <= bid <= 99:
@@ -1805,7 +1768,6 @@ def _complement_cents(bid: int | None) -> int | None:
     if 1 <= ask <= 99:
         return ask
     return None
-
 
 def _report_quote(market: Any) -> dict[str, Any] | None:
     """One market's asks. A missing NO ask is 100 minus the YES bid."""
@@ -1827,7 +1789,6 @@ def _report_quote(market: Any) -> dict[str, Any] | None:
             view["no_ask"] = derived
     return view
 
-
 def _canonical_close(value: Any) -> str | None:
     text = str(value or "").strip()
     if text.endswith("Z"):
@@ -1840,10 +1801,8 @@ def _canonical_close(value: Any) -> str | None:
         return None
     return parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-
 def _plain_number(raw: str) -> str:
     return format(Decimal(raw).normalize(), "f")
-
 
 def _outcome_key(title: str) -> tuple[str, ...] | None:
     plain = str(title or "").replace("\u2013", "-").replace("\u2014", "-").lower()
@@ -1871,7 +1830,6 @@ def _outcome_key(title: str) -> tuple[str, ...] | None:
         return ("by", by_date.group(1), str(int(by_date.group(2))), by_date.group(3))
     return None
 
-
 def _settlement_source(title: str, rules: str) -> str | None:
     blob = f"{title}\n{rules}".lower()
     if "rcp" in blob:
@@ -1882,7 +1840,6 @@ def _settlement_source(title: str, rules: str) -> str | None:
         return "hormuz-normal"
     return None
 
-
 def _contract_identity(view: Mapping[str, Any]) -> tuple[Any, ...] | None:
     close = _canonical_close(view.get("close_time"))
     outcome = _outcome_key(str(view.get("title") or ""))
@@ -1891,14 +1848,12 @@ def _contract_identity(view: Mapping[str, Any]) -> tuple[Any, ...] | None:
         return None
     return (close[:10], source, outcome)
 
-
 def _source_date(view: Mapping[str, Any]) -> tuple[str, str] | None:
     close = _canonical_close(view.get("close_time"))
     source = _settlement_source(str(view.get("title") or ""), str(view.get("rules") or ""))
     if close is None or source is None:
         return None
     return close[:10], source
-
 
 def _unmatched_reason(view: Mapping[str, Any], others: Sequence[Mapping[str, Any]]) -> str:
     left = _source_date(view)
@@ -1918,7 +1873,6 @@ def _unmatched_reason(view: Mapping[str, Any], others: Sequence[Mapping[str, Any
         return "different_settlement_date"
     return "no_counterpart" if parts is not None else "unparsed"
 
-
 def _pair_edge(yes_view: Mapping[str, Any], no_view: Mapping[str, Any]) -> Decimal | None:
     yes_ask = yes_view.get("yes_ask")
     no_ask = no_view.get("no_ask")
@@ -1929,7 +1883,6 @@ def _pair_edge(yes_view: Mapping[str, Any], no_view: Mapping[str, Any]) -> Decim
     if yes_fee is None or no_fee is None:
         return None
     return Decimal(1) - (Decimal(yes_ask) / Decimal(100)) - (Decimal(no_ask) / Decimal(100)) - yes_fee[1] - no_fee[1]
-
 
 def _cross_venue_row(
     *,
@@ -1964,7 +1917,6 @@ def _cross_venue_row(
         "fee_net_gap": None if best is None else format(best, "f"),
         "pair_clears": best is not None and edge_min is not None and best >= edge_min,
     }
-
 
 def cross_venue_report(
     markets: Sequence[Any],
@@ -2052,7 +2004,6 @@ def cross_venue_report(
             _skip(poly, kalshi_views, False)
     return rows
 
-
 def write_cross_venue(
     markets: Sequence[Any],
     *,
@@ -2067,7 +2018,6 @@ def write_cross_venue(
         _append_jsonl(target, row)
     return rows
 
-
 def scorecard_interval(values: Sequence[Decimal]) -> dict[str, Decimal | int | None]:
     count = len(values)
     mean = None if count == 0 else sum(values, Decimal(0)) / Decimal(count)
@@ -2076,7 +2026,6 @@ def scorecard_interval(values: Sequence[Decimal]) -> dict[str, Decimal | int | N
     variance = sum((item - mean) ** 2 for item in values) / Decimal(count - 1)
     half = Decimal("1.96") * variance.sqrt() / Decimal(count).sqrt()
     return {"n": count, "mean": mean, "ci95_low": mean - half, "ci95_high": mean + half}
-
 
 def promotion_label(*, mode: str, effective: str, n: int, low: Decimal | None, high: Decimal | None) -> str:
     """Report-only. This does not edit the universe file."""
@@ -2088,17 +2037,14 @@ def promotion_label(*, mode: str, effective: str, n: int, low: Decimal | None, h
         return "eligible for live"
     return ""
 
-
 def _cell(value: Decimal | None) -> str:
     return "" if value is None else format(value, "f")
-
 
 def _scorecard_modes() -> dict[str, tuple[str, str]]:
     universe = get_universe()
     if universe.failed:
         return {}
     return {entry.series: (entry.mode, effective_mode(entry)) for entry in universe.entries}
-
 
 def _earliest_polymarket_settlements(db_path: Path) -> dict[str, str]:
     if not db_path.is_file():
@@ -2136,7 +2082,6 @@ def _earliest_polymarket_settlements(db_path: Path) -> dict[str, str]:
             found[slug] = text
     return found
 
-
 def _prefer_earliest_settlement(db_path: Path, rows: list[tuple], stored_index: int) -> list[tuple]:
     earliest = _earliest_polymarket_settlements(db_path)
     if not earliest:
@@ -2151,7 +2096,6 @@ def _prefer_earliest_settlement(db_path: Path, rows: list[tuple], stored_index: 
         mutable[stored_index] = saved
         adjusted.append(tuple(mutable))
     return adjusted
-
 
 def _queued_candidate_rows(db_path: Path) -> list[tuple]:
     if not db_path.is_file():
@@ -2185,7 +2129,6 @@ def _queued_candidate_rows(db_path: Path) -> list[tuple]:
         conn.close()
     return _prefer_earliest_settlement(db_path, fetched, 6)
 
-
 def settlement_venue(value: Any) -> str:
     text = str(value or "").strip().lower()
     if text in ("", "kalshi"):
@@ -2193,7 +2136,6 @@ def settlement_venue(value: Any) -> str:
     if text == _POLYMARKET_US:
         return _POLYMARKET_US
     raise ValueError("unknown_venue")
-
 
 def outcome_from_polymarket_settlement(payload: Any) -> str | None:
     """1 is YES and 0 is NO. A missing payload is not settled. Any other number fails closed."""
@@ -2210,7 +2152,6 @@ def outcome_from_polymarket_settlement(payload: Any) -> str | None:
     if number == 0.0:
         return "no"
     raise ValueError("settlement_unreadable")
-
 
 def resolve_settlement(
     venue: Any,
@@ -2231,7 +2172,6 @@ def resolve_settlement(
             return None
         raise
     return outcome_from_polymarket_settlement(payload)
-
 
 def _polymarket_candidate_rows(db_path: Path) -> list[tuple]:
     if not db_path.is_file():
@@ -2258,7 +2198,6 @@ def _polymarket_candidate_rows(db_path: Path) -> list[tuple]:
     finally:
         conn.close()
     return _prefer_earliest_settlement(db_path, fetched, 3)
-
 
 def remember_polymarket_settlement(db_path: Path, ticker: str, result: str) -> None:
     if result not in {"yes", "no"} or not str(ticker or "").strip():
@@ -2290,7 +2229,6 @@ def remember_polymarket_settlement(db_path: Path, ticker: str, result: str) -> N
                 """,
                 (result, ticker),
             )
-
 
 def polymarket_observation_rows(
     db_path: Path,
@@ -2337,7 +2275,6 @@ def polymarket_observation_rows(
         )
     return rows
 
-
 def _polymarket_section(rows: Sequence[Mapping[str, str]]) -> list[str]:
     if not rows:
         return []
@@ -2361,7 +2298,6 @@ def _polymarket_section(rows: Sequence[Mapping[str, str]]) -> list[str]:
             )
         )
     return lines
-
 
 def write_paper_scorecard(
     *,
@@ -2480,7 +2416,6 @@ def write_paper_scorecard(
     )
     return text
 
-
 def _paper_only_series(series: str) -> bool:
     universe = get_universe()
     if universe.failed:
@@ -2490,7 +2425,6 @@ def _paper_only_series(series: str) -> bool:
         for entry in universe.entries
     )
 
-
 def _book_field(market: Any, *names: str) -> Any:
     for name in names:
         present = name in market if isinstance(market, Mapping) else hasattr(market, name)
@@ -2498,8 +2432,7 @@ def _book_field(market: Any, *names: str) -> Any:
             return market[name] if isinstance(market, Mapping) else getattr(market, name)
     return None
 
-
-def _list_block(series: str) -> str | None:
+def _list_block(series: str, now: datetime | None = None) -> str | None:
     upper = str(series or "").strip().upper()
     if not upper:
         return "universe"
@@ -2507,10 +2440,11 @@ def _list_block(series: str) -> str | None:
     if universe.failed:
         return "universe_unavailable"
     if any(entry.series == upper and entry.mode != "off" for entry in universe.entries):
+        if _polymarket_paused(upper, now):
+            return "paused"
         return None
     from config import MARKET_SERIES_BLOCKLIST_PREFIXES
     return "blocklist" if any(upper.startswith(item) for item in MARKET_SERIES_BLOCKLIST_PREFIXES) else "universe"
-
 
 def _polymarket_side_block(side: str, ask: Any) -> str | None:
     if isinstance(ask, bool) or type(ask) is not int:
@@ -2522,7 +2456,6 @@ def _polymarket_side_block(side: str, ask: Any) -> str | None:
     if side == "yes" and ask < 55:
         return "yes_floor"
     return None
-
 
 def _polymarket_book_block(view: Mapping[str, Any], market: Any = None) -> str | None:
     reasons: list[str] = []
@@ -2539,10 +2472,14 @@ def _polymarket_book_block(view: Mapping[str, Any], market: Any = None) -> str |
         reasons.append(reason)
     return reasons[0] if reasons else "bad_ask"
 
-
-def _paper_gate_reason(market: Any, view: Mapping[str, Any], probability: float | None) -> str | None:
+def _paper_gate_reason(
+    market: Any,
+    view: Mapping[str, Any],
+    probability: float | None,
+    now: datetime | None = None,
+) -> str | None:
     series = str(view.get("series") or "")
-    if blocked := _list_block(series) or _polymarket_book_block(view, market):
+    if blocked := _list_block(series, now) or _polymarket_book_block(view, market):
         return blocked
     if _view_venue(view) == _POLYMARKET_US:
         return None
@@ -2576,7 +2513,6 @@ def _paper_gate_reason(market: Any, view: Mapping[str, Any], probability: float 
         return None
     ignored = {"edge_not_evaluated", "transcript_skip_bypassed_for_paper_score"}
     return next((str(reason) for reason in decision["reasons"] if reason not in ignored), None)
-
 
 def _store_decision(
     view: Mapping[str, Any],
@@ -2616,7 +2552,6 @@ def _store_decision(
     }
     _append_jsonl(candidate_log_path, record)
     _insert_paper_row(db_path, "paper_candidates", record)
-
 
 def _queue_best_side(
     view: Mapping[str, Any],
@@ -2680,7 +2615,6 @@ def _queue_best_side(
     )
     return best is not None
 
-
 def _schema_format(kind: str) -> dict[str, Any]:
     if kind == "exit":
         return {
@@ -2703,7 +2637,6 @@ def _schema_format(kind: str) -> dict[str, Any]:
         "schema": _EDGE_SCHEMA,
     }
 
-
 def _p90(values: Sequence[Decimal]) -> Decimal | None:
     if not values:
         return None
@@ -2713,7 +2646,6 @@ def _p90(values: Sequence[Decimal]) -> Decimal | None:
     )
     index = min(len(ordered), max(1, rank)) - 1
     return ordered[index]
-
 
 def _measured_costs(path: Path, *, grounded: bool) -> list[Decimal]:
     if not path.is_file():
@@ -2737,7 +2669,6 @@ def _measured_costs(path: Path, *, grounded: bool) -> list[Decimal]:
             found.append(cost)
     return found[-MEASURED_COST_WINDOW:]
 
-
 def call_reserve_usd(path: Path, *, grounded: bool) -> Decimal:
     """Reserve max(recent measured p90 x 1.5, $0.05) for this call class."""
     p90 = _p90(_measured_costs(path, grounded=grounded))
@@ -2747,7 +2678,6 @@ def call_reserve_usd(path: Path, *, grounded: bool) -> Decimal:
     if scaled < MIN_CALL_RESERVE_USD:
         return MIN_CALL_RESERVE_USD
     return scaled
-
 
 def _provider_usage(body: Any) -> tuple[Decimal | None, dict[str, Any]]:
     if not isinstance(body, dict):
@@ -2773,7 +2703,6 @@ def _provider_usage(body: Any) -> tuple[Decimal | None, dict[str, Any]]:
         return reported, meta
     return None, meta
 
-
 def _redact_reply(value: Any) -> Any:
     if isinstance(value, dict):
         cleaned: dict[str, Any] = {}
@@ -2790,7 +2719,6 @@ def _redact_reply(value: Any) -> Any:
         text = re.sub(r"(?i)bearer\s+\S+", "Bearer [redacted]", value)
         return re.sub(r"(?i)\b(?:sk|xai)-[A-Za-z0-9_\-]+", "[redacted]", text)
     return value
-
 
 def _save_raw_reply(
     directory: Path,
@@ -2812,7 +2740,6 @@ def _save_raw_reply(
         )
     except OSError:
         return
-
 
 def _parse_series_body(body: Any, expected: Sequence[str]) -> dict[str, Any] | None:
     if not isinstance(body, dict):
@@ -2865,7 +2792,6 @@ def _parse_series_body(body: Any, expected: Sequence[str]) -> dict[str, Any] | N
         "markets": markets,
     }
 
-
 def _call_grok(
     *,
     ticker: str,
@@ -2884,7 +2810,8 @@ def _call_grok(
     venue: str = "kalshi",
 ) -> GrokEdgeCall | None:
     env = os.environ if environ is None else environ
-    cap = _call_cap(_daily_cap(env), kind)
+    hard = _call_cap(_daily_cap(env), "exit")
+    cap = hard if kind == "exit" else _call_cap(_daily_cap(env), kind, _trailing_fee_net(spend_path, now))
     tools = _SCAN_TOOLS if grounded else ()
     search_limit = grok_max_search_results(env) if grounded else 0
     tool_series = series or (ticker.split("-", 1)[0] if ticker else "")
@@ -2893,7 +2820,6 @@ def _call_grok(
     )
     system_text = system + (_search_limit_sentence(search_limit) if grounded else "")
     prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
-
     def _finish(
         skip: str | None,
         body: Any,
@@ -2985,7 +2911,6 @@ def _call_grok(
                 attempt,
             )
         return call
-
     def _attempt(user_prompt: str, attempt: int) -> GrokEdgeCall:
         reserve = call_reserve_usd(call_log_path, grounded=grounded)
         key = str(env.get(XAI_API_KEY_ENV) or "").strip()
@@ -3042,7 +2967,7 @@ def _call_grok(
         cost = reserved
         source = "reserve"
         if actual is not None:
-            _reconcile_spend(spend_path, reserved, actual, cap=cap, now=now)
+            _reconcile_spend(spend_path, reserved, actual, cap=hard, now=now)
             cost = actual
             source = "provider"
         return _finish(None, body, cost, cost_source=source, usage=usage, attempt=attempt)
@@ -3054,7 +2979,6 @@ def _call_grok(
         prompt + "\n\nPrevious reply did not parse. Return the schema object only.",
         2,
     )
-
 
 def _parse_edge_body(
     body: Any,
@@ -3091,7 +3015,6 @@ def _parse_edge_body(
         verdict = "YES" if probability >= Decimal("0.5") else "NO"
     return probability, confidence, verdict, sources, rationale
 
-
 def _market_view(market: Any) -> dict[str, Any] | None:
     if isinstance(market, Mapping):
         ticker = str(market.get("ticker") or "").strip()
@@ -3126,13 +3049,11 @@ def _market_view(market: Any) -> dict[str, Any] | None:
         "venue": _view_venue({"venue": venue_raw}),
     }
 
-
 def _strike_text(ticker: str) -> str:
     suffix = ticker.rsplit("-", 1)[-1]
     if len(suffix) >= 2 and suffix[0] in "TE" and suffix[1].isdigit():
         return suffix[1:]
     return ""
-
 
 def _market_prompt(view: Mapping[str, Any]) -> str:
     return (
@@ -3140,7 +3061,6 @@ def _market_prompt(view: Mapping[str, Any]) -> str:
         f"ticker={view['ticker']} strike={_strike_text(str(view['ticker']))} "
         f"title={view['title']} rules={view['rules']} close={view['close_time']}"
     )
-
 
 def _quote_cents(market: Any, side: str, quote: str) -> int | None:
     if market is None:
@@ -3152,7 +3072,6 @@ def _quote_cents(market: Any, side: str, quote: str) -> int | None:
         if cents is not None:
             return cents
     return None
-
 
 def _mark_cents(market: Any, side: str, row: Any) -> int | None:
     """Executable ask, else live bid, else exposure over size. Size 0 is not an ask."""
@@ -3180,17 +3099,124 @@ def _mark_cents(market: Any, side: str, row: Any) -> int | None:
         return None
     return cents if 1 <= cents <= 99 else None
 
-
 def _bid_cents(market: Any, side: str) -> int | None:
     return _quote_cents(market, side, "bid")
 
+def _call_cap(cap: Decimal, kind: str, pnl: Decimal | None = None) -> Decimal:
+    """Exit keeps the hard cap. Paper stops at the profit share and leaves $1 above $1."""
+    hard = _HARD_USD_CAP if cap > _HARD_USD_CAP else cap
+    if kind == "exit":
+        return hard
+    share = _PAPER_FLOOR_USD if pnl is None else max(_PAPER_FLOOR_USD, _PROFIT_SHARE * pnl)
+    budget = min(hard, share)
+    return budget if hard <= 1 else min(budget, hard - 1)
 
-def _call_cap(cap: Decimal, kind: str) -> Decimal:
-    """Series and scans leave $1 when the cap is above $1. Exit keeps the whole cap."""
-    if kind == "exit" or cap <= 1:
-        return cap
-    return cap - 1
+def _sum_fee_net_window(rows: Sequence[Any], now: datetime | None) -> Decimal | None:
+    moment = now or datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    end = moment.astimezone(timezone.utc).date()
+    start = end - timedelta(days=6)
+    total = Decimal("0")
+    for row in rows:
+        if not isinstance(row, dict):
+            return None
+        when = _parse_utc(row.get("close"))
+        amount = _decimal(row.get("fee_net"))
+        status = str(row.get("status") or "").strip().lower()
+        if when is None or amount is None or status not in _SETTLED_RESULTS:
+            return None
+        if start <= when.date() <= end:
+            total += amount
+    return total
 
+def _trailing_fee_net(spend_path: Path, now: datetime | None) -> Decimal | None:
+    path = spend_path.with_name(_PNL_CACHE_NAME)
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    rows = data.get("rows") if isinstance(data, dict) else None
+    return _sum_fee_net_window(rows, now) if isinstance(rows, list) else None
+
+def _revenue_dollars(value: Any) -> Decimal | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return Decimal(value) / Decimal(100)
+    if isinstance(value, str) and value.strip():
+        try:
+            number = Decimal(value.strip())
+        except Exception:
+            return None
+        if number == number.to_integral_value():
+            return number / Decimal(100)
+    return None
+
+def cache_settlement_fee_net(rows: Sequence[Any], path: Path | None = None, now: datetime | None = None) -> Decimal | None:
+    parsed: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for raw in rows:
+        if not isinstance(raw, dict):
+            return None
+        result = str(raw.get("market_result") or "").strip().lower()
+        if result not in {"yes", "no"}:
+            continue
+        ticker = str(raw.get("ticker") or "").strip()
+        if not ticker or ticker in seen:
+            return None
+        seen.add(ticker)
+        when = _parse_utc(raw.get("close_time") or raw.get("settled_time"))
+        revenue = _revenue_dollars(raw.get("revenue"))
+        yes_cost = _decimal(raw.get("yes_total_cost_dollars"))
+        no_cost = _decimal(raw.get("no_total_cost_dollars"))
+        fee = _decimal(raw.get("fee_cost"))
+        if when is None or revenue is None or yes_cost is None or no_cost is None or fee is None:
+            return None
+        fee_net = revenue - yes_cost - no_cost - fee
+        parsed.append({"close": _stamp(when), "fee_net": format(fee_net, "f"), "status": result})
+    target = path or SPEND_PATH.with_name(_PNL_CACHE_NAME)
+    try:
+        _write_json(target, {"rows": parsed})
+    except OSError:
+        return None
+    return _sum_fee_net_window(parsed, now)
+
+def _week_spend(path: Path, now: datetime | None) -> Decimal | None:
+    if not path.is_file():
+        return None
+    moment = now or datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    end = moment.astimezone(timezone.utc).date()
+    start = end - timedelta(days=6)
+    total = Decimal("0")
+    for row in _read_jsonl(path):
+        when = _parse_utc(row.get("ts"))
+        cost = _decimal(row.get("cost_usd"))
+        if when is not None and cost is not None and cost >= 0 and start <= when.date() <= end:
+            total += cost
+    return total
+
+def _profit_share_line(spend_path: Path, call_log_path: Path, now: datetime | None) -> str:
+    spent = _week_spend(call_log_path, now)
+    pnl = _trailing_fee_net(spend_path, now)
+    spend_text = "not measured" if spent is None else f"{format(spent, 'f')} USD"
+    pnl_text = "not measured" if pnl is None else f"{format(pnl, 'f')} USD"
+    ratio, warn = "not measured", pnl is None and spent is not None and spent > 0
+    if pnl is not None and spent is not None:
+        if pnl > 0:
+            ratio, warn = format(spent / pnl, "f"), spent > pnl * Decimal("0.5")
+        elif spent > 0:
+            ratio, warn = "not a profit", True
+        else:
+            ratio = "0"
+    line = f"7d grok spend vs settled fee-net: spend {spend_text}, fee-net {pnl_text}, ratio {ratio}"
+    if warn:
+        line += "\nWARN grok spend is above half of the 7-day settled fee-net"
+    return line
 
 def _response_text(body: Mapping[str, Any]) -> str:
     chunks: list[str] = []
@@ -3216,10 +3242,8 @@ def _response_text(body: Mapping[str, Any]) -> str:
             chunks.append(message["content"])
     return "\n".join(chunks)
 
-
 def _http_sources(body: Mapping[str, Any], obj: Mapping[str, Any]) -> tuple[str, ...]:
     found: list[str] = []
-
     def _add(value: Any) -> None:
         if isinstance(value, str) and (
             value.startswith("https://") or value.startswith("http://")
@@ -3238,7 +3262,6 @@ def _http_sources(body: Mapping[str, Any], obj: Mapping[str, Any]) -> tuple[str,
     if isinstance(sources, list):
         for item in sources:
             _add(item)
-
     def _walk(node: Any) -> None:
         if isinstance(node, dict):
             _add(node.get("url"))
@@ -3250,7 +3273,6 @@ def _http_sources(body: Mapping[str, Any], obj: Mapping[str, Any]) -> tuple[str,
 
     _walk(body.get("output"))
     return tuple(found)
-
 
 def _select_json_object(content: str, *, kind: str) -> dict[str, Any] | None:
     if kind == "exit":
@@ -3279,7 +3301,6 @@ def _select_json_object(content: str, *, kind: str) -> dict[str, Any] | None:
         return envelope
     return chosen
 
-
 def _reserve_spend(
     path: Path,
     amount: Decimal,
@@ -3290,7 +3311,6 @@ def _reserve_spend(
     """Debit ``amount`` if the UTC day still has room. None means do not call."""
     with _SPEND_LOCK:
         return _reserve_spend_unlocked(path, amount, cap=cap, now=now)
-
 
 def _reserve_spend_unlocked(
     path: Path,
@@ -3323,7 +3343,6 @@ def _reserve_spend_unlocked(
         return None
     return amount
 
-
 def _reconcile_spend(
     path: Path,
     reserved: Decimal,
@@ -3346,7 +3365,6 @@ def _reconcile_spend(
             return
         _credit_spend_unlocked(path, -delta, now=now)
 
-
 def _credit_spend_unlocked(path: Path, amount: Decimal, *, now: datetime | None) -> None:
     if amount <= 0:
         return
@@ -3365,12 +3383,10 @@ def _credit_spend_unlocked(path: Path, amount: Decimal, *, now: datetime | None)
     except OSError:
         return
 
-
 def _pin_spend_to_cap(path: Path, cap: Decimal, now: datetime | None) -> None:
     """Fill today's ledger so a later reserve cannot fit."""
     with _SPEND_LOCK:
         _pin_spend_to_cap_unlocked(path, cap, now)
-
 
 def _pin_spend_to_cap_unlocked(path: Path, cap: Decimal, now: datetime | None) -> None:
     if cap < 0:
@@ -3395,7 +3411,6 @@ def _pin_spend_to_cap_unlocked(path: Path, cap: Decimal, now: datetime | None) -
     except OSError:
         return
 
-
 def _reported_cost(body: Any) -> Decimal | None:
     if not isinstance(body, dict):
         return None
@@ -3406,7 +3421,6 @@ def _reported_cost(body: Any) -> Decimal | None:
             if parsed is not None and parsed > 0:
                 return parsed
     return None
-
 
 def _daily_cap(env: Mapping[str, str]) -> Decimal:
     raw = str(env.get(GROK_DAILY_USD_CAP) or "").strip()
@@ -3420,12 +3434,10 @@ def _daily_cap(env: Mapping[str, str]) -> Decimal:
         return DEFAULT_DAILY_USD_CAP
     return cap
 
-
 def _append_jsonl(path: Path, record: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=True, sort_keys=True) + "\n")
-
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.is_file():
@@ -3445,7 +3457,6 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
         if isinstance(row, dict):
             rows.append(row)
     return rows
-
 
 def _insert_paper_row(db_path: Path | None, table: str, record: Mapping[str, Any]) -> None:
     if db_path is None:
@@ -3550,7 +3561,6 @@ def _insert_paper_row(db_path: Path | None, table: str, record: Mapping[str, Any
                     ),
                 )
 
-
 def _spend_line(path: Path) -> str:
     if not path.is_file():
         return "spend: not measured"
@@ -3567,7 +3577,6 @@ def _spend_line(path: Path) -> str:
     when = f" on {day}" if day else ""
     return f"spend: {format(spent, 'f')} USD{when}"
 
-
 def _settlement_result(market: Any) -> str | None:
     if market is None:
         return None
@@ -3580,7 +3589,6 @@ def _settlement_result(market: Any) -> str | None:
     if status not in _SETTLED_STATUSES or result not in {"yes", "no"}:
         return None
     return result
-
 
 def _settlements_for(
     rows: Sequence[Any],
@@ -3630,7 +3638,6 @@ def _settlements_for(
             found[ticker] = result
     return found
 
-
 def _joined_settled_rows(
     candidates: Sequence[Mapping[str, Any]],
     comparisons: Sequence[Mapping[str, Any]],
@@ -3666,12 +3673,10 @@ def _joined_settled_rows(
         by_ticker[ticker]["outcome"] = Decimal(1) if settlements[ticker] == "yes" else Decimal(0)
     return list(by_ticker.values())
 
-
 def _decimal_text(value: Decimal | None) -> str:
     if value is None:
         return "not enough data"
     return format(value, "f")
-
 
 def _daily_report_text(
     rows: Sequence[Mapping[str, Any]],
@@ -3781,7 +3786,6 @@ def _daily_report_text(
     lines.append("")
     return "\n".join(lines)
 
-
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
@@ -3791,17 +3795,14 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     )
     os.replace(temporary, path)
 
-
 def _stamp(now: datetime | None) -> str:
     moment = now or datetime.now(timezone.utc)
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
     return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-
 def _day(now: datetime | None) -> str:
     return _stamp(now)[:10]
-
 
 def _decimal(value: Any) -> Decimal | None:
     if isinstance(value, bool) or value is None:
@@ -3821,13 +3822,11 @@ def _decimal(value: Any) -> Decimal | None:
         return None
     return number
 
-
 def _unit_decimal(value: Any) -> Decimal | None:
     number = _decimal(value)
     if number is None or number < 0 or number > 1:
         return None
     return number
-
 
 def _outcome(value: Any) -> Decimal | None:
     number = _unit_decimal(value)
@@ -3835,14 +3834,12 @@ def _outcome(value: Any) -> Decimal | None:
         return Decimal(int(number))
     return None
 
-
 def _pair(row: Mapping[str, Any]) -> tuple[Decimal, Decimal] | None:
     grounded = _unit_decimal(row.get("grounded_probability"))
     ungrounded = _unit_decimal(row.get("ungrounded_probability"))
     if grounded is None or ungrounded is None:
         return None
     return grounded, ungrounded
-
 
 def _int_or_none(value: Any) -> int | None:
     if isinstance(value, bool) or value is None:

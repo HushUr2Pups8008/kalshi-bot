@@ -19,6 +19,14 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.34] - 2026-10-25
+
+### Changed
+- Paper series and scan calls stop at the greater of $0.75 and 25% of trailing 7-day settled live fee-net. The hard cap stays $3. When that cap is above $1, paper also leaves $1 for exit. Exit watch keeps the hard cap and is not blocked by paper spend. A missing or unreadable settlement window uses the $0.75 floor. The sidecar refreshes that window from settled fills before the scan and does not store order ids in the cache.
+- The daily edge report adds a 7-day Grok spend versus settled fee-net line. It warns when that spend is above half of a positive week, or when spend is positive and the week is not a profit.
+- Polymarket series whose keys start with PM stay in the universe file and are off before 2026-11-03 UTC. They are paper again on that date.
+- 0.37.33 was not issued. Edge-scaled sizing was replayed and not shipped: 11 settled live trades is below the 15 required.
+
 ## [0.37.32] - 2026-10-25
 
 ### Changed

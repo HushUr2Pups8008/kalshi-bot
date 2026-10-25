@@ -44,6 +44,8 @@ from utils.event_news_grok_edge import (
     ev_by_edge_bucket,
     exit_versus_hold,
     grok_max_search_results,
+    _list_block,
+    cache_settlement_fee_net,
     paper_position_rows,
     paper_queue_decision,
     politics_scan_series,
@@ -77,6 +79,14 @@ class _Response:
 
     def json(self) -> dict:
         return self._body
+
+
+def _seed_pnl(directory: Path, fee_net: str, close: str = "2026-10-17T00:00:00Z") -> None:
+    payload = {"rows": [{"close": close, "fee_net": fee_net, "status": "settled"}]}
+    (directory / "grok_settled_fee_net.json").write_text(
+        json.dumps(payload) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _paths(tmp_path: Path) -> dict:
@@ -437,6 +447,7 @@ def test_spend_cap_skips_before_the_post(tmp_path: Path) -> None:
         json.dumps({"date": "2026-10-17", "spent_usd": "1.90"}) + "\n",
         encoding="utf-8",
     )
+    _seed_pnl(tmp_path, "12")
     history = {
         "cost_source": "provider",
         "grounded": True,
@@ -479,11 +490,13 @@ def test_rank_keeps_politics_inside_72h_and_drops_kxdji() -> None:
     ranked = rank_politics_markets(markets, now=NOW, series=politics_scan_series())
     tickers = [row["ticker"] for row in ranked]
     assert tickers == ["KXTRUMPSAY-SOON", "KXTRUMPSAY-EDGE", "KXTRUMPSAY-THIN"]
-    scanned = politics_scan_series(("KXDJI", "KXNEWPOL"))
+    scanned = politics_scan_series(("KXDJI", "KXNEWPOL"), now=NOW)
     from utils.series_universe import get_universe, live_series_tickers
 
     yaml_names = tuple(
-        entry.series for entry in get_universe().entries if entry.mode != "off"
+        entry.series
+        for entry in get_universe().entries
+        if entry.mode != "off" and not entry.series.startswith("PM")
     )
     assert scanned == yaml_names
     assert set(live_series_tickers()) < set(scanned)
@@ -1108,6 +1121,7 @@ def test_series_and_scans_leave_one_dollar_for_exit(tmp_path: Path) -> None:
         json.dumps({"date": "2026-10-17", "spent_usd": "2.01"}) + "\n",
         encoding="utf-8",
     )
+    _seed_pnl(tmp_path, "12")
     calls: list[str] = []
 
     def post(url, json, headers, timeout):  # noqa: A002
@@ -2680,3 +2694,203 @@ def test_daily_report_does_not_score_a_stored_polymarket_flip(tmp_path: Path) ->
         "SELECT settlement_result FROM paper_candidates"
     ).fetchone()
     assert stored == ("no",)
+
+
+def test_profit_share_floor_blocks_paper_and_still_allows_exit(tmp_path: Path) -> None:
+    """An unreadable 7-day P&L stops paper at $0.75. Exit still uses the $3 cap."""
+    from utils.event_news_grok_edge import _call_grok
+
+    spend = tmp_path / "spend.json"
+    spend.write_text(
+        json.dumps({"date": "2026-10-17", "spent_usd": "0.76"}) + "\n",
+        encoding="utf-8",
+    )
+    calls: list[str] = []
+
+    def post(url, json, headers, timeout):  # noqa: A002
+        calls.append("post")
+        return _Response(
+            {"output_text": json_dumps_contrary(True), "citations": ["https://example.test/contrary"]}
+        )
+
+    env = {XAI_API_KEY_ENV: "test-key", GROK_DAILY_USD_CAP: "3"}
+    blocked = _call_grok(
+        ticker="KXTRUMPACT",
+        prompt="series",
+        system="s",
+        grounded=False,
+        environ=env,
+        post=post,
+        call_log_path=tmp_path / "series.jsonl",
+        spend_path=spend,
+        raw_dir=tmp_path / "raw",
+        now=NOW,
+        kind="series",
+    )
+    assert calls == []
+    assert blocked is not None and blocked.skip_reason == "spend_cap"
+    exited = _call_grok(
+        ticker="KXTRUMPACT-26OCT18-T6",
+        prompt="exit",
+        system="s",
+        grounded=False,
+        environ=env,
+        post=post,
+        call_log_path=tmp_path / "exit.jsonl",
+        spend_path=spend,
+        raw_dir=tmp_path / "raw",
+        now=NOW,
+        kind="exit",
+    )
+    assert calls == ["post"]
+    assert exited is not None and exited.skip_reason != "spend_cap"
+
+
+def test_profit_share_uses_a_quarter_of_the_trailing_week(tmp_path: Path) -> None:
+    """$12 of settled fee-net is a $3 share, so paper still stops at $2."""
+    from utils.event_news_grok_edge import _call_grok
+
+    _seed_pnl(tmp_path, "12")
+    payload = json.loads((tmp_path / "grok_settled_fee_net.json").read_text(encoding="utf-8"))
+    payload["rows"].append({"close": "2026-10-10T00:00:00Z", "fee_net": "100", "status": "settled"})
+    (tmp_path / "grok_settled_fee_net.json").write_text(json.dumps(payload) + "\n", encoding="utf-8")
+    spend = tmp_path / "spend.json"
+    spend.write_text(
+        json.dumps({"date": "2026-10-17", "spent_usd": "1.50"}) + "\n",
+        encoding="utf-8",
+    )
+    calls: list[str] = []
+
+    def post(url, json, headers, timeout):  # noqa: A002
+        calls.append("post")
+        text = json.dumps(
+            {
+                "markets": [
+                    {"ticker": "KXTRUMPACT", "prob": "0.50", "confidence": "0.80", "rationale": "n"}
+                ],
+                "sources": ["https://example.test/s"],
+                "summary": "n",
+            }
+        )
+        return _Response({"output_text": text, "citations": ["https://example.test/s"]})
+
+    allowed = _call_grok(
+        ticker="KXTRUMPACT",
+        prompt="series",
+        system="s",
+        grounded=False,
+        environ={XAI_API_KEY_ENV: "test-key", GROK_DAILY_USD_CAP: "3"},
+        post=post,
+        call_log_path=tmp_path / "series.jsonl",
+        spend_path=spend,
+        raw_dir=tmp_path / "raw",
+        now=NOW,
+        kind="series",
+    )
+    assert calls == ["post"]
+    assert allowed is not None and allowed.skip_reason != "spend_cap"
+    spend.write_text(
+        json.dumps({"date": "2026-10-17", "spent_usd": "2.01"}) + "\n",
+        encoding="utf-8",
+    )
+    blocked = _call_grok(
+        ticker="KXTRUMPACT",
+        prompt="series",
+        system="s",
+        grounded=False,
+        environ={XAI_API_KEY_ENV: "test-key", GROK_DAILY_USD_CAP: "3"},
+        post=post,
+        call_log_path=tmp_path / "later.jsonl",
+        spend_path=spend,
+        raw_dir=tmp_path / "raw",
+        now=NOW,
+        kind="series",
+    )
+    assert len(calls) == 1
+    assert blocked is not None and blocked.skip_reason == "spend_cap"
+
+
+def test_unreadable_pnl_cache_uses_the_floor(tmp_path: Path) -> None:
+    from utils.event_news_grok_edge import _trailing_fee_net
+
+    (tmp_path / "grok_settled_fee_net.json").write_text("{", encoding="utf-8")
+    assert _trailing_fee_net(tmp_path / "spend.json", NOW) is None
+
+
+def test_settlement_fee_net_window_matches_revenue_minus_cost_and_fee(tmp_path: Path) -> None:
+    """8 YES at 64c that lose return -5.2491. A close before the 7-day window is out."""
+    total = cache_settlement_fee_net(
+        [
+            {
+                "ticker": "KXTRUMPSAY-26OCT19-ZACH",
+                "market_result": "no",
+                "yes_total_cost_dollars": "5.1200",
+                "no_total_cost_dollars": "0",
+                "revenue": 0,
+                "fee_cost": "0.1291",
+                "settled_time": "2026-10-19T00:00:00Z",
+                "order_id": "fill-order-1",
+            },
+            {
+                "ticker": "KXTRUMPSAY-26OCT10-OLD",
+                "market_result": "yes",
+                "yes_total_cost_dollars": "1",
+                "no_total_cost_dollars": "0",
+                "revenue": 800,
+                "fee_cost": "0",
+                "settled_time": "2026-10-10T00:00:00Z",
+            },
+        ],
+        path=tmp_path / "grok_settled_fee_net.json",
+        now=datetime(2026, 10, 25, tzinfo=timezone.utc),
+    )
+    assert total == Decimal("-5.2491")
+    stored = (tmp_path / "grok_settled_fee_net.json").read_text(encoding="utf-8")
+    assert "fill-order-1" not in stored
+    assert "order_id" not in stored
+
+
+def test_polymarket_series_pause_until_november_3() -> None:
+    """PM* paper rows stay in yaml and return on 2026-11-03 UTC."""
+    resume = datetime(2026, 11, 3, tzinfo=timezone.utc)
+    assert "PMTRUMPAPPROVE" not in politics_scan_series(now=NOW)
+    assert "PMUFCIASLUC" not in politics_scan_series(now=NOW)
+    assert "PMTRUMPAPPROVE" in politics_scan_series(now=resume)
+    assert "KXTRUMPSAY" in politics_scan_series(now=NOW)
+    assert _list_block("PMTRUMPAPPROVE", NOW) == "paused"
+    assert _list_block("PMTRUMPAPPROVE", resume) is None
+    assert _list_block("KXTRUMPSAY", NOW) is None
+
+
+def test_daily_report_warns_when_spend_exceeds_half_the_week(tmp_path: Path) -> None:
+    _seed_pnl(tmp_path, "1.00")
+    (tmp_path / "calls.jsonl").write_text(
+        json.dumps({"ts": "2026-10-17T01:00:00Z", "cost_usd": "0.60"}) + "\n",
+        encoding="utf-8",
+    )
+    text = write_daily_edge_report(
+        candidate_log_path=tmp_path / "candidates.jsonl",
+        comparison_log_path=tmp_path / "comparisons.jsonl",
+        spend_path=tmp_path / "spend.json",
+        market_lookup=lambda ticker: None,
+        report_path=tmp_path / "grok-edge-daily.md",
+        now=NOW,
+        call_log_path=tmp_path / "calls.jsonl",
+    )
+    assert "7d grok spend vs settled fee-net: spend 0.60 USD, fee-net 1.00 USD, ratio 0.6" in text
+    assert "WARN grok spend is above half of the 7-day settled fee-net" in text
+    (tmp_path / "calls.jsonl").write_text(
+        json.dumps({"ts": "2026-10-17T01:00:00Z", "cost_usd": "0.40"}) + "\n",
+        encoding="utf-8",
+    )
+    quiet = write_daily_edge_report(
+        candidate_log_path=tmp_path / "candidates.jsonl",
+        comparison_log_path=tmp_path / "comparisons.jsonl",
+        spend_path=tmp_path / "spend.json",
+        market_lookup=lambda ticker: None,
+        report_path=tmp_path / "quiet.md",
+        now=NOW,
+        call_log_path=tmp_path / "calls.jsonl",
+    )
+    assert "ratio 0.4" in quiet
+    assert "WARN" not in quiet
