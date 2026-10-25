@@ -941,6 +941,84 @@ def test_empty_book_string_ask_uses_the_bid_integer(tmp_path: Path) -> None:
     assert scored["scored"] == 1
 
 
+def test_empty_book_cache_miss_does_not_pay(tmp_path: Path) -> None:
+    """Size 0 on both sides cannot be entered, so the score makes no Grok call."""
+    book = _empty_yes_book("KXTRUMPACT-26OCT18-T6")
+    calls: list[int] = []
+
+    def post(url, json, headers, timeout):  # noqa: A002
+        calls.append(1)
+        raise AssertionError("no paid call")
+
+    scored = score_open_positions(
+        [{
+            "ticker": book["ticker"],
+            "position_fp": "8.00",
+            "market_exposure_dollars": "5.350000",
+        }],
+        live=False,
+        market_lookup=lambda ticker: book,
+        environ={XAI_API_KEY_ENV: "test-key", "GROK_DAILY_USD_CAP": "3"},
+        post=post,
+        now=NOW,
+        call_log_path=tmp_path / "calls.jsonl",
+        score_log_path=tmp_path / "scores.jsonl",
+        spend_path=tmp_path / "spend.json",
+        cache_path=tmp_path / "cache.json",
+        screen_log_path=tmp_path / "screen.jsonl",
+        post_lookup=lambda: "post-1",
+    )
+    assert calls == []
+    assert scored["grounded_calls"] == 0
+    assert _rows(tmp_path / "scores.jsonl")[0]["skip_reason"] == "depth"
+
+
+def test_untradeable_scan_makes_no_paid_call(tmp_path: Path) -> None:
+    """Ask band, empty depth, the sports blocklist, and an unknown series post nothing."""
+    env = {XAI_API_KEY_ENV: "test-key", "GROK_DAILY_USD_CAP": "3"}
+    calls: list[dict] = []
+    band = _scan(
+        tmp_path / "band",
+        [_market(yes_ask=94, no_ask=8)],
+        _poster(calls),
+        env,
+        prior_prob=None,
+    )
+    assert calls == []
+    assert band["grounded_calls"] == 0
+    assert _rows(tmp_path / "band" / "candidates.jsonl")[0]["skip_reason"] == "near_certain_ask"
+    depth = _scan(
+        tmp_path / "depth",
+        [_market(yes_ask_size_fp="0", no_ask_size_fp="0.00")],
+        _poster(calls),
+        env,
+        prior_prob=None,
+    )
+    assert calls == []
+    assert depth["grounded_calls"] == 0
+    assert _rows(tmp_path / "depth" / "candidates.jsonl")[0]["skip_reason"] == "depth"
+    sports = _scan(
+        tmp_path / "sports",
+        [_market(ticker="KXNFLGAME-26OCT20-TEST", series="KXNFLGAME")],
+        _poster(calls),
+        env,
+        prior_prob=None,
+        allowlist=("KXNFLGAME",),
+    )
+    assert calls == []
+    assert _rows(tmp_path / "sports" / "candidates.jsonl")[0]["skip_reason"] == "blocklist"
+    unknown = _scan(
+        tmp_path / "unknown",
+        [_market(ticker="ZZNOTASERIES-26OCT20-TEST", series="ZZNOTASERIES")],
+        _poster(calls),
+        env,
+        prior_prob=None,
+        allowlist=("ZZNOTASERIES",),
+    )
+    assert calls == []
+    assert _rows(tmp_path / "unknown" / "candidates.jsonl")[0]["skip_reason"] == "universe"
+
+
 def test_exit_watch_logs_both_open_books_without_a_paid_call(tmp_path: Path) -> None:
     """One mocked contrary pass writes both open positions. The ask string is not the bid."""
     books = {
@@ -983,6 +1061,42 @@ def test_exit_watch_logs_both_open_books_without_a_paid_call(tmp_path: Path) -> 
     ]
     assert [row["bid_cents"] for row in rows] == [99, 99]
     assert all(type(row["bid_cents"]) is int and row["paper_only"] is True for row in rows)
+
+
+def test_exit_rechecks_only_after_five_cents_or_inside_a_day_of_close(tmp_path: Path) -> None:
+    """A flat book more than a day from close is cached. Five cents or a near close pays again."""
+    calls: list[int] = []
+
+    def post(url, json, headers, timeout):  # noqa: A002
+        calls.append(1)
+        return _Response(
+            {"output_text": json_dumps_contrary(True), "citations": ["https://example.test/contrary"]}
+        )
+
+    book = {"yes_bid": 60, "yes_ask": 62, "close_time": "2026-11-20T23:00:00Z"}
+    positions = [{"ticker": "KXTRUMPSAY-26OCT20-TEST", "side": "yes"}]
+    kwargs = {
+        "live": False,
+        "market_lookup": lambda ticker: book,
+        "environ": {XAI_API_KEY_ENV: "test-key", "GROK_DAILY_USD_CAP": "3"},
+        "post": post,
+        "call_log_path": tmp_path / "calls.jsonl",
+        "exit_log_path": tmp_path / "exits.jsonl",
+        "spend_path": tmp_path / "spend.json",
+        "now": NOW,
+    }
+    assert run_paper_exit_watch(positions, **kwargs) == 1
+    assert run_paper_exit_watch(positions, **kwargs) == 0
+    book["yes_bid"] = 64
+    assert run_paper_exit_watch(positions, **kwargs) == 0
+    book["yes_bid"] = 65
+    assert run_paper_exit_watch(positions, **kwargs) == 1
+    book["yes_ask"] = 67
+    assert run_paper_exit_watch(positions, **kwargs) == 1
+    assert len(calls) == 3
+    book["close_time"] = "2026-10-18T00:00:00Z"
+    assert run_paper_exit_watch(positions, **kwargs) == 1
+    assert len(calls) == 4
 
 
 def test_series_and_scans_leave_one_dollar_for_exit(tmp_path: Path) -> None:
