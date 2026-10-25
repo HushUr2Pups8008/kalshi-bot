@@ -26,6 +26,7 @@ from utils.event_news_desk_flags import (
     event_news_yes_floor_cents,
 )
 from utils.event_news_grok_flags import EVENT_NEWS_BAND_FLOOR_CENTS
+from utils.event_news_maker_shadow import resting_bid_cents
 from utils.event_news_grok_veto import GROK_MODEL, XAI_API_KEY_ENV
 from utils.event_news_research import (
     EVENT_NEWS_COHORT_ID,
@@ -2537,6 +2538,7 @@ def _store_decision(
         "ticker": view.get("ticker"),
         "side": side,
         "ask_cents": ask,
+        "maker_limit_cents": resting_bid_cents(ask),
         "yes_ask_cents": view.get("yes_ask") if yes_ask is None else yes_ask,
         "grok_probability": None if probability is None else str(probability),
         "edge_cents": edge,

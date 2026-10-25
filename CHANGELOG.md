@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.36] - 2026-10-25
+
+### Added
+- Each paper candidate log records the hypothetical resting bid one cent under the ask, stopped at the 36c band. The bid is not sent. A public-tape check can ask whether that bid would have filled. The check is optimistic and not queue-aware.
+
 ## [0.37.35] - 2026-10-25
 
 ### Added
