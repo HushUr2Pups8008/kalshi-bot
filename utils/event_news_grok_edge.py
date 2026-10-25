@@ -75,8 +75,7 @@ _PAPER_SCORE_ENV = {
 GROK_MAX_SEARCH_RESULTS = "GROK_MAX_SEARCH_RESULTS"
 DEFAULT_MAX_SEARCH_RESULTS = 8
 MAX_SEARCH_RESULTS_CAP = 20
-# Responses API x_search handles, without the @. Truth Social itself is not
-# an X handle; the Factbase fingerprint is the Truth Social change trigger.
+# x_search handles, no @. Truth Social is not an X handle; Factbase is its change trigger.
 TRUMP_X_HANDLES = ("realDonaldTrump", "POTUS", "WhiteHouse")
 _SCAN_TOOLS = ("web_search", "x_search")
 
@@ -281,7 +280,6 @@ def verdicts_agree(left: Decimal, right: Decimal) -> bool:
 
 
 def politics_scan_series(extra: Sequence[str] = ()) -> tuple[str, ...]:
-    """Non-off yaml series. An extra name stays only when it is already in that set."""
     universe = get_universe()
     if universe.failed:
         return ()
@@ -504,7 +502,6 @@ def exit_versus_hold(
 
 
 def grok_max_search_results(environ: Mapping[str, str] | None = None) -> int:
-    """Search budget for one grounded call. Blank or invalid env keeps the default."""
     env = os.environ if environ is None else environ
     raw = str(env.get(GROK_MAX_SEARCH_RESULTS) or "").strip()
     if not raw.isdigit():
@@ -516,12 +513,10 @@ def grok_max_search_results(environ: Mapping[str, str] | None = None) -> int:
 
 
 def _search_turns(limit: int) -> int:
-    """One tool round at 8 results. A 16-result budget gets one extra round."""
     return 2 if limit <= 8 else 3
 
 
 def _trump_x_series(series: str) -> bool:
-    """Exact yaml x_search series, or that series plus a hyphen."""
     return any(series_ticker_matches(series, name) for name in x_search_series())
 
 
@@ -530,7 +525,6 @@ def _grounded_tool_payload(
     now: datetime | None,
     limit: int,
 ) -> tuple[list[dict[str, Any]], int]:
-    """web_search and x_search have no max_search_results field. to_date is exclusive."""
     moment = now or datetime.now(timezone.utc)
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
@@ -552,7 +546,6 @@ def _search_limit_sentence(limit: int) -> str:
 
 
 def latest_truth_social_fingerprint(timeout: float = 8.0) -> str | None:
-    """Newest Truth Social post in 72h. None on failure. ``none`` when the newest row is older."""
     try:
         import urllib.parse
 
@@ -651,7 +644,6 @@ def _cache_fresh(
 
 
 def stable_scan_probability(scans: Sequence[Mapping[str, Any]]) -> Decimal | None:
-    """Median of the last 2-3 grounded scans when the last two are within 0.10."""
     probs: list[Decimal] = []
     for row in scans:
         if not isinstance(row, Mapping):
@@ -673,7 +665,6 @@ def stable_scan_probability(scans: Sequence[Mapping[str, Any]]) -> Decimal | Non
 
 
 def _prior_scans(row: Mapping[str, Any] | None, now: datetime) -> list[dict[str, Any]]:
-    """Same-day grounded samples. A legacy cache row counts as one sample."""
     if not row:
         return []
     cached_at = _parse_utc(row.get("ts"))
@@ -699,7 +690,6 @@ def _tie_break_due(
     fingerprint: str | None,
     now: datetime,
 ) -> bool:
-    """True when two same-day scans disagree and the quote has not moved."""
     if not row:
         return False
     cached_at = _parse_utc(row.get("ts"))
@@ -888,7 +878,6 @@ def _ground_series(
     raw_dir: Path,
     now: datetime | None,
 ) -> dict[str, Any] | None:
-    """One grounded call for every ticker in this series. None queues nothing."""
     if not views:
         return None
     limit = grok_max_search_results(environ)
@@ -947,7 +936,6 @@ def run_paper_edge_scan(
     screen_log_path: Path = SCREEN_LOG_PATH,
     post_lookup: Callable[[], str | None] | None = None,
 ) -> dict[str, int]:
-    """Queue at most max_markets paper rows. Ungrounded probabilities never queue."""
     counts = {
         "examined": 0,
         "queued": 0,
@@ -1266,7 +1254,6 @@ def run_paper_edge_scan(
 
 
 def paper_position_rows(positions: Sequence[Any] | None) -> list[dict[str, str]]:
-    """Ticker and side for open Kalshi rows. A zero or unreadable size is dropped."""
     rows: list[dict[str, str]] = []
     for row in positions or ():
         if isinstance(row, Mapping):
@@ -1296,7 +1283,6 @@ def paper_position_rows(positions: Sequence[Any] | None) -> list[dict[str, str]]
 
 
 def edge_scan_interval_seconds(environ: Mapping[str, str] | None = None) -> int:
-    """Scan period in seconds. The floor is 5 minutes so a bad env cannot spin."""
     env = os.environ if environ is None else environ
     raw = str(env.get(EVENT_NEWS_GROK_EDGE_SCAN_MINUTES) or "").strip()
     minutes = int(raw) if raw.isdigit() else DEFAULT_SCAN_MINUTES
@@ -1326,6 +1312,7 @@ def run_paper_exit_watch(
     ):
         return 0
     logged = 0
+    exit_cache_path = exit_log_path.with_suffix(".cache.json")
     for position in positions:
         ticker = str(position.get("ticker") or "").strip()
         side = str(position.get("side") or "").strip().lower()
@@ -1334,6 +1321,14 @@ def run_paper_exit_watch(
         market = market_lookup(ticker)
         bid = _bid_cents(market, side)
         if bid is None:
+            continue
+        ask, close = _quote_cents(market, side, "ask"), _book_field(market, "close_time", "expected_expiration_time")
+        key = f"{ticker}|{side}"
+        cached_exit = _cache_get(exit_cache_path, key) or {}
+        moved = _ask_moved(cached_exit.get("bid_cents"), bid) or _ask_moved(cached_exit.get("ask_cents"), ask)
+        parsed = _parse_utc(close)
+        near = parsed is not None and abs(parsed - (now or datetime.now(timezone.utc))) <= timedelta(hours=24)
+        if cached_exit and not moved and not near:
             continue
         prompt = (
             f"Open {side} position on {ticker}. "
@@ -1355,6 +1350,7 @@ def run_paper_exit_watch(
         )
         if result is None or result.skip_reason or not result.sources:
             continue
+        _cache_put(exit_cache_path, key, {"bid_cents": bid, "ask_cents": ask, "ts": _stamp(now), "verdict": result.verdict})
         if result.verdict != "CONTRARY":
             continue
         if result.confidence is None or result.confidence < STRONG_CONTRARY_CONFIDENCE:
@@ -1523,6 +1519,12 @@ def score_open_positions(
                 counts["skipped"] += 1
             else:
                 counts["scored"] += 1
+            _append_jsonl(score_log_path, record)
+            _insert_paper_row(db_path, "position_scores", record)
+            continue
+        if blocked := _paper_gate_reason(market, view, None):
+            record = _score_record(ticker=ticker, side=side, ask=ask, probability=None, sources=(), skip_reason=blocked, floor=floor, now=moment)
+            counts["skipped"] += 1
             _append_jsonl(score_log_path, record)
             _insert_paper_row(db_path, "position_scores", record)
             continue
@@ -1772,7 +1774,6 @@ def contract_fee_net_dollars(
     result_yes: bool,
     venue: str = "kalshi",
 ) -> Decimal | None:
-    """Settlement dollars for one contract after that venue's taker fee."""
     if side not in {"yes", "no"}:
         return None
     if venue == _POLYMARKET_US:
@@ -1790,7 +1791,6 @@ def contract_fee_net_dollars(
 
 
 def quote_from_market(market: Any) -> dict[str, Any] | None:
-    """One market's own YES and NO asks. A missing YES ask is not a quote."""
     view = _market_view(market)
     yes_ask = None if view is None else view.get("yes_ask")
     if view is None or type(yes_ask) is not int:
@@ -1799,7 +1799,6 @@ def quote_from_market(market: Any) -> dict[str, Any] | None:
 
 
 def _complement_cents(bid: int | None) -> int | None:
-    """NO ask from the YES bid, or YES ask from the NO bid. 100 minus the bid."""
     if type(bid) is not int or not 1 <= bid <= 99:
         return None
     ask = 100 - bid
@@ -1847,7 +1846,6 @@ def _plain_number(raw: str) -> str:
 
 
 def _outcome_key(title: str) -> tuple[str, ...] | None:
-    """The contract's own result. A series name or a slug is not an outcome."""
     plain = str(title or "").replace("\u2013", "-").replace("\u2014", "-").lower()
     ranged = re.search(
         r"(?<!\d)(\d{1,2}(?:\.\d+)?)\s*-\s*(\d{1,2}(?:\.\d+)?)(?!\d)",
@@ -1886,7 +1884,6 @@ def _settlement_source(title: str, rules: str) -> str | None:
 
 
 def _contract_identity(view: Mapping[str, Any]) -> tuple[Any, ...] | None:
-    """Same settlement date, outcome, and source. The clock time is not the date."""
     close = _canonical_close(view.get("close_time"))
     outcome = _outcome_key(str(view.get("title") or ""))
     source = _settlement_source(str(view.get("title") or ""), str(view.get("rules") or ""))
@@ -1904,7 +1901,6 @@ def _source_date(view: Mapping[str, Any]) -> tuple[str, str] | None:
 
 
 def _unmatched_reason(view: Mapping[str, Any], others: Sequence[Mapping[str, Any]]) -> str:
-    """A different source or date is not comparable. It is not a failed pair."""
     left = _source_date(view)
     if left is None:
         return "unparsed"
@@ -1924,7 +1920,6 @@ def _unmatched_reason(view: Mapping[str, Any], others: Sequence[Mapping[str, Any
 
 
 def _pair_edge(yes_view: Mapping[str, Any], no_view: Mapping[str, Any]) -> Decimal | None:
-    """1 - YES - NO - each leg's own one-contract taker fee."""
     yes_ask = yes_view.get("yes_ask")
     no_ask = no_view.get("no_ask")
     if type(yes_ask) is not int or type(no_ask) is not int:
@@ -1976,7 +1971,6 @@ def cross_venue_report(
     *,
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
-    """Report-only. Same source, settlement date, and outcome. A map cannot cross those."""
     universe = get_universe()
     if universe.failed:
         return []
@@ -2075,7 +2069,6 @@ def write_cross_venue(
 
 
 def scorecard_interval(values: Sequence[Decimal]) -> dict[str, Decimal | int | None]:
-    """Mean and normal 95% interval. Fewer than two values have no interval."""
     count = len(values)
     mean = None if count == 0 else sum(values, Decimal(0)) / Decimal(count)
     if count < 2 or mean is None:
@@ -2108,7 +2101,6 @@ def _scorecard_modes() -> dict[str, tuple[str, str]]:
 
 
 def _earliest_polymarket_settlements(db_path: Path) -> dict[str, str]:
-    """First stored YES or NO per Polymarket ticker. A later blank row does not hide it."""
     if not db_path.is_file():
         return {}
     uri = f"file:{db_path.resolve()}?mode=ro"
@@ -2146,7 +2138,6 @@ def _earliest_polymarket_settlements(db_path: Path) -> dict[str, str]:
 
 
 def _prefer_earliest_settlement(db_path: Path, rows: list[tuple], stored_index: int) -> list[tuple]:
-    """Replace a blank latest settlement with the first YES or NO stored for that ticker."""
     earliest = _earliest_polymarket_settlements(db_path)
     if not earliest:
         return rows
@@ -2196,7 +2187,6 @@ def _queued_candidate_rows(db_path: Path) -> list[tuple]:
 
 
 def settlement_venue(value: Any) -> str:
-    """Kalshi or Polymarket US. Blank is the historical Kalshi row. Anything else fails."""
     text = str(value or "").strip().lower()
     if text in ("", "kalshi"):
         return "kalshi"
@@ -2229,7 +2219,6 @@ def resolve_settlement(
     market_lookup: Callable[[str], Any],
     polymarket_lookup: Callable[[str], Any] | None = None,
 ) -> str | None:
-    """YES/NO from the venue that listed the market. Unknown venues raise."""
     name = settlement_venue(venue)
     if name == "kalshi":
         return _settlement_result(market_lookup(ticker))
@@ -2245,7 +2234,6 @@ def resolve_settlement(
 
 
 def _polymarket_candidate_rows(db_path: Path) -> list[tuple]:
-    """Latest Polymarket paper row per ticker, including skips."""
     if not db_path.is_file():
         return []
     uri = f"file:{db_path.resolve()}?mode=ro"
@@ -2273,7 +2261,6 @@ def _polymarket_candidate_rows(db_path: Path) -> list[tuple]:
 
 
 def remember_polymarket_settlement(db_path: Path, ticker: str, result: str) -> None:
-    """Store YES/NO once. A later disagreement is left for the reader to reject."""
     if result not in {"yes", "no"} or not str(ticker or "").strip():
         return
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2311,7 +2298,6 @@ def polymarket_observation_rows(
     market_lookup: Callable[[str], Any] | None = None,
     polymarket_lookup: Callable[[str], Any] | None = None,
 ) -> list[dict[str, str]]:
-    """Settlement status for Polymarket paper rows. Skips stay out of the EV table."""
     rows: list[dict[str, str]] = []
     for ticker, series, queued, stored in _polymarket_candidate_rows(db_path):
         slug = str(ticker or "")
@@ -2513,8 +2499,20 @@ def _book_field(market: Any, *names: str) -> Any:
     return None
 
 
+def _list_block(series: str) -> str | None:
+    upper = str(series or "").strip().upper()
+    if not upper:
+        return "universe"
+    universe = get_universe()
+    if universe.failed:
+        return "universe_unavailable"
+    if any(entry.series == upper and entry.mode != "off" for entry in universe.entries):
+        return None
+    from config import MARKET_SERIES_BLOCKLIST_PREFIXES
+    return "blocklist" if any(upper.startswith(item) for item in MARKET_SERIES_BLOCKLIST_PREFIXES) else "universe"
+
+
 def _polymarket_side_block(side: str, ask: Any) -> str | None:
-    """0-35c, the 55c YES floor, and the 91c gate. Size is checked at the queue."""
     if isinstance(ask, bool) or type(ask) is not int:
         return "bad_ask"
     if ask < EVENT_NEWS_BAND_FLOOR_CENTS:
@@ -2526,12 +2524,17 @@ def _polymarket_side_block(side: str, ask: Any) -> str | None:
     return None
 
 
-def _polymarket_book_block(view: Mapping[str, Any]) -> str | None:
-    """Skip Grok only when every side fails a shared guard."""
+def _polymarket_book_block(view: Mapping[str, Any], market: Any = None) -> str | None:
     reasons: list[str] = []
     for side in ("yes", "no"):
-        reason = _polymarket_side_block(side, view.get(f"{side}_ask"))
-        if reason is None:
+        raw = _book_field(market, f"{side}_ask_size_fp", f"{side}_ask_size")
+        try:
+            empty = raw is not None and float(raw) == 0.0
+        except (TypeError, ValueError):
+            empty = False
+        ask = view.get(f"{side}_ask")
+        ask = ask if type(ask) is int else _quote_cents(market, side, "ask")
+        if (reason := "depth" if empty else _polymarket_side_block(side, ask)) is None:
             return None
         reasons.append(reason)
     return reasons[0] if reasons else "bad_ask"
@@ -2539,8 +2542,10 @@ def _polymarket_book_block(view: Mapping[str, Any]) -> str | None:
 
 def _paper_gate_reason(market: Any, view: Mapping[str, Any], probability: float | None) -> str | None:
     series = str(view.get("series") or "")
+    if blocked := _list_block(series) or _polymarket_book_block(view, market):
+        return blocked
     if _view_venue(view) == _POLYMARKET_US:
-        return _polymarket_book_block(view)
+        return None
     if not _paper_only_series(series):
         return None
     scored = SimpleNamespace(
@@ -2745,7 +2750,6 @@ def call_reserve_usd(path: Path, *, grounded: bool) -> Decimal:
 
 
 def _provider_usage(body: Any) -> tuple[Decimal | None, dict[str, Any]]:
-    """Provider cost from cost_in_usd_ticks, else cost_in_usd. Tokens are logged either way."""
     if not isinstance(body, dict):
         return None, {}
     usage = body.get("usage") if isinstance(body.get("usage"), dict) else {}
@@ -2811,7 +2815,6 @@ def _save_raw_reply(
 
 
 def _parse_series_body(body: Any, expected: Sequence[str]) -> dict[str, Any] | None:
-    """Shared grounded context. One ticker may still use the flat prob schema."""
     if not isinstance(body, dict):
         return None
     obj = _select_json_object(_response_text(body), kind="series")
@@ -3125,7 +3128,6 @@ def _market_view(market: Any) -> dict[str, Any] | None:
 
 
 def _strike_text(ticker: str) -> str:
-    """T20 and E38.9 name the strike. Anything else stays blank."""
     suffix = ticker.rsplit("-", 1)[-1]
     if len(suffix) >= 2 and suffix[0] in "TE" and suffix[1].isdigit():
         return suffix[1:]
@@ -3251,7 +3253,6 @@ def _http_sources(body: Mapping[str, Any], obj: Mapping[str, Any]) -> tuple[str,
 
 
 def _select_json_object(content: str, *, kind: str) -> dict[str, Any] | None:
-    """Last object with the schema fields. A series envelope is the object whose markets value is a list."""
     if kind == "exit":
         wanted = ("contrary",)
     elif kind == "series":
@@ -3635,7 +3636,6 @@ def _joined_settled_rows(
     comparisons: Sequence[Mapping[str, Any]],
     settlements: Mapping[str, str],
 ) -> list[dict[str, Any]]:
-    """One row per settled ticker that has a logged grounded probability."""
     by_ticker: dict[str, dict[str, Any]] = {}
     for row in candidates:
         ticker = str(row.get("ticker") or "").strip()

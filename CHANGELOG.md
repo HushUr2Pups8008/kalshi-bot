@@ -19,6 +19,12 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.32] - 2026-10-25
+
+### Changed
+- The paper sidecar applies the free book filters before a paid scan, a tie-break, or an open-position score. A market whose both sides fail the ask band, the 55c YES floor, the 91c gate, a zero-size ask, the discovery blocklist, or the universe makes no paid call. A yaml series whose mode is not off stays allowed even when its prefix is on that blocklist.
+- Exit watch re-checks an open position only after the bid or ask moves by at least 5 cents from the last sourced check, or when close is within 24 hours. The last bid, ask, and verdict are cached next to the exit log. The watch still only logs a sourced strong CONTRARY. It does not cancel or sell.
+
 ## [0.37.31] - 2026-10-24
 
 ### Fixed
