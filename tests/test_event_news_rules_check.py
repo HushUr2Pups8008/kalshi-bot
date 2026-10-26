@@ -501,10 +501,6 @@ async def test_paper_rules_mismatch_does_not_record(monkeypatch, tmp_path) -> No
     executor._paper.record_trade.return_value = "paper-rules"
     with (
         patch(
-            "utils.event_news_grok_veto.event_news_paper_grounding_skip",
-            return_value=False,
-        ),
-        patch(
             "utils.event_news_rules_check.event_news_rules_check_skip",
             return_value=True,
         ),
@@ -543,10 +539,6 @@ async def test_paper_rules_timeout_still_records(monkeypatch, tmp_path) -> None:
     analysis.executed_price_cents = 60
     executor._paper.record_trade.return_value = "paper-rules"
     with (
-        patch(
-            "utils.event_news_grok_veto.event_news_paper_grounding_skip",
-            return_value=False,
-        ),
         patch(
             "utils.event_news_rules_check.event_news_rules_check_skip",
             return_value=False,

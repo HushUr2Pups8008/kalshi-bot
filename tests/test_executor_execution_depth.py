@@ -96,10 +96,6 @@ def _executor(monkeypatch: pytest.MonkeyPatch, *, paper_mode: bool) -> tuple[Tra
         return {}
 
     rest._request.side_effect = _balance_request
-    monkeypatch.setattr(
-        "utils.event_news_grok_veto.event_news_paper_grounding_skip",
-        lambda *_args, **_kwargs: False,
-    )
     paper = MagicMock()
     paper.get_notional_bankroll.return_value = 500.0
     paper.portfolio.open_positions.return_value = []

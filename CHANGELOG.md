@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.43] - 2026-10-26
+
+### Removed
+- The chat grounding verdict parser, its log, and the paper admission hook that always returned false. Veto and watch stay on the ungrounded chat parse. A timeout stays unavailable, not a model block.
+
 ## [0.37.42] - 2026-10-26
 
 ### Removed
