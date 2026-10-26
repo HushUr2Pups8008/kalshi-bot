@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -361,3 +362,51 @@ def test_legacy_date_mark_does_not_call_again(politics_cohort, tmp_path):
     assert path.read_text(encoding="utf-8") == (
         '{"KXTRUTHSOCIAL-26OCT17-B129": "2026-10-11"}\n'
     )
+
+
+def test_watch_call_logs_usage_and_keeps_ok(tmp_path, monkeypatch):
+    call_path = tmp_path / "calls.jsonl"
+    monkeypatch.setattr("utils.event_news_grok_veto.GROK_CALL_LOG_PATH", call_path)
+
+    class _Usage:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [{"message": {"content": "OK"}}],
+                "usage": {
+                    "prompt_tokens": 8,
+                    "completion_tokens": 1,
+                    "total_tokens": 9,
+                    "cost_in_usd_ticks": 500000000,
+                },
+            }
+
+    def _post(*_args, **kwargs):
+        assert "search_parameters" not in kwargs["json"]
+        return _Usage()
+
+    missing = event_news_grok_watch_decision(
+        {"ticker": "KXTEST-WATCH", "side": "yes"},
+        environ={},
+        post=_post,
+    )
+    assert missing.reason == "missing_key"
+    assert not call_path.exists()
+    result = event_news_grok_watch_decision(
+        {"ticker": "KXTEST-WATCH", "side": "yes"},
+        environ={"XAI_API_KEY": _SECRET},
+        post=_post,
+    )
+    assert result.result == "ok"
+    row = json.loads(call_path.read_text(encoding="utf-8"))
+    assert row["kind"] == "watch"
+    assert row["verdict"] == "ok"
+    assert row["grounded"] is False
+    assert row["input_tokens"] == 8
+    assert row["output_tokens"] == 1
+    assert row["cost_usd"] == "0.05"
+    assert row["cost_source"] == "provider"
+    assert row["rationale"] == ""
+    assert row["prompt_hash"] == ""
+    assert _SECRET not in call_path.read_text(encoding="utf-8")

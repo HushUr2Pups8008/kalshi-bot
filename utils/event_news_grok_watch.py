@@ -32,6 +32,7 @@ from utils.event_news_grok_veto import (
     GROK_TIMEOUT_SECONDS,
     XAI_API_KEY_ENV,
     XAI_CHAT_URL,
+    append_chat_call,
     event_news_grok_grounded_verdict,
     event_news_grok_trace_log,
 )
@@ -86,6 +87,19 @@ def event_news_grok_watch_decision(
     use_grounding = (
         event_news_grok_grounding_enabled(env) if grounded is None else grounded
     )
+
+    def _logged(result: EventNewsGrokWatchResult, body: Any = None) -> EventNewsGrokWatchResult:
+        skip = None if result.result in {"contradict", "ok"} else (result.reason or "timeout")
+        append_chat_call(
+            kind="watch",
+            ticker=ticker,
+            grounded=use_grounding,
+            body=body,
+            skip_reason=skip,
+            verdict=result.result,
+        )
+        return result
+
     user_content = (
         _WATCH_USER
         + "\n"
@@ -120,16 +134,16 @@ def event_news_grok_watch_decision(
     except requests.Timeout:
         result = EventNewsGrokWatchResult("timeout", "timeout", _elapsed_ms(started))
         _log_watch(result, ticker, side)
-        return result
+        return _logged(result)
     except Exception:
         result = EventNewsGrokWatchResult("timeout", "request_error", _elapsed_ms(started))
         _log_watch(result, ticker, side)
-        return result
+        return _logged(result)
     status = getattr(response, "status_code", None)
     if status != 200:
         result = EventNewsGrokWatchResult("timeout", f"http_{status}", _elapsed_ms(started))
         _log_watch(result, ticker, side)
-        return result
+        return _logged(result)
     body: Any = None
     try:
         body = response.json()
@@ -137,7 +151,7 @@ def event_news_grok_watch_decision(
     except Exception:
         result = EventNewsGrokWatchResult("timeout", "parse_fail", _elapsed_ms(started))
         _log_watch(result, ticker, side)
-        return result
+        return _logged(result, body)
     urls = _watch_urls(packet)
     if event_news_grok_trace_enabled(env):
         event_news_grok_trace_log(
@@ -174,7 +188,7 @@ def event_news_grok_watch_decision(
             reply=content,
         )
         _log_watch(result, ticker, side)
-        return result
+        return _logged(result, body)
     result = EventNewsGrokWatchResult(
         parsed,
         "",
@@ -205,7 +219,7 @@ def event_news_grok_watch_decision(
             response_id(body),
             ",".join(sources)[:500],
         )
-    return result
+    return _logged(result, body)
 
 
 def event_news_watch_series_record(

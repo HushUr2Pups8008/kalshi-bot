@@ -2762,6 +2762,7 @@ def test_daily_report_does_not_score_a_stored_polymarket_flip(tmp_path: Path) ->
         report_path=tmp_path / "grok-edge-daily.md",
         db_path=db_path,
         now=NOW,
+        decision_log_path=tmp_path / "veto-decisions.jsonl",
     )
     assert kalshi_calls == []
     assert "n: not enough data" in text
@@ -2951,6 +2952,7 @@ def test_daily_report_warns_when_spend_exceeds_half_the_week(tmp_path: Path) -> 
         report_path=tmp_path / "grok-edge-daily.md",
         now=NOW,
         call_log_path=tmp_path / "calls.jsonl",
+        decision_log_path=tmp_path / "veto-decisions.jsonl",
     )
     assert "7d grok spend vs settled fee-net: spend 0.60 USD, fee-net 1.00 USD, ratio 0.6" in text
     assert "WARN grok spend is above half of the 7-day settled fee-net" in text
@@ -2966,6 +2968,107 @@ def test_daily_report_warns_when_spend_exceeds_half_the_week(tmp_path: Path) -> 
         report_path=tmp_path / "quiet.md",
         now=NOW,
         call_log_path=tmp_path / "calls.jsonl",
+        decision_log_path=tmp_path / "veto-decisions.jsonl",
     )
     assert "ratio 0.4" in quiet
     assert "WARN" not in quiet
+
+
+def test_veto_table_uses_the_quadratic_fee_and_sums_only_veto_calls(tmp_path: Path) -> None:
+    """A 7-lot fee is the quadratic quote, not seven times the one-lot fee."""
+    from utils.event_news_research import event_news_fee_net_edge
+
+    decisions = tmp_path / "decisions.jsonl"
+    calls = tmp_path / "calls.jsonl"
+    decision_rows = [
+        {
+            "date": "2026-10-25",
+            "ticker": "KXTEST-A",
+            "side": "yes",
+            "ask_cents": 67,
+            "contracts": 7,
+            "decision": "allow",
+        },
+        {
+            "date": "2026-10-25",
+            "ticker": "KXTEST-A",
+            "side": "yes",
+            "ask_cents": 10,
+            "contracts": 1,
+            "decision": "block",
+        },
+        {
+            "date": "2026-10-25",
+            "ticker": "KXTEST-B",
+            "side": "no",
+            "ask_cents": 40,
+            "contracts": 2,
+            "decision": "block",
+        },
+        {
+            "date": "2026-10-25",
+            "ticker": "KXTEST-C",
+            "side": "yes",
+            "ask_cents": 55,
+            "contracts": 1,
+            "decision": "allow",
+        },
+        {
+            "date": "2026-10-25",
+            "ticker": "KXTEST-D",
+            "side": "yes",
+            "ask_cents": "60",
+            "contracts": 1,
+            "decision": "allow",
+        },
+    ]
+    decisions.write_text(
+        "".join(json.dumps(row) + "\n" for row in decision_rows),
+        encoding="utf-8",
+    )
+    calls.write_text(
+        "".join(
+            json.dumps(row) + "\n"
+            for row in (
+                {"kind": "veto", "cost_usd": "0.10"},
+                {"kind": "veto", "cost_usd": "0.02"},
+                {"kind": "scan", "cost_usd": "9.00"},
+                {"kind": "source", "cost_usd": "1.00"},
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    def lookup(ticker: str) -> dict:
+        if ticker == "KXTEST-C":
+            return {"status": "active", "result": "yes"}
+        return {"status": "finalized", "result": "yes"}
+
+    def payout(side: str, ask: int, contracts: int, result_yes: bool) -> Decimal:
+        fee = event_news_fee_net_edge(Decimal("0.5"), ask, contracts)[1]
+        price = (Decimal(ask) / Decimal(100)) * Decimal(contracts)
+        won = (side == "yes") == result_yes
+        if won:
+            return Decimal(contracts) - price - fee
+        return -price - fee
+
+    lot_fee = event_news_fee_net_edge(Decimal("0.5"), 67, 7)[1]
+    one_fee = event_news_fee_net_edge(Decimal("0.5"), 67, 1)[1]
+    assert lot_fee != one_fee * 7
+    allowed = payout("yes", 67, 7, True)
+    blocked = payout("no", 40, 2, True)
+    text = write_daily_edge_report(
+        candidate_log_path=tmp_path / "candidates.jsonl",
+        comparison_log_path=tmp_path / "comparisons.jsonl",
+        spend_path=tmp_path / "spend.json",
+        market_lookup=lookup,
+        report_path=tmp_path / "report.md",
+        now=NOW,
+        call_log_path=calls,
+        decision_log_path=decisions,
+    )
+    assert f"| allowed | 1 | {format(allowed, 'f')} |" in text
+    assert f"| blocked | 1 | {format(blocked, 'f')} |" in text
+    assert text.count("veto-call cost:") == 1
+    assert "veto-call cost: 0.12" in text
+    assert "9.00" not in text.split("veto-call cost:", 1)[1]
