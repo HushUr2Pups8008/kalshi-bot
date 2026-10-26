@@ -2213,18 +2213,6 @@ class TradeExecutor:
             if await self._event_news_plan_skip_off_loop(analysis, execution_plan):
                 return None
             self._event_news_log_paper_maker(analysis, execution_plan)
-            from utils.event_news_grok_veto import event_news_paper_grounding_skip
-
-            if await asyncio.to_thread(
-                event_news_paper_grounding_skip,
-                analysis,
-                contracts=execution_plan.contracts,
-            ):
-                log.info(
-                    "[EVENT_NEWS_GROK_GROUNDING] skip=no ticker=%s",
-                    analysis.market.ticker,
-                )
-                return None
             from utils.event_news_rules_check import event_news_rules_check_skip
 
             rules_skip = await self._wait_off_loop(

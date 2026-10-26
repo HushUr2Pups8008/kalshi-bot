@@ -21,9 +21,7 @@ from utils.event_news_grok_veto import (
     event_news_grok_veto_allows_live_post,
     event_news_grok_veto_decision,
     event_news_grok_veto_packet,
-    event_news_paper_grounding_skip,
 )
-from utils import event_news_grounding_log as grounding_log
 from utils.event_news_research import EVENT_NEWS_COHORT_ID
 
 
@@ -372,45 +370,6 @@ async def test_execute_live_slow_yes_still_places(
     assert elapsed >= 0.25
     assert order_id == "ord-1"
     rest.place_limit_order.assert_called_once()
-
-
-def test_paper_grounding_skip_does_not_call_chat(politics_cohort):
-    """The chat search path is gone, so paper admission does not post or skip."""
-
-    def _post(*_args, **_kwargs):
-        raise AssertionError("chat grounding must not post")
-
-    assert event_news_paper_grounding_skip(
-        _analysis(),
-        contracts=8,
-        environ={"XAI_API_KEY": "secret-key", "EVENT_NEWS_GROK_GROUNDING": "true"},
-        post=_post,
-    ) is False
-
-
-def test_paper_grounding_timeout_and_missing_key_do_not_skip(
-    politics_cohort, tmp_path, monkeypatch
-):
-    monkeypatch.setattr(grounding_log, "GROUNDING_LOG_PATH", tmp_path / "grounding.jsonl")
-    def _post(*_args, **_kwargs):
-        raise requests.Timeout("slow")
-
-    assert event_news_paper_grounding_skip(
-        _analysis(),
-        contracts=8,
-        environ={"XAI_API_KEY": "secret-key"},
-        post=_post,
-    ) is False
-
-    def _unused(*_args, **_kwargs):
-        raise AssertionError("missing key must not call xAI")
-
-    assert event_news_paper_grounding_skip(
-        _analysis(),
-        contracts=8,
-        environ={},
-        post=_unused,
-    ) is False
 
 
 def _usage_body(text: str, ticks: int) -> dict:

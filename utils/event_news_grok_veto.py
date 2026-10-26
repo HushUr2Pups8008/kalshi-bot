@@ -11,12 +11,11 @@ import hashlib
 import json
 import os
 import time
-import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping
 
 import requests
 
@@ -195,116 +194,6 @@ def _parse_yes_no(content: str) -> str:
         elif token == "NO":
             last = "no"
     return last if last is not None else "timeout"
-
-
-def _last_json_object(content: str) -> dict[str, Any] | None:
-    """Keep the last valid object. A greedy brace match breaks on preambles."""
-    decoder = json.JSONDecoder()
-    text = str(content or "")
-    last: dict[str, Any] | None = None
-    start = 0
-    while True:
-        index = text.find("{", start)
-        if index < 0:
-            return last
-        try:
-            obj, _end = decoder.raw_decode(text[index:])
-        except json.JSONDecodeError:
-            start = index + 1
-            continue
-        if isinstance(obj, dict):
-            last = obj
-        start = index + 1
-
-
-# A one-word strike such as "Golf" can appear in a real source quote.
-_ECHO_PART_MIN_CHARS = 20
-
-
-def _collapsed(text: str) -> str:
-    return " ".join(str(text or "").split()).casefold()
-
-
-def _quoted_evidence_text(value: Any) -> str:
-    """Return quote text only when the model sent a real sentence.
-
-    A list, a number, or a zero-width string is not a quote. ``str([""])``
-    is non-empty, and that must not open the live POST.
-    """
-    if not isinstance(value, str):
-        return ""
-    visible = "".join(
-        ch for ch in value if unicodedata.category(ch) != "Cf"
-    )
-    return " ".join(visible.split())
-
-
-def _quote_repeats_contract(
-    evidence: str,
-    contract_text: str,
-    contract_parts: Sequence[str] | None,
-) -> bool:
-    """True when the quote only repeats text we already sent.
-
-    Case and whitespace do not make an echo into evidence. A long contract
-    field inside a longer quote is still an echo. A short strike is not,
-    because that word can appear in a real source sentence.
-    """
-    quote = _collapsed(evidence)
-    if not quote:
-        return False
-    parts = list(contract_parts) if contract_parts is not None else [contract_text]
-    for part in parts:
-        collapsed = _collapsed(part)
-        if not collapsed:
-            continue
-        if quote in collapsed:
-            return True
-        if len(collapsed) >= _ECHO_PART_MIN_CHARS and collapsed in quote:
-            return True
-    return False
-
-
-def event_news_grok_grounded_verdict(
-    content: str,
-    *,
-    yes_no: bool,
-    allowed_urls: tuple[str, ...] | list[str] | None = None,
-    contract_text: str = "",
-    contract_parts: Sequence[str] | None = None,
-) -> str | None:
-    """Accept a verdict only when it quotes evidence from an allowed URL.
-
-    A quote that only repeats the contract text we sent is not evidence.
-    The model can echo the prompt without opening the URL.
-    """
-    obj = _last_json_object(content)
-    if not obj:
-        return None
-    evidence = _quoted_evidence_text(obj.get("quoted_evidence"))
-    url = obj.get("url")
-    if not isinstance(url, str):
-        return None
-    url = url.strip()
-    if not evidence or not any(ch.isalnum() for ch in evidence) or not url:
-        return None
-    if _quote_repeats_contract(evidence, contract_text, contract_parts):
-        return None
-    allowed = tuple(allowed_urls or ())
-    if url not in allowed:
-        return None
-    verdict = str(obj.get("verdict") or "").strip().upper()
-    if yes_no:
-        if verdict == "YES":
-            return "yes"
-        if verdict == "NO":
-            return "no"
-        return None
-    if verdict == "CONTRADICT":
-        return "contradict"
-    if verdict == "OK":
-        return "ok"
-    return None
 
 
 def _trace_source_count(payload: dict[str, Any], usage: dict[str, Any], message: dict[str, Any]) -> object:
@@ -666,18 +555,6 @@ def event_news_grok_veto_decision(
     )
     _logged(body, "parse_fail" if result == "timeout" else None, result)
     return result
-
-
-def event_news_paper_grounding_skip(
-    analysis: Any,
-    *,
-    contracts: int,
-    environ: Mapping[str, str] | None = None,
-    post: Callable[..., Any] | None = None,
-) -> bool:
-    """Chat grounding is gone. This does not call xAI and does not skip."""
-    del analysis, contracts, environ, post
-    return False
 
 
 def event_news_grok_veto_allows_live_post(

@@ -30,7 +30,6 @@ from utils.event_news_grok_flags import (
 from utils.event_news_grok_veto import (
     GROK_TIMEOUT_SECONDS,
     EventNewsGrokVetoPacket,
-    event_news_grok_grounded_verdict,
     event_news_grok_veto_decision,
 )
 from utils.event_news_grok_watch import run_event_news_grok_watch_once
@@ -688,49 +687,6 @@ def test_exact_35c_snapshot_skips_unless_the_flag_is_false(monkeypatch):
     )
     monkeypatch.setenv(EVENT_NEWS_EXCLUDE_EXACT_35, "false")
     assert event_news_executed_side_skip_reason(market, "yes", config=band) is None
-
-
-def test_grounded_parser_rejects_blank_quotes_wrong_urls_and_keeps_the_last_object():
-    missing = event_news_grok_grounded_verdict(
-        json.dumps({"verdict": "YES", "quoted_evidence": "", "url": _ALLOWED}),
-        yes_no=True,
-        allowed_urls=(_ALLOWED,),
-    )
-    assert missing is None
-    foreign = event_news_grok_grounded_verdict(
-        json.dumps(
-            {
-                "verdict": "YES",
-                "quoted_evidence": "He said the word on the south lawn today.",
-                "url": "https://evil.example/quote",
-            }
-        ),
-        yes_no=True,
-        allowed_urls=(_ALLOWED,),
-    )
-    assert foreign is None
-    first = json.dumps(
-        {
-            "verdict": "NO",
-            "quoted_evidence": "An earlier object must not win.",
-            "url": _ALLOWED,
-        }
-    )
-    last = json.dumps(
-        {
-            "verdict": "YES",
-            "quoted_evidence": "He said the word on the south lawn today.",
-            "url": _ALLOWED,
-        }
-    )
-    assert (
-        event_news_grok_grounded_verdict(
-            first + " " + last,
-            yes_no=True,
-            allowed_urls=(_ALLOWED,),
-        )
-        == "yes"
-    )
 
 
 def test_grounded_non_string_and_zero_width_quotes_do_not_allow_a_post():
@@ -1554,37 +1510,8 @@ async def test_paper_maker_flag_does_not_sleep(monkeypatch, tmp_path, caplog):
 
 
 @pytest.mark.asyncio
-async def test_paper_grounding_no_does_not_record(monkeypatch, tmp_path):
-    _band_flags_unset(monkeypatch)
-    monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
-    executor = _executor(monkeypatch, tmp_path, paper=True)
-    _stub_equity(executor)
-    analysis = _analysis()
-    analysis.executed_price_cents = 60
-    analysis.signal_meta = {"blend_bypass_reason": "official_p"}
-    executor._paper.record_trade.return_value = "paper-ground"
-    with (
-        patch(
-            "utils.event_news_grok_veto.event_news_paper_grounding_skip",
-            return_value=True,
-        ),
-        patch(
-            "trading.executor.final_execution_terms",
-            return_value=FinalExecutionTerms(60, 8, 4.80),
-        ),
-        patch(
-            "trading.executor.fetch_kalshi_execution_liquidity",
-            new=AsyncMock(return_value=_liquidity("0.60")),
-        ),
-    ):
-        plan, reason = await executor._final_execution_plan(analysis)
-        trade_id = await executor._execute_paper(analysis, execution_plan=plan)
-    assert reason is None and trade_id is None
-    executor._paper.record_trade.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_paper_grounding_timeout_still_records(monkeypatch, tmp_path):
+async def test_paper_admission_records_when_rules_pass(monkeypatch, tmp_path):
+    """Chat grounding no longer sits in front of a paper record."""
     _band_flags_unset(monkeypatch)
     monkeypatch.setattr(_cfg_module.cfg, "enable_fee_net_paper_accounting", False)
     executor = _executor(monkeypatch, tmp_path, paper=True)
@@ -1593,10 +1520,6 @@ async def test_paper_grounding_timeout_still_records(monkeypatch, tmp_path):
     analysis.executed_price_cents = 60
     executor._paper.record_trade.return_value = "paper-ground"
     with (
-        patch(
-            "utils.event_news_grok_veto.event_news_paper_grounding_skip",
-            return_value=False,
-        ),
         patch(
             "trading.executor.final_execution_terms",
             return_value=FinalExecutionTerms(60, 8, 4.80),
