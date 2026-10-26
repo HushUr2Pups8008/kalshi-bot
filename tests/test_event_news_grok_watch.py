@@ -274,20 +274,22 @@ def test_watch_search_stays_off_until_grounding_is_explicit():
     assert "search_parameters" not in captured["json"]
     assert "tools" not in captured["json"]
 
-    def _grounded_post(*_args, **kwargs):
-        captured["grounded"] = kwargs["json"]
+    def _flag_on(*_args, **kwargs):
+        captured["flag_on"] = kwargs["json"]
         return _Response("OK")
 
-    event_news_grok_watch_decision(
+    flagged = event_news_grok_watch_decision(
         {"ticker": "KXTRUTHSOCIAL-26OCT17-B129", "side": "no", "fill_price": 0.85},
         environ={"XAI_API_KEY": _SECRET, "EVENT_NEWS_GROK_GROUNDING": "true"},
-        post=_grounded_post,
+        post=_flag_on,
+        grounded=True,
     )
-    assert captured["grounded"]["search_parameters"] == {
-        "mode": "on",
-        "return_citations": True,
-    }
-    assert "tools" not in captured["grounded"]
+    assert flagged.result == "ok"
+    assert "search_parameters" not in captured["flag_on"]
+    assert "tools" not in captured["flag_on"]
+    assert captured["flag_on"]["messages"][0]["content"].startswith(
+        "Answer only CONTRADICT or OK."
+    )
 
 
 def test_series_url_included_when_market_field_empty(politics_cohort, tmp_path):

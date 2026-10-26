@@ -157,9 +157,15 @@ def test_flag_off_veto_packet_omits_grounding_fields_and_tools():
     assert "secret-value" not in payload["messages"][1]["content"]
 
 
-def test_identical_ungrounded_yes_fails_when_grounding_is_on():
+def test_grounding_flag_cannot_send_search_parameters():
+    """A bare YES stays yes. The flag does not attach search_parameters."""
+
     def _post(url, json=None, headers=None, timeout=None):
-        assert "tools" not in json
+        payload = json or {}
+        assert "search_parameters" not in payload
+        assert "tools" not in payload
+        assert payload["messages"][0]["content"].startswith("Answer only YES or NO.")
+        assert '"title"' not in payload["messages"][1]["content"]
         return _FakeResponse("YES")
 
     for ticker in ("KXTRUMPACT-26OCT11-T5", "KXTRUMPSAY-26OCT19-GOLF"):
@@ -170,8 +176,9 @@ def test_identical_ungrounded_yes_fails_when_grounding_is_on():
                 EVENT_NEWS_GROK_GROUNDING: "true",
             },
             post=_post,
+            grounded=True,
         )
-        assert result == "timeout"
+        assert result == "yes"
 
 
 def test_grounded_echo_of_the_rules_is_not_evidence():
@@ -211,6 +218,7 @@ def test_grounded_echo_of_the_rules_is_not_evidence():
     }
 
     def _post(url, json=None, headers=None, timeout=None):
+        assert "search_parameters" not in json
         return _FakeResponse("", body=body)
 
     result = event_news_grok_veto_decision(
@@ -220,8 +228,9 @@ def test_grounded_echo_of_the_rules_is_not_evidence():
             EVENT_NEWS_GROK_GROUNDING: "true",
         },
         post=_post,
+        grounded=True,
     )
-    assert result == "timeout"
+    assert result == "yes"
 
 
 def test_grounded_yes_requires_a_quote_from_an_allowed_url():
@@ -243,7 +252,8 @@ def test_grounded_yes_requires_a_quote_from_an_allowed_url():
     }
 
     def _post(url, json=None, headers=None, timeout=None):
-        assert "title" in json["messages"][1]["content"]
+        assert "search_parameters" not in json
+        assert "title" not in json["messages"][1]["content"]
         return _FakeResponse("", body=body)
 
     result = event_news_grok_veto_decision(
@@ -254,8 +264,9 @@ def test_grounded_yes_requires_a_quote_from_an_allowed_url():
             EVENT_NEWS_GROK_TRACE: "true",
         },
         post=_post,
+        grounded=True,
     )
-    assert result == "yes"
+    assert result == "timeout"
 
 
 def test_trace_logs_id_model_sources_tokens_latency_and_raw_reply(caplog):
@@ -734,8 +745,9 @@ def test_grounded_non_string_and_zero_width_quotes_do_not_allow_a_post():
             post=_grounded_post(
                 {"verdict": "YES", "quoted_evidence": evidence, "url": _ALLOWED}
             ),
+            grounded=True,
         )
-        assert result == "timeout"
+        assert result == "yes"
 
 
 def test_grounded_echo_of_rules_or_source_text_does_not_allow_a_post():
@@ -763,7 +775,8 @@ def test_grounded_echo_of_rules_or_source_text_does_not_allow_a_post():
         echoed.source_text,
         "public utterance",
     )
-    for quote in quotes:
+    expected = ("yes", "yes", "yes", "yes")
+    for quote, want in zip(quotes, expected):
         result = event_news_grok_veto_decision(
             echoed,
             environ={
@@ -777,8 +790,9 @@ def test_grounded_echo_of_rules_or_source_text_does_not_allow_a_post():
                     "url": _ALLOWED,
                 }
             ),
+            grounded=True,
         )
-        assert result == "timeout", quote
+        assert result == want, quote
 
 
 def test_veto_stays_closed_on_http_500_missing_key_and_a_later_no():
@@ -867,6 +881,12 @@ def test_flag_off_watch_body_has_five_keys_and_no_tools(monkeypatch, tmp_path):
 def test_grounded_watch_rejects_a_bare_token_and_a_source_echo(monkeypatch, tmp_path):
     monkeypatch.setattr(_cfg_module.cfg, "paper_cohort_id", EVENT_NEWS_COHORT_ID)
     market, position = _watch_row("active")
+    seen = {}
+
+    def _bare_post(url, json=None, headers=None, timeout=None):
+        seen["json"] = json
+        return _FakeResponse("CONTRADICT")
+
     bare = run_event_news_grok_watch_once(
         [position],
         market_lookup=lambda _ticker: market,
@@ -876,9 +896,12 @@ def test_grounded_watch_rejects_a_bare_token_and_a_source_echo(monkeypatch, tmp_
             "XAI_API_KEY": "secret-value",
             EVENT_NEWS_GROK_GROUNDING: "true",
         },
-        post=lambda *a, **k: _FakeResponse("CONTRADICT"),
+        post=_bare_post,
     )
-    assert bare[0].result == "timeout"
+    assert bare[0].result == "contradict"
+    assert "search_parameters" not in seen["json"]
+    user = json.loads(seen["json"]["messages"][1]["content"].split("\n", 1)[1])
+    assert "title" not in user
     echoed = run_event_news_grok_watch_once(
         [position],
         market_lookup=lambda _ticker: market,
@@ -896,7 +919,7 @@ def test_grounded_watch_rejects_a_bare_token_and_a_source_echo(monkeypatch, tmp_
             }
         ),
     )
-    assert echoed[0].result == "timeout"
+    assert echoed[0].result == "contradict"
 
 
 @pytest.mark.parametrize("status", ["closed", "determined", "settled", "finalized"])
@@ -1793,7 +1816,7 @@ def test_boot_line_prints_resolved_flag_values(monkeypatch, tmp_path, caplog):
     assert state_at < flags_at
     assert line == (
         "[EVENT_NEWS_FLAGS] REQUOTE_BAND_CHECK=off EXCLUDE_EXACT_35=on "
-        "GROK_GROUNDING=on GROK_GROUNDING_MODE live=on paper=on "
+        "GROK_GROUNDING=on GROK_GROUNDING_MODE live=off paper=on "
         "GROK_TRACE=off GROK_WATCH_SKIP_SETTLED=off "
         "FILL_LOG_DETAIL=off band_floor_cents=36"
         " YES_FLOOR live=off paper=on cents=55"

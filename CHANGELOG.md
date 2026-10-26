@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.40] - 2026-10-26
+
+### Removed
+- Veto and watch chat calls never send `search_parameters`. `EVENT_NEWS_GROK_GROUNDING` no longer turns that chat path on, including for paper admission. A timeout, HTTP error, or transport error stays `timeout` and is logged as `unavailable`, not as a model block. The paper Responses `web_search` path is unchanged.
+
 ## [0.37.39] - 2026-10-25
 
 ### Removed

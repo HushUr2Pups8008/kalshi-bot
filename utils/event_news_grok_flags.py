@@ -65,17 +65,19 @@ def event_news_grok_grounding_for_mode(
     live: bool | None,
     environ: Mapping[str, str] | None = None,
 ) -> bool:
-    """Paper defaults on. Live defaults off. An explicit true or false wins.
+    """Paper defaults on. Live chat grounding stays off.
 
-    ``live is None`` keeps the historical env-exact reading: unset is off.
+    An explicit true or false wins for paper only. Live and an unknown
+    mode stay off even when EVENT_NEWS_GROK_GROUNDING=true. Veto and watch
+    chat calls do not read this value.
     """
+    if live is None or live is True:
+        return False
     env = os.environ if environ is None else environ
     if EVENT_NEWS_GROK_GROUNDING in env:
         raw = str(env.get(EVENT_NEWS_GROK_GROUNDING) or "").strip().lower()
         if raw:
             return raw == "true"
-    if live is None or live is True:
-        return False
     return True
 
 

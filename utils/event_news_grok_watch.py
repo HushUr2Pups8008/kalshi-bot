@@ -15,13 +15,7 @@ from typing import Any, Callable, Mapping
 
 import requests
 
-from utils.event_news_grounding_log import (
-    append_event_news_grounding_record,
-    response_id,
-    response_sources,
-)
 from utils.event_news_grok_flags import (
-    event_news_grok_grounding_enabled,
     event_news_grok_trace_enabled,
     event_news_market_status_settled,
     event_news_watch_skip_settled_enabled,
@@ -33,7 +27,6 @@ from utils.event_news_grok_veto import (
     XAI_API_KEY_ENV,
     XAI_CHAT_URL,
     append_chat_call,
-    event_news_grok_grounded_verdict,
     event_news_grok_trace_log,
 )
 from utils.logger import get_logger
@@ -45,11 +38,6 @@ _WATCH_SYSTEM = (
     "source contradicts this open side. OK means it does not."
 )
 _WATCH_USER = "Does the official source contradict this side?"
-_GROUNDED_WATCH_SYSTEM = (
-    "Reply with one JSON object only. Keys are verdict, confidence, "
-    "quoted_evidence, and url. verdict is CONTRADICT or OK. "
-    "A verdict without quoted_evidence is invalid."
-)
 _LONGSHOT_FILL = 0.35
 
 
@@ -74,7 +62,12 @@ def event_news_grok_watch_decision(
     post: Callable[..., Any] | None = None,
     grounded: bool | None = None,
 ) -> EventNewsGrokWatchResult:
-    """Return contradict, ok, or timeout. Never submits an order."""
+    """Return contradict, ok, or timeout. Never submits an order.
+
+    Chat completions stay ungrounded. ``grounded`` and
+    EVENT_NEWS_GROK_GROUNDING do not add search_parameters.
+    """
+    del grounded
     started = time.monotonic()
     ticker = str(packet.get("ticker") or "")
     side = str(packet.get("side") or "")
@@ -84,16 +77,13 @@ def event_news_grok_watch_decision(
         result = EventNewsGrokWatchResult("timeout", "missing_key", _elapsed_ms(started))
         _log_watch(result, ticker, side)
         return result
-    use_grounding = (
-        event_news_grok_grounding_enabled(env) if grounded is None else grounded
-    )
 
     def _logged(result: EventNewsGrokWatchResult, body: Any = None) -> EventNewsGrokWatchResult:
         skip = None if result.result in {"contradict", "ok"} else (result.reason or "timeout")
         append_chat_call(
             kind="watch",
             ticker=ticker,
-            grounded=use_grounding,
+            grounded=False,
             body=body,
             skip_reason=skip,
             verdict=result.result,
@@ -110,15 +100,10 @@ def event_news_grok_watch_decision(
         "temperature": 0,
         "max_tokens": GROK_MAX_TOKENS,
         "messages": [
-            {
-                "role": "system",
-                "content": _GROUNDED_WATCH_SYSTEM if use_grounding else _WATCH_SYSTEM,
-            },
+            {"role": "system", "content": _WATCH_SYSTEM},
             {"role": "user", "content": user_content},
         ],
     }
-    if use_grounding:
-        payload["search_parameters"] = {"mode": "on", "return_citations": True}
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
@@ -162,24 +147,7 @@ def event_news_grok_watch_decision(
             urls,
             latency_ms=_elapsed_ms(started),
         )
-    if use_grounding:
-        parsed = event_news_grok_grounded_verdict(
-            content,
-            yes_no=False,
-            allowed_urls=urls,
-            contract_parts=tuple(
-                str(packet.get(name) or "")
-                for name in (
-                    "title",
-                    "rules",
-                    "strike",
-                    "close_time",
-                    "source_text",
-                )
-            ),
-        )
-    else:
-        parsed = _parse_contradict_ok(content)
+    parsed = _parse_contradict_ok(content)
     if parsed is None:
         result = EventNewsGrokWatchResult(
             "timeout",
@@ -196,29 +164,6 @@ def event_news_grok_watch_decision(
         reply=content,
     )
     _log_watch(result, ticker, side)
-    if use_grounding:
-        sources = response_sources(body)
-        if not sources:
-            sources = _watch_urls(packet)
-        try:
-            append_event_news_grounding_record(
-                kind="watch",
-                ticker=ticker,
-                side=side,
-                verdict=result.result,
-                response_id=response_id(body),
-                sources=sources,
-            )
-        except Exception:
-            log.warning("[EVENT_NEWS_GROK_GROUNDING] journal_failed ticker=%s", ticker)
-        log.info(
-            "[EVENT_NEWS_GROK_GROUNDING] kind=watch ticker=%s verdict=%s "
-            "response_id=%s sources=%s",
-            ticker,
-            result.result,
-            response_id(body),
-            ",".join(sources)[:500],
-        )
     return _logged(result, body)
 
 
@@ -302,16 +247,6 @@ def run_event_news_grok_watch_once(
             "settlement_sources": urls,
             "contract_terms_url": terms,
         }
-        if event_news_grok_grounding_enabled(environ):
-            packet["title"] = str(getattr(market, "title", "") or "")
-            packet["rules"] = str(
-                getattr(market, "rules_primary", "")
-                or getattr(market, "rules", "")
-                or ""
-            )
-            packet["strike"] = str(getattr(market, "strike", "") or "")
-            packet["close_time"] = str(getattr(market, "close_time", "") or "")
-            packet["source_text"] = str(getattr(market, "source_text", "") or "")
         result = event_news_grok_watch_decision(packet, environ=environ, post=post)
         results.append(result)
         if result.reason != "missing_key":
