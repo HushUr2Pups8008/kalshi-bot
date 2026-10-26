@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import sqlite3
@@ -1750,20 +1751,8 @@ def write_daily_edge_report(
     )
     joined = _joined_settled_rows(candidates, comparisons, settlements)
     text = _daily_report_text(joined, spend_line, now=now).rstrip("\n")
-    decision_rows = _read_jsonl(
-        VETO_DECISION_LOG_PATH if decision_log_path is None else decision_log_path
-    )
-    settled: dict[str, str] = {}
-    for row in decision_rows:
-        ticker = str(row.get("ticker") or "")
-        if ticker and ticker not in settled:
-            try:
-                result = _settlement_result(market_lookup(ticker))
-            except Exception:
-                result = None
-            if result in {"yes", "no"}:
-                settled[ticker] = result
-    text += grade_veto_decisions(decision_rows, settled)
+    log_path = VETO_DECISION_LOG_PATH if decision_log_path is None else decision_log_path
+    text += _veto_scorecard_text(_read_jsonl(log_path), market_lookup)
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(text, encoding="utf-8")
     return text
@@ -2075,6 +2064,53 @@ def promotion_label(*, mode: str, effective: str, n: int, low: Decimal | None, h
 def _cell(value: Decimal | None) -> str:
     return "" if value is None else format(value, "f")
 
+def _cluster_means(samples: Sequence[tuple]) -> list[Decimal]:
+    groups: dict[str, list[Decimal]] = {}
+    for item in samples:
+        text = str(item[-1] or "").upper()
+        found = re.search(r"\d{2}[A-Z]{3}\d{2}|\d{4}-\d{2}-\d{2}", text)
+        groups.setdefault(text[: found.end()] if found else text, []).append(item[1])
+    return [sum(chunk, Decimal(0)) / Decimal(len(chunk)) for chunk in groups.values()]
+
+def _ev_p(values: Sequence[Decimal]) -> Decimal | None:
+    stats = scorecard_interval(values)
+    mean, low, high = stats["mean"], stats["ci95_low"], stats["ci95_high"]
+    if not isinstance(mean, Decimal) or not isinstance(low, Decimal) or not isinstance(high, Decimal):
+        return None
+    half = (high - low) / 2
+    if half == 0:
+        return Decimal(0) if mean > 0 else Decimal(1)
+    z = float(mean * Decimal("1.96") / half)
+    return Decimal(repr(0.5 * math.erfc(z / math.sqrt(2))))
+
+def _bh_q(pairs: Sequence[tuple[Any, Decimal]]) -> dict[Any, Decimal]:
+    ordered = sorted(pairs, key=lambda item: item[1])
+    found, ceiling, m = {}, Decimal(1), len(ordered)
+    for rank in range(m, 0, -1):
+        key, p_value = ordered[rank - 1]
+        ceiling = min(ceiling, min(Decimal(1), p_value * Decimal(m) / Decimal(rank)))
+        found[key] = ceiling
+    return found
+
+def _guard_cell(value: Decimal | None, count: int) -> str:
+    number = _cell(value)
+    if count >= 15:
+        return number
+    return f"not enough data (n={count})" if not number else f"not enough data (n={count}) {number}"
+
+def _veto_scorecard_text(rows: Sequence[Mapping[str, Any]], market_lookup: Callable[[str], Any]) -> str:
+    settled: dict[str, str] = {}
+    for row in rows:
+        ticker = str(row.get("ticker") or "")
+        if ticker and ticker not in settled:
+            try:
+                result = _settlement_result(market_lookup(ticker))
+            except Exception:
+                result = None
+            if result in {"yes", "no"}:
+                settled[ticker] = result
+    return grade_veto_decisions(list(rows), settled)
+
 def _scorecard_modes() -> dict[str, tuple[str, str]]:
     universe = get_universe()
     if universe.failed:
@@ -2341,6 +2377,7 @@ def write_paper_scorecard(
     report_path: Path,
     now: datetime | None = None,
     polymarket_lookup: Callable[[str], Any] | None = None,
+    veto_log_path: Path | None = None,
 ) -> str:
     """Per-series fee-net scorecard. Promotion text does not change modes."""
     moment = now or datetime.now(timezone.utc)
@@ -2390,7 +2427,7 @@ def write_paper_scorecard(
             continue
         outcome = Decimal(1 if result == "yes" else 0)
         grouped.setdefault((venue_name, name), []).append(
-            ((str(side) == "yes") == (result == "yes"), pnl, p_yes, outcome)
+            ((str(side) == "yes") == (result == "yes"), pnl, p_yes, outcome, str(ticker or ""))
         )
         calibration.append(
             {
@@ -2405,19 +2442,25 @@ def write_paper_scorecard(
         f"# Paper scorecard {moment.strftime('%Y-%m-%d')}",
         "",
         "Report only. Eligible for live: paper, n>=15, fee-net EV CI low > 0.",
-        "Recommend off: effective live, n>=15, CI high < 0. Modes do not change.",
-        "EV is per-contract taker-fee-net. One settled row per ticker. CI is mean +/- 1.96 sample stdev / sqrt(n). n<2 has none.",
-        "Brier is the mean squared error of the YES probability against the settlement.",
+        "Recommend off: effective live, n>=15, CI high < 0. Modes do not change. A promotion shows that CI low, the clustered CI low, and the BH q.",
+        "EV is per-contract taker-fee-net. One settled row per ticker. CI is mean +/- 1.96 sample stdev / sqrt(n). n<2 has none. Same settlement date is one event.",
+        "BH q tests mean fee-net > 0 when n>=5. Brier is the mean squared error of the YES probability against the settlement.",
         "",
-        "| venue | series | mode | n | hits | hit_rate | ev_per_contract | ci95_low | ci95_high | brier | promotion |",
-        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|",
+        "| venue | series | mode | n | hits | hit_rate | ev_per_contract | ci95_low | ci95_high | brier | cluster_n | cluster_ci95_low | cluster_ci95_high | bh_q | series_tested | promotion |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
+    tested = []
+    for key, samples in grouped.items():
+        p_value = _ev_p([item[1] for item in samples]) if len(samples) >= 5 else None
+        if p_value is not None:
+            tested.append((key, p_value))
+    bh = _bh_q(tested)
     if not grouped:
-        lines.append("| | | | 0 | | | | | | | no settled fee-net rows |")
+        lines.append("| | | | 0 | | | | | | | | | | | | no settled fee-net rows |")
     for venue_name, series in sorted(grouped):
         samples = grouped[(venue_name, series)]
-        values = [pnl for _hit, pnl, _p, _outcome in samples]
-        hits = sum(hit for hit, _pnl, _p, _outcome in samples)
+        values = [item[1] for item in samples]
+        hits = sum(item[0] for item in samples)
         stats = scorecard_interval(values)
         n = int(stats["n"] or 0)
         mode, effective = modes.get(series, ("", ""))
@@ -2426,12 +2469,23 @@ def write_paper_scorecard(
         mean = stats["mean"] if isinstance(stats["mean"], Decimal) else None
         rate = None if n == 0 else Decimal(hits) / Decimal(n)
         label = promotion_label(mode=mode, effective=effective, n=n, low=low, high=high)
-        squared = sum((p - outcome) ** 2 for _hit, _pnl, p, outcome in samples)
+        squared = sum((item[2] - item[3]) ** 2 for item in samples)
         brier = None if n == 0 else squared / Decimal(n)
         brier_cell = "" if brier is None else format(brier.normalize(), "f")
+        clustered = scorecard_interval(_cluster_means(samples))
+        cn = int(clustered["n"] or 0)
+        clow = clustered["ci95_low"] if isinstance(clustered["ci95_low"], Decimal) else None
+        chigh = clustered["ci95_high"] if isinstance(clustered["ci95_high"], Decimal) else None
+        q = bh.get((venue_name, series))
+        cluster_text = _cell(clow) if cn >= 15 else f"not enough data (n={cn})"
+        shown = f"not enough data (n={n})" if n < 15 else (
+            f"{label}; ci_low={_cell(low)}; clustered_low={cluster_text}; bh_q={_cell(q)}; tested={len(bh)}"
+            if label else ""
+        )
         lines.append(
             f"| {venue_name} | {series} | {effective or mode} | {n} | {hits} | {_cell(rate)} | "
-            f"{_cell(mean)} | {_cell(low)} | {_cell(high)} | {brier_cell} | {label} |"
+            f"{_cell(mean)} | {_cell(low)} | {_cell(high)} | {brier_cell} | {cn} | "
+            f"{_guard_cell(clow, cn)} | {_guard_cell(chigh, cn)} | {_cell(q)} | {len(bh)} | {shown} |"
         )
     lines.extend(
         _polymarket_section(
@@ -2442,6 +2496,8 @@ def write_paper_scorecard(
             )
         )
     )
+    veto_rows = [] if veto_log_path is None else _read_jsonl(veto_log_path)
+    lines.append(_veto_scorecard_text(veto_rows, market_lookup).strip("\n"))
     text = "\n".join(lines) + "\n"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(text, encoding="utf-8")
@@ -2720,7 +2776,7 @@ def _provider_usage(body: Any) -> tuple[Decimal | None, dict[str, Any]]:
         return None, {}
     usage = body.get("usage") if isinstance(body.get("usage"), dict) else {}
     meta: dict[str, Any] = {}
-    for key in ("input_tokens", "output_tokens", "total_tokens"):
+    for key in ("input_tokens", "output_tokens", "total_tokens", "cached_tokens"):
         raw = usage.get(key)
         if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0:
             meta[key] = raw
@@ -2929,6 +2985,7 @@ def _call_grok(
             "input_tokens",
             "output_tokens",
             "total_tokens",
+            "cached_tokens",
             "cost_in_usd_ticks",
             "web_search_calls",
             "x_search_calls",

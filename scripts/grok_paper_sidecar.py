@@ -301,6 +301,7 @@ def _polymarket_settlement_lookup():
 
 def _run_daily(rest) -> None:
     from utils.event_news_grok_edge import PAPER_DB_PATH, write_daily_edge_report, write_paper_scorecard
+    from utils.event_news_grok_veto import VETO_DECISION_LOG_PATH
 
     lookup = _polymarket_settlement_lookup()
     write_daily_edge_report(market_lookup=rest.get_market, polymarket_lookup=lookup)
@@ -310,6 +311,7 @@ def _run_daily(rest) -> None:
         market_lookup=rest.get_market,
         report_path=Path(f"logs/reports/paper-scorecard-{day}.md"),
         polymarket_lookup=lookup,
+        veto_log_path=VETO_DECISION_LOG_PATH,
     )
 
 def _log_scan_cycle(scores: dict, scan: dict) -> None:

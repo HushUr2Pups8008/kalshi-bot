@@ -40,6 +40,7 @@ PROMOTION_RULE = (
     "A series is eligible for live after at least 15 settled paper trades "
     "when the fee-net EV 95% CI lower bound is above 0. A live series is "
     "recommend off when that many trades have a CI upper bound below 0. "
+    "A promotion shows the clustered CI low and the BH q. Under 15 settled trades the bucket says not enough data. "
     "This report does not change modes."
 )
 POLITICS_CATEGORIES = frozenset({"politics", "elections"})
