@@ -1,6 +1,6 @@
 # kalshi-bot
 
-[![Version](https://img.shields.io/badge/version-0.37.38-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.37.39-blue)](CHANGELOG.md)
 [![Mode](https://img.shields.io/badge/default-paper%20trading-orange)](.env.example)
 
 Paper research for Kalshi event markets, plus a small live politics desk.
@@ -19,7 +19,7 @@ Do not install or restart the retired label `com.jake.kalshi-bot`.
 
 ## Path
 
-Free book filters run before a paid Grok call: the ask band, the 55c YES floor, the 91c gate, an empty ask, the blocklist, and the series universe. Paid calls use `https://api.x.ai/v1` and the model `grok-4.20-0309-non-reasoning`. A Polymarket paper row still needs a fee-net edge and two stable scans; the operated sidecar turns Kalshi series, tie-break, and paid exit calls off. The live veto is a separate yes or no. It does not apply that stability rule.
+Free book filters run before a paid Grok call: the ask band, the 55c YES floor, the 91c gate, an empty ask, the blocklist, and the series universe. Paid calls use `https://api.x.ai/v1` and the model `grok-4.20-0309-non-reasoning`. A Polymarket paper row still needs a fee-net edge and two stable scans; the operated sidecar turns Kalshi series and tie-break calls off. The exit watch logs the bid and ask and does not call Grok. The live veto is a separate yes or no. It does not apply that stability rule.
 
 Signing is RSA-PSS with the digest salt length. Open-market requests use `status=open`.
 

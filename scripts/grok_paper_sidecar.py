@@ -30,7 +30,6 @@ def arm_sidecar_environment() -> None:
     os.environ["EVENT_NEWS_GROK_EXIT_WATCH"] = "true"
     os.environ["EVENT_NEWS_GROK_GROUNDING"] = "true"
     os.environ["EVENT_NEWS_GROK_KALSHI_SERIES"] = "false"
-    os.environ["EVENT_NEWS_GROK_EXIT_PAID"] = "false"
     os.environ.setdefault("GROK_DAILY_USD_CAP", "3")
     os.environ["POLYMARKET_US_ENABLED"] = "false"
     os.environ["POLYMARKET_US_LIVE_TRADING_ENABLED"] = "false"
@@ -322,13 +321,6 @@ def _log_scan_cycle(scores: dict, scan: dict) -> None:
     )
 
 def _log_exit_cycle(logged: object) -> None:
-    from utils.event_news_desk_flags import (
-        EVENT_NEWS_GROK_EXIT_PAID,
-        event_news_desk_flag_enabled,
-    )
-
-    if event_news_desk_flag_enabled(EVENT_NEWS_GROK_EXIT_PAID, live=False):
-        return
     count = logged if isinstance(logged, int) else 0
     print(f"grok paper exit logged={count} paid_calls=0", file=sys.stderr)
 
