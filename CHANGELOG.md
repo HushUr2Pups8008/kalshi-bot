@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.38] - 2026-10-25
+
+### Added
+- Live veto, source, and watch calls append token use and dollar cost to the Grok call log. They do not debit the paper spend cap. One veto decision per market and UTC day is logged. The daily edge report grades settled allowed and blocked candidates with the quadratic taker fee and the veto-call cost. A log failure does not change the veto.
+
 ## [0.37.37] - 2026-10-25
 
 ### Changed

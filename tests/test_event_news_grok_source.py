@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -433,3 +434,53 @@ def test_reader_module_does_not_place_orders():
     text = Path("utils/event_news_grok_source.py").read_text(encoding="utf-8")
     assert "place_limit_order" not in text
     assert "trading.executor" not in text
+
+
+def test_source_call_logs_usage_and_returns_the_same_text(tmp_path, monkeypatch):
+    from utils.event_news_grok_source import _post_source
+
+    call_path = tmp_path / "calls.jsonl"
+    monkeypatch.setattr("utils.event_news_grok_veto.GROK_CALL_LOG_PATH", call_path)
+
+    def _post(*_args, **_kwargs):
+        return _Response(
+            200,
+            {
+                "choices": [{"message": {"content": '{"kind":"none","value":"","url":""}'}}],
+                "usage": {
+                    "prompt_tokens": 11,
+                    "completion_tokens": 2,
+                    "cost_in_usd_ticks": 3000000000,
+                },
+            },
+        )
+
+    missing, why = _post_source(
+        {"ticker": "KXTEST-SOURCE"},
+        ticker="KXTEST-SOURCE",
+        environ={},
+        post=_post,
+        started=0.0,
+    )
+    assert missing is None and why == "missing_key"
+    assert not call_path.exists()
+    text, reason = _post_source(
+        {"ticker": "KXTEST-SOURCE"},
+        ticker="KXTEST-SOURCE",
+        environ={"XAI_API_KEY": _SECRET},
+        post=_post,
+        started=0.0,
+    )
+    assert reason is None
+    assert text == '{"kind":"none","value":"","url":""}'
+    row = json.loads(call_path.read_text(encoding="utf-8"))
+    assert row["kind"] == "source"
+    assert row["input_tokens"] == 11
+    assert row["output_tokens"] == 2
+    assert row["total_tokens"] == 13
+    assert row["cost_usd"] == "0.3"
+    assert row["cost_source"] == "provider"
+    assert row["grounded"] is False
+    assert row["rationale"] == ""
+    assert row["prompt_hash"] == ""
+    assert _SECRET not in call_path.read_text(encoding="utf-8")

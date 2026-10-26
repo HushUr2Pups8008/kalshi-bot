@@ -31,6 +31,7 @@ from utils.event_news_grok_veto import (
     GROK_TIMEOUT_SECONDS,
     XAI_API_KEY_ENV,
     XAI_CHAT_URL,
+    append_chat_call,
 )
 from utils.event_news_research import (
     event_news_executed_side_skip_reason,
@@ -215,6 +216,17 @@ def _post_source(
     if not key:
         _log_source("timeout", ticker, _elapsed_ms(started), "missing_key")
         return None, "missing_key"
+
+    def _logged(skip: str | None, body: Any = None) -> None:
+        append_chat_call(
+            kind="source",
+            ticker=ticker,
+            grounded=False,
+            body=body,
+            skip_reason=skip,
+            verdict="",
+        )
+
     payload = {
         "model": GROK_MODEL,
         "temperature": 0,
@@ -243,20 +255,26 @@ def _post_source(
         )
     except requests.Timeout:
         _log_source("timeout", ticker, _elapsed_ms(started), "timeout")
+        _logged("timeout")
         return None, "timeout"
     except Exception:
         _log_source("timeout", ticker, _elapsed_ms(started), "request_error")
+        _logged("request_error")
         return None, "request_error"
     status = getattr(response, "status_code", None)
     if status != 200:
         _log_source("timeout", ticker, _elapsed_ms(started), f"http_{status}")
+        _logged("http")
         return None, "http"
+    body: Any = None
     try:
         body = response.json()
         content = body["choices"][0]["message"]["content"]
     except Exception:
         _log_source("timeout", ticker, _elapsed_ms(started), "parse_fail")
+        _logged("parse_fail", body)
         return None, "parse_fail"
+    _logged(None, body)
     return str(content), None
 
 

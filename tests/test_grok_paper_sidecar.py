@@ -722,6 +722,7 @@ def test_empty_daily_report_does_not_invent_numbers(tmp_path: Path) -> None:
         market_lookup=lambda ticker: None,
         report_path=tmp_path / "grok-edge-daily.md",
         now=NOW,
+        decision_log_path=tmp_path / "veto-decisions.jsonl",
     )
     assert "not enough data" in text
     assert "hit rate: not enough data" in text
@@ -767,6 +768,7 @@ def test_daily_report_joins_a_settled_market_and_withholds_a_one_row_interval(tm
         market_lookup=lookup,
         report_path=tmp_path / "grok-edge-daily.md",
         now=NOW,
+        decision_log_path=tmp_path / "veto-decisions.jsonl",
     )
     assert "n: 1" in text
     assert "hit rate: 1 of 1" in text
@@ -856,6 +858,7 @@ def test_daily_report_settles_polymarket_on_its_endpoint(tmp_path: Path) -> None
         polymarket_lookup=polymarket_lookup,
         report_path=tmp_path / "grok-edge-daily.md",
         now=NOW,
+        decision_log_path=tmp_path / "veto-decisions.jsonl",
     )
     assert kalshi_calls == ["KXTRUMPSAY-A"]
     assert poly_calls == ["parc-example-yes", "parc-missing"]
