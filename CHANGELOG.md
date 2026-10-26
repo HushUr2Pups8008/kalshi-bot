@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.42] - 2026-10-26
+
+### Removed
+- The maker shadow no longer grades fills from the public trades tape. Queue-ahead size is not stored. The resting bid on the paper candidate log stays. `EVENT_NEWS_MAKER_FIRST` stays off. No order is placed.
+
 ## [0.37.41] - 2026-10-26
 
 ### Changed
