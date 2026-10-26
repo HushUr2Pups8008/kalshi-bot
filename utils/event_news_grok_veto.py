@@ -23,6 +23,7 @@ import requests
 from utils.event_news_grok_flags import event_news_grok_trace_enabled
 from utils.event_news_research import (
     event_news_executed_side_skip_reason,
+    event_news_fee_net_edge,
     snapshot_ask_cents,
 )
 from utils.logger import get_logger
@@ -431,7 +432,7 @@ def append_chat_call(
     verdict: str = "",
     call_log_path: Path | None = None,
     now: datetime | None = None,
-) -> None:
+) -> dict[str, Any] | None:
     """Append one chat call. A log failure must not change the caller result.
 
     This does not reserve or debit the paper spend cap. Prompt text stays out.
@@ -466,89 +467,74 @@ def append_chat_call(
         }
         record.update(meta)
         _append_jsonl(path, record)
+        return record
     except Exception:
-        return
-
-
-def _plain_depth(value: Any) -> int | float | str | None:
-    if isinstance(value, bool):
         return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return value
-    if isinstance(value, str) and value.strip():
-        return value
-    return None
-
-
-def _side_depth(market: Any, side: str) -> int | float | str | None:
-    for name in (f"{side}_ask_size_fp", f"{side}_ask_size"):
-        found = _plain_depth(getattr(market, name, None))
-        if found is not None:
-            return found
-    return None
-
-
-def _decision_seen(path: Path, ticker: str, side: str, day: str) -> bool:
-    if not path.is_file():
-        return False
-    text = path.read_text(encoding="utf-8")
-    for line in text.splitlines():
-        if not line.strip():
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(row, dict):
-            continue
-        if (
-            str(row.get("ticker") or "") == ticker
-            and str(row.get("side") or "") == side
-            and str(row.get("date") or "") == day
-        ):
-            return True
-    return False
 
 
 def _record_veto_decision(
-    analysis: Any,
-    packet: EventNewsGrokVetoPacket,
-    result: str,
-    *,
-    now: datetime | None,
+    analysis: Any, packet: EventNewsGrokVetoPacket, result: str, *,
+    now: datetime | None, usage: Mapping[str, Any],
 ) -> None:
-    """First ticker/side/UTC-date row wins. Later calls still hit Grok."""
+    """First ticker, side, and UTC date wins. A log error does not change the veto."""
     try:
-        path = VETO_DECISION_LOG_PATH
-        stamp = _utc_stamp(now)
-        day = stamp[:10]
-        ticker = packet.ticker
-        side = packet.side
-        if _decision_seen(path, ticker, side, day):
-            return
+        path, stamp = VETO_DECISION_LOG_PATH, _utc_stamp(now)
+        day, ticker, side = stamp[:10], packet.ticker, packet.side
+        if path.is_file():
+            for line in path.read_text(encoding="utf-8").splitlines():
+                try:
+                    prior = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if (prior.get("ticker"), prior.get("side"), prior.get("date")) == (ticker, side, day):
+                    return
+        market, depth = getattr(analysis, "market", None), None
+        for name in (f"{side}_ask_size_fp", f"{side}_ask_size"):
+            found = getattr(market, name, None)
+            if isinstance(found, (int, float, str)) and not isinstance(found, bool) and str(found).strip():
+                depth = found
+                break
         ask = packet.yes_ask_cents if side == "yes" else packet.no_ask_cents
-        if type(ask) is not int:
-            ask = None
-        _append_jsonl(
-            path,
-            {
-                "ts": stamp,
-                "date": day,
-                "ticker": ticker,
-                "side": side,
-                "ask_cents": ask,
-                "depth": _side_depth(getattr(analysis, "market", None), side),
-                "decision": (
-                    "allow" if result == "yes" else "block" if result == "no" else "unavailable"
-                ),
-                "fee_net_edge": packet.fee_net_edge,
-                "contracts": packet.proposed_contracts,
-            },
-        )
+        tokens = usage.get("total_tokens")
+        _append_jsonl(path, {
+            "ts": stamp, "date": day, "ticker": ticker, "side": side, "depth": depth,
+            "ask_cents": ask if type(ask) is int else None,
+            "decision": {"yes": "allow", "no": "block"}.get(result, "unavailable"),
+            "total_tokens": tokens if type(tokens) is int else None,
+            "cost_usd": str(usage.get("cost_usd") or "0"),
+        })
     except Exception:
         return
+
+
+def grade_veto_decisions(rows: list[Mapping[str, Any]], settled: Mapping[str, str]) -> str:
+    """8-contract taker per market-day. Unavailable is skipped. n under 15 is not enough."""
+    sums, counts, seen = {"allow": Decimal(0), "block": Decimal(0)}, {"allow": 0, "block": 0}, set()
+    for row in rows:
+        decision, ask = str(row.get("decision") or ""), row.get("ask_cents")
+        key = (str(row.get("ticker") or ""), str(row.get("side") or ""), str(row.get("date") or ""))
+        result = settled.get(key[0])
+        if decision not in sums or not all(key) or key in seen or type(ask) is not int or result not in {"yes", "no"}:
+            continue
+        seen.add(key)
+        scored = event_news_fee_net_edge(Decimal("0.5"), ask, 8)
+        if scored is None:
+            continue
+        price = Decimal(ask) / Decimal(100) * 8
+        won = (key[1] == "yes") == (result == "yes")
+        sums[decision] += (Decimal(8) - price - scored[1]) if won else (-price - scored[1])
+        counts[decision] += 1
+
+    def _cell(name: str) -> str:
+        if counts[name] < 15:
+            return f"not enough data (n={counts[name]})"
+        return format(sums[name], "f")
+
+    return (
+        "\n## Veto counterfactual\n\n| decision | n | fee-net sum |\n| --- | --- | --- |\n"
+        f"| allowed | {counts['allow']} | {_cell('allow')} |\n"
+        f"| blocked | {counts['block']} | {_cell('block')} |\n"
+    )
 
 
 def event_news_grok_veto_decision(
@@ -558,6 +544,7 @@ def event_news_grok_veto_decision(
     post: Callable[..., Any] | None = None,
     timeout_seconds: float = GROK_TIMEOUT_SECONDS,
     grounded: bool | None = None,
+    usage_out: dict[str, Any] | None = None,
 ) -> str:
     """Return yes, no, or timeout. Never logs the API key.
 
@@ -582,7 +569,7 @@ def event_news_grok_veto_decision(
         return "timeout"
 
     def _logged(body: Any, skip: str | None, verdict: str) -> None:
-        append_chat_call(
+        record = append_chat_call(
             kind="veto",
             ticker=packet.ticker,
             grounded=False,
@@ -590,6 +577,11 @@ def event_news_grok_veto_decision(
             skip_reason=skip,
             verdict=verdict,
         )
+        if usage_out is None or not isinstance(record, dict):
+            return
+        tokens = record.get("total_tokens")
+        usage_out["total_tokens"] = tokens if type(tokens) is int else None
+        usage_out["cost_usd"] = record.get("cost_usd") or "0"
 
     user_content = json.dumps(
         packet.as_prompt_dict(environ=env),
@@ -714,12 +706,14 @@ def event_news_grok_veto_allows_live_post(
     if edge is not None and edge <= 0:
         return False
     packet = event_news_grok_veto_packet(analysis, contracts=contracts)
+    usage: dict[str, Any] = {}
     result = event_news_grok_veto_decision(
         packet,
         environ=environ,
         post=post,
+        usage_out=usage,
     )
     env = os.environ if environ is None else environ
     if str(env.get(XAI_API_KEY_ENV) or "").strip():
-        _record_veto_decision(analysis, packet, result, now=now)
+        _record_veto_decision(analysis, packet, result, now=now, usage=usage)
     return result == "yes"

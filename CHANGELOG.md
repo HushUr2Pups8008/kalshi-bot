@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.41] - 2026-10-26
+
+### Changed
+- One veto decision row per market, side, and UTC day records the ask, depth, time, allow or block or unavailable, tokens, and dollar cost. The daily report grades that row as an 8-contract taker with the live fee. A bucket under 15 rows says not enough data. Unavailable is not a model block.
+
 ## [0.37.40] - 2026-10-26
 
 ### Removed

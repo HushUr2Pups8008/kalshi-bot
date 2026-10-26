@@ -28,7 +28,12 @@ from utils.event_news_desk_flags import (
 )
 from utils.event_news_grok_flags import EVENT_NEWS_BAND_FLOOR_CENTS
 from utils.event_news_maker_shadow import resting_bid_cents
-from utils.event_news_grok_veto import GROK_MODEL, VETO_DECISION_LOG_PATH, XAI_API_KEY_ENV
+from utils.event_news_grok_veto import (
+    GROK_MODEL,
+    VETO_DECISION_LOG_PATH,
+    XAI_API_KEY_ENV,
+    grade_veto_decisions,
+)
 from utils.event_news_research import (
     EVENT_NEWS_COHORT_ID,
     event_news_fee_net_edge,
@@ -1720,79 +1725,6 @@ def score_open_positions(
             _insert_paper_row(db_path, "position_scores", record)
     return counts
 
-def _veto_counterfactual_text(
-    decision_path: Path,
-    call_log_path: Path,
-    market_lookup: Callable[[str], Any],
-) -> str:
-    """Grade the first veto row of each market-day. Fee is the whole-lot quote."""
-    first: dict[tuple[str, str, str], Mapping[str, Any]] = {}
-    for row in _read_jsonl(decision_path):
-        ticker = str(row.get("ticker") or "").strip()
-        side = str(row.get("side") or "").strip().lower()
-        day = str(row.get("date") or "").strip()
-        decision = str(row.get("decision") or "")
-        if (
-            not ticker
-            or side not in {"yes", "no"}
-            or not day
-            or decision not in {"allow", "block"}
-        ):
-            continue
-        first.setdefault((ticker, side, day), row)
-    sums = {"allow": Decimal("0"), "block": Decimal("0")}
-    counts = {"allow": 0, "block": 0}
-    for row in first.values():
-        ask = row.get("ask_cents")
-        contracts = row.get("contracts")
-        if (
-            type(ask) is not int
-            or ask < 1
-            or type(contracts) is not int
-            or contracts < 1
-        ):
-            continue
-        try:
-            market = market_lookup(str(row.get("ticker") or ""))
-        except Exception:
-            continue
-        result = _settlement_result(market)
-        if result not in {"yes", "no"}:
-            continue
-        scored = event_news_fee_net_edge(Decimal("0.5"), ask, contracts)
-        if scored is None:
-            continue
-        fee = scored[1]
-        price = (Decimal(ask) / Decimal(100)) * Decimal(contracts)
-        won = (str(row.get("side") or "") == "yes") == (result == "yes")
-        pnl = (Decimal(contracts) - price - fee) if won else (-price - fee)
-        bucket = "allow" if row.get("decision") == "allow" else "block"
-        sums[bucket] += pnl
-        counts[bucket] += 1
-    cost = Decimal("0")
-    for row in _read_jsonl(call_log_path):
-        if str(row.get("kind") or "") != "veto":
-            continue
-        amount = _decimal(row.get("cost_usd"))
-        if amount is None:
-            continue
-        cost += amount
-
-    def _cell(bucket: str) -> str:
-        if counts[bucket] == 0:
-            return "not enough data"
-        return format(sums[bucket], "f")
-
-    return (
-        "\n## Veto counterfactual\n\n"
-        "| decision | n | fee-net sum |\n"
-        "| --- | --- | --- |\n"
-        f"| allowed | {counts['allow']} | {_cell('allow')} |\n"
-        f"| blocked | {counts['block']} | {_cell('block')} |\n\n"
-        f"veto-call cost: {format(cost, 'f')}\n"
-    )
-
-
 def write_daily_edge_report(
     *,
     candidate_log_path: Path = CANDIDATE_LOG_PATH,
@@ -1818,11 +1750,20 @@ def write_daily_edge_report(
     )
     joined = _joined_settled_rows(candidates, comparisons, settlements)
     text = _daily_report_text(joined, spend_line, now=now).rstrip("\n")
-    text += _veto_counterfactual_text(
-        VETO_DECISION_LOG_PATH if decision_log_path is None else decision_log_path,
-        call_log_path,
-        market_lookup,
+    decision_rows = _read_jsonl(
+        VETO_DECISION_LOG_PATH if decision_log_path is None else decision_log_path
     )
+    settled: dict[str, str] = {}
+    for row in decision_rows:
+        ticker = str(row.get("ticker") or "")
+        if ticker and ticker not in settled:
+            try:
+                result = _settlement_result(market_lookup(ticker))
+            except Exception:
+                result = None
+            if result in {"yes", "no"}:
+                settled[ticker] = result
+    text += grade_veto_decisions(decision_rows, settled)
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(text, encoding="utf-8")
     return text
