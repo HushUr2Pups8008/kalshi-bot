@@ -119,18 +119,18 @@ def test_arm_keeps_an_explicit_dry_run_cap(monkeypatch) -> None:
         "EVENT_NEWS_GROK_EXIT_WATCH",
         "EVENT_NEWS_GROK_GROUNDING",
         "EVENT_NEWS_GROK_KALSHI_SERIES",
-        "EVENT_NEWS_GROK_EXIT_PAID",
         "POLYMARKET_US_ENABLED",
         "POLYMARKET_US_LIVE_TRADING_ENABLED",
     ):
         monkeypatch.setenv(name, os.environ.get(name, ""))
     monkeypatch.setenv("GROK_DAILY_USD_CAP", "0.50")
+    monkeypatch.delenv("EVENT_NEWS_GROK_EXIT_PAID", raising=False)
     arm_sidecar_environment()
     assert os.environ["GROK_DAILY_USD_CAP"] == "0.50"
     assert os.environ["KALSHI_GROK_PAPER_SIDECAR"] == "true"
     assert os.environ["LIVE_TRADING_ENABLED"] == "false"
     assert os.environ["EVENT_NEWS_GROK_KALSHI_SERIES"] == "false"
-    assert os.environ["EVENT_NEWS_GROK_EXIT_PAID"] == "false"
+    assert "EVENT_NEWS_GROK_EXIT_PAID" not in os.environ
 
 
 def test_sidecar_logs_polymarket_paper_active_and_blocks_live(monkeypatch, capsys) -> None:
@@ -146,19 +146,19 @@ def test_sidecar_logs_polymarket_paper_active_and_blocks_live(monkeypatch, capsy
         "EVENT_NEWS_GROK_EXIT_WATCH",
         "EVENT_NEWS_GROK_GROUNDING",
         "EVENT_NEWS_GROK_KALSHI_SERIES",
-        "EVENT_NEWS_GROK_EXIT_PAID",
         "POLYMARKET_US_ENABLED",
         "POLYMARKET_US_LIVE_TRADING_ENABLED",
     ):
         monkeypatch.setenv(name, os.environ.get(name, ""))
     monkeypatch.setenv("POLYMARKET_US_ENABLED", "true")
     monkeypatch.setenv("POLYMARKET_US_LIVE_TRADING_ENABLED", "true")
+    monkeypatch.delenv("EVENT_NEWS_GROK_EXIT_PAID", raising=False)
     arm_sidecar_environment()
     assert os.environ["POLYMARKET_US_ENABLED"] == "false"
     assert os.environ["POLYMARKET_US_LIVE_TRADING_ENABLED"] == "false"
     assert os.environ["LIVE_TRADING_ENABLED"] == "false"
     assert os.environ["EVENT_NEWS_GROK_KALSHI_SERIES"] == "false"
-    assert os.environ["EVENT_NEWS_GROK_EXIT_PAID"] == "false"
+    assert "EVENT_NEWS_GROK_EXIT_PAID" not in os.environ
     assert capsys.readouterr().err.strip() == (
         "[POLYMARKET_PAPER] active venue=polymarket_us order_endpoint=blocked"
     )
@@ -317,13 +317,9 @@ def test_polymarket_scan_still_posts_when_kalshi_series_is_off(tmp_path: Path) -
     assert any("PMTRUMPAPPROVE-26NOV06-TEST" in json.dumps(payload) for payload in calls)
 
 
-def test_exit_cycle_log_is_silent_while_paid_exit_stays_on(capsys, monkeypatch) -> None:
+def test_exit_cycle_log_reports_zero_paid_calls(capsys) -> None:
     import scripts.grok_paper_sidecar as sidecar
 
-    monkeypatch.delenv("EVENT_NEWS_GROK_EXIT_PAID", raising=False)
-    sidecar._log_exit_cycle(None)
-    assert capsys.readouterr().err == ""
-    monkeypatch.setenv("EVENT_NEWS_GROK_EXIT_PAID", "false")
     sidecar._log_exit_cycle(2)
     assert capsys.readouterr().err.strip() == "grok paper exit logged=2 paid_calls=0"
     sidecar._log_exit_cycle("nope")

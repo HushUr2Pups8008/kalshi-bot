@@ -20,7 +20,6 @@ import requests
 
 from utils.event_news_desk_flags import (
     EVENT_NEWS_GROK_EDGE_SCAN,
-    EVENT_NEWS_GROK_EXIT_PAID,
     EVENT_NEWS_GROK_EXIT_WATCH,
     EVENT_NEWS_GROK_KALSHI_SERIES,
     HARD_MAX_CONTRACTS,
@@ -69,7 +68,6 @@ RESERVE_P90_MULTIPLIER = Decimal("1.5")
 COST_TICKS_PER_USD = Decimal("10000000000")
 MEASURED_COST_WINDOW = 20
 AGREE_ABS = Decimal("0.05")
-STRONG_CONTRARY_CONFIDENCE = Decimal("0.70")
 MAX_MARKETS_PER_CYCLE = 1
 SCAN_TOP_N = 3
 SCAN_CLOSE_WINDOW = timedelta(hours=72)
@@ -118,12 +116,6 @@ _UNGROUNDED_SYSTEM = (
     "prob is the probability the market resolves YES, from 0 to 1. "
     "confidence is from 0 to 1. sources is an empty list. "
     "rationale is one short sentence."
-)
-_EXIT_SYSTEM = (
-    "Use web search and X search. "
-    "contrary is true only for strong evidence against the open side. "
-    "prob is the probability the market resolves YES, from 0 to 1. "
-    "confidence is from 0 to 1. sources is a list of http urls."
 )
 _EDGE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -1317,7 +1309,7 @@ def run_paper_exit_watch(
     raw_dir: Path = RAW_DIR,
     now: datetime | None = None,
 ) -> int:
-    """Log a paper exit at the bid. Does not cancel or sell."""
+    """Log a free bid and ask mark. Does not call Grok, cancel, or sell."""
     if live or not event_news_desk_flag_enabled(
         EVENT_NEWS_GROK_EXIT_WATCH,
         live=False,
@@ -1325,12 +1317,6 @@ def run_paper_exit_watch(
     ):
         return 0
     logged = 0
-    paid = event_news_desk_flag_enabled(
-        EVENT_NEWS_GROK_EXIT_PAID,
-        live=False,
-        environ=environ,
-    )
-    exit_cache_path = exit_log_path.with_suffix(".cache.json")
     for position in positions:
         ticker = str(position.get("ticker") or "").strip()
         side = str(position.get("side") or "").strip().lower()
@@ -1340,64 +1326,15 @@ def run_paper_exit_watch(
         bid = _bid_cents(market, side)
         if bid is None:
             continue
-        ask, close = _quote_cents(market, side, "ask"), _book_field(market, "close_time", "expected_expiration_time")
-        if not paid:
-            _append_jsonl(
-                mark_log_path,
-                {
-                    "ts": _stamp(now),
-                    "ticker": ticker,
-                    "side": side,
-                    "bid_cents": bid,
-                    "ask_cents": ask,
-                    "paid": False,
-                },
-            )
-            logged += 1
-            continue
-        key = f"{ticker}|{side}"
-        cached_exit = _cache_get(exit_cache_path, key) or {}
-        moved = _ask_moved(cached_exit.get("bid_cents"), bid) or _ask_moved(cached_exit.get("ask_cents"), ask)
-        parsed = _parse_utc(close)
-        near = parsed is not None and abs(parsed - (now or datetime.now(timezone.utc))) <= timedelta(hours=24)
-        if cached_exit and not moved and not near:
-            continue
-        prompt = (
-            f"Open {side} position on {ticker}. "
-            "Is there strong contrary evidence from Trump posts, the schedule, "
-            "speeches, or news?"
-        )
-        result = _call_grok(
-            ticker=ticker,
-            prompt=prompt,
-            system=_EXIT_SYSTEM,
-            grounded=True,
-            environ=environ,
-            post=post,
-            call_log_path=call_log_path,
-            spend_path=spend_path,
-            raw_dir=raw_dir,
-            now=now,
-            kind="exit",
-        )
-        if result is None or result.skip_reason or not result.sources:
-            continue
-        _cache_put(exit_cache_path, key, {"bid_cents": bid, "ask_cents": ask, "ts": _stamp(now), "verdict": result.verdict})
-        if result.verdict != "CONTRARY":
-            continue
-        if result.confidence is None or result.confidence < STRONG_CONTRARY_CONFIDENCE:
-            continue
         _append_jsonl(
-            exit_log_path,
+            mark_log_path,
             {
                 "ts": _stamp(now),
                 "ticker": ticker,
                 "side": side,
                 "bid_cents": bid,
-                "confidence": str(result.confidence),
-                "sources": list(result.sources),
-                "hold_to_settle_cents": None,
-                "paper_only": True,
+                "ask_cents": _quote_cents(market, side, "ask"),
+                "paid": False,
             },
         )
         logged += 1

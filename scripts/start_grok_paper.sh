@@ -24,7 +24,6 @@ export EVENT_NEWS_GROK_EDGE_SCAN=true
 export EVENT_NEWS_GROK_EXIT_WATCH=true
 export EVENT_NEWS_GROK_GROUNDING=true
 export EVENT_NEWS_GROK_KALSHI_SERIES=false
-export EVENT_NEWS_GROK_EXIT_PAID=false
 export GROK_DAILY_USD_CAP=3
 
 PY="$ROOT/.venv/bin/python"

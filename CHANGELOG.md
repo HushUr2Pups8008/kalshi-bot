@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.39] - 2026-10-25
+
+### Removed
+- The paper exit watch no longer calls Grok. It logs a free bid and ask mark for each open position. `EVENT_NEWS_GROK_EXIT_PAID` is gone. Stable scans, tie-breaks, and Polymarket series scans stay. The live veto, source, and watch stay. The spend cap is unchanged.
+
 ## [0.37.38] - 2026-10-25
 
 ### Added

@@ -19,7 +19,6 @@ from config import cfg
 from main import TradingBot
 from utils.event_news_desk_flags import (
     EVENT_NEWS_GROK_EDGE_SCAN,
-    EVENT_NEWS_GROK_EXIT_PAID,
     EVENT_NEWS_GROK_EXIT_WATCH,
     EVENT_NEWS_GROK_KALSHI_SERIES,
     _DESK_FLAG_NAMES,
@@ -807,52 +806,29 @@ def test_comparison_brier_and_ev_need_settled_rows() -> None:
     assert bucket["ci95_high"] == Decimal("2") + Decimal("1.96")
 
 
-def test_exit_logs_a_sourced_contrary_read_and_does_not_order(tmp_path: Path) -> None:
+def test_exit_logs_the_bid_and_does_not_call_or_order(tmp_path: Path) -> None:
+    """A resting bid is a mark. The exit watch does not post or write an exit row."""
     calls: list[dict] = []
-
-    def post(url, json, headers, timeout):  # noqa: A002
-        calls.append(json)
-        text = json_dumps_contrary(True)
-        return _Response({"output_text": text, "citations": ["https://example.test/contrary"]})
-
+    marks = tmp_path / "marks.jsonl"
     logged = run_paper_exit_watch(
         [{"ticker": "KXTRUMPSAY-26OCT20-TEST", "side": "yes"}],
         live=False,
         market_lookup=lambda ticker: {"yes_bid": 60, "no_bid": 40},
         environ={XAI_API_KEY_ENV: "test-key"},
-        post=post,
+        post=_poster(calls),
         call_log_path=tmp_path / "calls.jsonl",
         exit_log_path=tmp_path / "exits.jsonl",
+        mark_log_path=marks,
         spend_path=tmp_path / "spend.json",
         now=NOW,
     )
     assert logged == 1
-    row = _rows(tmp_path / "exits.jsonl")[0]
+    assert calls == []
+    assert not (tmp_path / "exits.jsonl").exists()
+    assert not (tmp_path / "calls.jsonl").exists()
+    row = _rows(marks)[0]
     assert row["bid_cents"] == 60
-    assert row["paper_only"] is True
-    assert row["hold_to_settle_cents"] is None
-    assert row["sources"] == ["https://example.test/contrary"]
-    assert "tools" in calls[0]
-
-    def quiet(url, json, headers, timeout):  # noqa: A002
-        text = json.dumps(
-            {"contrary": True, "confidence": 0.9, "probability": 0.2, "sources": []}
-        )
-        return _Response({"output_text": text})
-
-    silent = run_paper_exit_watch(
-        [{"ticker": "KXTRUMPSAY-26OCT20-TEST", "side": "yes"}],
-        live=False,
-        market_lookup=lambda ticker: {"yes_bid": 60},
-        environ={XAI_API_KEY_ENV: "test-key"},
-        post=quiet,
-        call_log_path=tmp_path / "calls2.jsonl",
-        exit_log_path=tmp_path / "exits2.jsonl",
-        spend_path=tmp_path / "spend2.json",
-        now=NOW,
-    )
-    assert silent == 0
-    assert not (tmp_path / "exits2.jsonl").exists()
+    assert row["paid"] is False
     compared = exit_versus_hold(
         side="yes",
         bid_cents=60,
@@ -1035,7 +1011,7 @@ def test_untradeable_scan_makes_no_paid_call(tmp_path: Path) -> None:
 
 
 def test_exit_watch_logs_both_open_books_without_a_paid_call(tmp_path: Path) -> None:
-    """One mocked contrary pass writes both open positions. The ask string is not the bid."""
+    """Both open books get a mark. The ask string is not the bid, and nothing is posted."""
     books = {
         "KXTRUMPACT-26OCT18-T6": _empty_yes_book("KXTRUMPACT-26OCT18-T6"),
         "KXTRUTHSOCIAL-26OCT24-T240": SimpleNamespace(
@@ -1045,13 +1021,7 @@ def test_exit_watch_logs_both_open_books_without_a_paid_call(tmp_path: Path) -> 
         ),
     }
     calls: list[str] = []
-
-    def post(url, json, headers, timeout):  # noqa: A002
-        calls.append(url)
-        return _Response(
-            {"output_text": json_dumps_contrary(True), "citations": ["https://example.test/contrary"]}
-        )
-
+    marks = tmp_path / "marks.jsonl"
     logged = run_paper_exit_watch(
         [
             {"ticker": "KXTRUMPACT-26OCT18-T6", "side": "yes"},
@@ -1060,58 +1030,24 @@ def test_exit_watch_logs_both_open_books_without_a_paid_call(tmp_path: Path) -> 
         live=False,
         market_lookup=lambda ticker: books[ticker],
         environ={XAI_API_KEY_ENV: "test-key", "GROK_DAILY_USD_CAP": "3"},
-        post=post,
+        post=_poster(calls),
         call_log_path=tmp_path / "calls.jsonl",
         exit_log_path=tmp_path / "grok_edge_exits.jsonl",
+        mark_log_path=marks,
         spend_path=tmp_path / "spend.json",
         raw_dir=tmp_path / "raw",
         now=NOW,
     )
     assert logged == 2
-    assert len(calls) == 2
-    rows = _rows(tmp_path / "grok_edge_exits.jsonl")
+    assert calls == []
+    assert not (tmp_path / "grok_edge_exits.jsonl").exists()
+    rows = _rows(marks)
     assert [row["ticker"] for row in rows] == [
         "KXTRUMPACT-26OCT18-T6",
         "KXTRUTHSOCIAL-26OCT24-T240",
     ]
     assert [row["bid_cents"] for row in rows] == [99, 99]
-    assert all(type(row["bid_cents"]) is int and row["paper_only"] is True for row in rows)
-
-
-def test_exit_rechecks_only_after_five_cents_or_inside_a_day_of_close(tmp_path: Path) -> None:
-    """A flat book more than a day from close is cached. Five cents or a near close pays again."""
-    calls: list[int] = []
-
-    def post(url, json, headers, timeout):  # noqa: A002
-        calls.append(1)
-        return _Response(
-            {"output_text": json_dumps_contrary(True), "citations": ["https://example.test/contrary"]}
-        )
-
-    book = {"yes_bid": 60, "yes_ask": 62, "close_time": "2026-11-20T23:00:00Z"}
-    positions = [{"ticker": "KXTRUMPSAY-26OCT20-TEST", "side": "yes"}]
-    kwargs = {
-        "live": False,
-        "market_lookup": lambda ticker: book,
-        "environ": {XAI_API_KEY_ENV: "test-key", "GROK_DAILY_USD_CAP": "3"},
-        "post": post,
-        "call_log_path": tmp_path / "calls.jsonl",
-        "exit_log_path": tmp_path / "exits.jsonl",
-        "spend_path": tmp_path / "spend.json",
-        "now": NOW,
-    }
-    assert run_paper_exit_watch(positions, **kwargs) == 1
-    assert run_paper_exit_watch(positions, **kwargs) == 0
-    book["yes_bid"] = 64
-    assert run_paper_exit_watch(positions, **kwargs) == 0
-    book["yes_bid"] = 65
-    assert run_paper_exit_watch(positions, **kwargs) == 1
-    book["yes_ask"] = 67
-    assert run_paper_exit_watch(positions, **kwargs) == 1
-    assert len(calls) == 3
-    book["close_time"] = "2026-10-18T00:00:00Z"
-    assert run_paper_exit_watch(positions, **kwargs) == 1
-    assert len(calls) == 4
+    assert all(type(row["bid_cents"]) is int and row["paid"] is False for row in rows)
 
 
 def test_series_and_scans_leave_one_dollar_for_exit(tmp_path: Path) -> None:
@@ -1254,7 +1190,6 @@ def test_paid_exit_off_logs_the_mark_and_does_not_post(tmp_path: Path) -> None:
         "environ": {
             XAI_API_KEY_ENV: "test-key",
             "GROK_DAILY_USD_CAP": "3",
-            EVENT_NEWS_GROK_EXIT_PAID: "false",
         },
         "post": _poster(calls),
         "call_log_path": tmp_path / "calls.jsonl",
@@ -1285,7 +1220,7 @@ def test_paid_exit_off_does_not_invent_a_mark_without_a_bid(tmp_path: Path) -> N
         [{"ticker": "KXTRUMPSAY-26OCT20-TEST", "side": "yes"}],
         live=False,
         market_lookup=lambda ticker: {"yes_bid": 0},
-        environ={XAI_API_KEY_ENV: "test-key", EVENT_NEWS_GROK_EXIT_PAID: "false"},
+        environ={XAI_API_KEY_ENV: "test-key"},
         post=_poster(calls),
         call_log_path=tmp_path / "calls.jsonl",
         exit_log_path=tmp_path / "exits.jsonl",
@@ -1327,7 +1262,7 @@ def test_new_flags_do_not_arm_the_live_order_path_or_the_plist() -> None:
     assert EVENT_NEWS_GROK_EDGE_SCAN not in _DESK_FLAG_NAMES
     assert EVENT_NEWS_GROK_EXIT_WATCH not in _DESK_FLAG_NAMES
     assert EVENT_NEWS_GROK_KALSHI_SERIES not in _DESK_FLAG_NAMES
-    assert EVENT_NEWS_GROK_EXIT_PAID not in _DESK_FLAG_NAMES
+    assert "EVENT_NEWS_GROK_EXIT_PAID" not in _DESK_FLAG_NAMES
     assert event_news_any_live_desk_flag(
         {EVENT_NEWS_GROK_EDGE_SCAN: "true", EVENT_NEWS_GROK_EXIT_WATCH: "true"}
     ) is False
@@ -1369,7 +1304,7 @@ def test_new_flags_do_not_arm_the_live_order_path_or_the_plist() -> None:
     assert "EVENT_NEWS_GROK_EXIT_WATCH=true" in sidecar_script
     assert "EVENT_NEWS_GROK_GROUNDING=true" in sidecar_script
     assert "EVENT_NEWS_GROK_KALSHI_SERIES=false" in sidecar_script
-    assert "EVENT_NEWS_GROK_EXIT_PAID=false" in sidecar_script
+    assert "EVENT_NEWS_GROK_EXIT_PAID" not in sidecar_script
     assert "GROK_DAILY_USD_CAP=3" in sidecar_script
     assert "bot_runtime.kalshi-grok-paper.lock" in sidecar_script
     assert "bot_runtime.kalshi-event-news-20260820.lock" not in sidecar_script
@@ -1482,28 +1417,27 @@ def test_reported_cost_above_the_reserve_fills_the_cap(tmp_path: Path) -> None:
 
 
 def test_exit_without_a_probability_does_not_log(tmp_path: Path) -> None:
-    def post(url, headers, timeout, **_payload):
-        text = (
-            '{"contrary": true, "confidence": 0.95, '
-            '"sources": ["https://example.test/contrary"]}'
-        )
-        return _Response({"output_text": text, "citations": ["https://example.test/contrary"]})
-
+    """A bid is marked even when the old exit reply would have failed to parse."""
+    calls: list[dict] = []
+    marks = tmp_path / "marks.jsonl"
     logged = run_paper_exit_watch(
         [{"ticker": "KXTRUMPSAY-26OCT20-TEST", "side": "yes"}],
         live=False,
         market_lookup=lambda ticker: {"yes_bid": 60},
         environ={XAI_API_KEY_ENV: "test-key"},
-        post=post,
+        post=_poster(calls),
         call_log_path=tmp_path / "calls.jsonl",
         exit_log_path=tmp_path / "exits.jsonl",
+        mark_log_path=marks,
         spend_path=tmp_path / "spend.json",
         raw_dir=tmp_path / "raw",
         now=NOW,
     )
-    assert logged == 0
+    assert logged == 1
+    assert calls == []
     assert not (tmp_path / "exits.jsonl").exists()
-    assert _rows(tmp_path / "calls.jsonl")[0]["skip_reason"] == "malformed"
+    assert not (tmp_path / "calls.jsonl").exists()
+    assert _rows(marks)[0]["bid_cents"] == 60
 
 
 def test_two_reserves_cannot_both_pass_the_same_cap(tmp_path: Path) -> None:
