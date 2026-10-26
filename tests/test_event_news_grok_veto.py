@@ -483,10 +483,13 @@ def test_veto_logs_chat_usage_and_one_decision_per_market_day(tmp_path, monkeypa
     ]
     assert saved[0]["ask_cents"] == 85
     assert saved[0]["depth"] == "4.00"
-    assert saved[0]["fee_net_edge"] == 0.24
-    assert saved[0]["contracts"] == 8
+    assert saved[0]["total_tokens"] == 104
+    assert saved[0]["cost_usd"] == "0.125"
+    assert "fee_net_edge" not in saved[0]
+    assert "contracts" not in saved[0]
     assert saved[0]["date"] == "2026-10-25"
     assert saved[0]["side"] == "no"
+    assert saved[0]["ts"] == "2026-10-25T15:00:00Z"
     assert saved[1]["depth"] is None
 
 
@@ -526,6 +529,10 @@ def test_timeout_is_unavailable_and_model_no_stays_a_block(tmp_path, monkeypatch
         ("KXTRUTHSOCIAL-26OCT17-B129", "unavailable"),
         ("KXTRUMPACT-26OCT25-T6", "block"),
     ]
+    assert saved[0]["cost_usd"] == "0"
+    assert saved[0]["total_tokens"] is None
+    assert saved[1]["total_tokens"] == 104
+    assert saved[1]["cost_usd"] == "0.1"
 
 
 def test_missing_key_and_early_gate_write_no_veto_rows(tmp_path, monkeypatch):

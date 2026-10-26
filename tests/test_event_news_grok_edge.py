@@ -2908,51 +2908,55 @@ def test_daily_report_warns_when_spend_exceeds_half_the_week(tmp_path: Path) -> 
     assert "WARN" not in quiet
 
 
-def test_veto_table_uses_the_quadratic_fee_and_sums_only_veto_calls(tmp_path: Path) -> None:
-    """A 7-lot fee is the quadratic quote, not seven times the one-lot fee."""
+def test_veto_table_grades_eight_contracts_and_hides_small_samples(tmp_path: Path) -> None:
+    """An 8-lot fee is the quadratic quote, not eight times the one-lot fee.
+
+    One settled row is not enough data. Unavailable, a bad ask, an open
+    market, and a second row for the same market-day stay out of the sum.
+    """
     from utils.event_news_research import event_news_fee_net_edge
 
     decisions = tmp_path / "decisions.jsonl"
     calls = tmp_path / "calls.jsonl"
-    decision_rows = [
+    allows = [
         {
-            "date": "2026-10-25",
+            "date": f"2026-10-{day:02d}",
             "ticker": "KXTEST-A",
             "side": "yes",
             "ask_cents": 67,
-            "contracts": 7,
             "decision": "allow",
-        },
+        }
+        for day in range(1, 16)
+    ]
+    decision_rows = [
+        *allows,
+        {**allows[0], "ask_cents": 10, "decision": "block"},
         {
-            "date": "2026-10-25",
-            "ticker": "KXTEST-A",
-            "side": "yes",
-            "ask_cents": 10,
-            "contracts": 1,
-            "decision": "block",
-        },
-        {
-            "date": "2026-10-25",
+            "date": "2026-10-16",
             "ticker": "KXTEST-B",
             "side": "no",
             "ask_cents": 40,
-            "contracts": 2,
             "decision": "block",
         },
         {
-            "date": "2026-10-25",
+            "date": "2026-10-16",
+            "ticker": "KXTEST-U",
+            "side": "no",
+            "ask_cents": 40,
+            "decision": "unavailable",
+        },
+        {
+            "date": "2026-10-17",
             "ticker": "KXTEST-C",
             "side": "yes",
             "ask_cents": 55,
-            "contracts": 1,
             "decision": "allow",
         },
         {
-            "date": "2026-10-25",
+            "date": "2026-10-17",
             "ticker": "KXTEST-D",
             "side": "yes",
             "ask_cents": "60",
-            "contracts": 1,
             "decision": "allow",
         },
     ]
@@ -2961,15 +2965,7 @@ def test_veto_table_uses_the_quadratic_fee_and_sums_only_veto_calls(tmp_path: Pa
         encoding="utf-8",
     )
     calls.write_text(
-        "".join(
-            json.dumps(row) + "\n"
-            for row in (
-                {"kind": "veto", "cost_usd": "0.10"},
-                {"kind": "veto", "cost_usd": "0.02"},
-                {"kind": "scan", "cost_usd": "9.00"},
-                {"kind": "source", "cost_usd": "1.00"},
-            )
-        ),
+        json.dumps({"kind": "scan", "cost_usd": "9.00"}) + "\n",
         encoding="utf-8",
     )
 
@@ -2978,19 +2974,11 @@ def test_veto_table_uses_the_quadratic_fee_and_sums_only_veto_calls(tmp_path: Pa
             return {"status": "active", "result": "yes"}
         return {"status": "finalized", "result": "yes"}
 
-    def payout(side: str, ask: int, contracts: int, result_yes: bool) -> Decimal:
-        fee = event_news_fee_net_edge(Decimal("0.5"), ask, contracts)[1]
-        price = (Decimal(ask) / Decimal(100)) * Decimal(contracts)
-        won = (side == "yes") == result_yes
-        if won:
-            return Decimal(contracts) - price - fee
-        return -price - fee
-
-    lot_fee = event_news_fee_net_edge(Decimal("0.5"), 67, 7)[1]
+    eight_fee = event_news_fee_net_edge(Decimal("0.5"), 67, 8)[1]
     one_fee = event_news_fee_net_edge(Decimal("0.5"), 67, 1)[1]
-    assert lot_fee != one_fee * 7
-    allowed = payout("yes", 67, 7, True)
-    blocked = payout("no", 40, 2, True)
+    assert eight_fee != one_fee * 8
+    price = Decimal(67) / Decimal(100) * 8
+    allowed = (Decimal(8) - price - eight_fee) * 15
     text = write_daily_edge_report(
         candidate_log_path=tmp_path / "candidates.jsonl",
         comparison_log_path=tmp_path / "comparisons.jsonl",
@@ -3001,8 +2989,7 @@ def test_veto_table_uses_the_quadratic_fee_and_sums_only_veto_calls(tmp_path: Pa
         call_log_path=calls,
         decision_log_path=decisions,
     )
-    assert f"| allowed | 1 | {format(allowed, 'f')} |" in text
-    assert f"| blocked | 1 | {format(blocked, 'f')} |" in text
-    assert text.count("veto-call cost:") == 1
-    assert "veto-call cost: 0.12" in text
-    assert "9.00" not in text.split("veto-call cost:", 1)[1]
+    assert f"| allowed | 15 | {format(allowed, 'f')} |" in text
+    assert "| blocked | 1 | not enough data (n=1) |" in text
+    assert "veto-call cost" not in text
+    assert "9.00" not in text.split("## Veto counterfactual", 1)[1]
