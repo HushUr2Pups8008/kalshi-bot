@@ -118,6 +118,8 @@ def test_arm_keeps_an_explicit_dry_run_cap(monkeypatch) -> None:
         "EVENT_NEWS_GROK_EDGE_SCAN",
         "EVENT_NEWS_GROK_EXIT_WATCH",
         "EVENT_NEWS_GROK_GROUNDING",
+        "EVENT_NEWS_GROK_KALSHI_SERIES",
+        "EVENT_NEWS_GROK_EXIT_PAID",
         "POLYMARKET_US_ENABLED",
         "POLYMARKET_US_LIVE_TRADING_ENABLED",
     ):
@@ -127,6 +129,8 @@ def test_arm_keeps_an_explicit_dry_run_cap(monkeypatch) -> None:
     assert os.environ["GROK_DAILY_USD_CAP"] == "0.50"
     assert os.environ["KALSHI_GROK_PAPER_SIDECAR"] == "true"
     assert os.environ["LIVE_TRADING_ENABLED"] == "false"
+    assert os.environ["EVENT_NEWS_GROK_KALSHI_SERIES"] == "false"
+    assert os.environ["EVENT_NEWS_GROK_EXIT_PAID"] == "false"
 
 
 def test_sidecar_logs_polymarket_paper_active_and_blocks_live(monkeypatch, capsys) -> None:
@@ -141,6 +145,8 @@ def test_sidecar_logs_polymarket_paper_active_and_blocks_live(monkeypatch, capsy
         "EVENT_NEWS_GROK_EDGE_SCAN",
         "EVENT_NEWS_GROK_EXIT_WATCH",
         "EVENT_NEWS_GROK_GROUNDING",
+        "EVENT_NEWS_GROK_KALSHI_SERIES",
+        "EVENT_NEWS_GROK_EXIT_PAID",
         "POLYMARKET_US_ENABLED",
         "POLYMARKET_US_LIVE_TRADING_ENABLED",
     ):
@@ -151,6 +157,8 @@ def test_sidecar_logs_polymarket_paper_active_and_blocks_live(monkeypatch, capsy
     assert os.environ["POLYMARKET_US_ENABLED"] == "false"
     assert os.environ["POLYMARKET_US_LIVE_TRADING_ENABLED"] == "false"
     assert os.environ["LIVE_TRADING_ENABLED"] == "false"
+    assert os.environ["EVENT_NEWS_GROK_KALSHI_SERIES"] == "false"
+    assert os.environ["EVENT_NEWS_GROK_EXIT_PAID"] == "false"
     assert capsys.readouterr().err.strip() == (
         "[POLYMARKET_PAPER] active venue=polymarket_us order_endpoint=blocked"
     )
@@ -205,6 +213,131 @@ def test_reserve_floor_screen_spends_the_only_nickel(tmp_path: Path) -> None:
     assert logged[-1]["grounded"] is True
     assert logged[-1]["skip_reason"] == "spend_cap"
     assert not (tmp_path / "comparisons.jsonl").exists()
+
+
+def test_kalshi_series_off_spends_nothing_and_keeps_the_maker_bid(tmp_path: Path) -> None:
+    """The same nickel screen posts when the flag is unset. Off spends nothing.
+
+    The ungrounded scan is cut with the series and tie-break calls. The
+    paper ledger acceptance is $0, and that scan is a paid call. The maker
+    bid stays on the skip row. Polymarket is not in this list.
+    """
+    from utils.event_news_grok_edge import run_paper_edge_scan
+
+    calls: list[dict] = []
+
+    def post(url, json, headers, timeout):  # noqa: A002
+        calls.append(json)
+        return _Response({})
+
+    run_paper_edge_scan(
+        [_market()],
+        live=False,
+        allowlist=("KXTRUMPSAY",),
+        environ={
+            XAI_API_KEY_ENV: "test-key",
+            "GROK_DAILY_USD_CAP": "3",
+            "EVENT_NEWS_GROK_KALSHI_SERIES": "false",
+        },
+        post=post,
+        now=NOW,
+        post_lookup=lambda: "post-1",
+        call_log_path=tmp_path / "calls.jsonl",
+        candidate_log_path=tmp_path / "candidates.jsonl",
+        comparison_log_path=tmp_path / "comparisons.jsonl",
+        spend_path=tmp_path / "spend.json",
+        cache_path=tmp_path / "cache.json",
+        screen_log_path=tmp_path / "screen.jsonl",
+        db_path=tmp_path / "grok_paper.db",
+    )
+    assert calls == []
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "candidates.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert rows[-1]["skip_reason"] == "kalshi_series_off"
+    assert rows[-1]["maker_limit_cents"] == 54
+    assert not (tmp_path / "calls.jsonl").exists()
+
+
+def test_polymarket_scan_still_posts_when_kalshi_series_is_off(tmp_path: Path) -> None:
+    """PM pause ends 2026-11-03 UTC. A Kalshi skip counts toward the cycle cap."""
+    from utils.event_news_grok_edge import run_paper_edge_scan
+
+    calls: list[dict] = []
+    kalshi = _market()
+    polymarket = {
+        "ticker": "PMTRUMPAPPROVE-26NOV06-TEST",
+        "series": "PMTRUMPAPPROVE",
+        "venue": "polymarket_us",
+        "status": "active",
+        "yes_ask": 60,
+        "no_ask": 46,
+        "title": "Will Trump approve",
+        "rules": "Official record",
+        "close_time": "2026-11-06T23:00:00Z",
+    }
+
+    def post(url, json, headers, timeout):  # noqa: A002
+        calls.append(json)
+        text = __import__("json").dumps(
+            {
+                "probability": "0.40",
+                "confidence": "0.40",
+                "verdict": "NO",
+                "sources": [],
+            }
+        )
+        return _Response({"output_text": text})
+
+    run_paper_edge_scan(
+        [kalshi, polymarket],
+        live=False,
+        allowlist=("KXTRUMPSAY", "PMTRUMPAPPROVE"),
+        max_markets=2,
+        environ={
+            XAI_API_KEY_ENV: "test-key",
+            "GROK_DAILY_USD_CAP": "3",
+            "EVENT_NEWS_GROK_KALSHI_SERIES": "false",
+        },
+        post=post,
+        now=datetime(2026, 11, 3, tzinfo=timezone.utc),
+        post_lookup=lambda: "post-1",
+        call_log_path=tmp_path / "calls.jsonl",
+        candidate_log_path=tmp_path / "candidates.jsonl",
+        comparison_log_path=tmp_path / "comparisons.jsonl",
+        spend_path=tmp_path / "spend.json",
+        cache_path=tmp_path / "cache.json",
+        screen_log_path=tmp_path / "screen.jsonl",
+        db_path=tmp_path / "grok_paper.db",
+    )
+    assert calls
+    blob = json.dumps(calls)
+    assert kalshi["ticker"] not in blob
+    assert any("PMTRUMPAPPROVE-26NOV06-TEST" in json.dumps(payload) for payload in calls)
+
+
+def test_exit_cycle_log_is_silent_while_paid_exit_stays_on(capsys, monkeypatch) -> None:
+    import scripts.grok_paper_sidecar as sidecar
+
+    monkeypatch.delenv("EVENT_NEWS_GROK_EXIT_PAID", raising=False)
+    sidecar._log_exit_cycle(None)
+    assert capsys.readouterr().err == ""
+    monkeypatch.setenv("EVENT_NEWS_GROK_EXIT_PAID", "false")
+    sidecar._log_exit_cycle(2)
+    assert capsys.readouterr().err.strip() == "grok paper exit logged=2 paid_calls=0"
+    sidecar._log_exit_cycle("nope")
+    assert capsys.readouterr().err.strip() == "grok paper exit logged=0 paid_calls=0"
+
+
+def test_scan_cycle_log_names_the_series_flag(capsys, monkeypatch) -> None:
+    import scripts.grok_paper_sidecar as sidecar
+
+    monkeypatch.setenv("EVENT_NEWS_GROK_KALSHI_SERIES", "false")
+    sidecar._log_scan_cycle({"grounded_calls": 1}, {"grounded_calls": 2})
+    assert capsys.readouterr().err.strip() == (
+        "grok paper scan kalshi_series=false grounded_calls=3"
+    )
 
 
 def test_exit_watch_waits_out_the_sixty_seconds_before_the_long_sleep(monkeypatch) -> None:
@@ -496,6 +629,89 @@ def test_live_position_score_does_not_call(tmp_path: Path) -> None:
     )
     assert counts == {"scored": 0, "skipped": 0}
     assert calls == []
+
+
+def test_kalshi_position_score_writes_series_off_and_does_not_call(tmp_path: Path) -> None:
+    calls: list[dict] = []
+
+    def post(url, json, headers, timeout):  # noqa: A002
+        calls.append(json)
+        return _Response({})
+
+    counts = score_open_positions(
+        [{"ticker": "KXTRUMPSAY-26OCT20-TEST", "position": 8}],
+        live=False,
+        market_lookup=lambda ticker: _market(),
+        environ={
+            XAI_API_KEY_ENV: "test-key",
+            "GROK_DAILY_USD_CAP": "3",
+            "EVENT_NEWS_GROK_KALSHI_SERIES": "false",
+        },
+        post=post,
+        now=NOW,
+        call_log_path=tmp_path / "calls.jsonl",
+        score_log_path=tmp_path / "scores.jsonl",
+        spend_path=tmp_path / "spend.json",
+        cache_path=tmp_path / "cache.json",
+        db_path=tmp_path / "grok_paper.db",
+    )
+    assert calls == []
+    assert counts["scored"] == 0
+    assert counts["skipped"] == 1
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "scores.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert rows[0]["skip_reason"] == "kalshi_series_off"
+    assert rows[0]["decision"] == "not_scored"
+
+
+def test_polymarket_position_score_still_calls_when_kalshi_series_is_off(tmp_path: Path) -> None:
+    calls: list[dict] = []
+
+    def post(url, json, headers, timeout):  # noqa: A002
+        calls.append(json)
+        text = __import__("json").dumps(
+            {
+                "probability": "0.40",
+                "confidence": "0.40",
+                "verdict": "NO",
+                "sources": [],
+            }
+        )
+        return _Response({"output_text": text})
+
+    market = {
+        "ticker": "PMTRUMPAPPROVE-26NOV06-TEST",
+        "series": "PMTRUMPAPPROVE",
+        "venue": "polymarket_us",
+        "status": "active",
+        "yes_ask": 60,
+        "no_ask": 46,
+        "title": "Will Trump approve",
+        "rules": "Official record",
+        "close_time": "2026-11-06T23:00:00Z",
+    }
+    score_open_positions(
+        [{"ticker": "PMTRUMPAPPROVE-26NOV06-TEST", "position": 4}],
+        live=False,
+        market_lookup=lambda ticker: market,
+        environ={
+            XAI_API_KEY_ENV: "test-key",
+            "GROK_DAILY_USD_CAP": "3",
+            "EVENT_NEWS_GROK_KALSHI_SERIES": "false",
+        },
+        post=post,
+        now=datetime(2026, 11, 3, tzinfo=timezone.utc),
+        call_log_path=tmp_path / "calls.jsonl",
+        score_log_path=tmp_path / "scores.jsonl",
+        spend_path=tmp_path / "spend.json",
+        cache_path=tmp_path / "cache.json",
+        db_path=tmp_path / "grok_paper.db",
+        post_lookup=lambda: "post-1",
+    )
+    assert calls
+    assert "PMTRUMPAPPROVE-26NOV06-TEST" in json.dumps(calls)
 
 
 def test_empty_daily_report_does_not_invent_numbers(tmp_path: Path) -> None:

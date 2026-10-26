@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.37] - 2026-10-25
+
+### Changed
+- The operated sidecar sets `EVENT_NEWS_GROK_KALSHI_SERIES` and `EVENT_NEWS_GROK_EXIT_PAID` false. Kalshi series, tie-break, ungrounded scans, position scores, and paid exit calls do not run. A free bid and ask mark is written per open position. Polymarket paper scans stay. Live veto, source, and watch stay. An unset flag still defaults on.
+
 ## [0.37.36] - 2026-10-25
 
 ### Added
