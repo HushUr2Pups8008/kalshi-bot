@@ -420,7 +420,7 @@ def grade_veto_decisions(rows: list[Mapping[str, Any]], settled: Mapping[str, st
         return format(sums[name], "f")
 
     return (
-        "\n## Veto counterfactual\n\n| decision | n | fee-net sum |\n| --- | --- | --- |\n"
+        "\n## Veto counterfactual\n\ndecide at n>=15 allowed rows\n\n| decision | n | fee-net sum |\n| --- | --- | --- |\n"
         f"| allowed | {counts['allow']} | {_cell('allow')} |\n"
         f"| blocked | {counts['block']} | {_cell('block')} |\n"
     )

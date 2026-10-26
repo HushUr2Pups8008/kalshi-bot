@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import math
 import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
@@ -32,6 +33,8 @@ from utils.event_news_grok_edge import (
     MIN_CALL_RESERVE_USD,
     PAPER_CLOSE_WINDOW,
     PAPER_QUEUE_CONTRACTS,
+    _bh_q,
+    _ev_p,
     _grounded_tool_payload,
     _insert_paper_row,
     _reserve_spend,
@@ -632,6 +635,7 @@ def test_cost_ticks_replace_the_reserve(tmp_path: Path) -> None:
                     "cost_in_usd_ticks": ticks if grounded else 0,
                     "input_tokens": 12,
                     "output_tokens": 4,
+                    "cached_tokens": 7,
                 }
             return _Response(body)
 
@@ -645,6 +649,7 @@ def test_cost_ticks_replace_the_reserve(tmp_path: Path) -> None:
     assert Decimal(grounded["cost_usd"]) == Decimal("0.0037756")
     assert grounded["cost_in_usd_ticks"] == 37756000
     assert grounded["input_tokens"] == 12
+    assert grounded["cached_tokens"] == 7
     spent = json.loads((tmp_path / "ticks" / "spend.json").read_text(encoding="utf-8"))
     assert Decimal(spent["spent_usd"]) == Decimal("0.0037756")
 
@@ -2435,6 +2440,7 @@ def test_scorecard_matches_the_hand_interval_and_promotion(tmp_path: Path) -> No
     assert {row["outcome"] for row in logged} == {0, 1}
     assert "-0.9975000000000000000000000003" in text
     assert "0.9625000000000000000000000003" in text
+    assert "not enough data (n=2)" in text
     assert "eligible for live" not in text
     assert "recommend off" not in text
 
@@ -2451,7 +2457,7 @@ def test_scorecard_matches_the_hand_interval_and_promotion(tmp_path: Path) -> No
         report_path=tmp_path / "off.md",
         now=NOW,
     )
-    assert "recommend off" in off
+    assert "recommend off; ci_low=-0.5175; clustered_low=-0.5175; bh_q=1; tested=1" in off
     assert "| KXTRUMPSAY | live | 15 | 0 |" in off
 
     paper_db = tmp_path / "paper.db"
@@ -2467,7 +2473,8 @@ def test_scorecard_matches_the_hand_interval_and_promotion(tmp_path: Path) -> No
         report_path=tmp_path / "eligible.md",
         now=NOW,
     )
-    assert "eligible for live" in eligible
+    assert "eligible for live; ci_low=0.4825; clustered_low=0.4825; bh_q=0; tested=1" in eligible
+    assert "decide at n>=15 allowed rows" in eligible
     empty = write_paper_scorecard(
         db_path=tmp_path / "missing.db",
         market_lookup=lookup,
@@ -2493,6 +2500,60 @@ def test_scorecard_matches_the_hand_interval_and_promotion(tmp_path: Path) -> No
     assert "eligible for live" not in dup
     # Latest 60c ask wins. Exact taker fee is $0.0168, so a YES settlement is $0.3832.
     assert "| 0.3832 |" in dup
+
+
+def test_same_date_brackets_share_one_cluster_and_bh_steps_down(tmp_path: Path) -> None:
+    """One date is one CI observation. BH q steps down so a lucky series cannot pass alone."""
+    values = [Decimal(1), Decimal(3)]
+    stats = scorecard_interval(values)
+    half = (stats["ci95_high"] - stats["ci95_low"]) / 2
+    z = float(stats["mean"] * Decimal("1.96") / half)
+    assert abs(z - 2) < 1e-6
+    # WHY: the tail must use the scorecard SE. A second variance formula would move z off 2.
+    assert _ev_p(values) == Decimal(repr(0.5 * math.erfc(z / math.sqrt(2))))
+    assert _bh_q([("a", Decimal("0.04")), ("b", Decimal("0.04")), ("c", Decimal("0.05"))]) == {
+        "a": Decimal("0.05"),
+        "b": Decimal("0.05"),
+        "c": Decimal("0.05"),
+    }
+    db_path = tmp_path / "grok_paper.db"
+    _insert_paper_row(db_path, "paper_candidates", _score_row("KXHORMUZWEEKLY-26OCT25-A", "KXHORMUZWEEKLY"))
+    _insert_paper_row(db_path, "paper_candidates", _score_row("KXHORMUZWEEKLY-26OCT25-B", "KXHORMUZWEEKLY"))
+    for index in range(5):
+        _insert_paper_row(db_path, "paper_candidates", _score_row(f"KXSCOREPOS-{index}", "KXSCOREPOS"))
+        _insert_paper_row(db_path, "paper_candidates", _score_row(f"KXSCORENEG-{index}", "KXSCORENEG"))
+    decisions = tmp_path / "veto.jsonl"
+    decisions.write_text(
+        json.dumps(
+            {
+                "date": "2026-10-01",
+                "ticker": "KXTEST-A",
+                "side": "yes",
+                "ask_cents": 67,
+                "decision": "allow",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    def lookup(ticker: str) -> dict:
+        result = "no" if ticker.startswith("KXSCORENEG") else "yes"
+        return {"status": "finalized", "result": result}
+
+    text = write_paper_scorecard(
+        db_path=db_path,
+        market_lookup=lookup,
+        report_path=tmp_path / "card.md",
+        now=NOW,
+        veto_log_path=decisions,
+    )
+    assert "| KXHORMUZWEEKLY | paper | 2 |" in text
+    assert "not enough data (n=1)" in text
+    assert "| 0 | 2 | not enough data (n=5) |" in text
+    assert "| 1 | 2 | not enough data (n=5) |" in text
+    assert "| allowed | 1 | not enough data (n=1) |" in text
+    assert "decide at n>=15 allowed rows" in text
 
 
 def _polymarket_row(ticker: str, **overrides) -> dict:

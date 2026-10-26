@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.44] - 2026-10-26
+
+### Changed
+- The paper scorecard reports the per-trade fee-net CI and an event-clustered CI. Brackets that share a settlement date are one observation. Series with at least 5 settled rows get a Benjamini-Hochberg q for mean fee-net above 0. A promotion still uses the unclustered 15-trade CI and also prints the clustered lower bound and the q. A bucket under 15 says not enough data. The veto counterfactual in that report says to decide at 15 allowed rows. Call logs record cached_tokens when the provider sends them.
+
 ## [0.37.43] - 2026-10-26
 
 ### Removed
