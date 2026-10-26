@@ -374,47 +374,18 @@ async def test_execute_live_slow_yes_still_places(
     rest.place_limit_order.assert_called_once()
 
 
-def test_paper_grounding_skips_only_an_explicit_no(politics_cohort, tmp_path, monkeypatch):
-    monkeypatch.setattr(grounding_log, "GROUNDING_LOG_PATH", tmp_path / "grounding.jsonl")
-    url = "https://truthsocial.com/@realDonaldTrump"
-    content = json.dumps(
-        {
-            "verdict": "NO",
-            "quoted_evidence": "The source page shows a count of 12 posts.",
-            "url": url,
-        }
-    )
+def test_paper_grounding_skip_does_not_call_chat(politics_cohort):
+    """The chat search path is gone, so paper admission does not post or skip."""
 
-    def _post(*_args, **kwargs):
-        assert kwargs["json"]["search_parameters"] == {
-            "mode": "on",
-            "return_citations": True,
-        }
-        assert "tools" not in kwargs["json"]
-        return _FakeResponse(
-            200,
-            {
-                "id": "resp-paper-1",
-                "citations": [url],
-                "choices": [{"message": {"content": content}}],
-            },
-        )
+    def _post(*_args, **_kwargs):
+        raise AssertionError("chat grounding must not post")
 
     assert event_news_paper_grounding_skip(
         _analysis(),
         contracts=8,
-        environ={"XAI_API_KEY": "secret-key"},
+        environ={"XAI_API_KEY": "secret-key", "EVENT_NEWS_GROK_GROUNDING": "true"},
         post=_post,
-    ) is True
-    rows = [
-        json.loads(line)
-        for line in (tmp_path / "grounding.jsonl").read_text(encoding="utf-8").splitlines()
-    ]
-    assert rows[-1]["verdict"] == "no"
-    assert rows[-1]["response_id"] == "resp-paper-1"
-    assert url in rows[-1]["sources"]
-    assert rows[-1]["outcome"] is None
-    assert "secret" not in (tmp_path / "grounding.jsonl").read_text(encoding="utf-8")
+    ) is False
 
 
 def test_paper_grounding_timeout_and_missing_key_do_not_skip(
@@ -519,6 +490,44 @@ def test_veto_logs_chat_usage_and_one_decision_per_market_day(tmp_path, monkeypa
     assert saved[1]["depth"] is None
 
 
+def test_timeout_is_unavailable_and_model_no_stays_a_block(tmp_path, monkeypatch):
+    """A transport failure is not a model block. A parsed NO still is."""
+    call_path = tmp_path / "calls.jsonl"
+    decision_path = tmp_path / "decisions.jsonl"
+    monkeypatch.setattr("utils.event_news_grok_veto.GROK_CALL_LOG_PATH", call_path)
+    monkeypatch.setattr("utils.event_news_grok_veto.VETO_DECISION_LOG_PATH", decision_path)
+    moment = datetime(2026, 10, 26, 4, tzinfo=timezone.utc)
+
+    def _timeout(*_args, **kwargs):
+        assert "search_parameters" not in kwargs["json"]
+        raise requests.Timeout("slow")
+
+    assert event_news_grok_veto_allows_live_post(
+        _analysis(),
+        contracts=8,
+        environ={"XAI_API_KEY": "secret-key", "EVENT_NEWS_GROK_GROUNDING": "true"},
+        post=_timeout,
+        now=moment,
+    ) is False
+
+    def _no(*_args, **kwargs):
+        assert "search_parameters" not in kwargs["json"]
+        return _FakeResponse(200, _usage_body("NO", 1000000000))
+
+    assert event_news_grok_veto_allows_live_post(
+        _analysis(ticker="KXTRUMPACT-26OCT25-T6"),
+        contracts=8,
+        environ={"XAI_API_KEY": "secret-key"},
+        post=_no,
+        now=moment,
+    ) is False
+    saved = [json.loads(line) for line in decision_path.read_text(encoding="utf-8").splitlines()]
+    assert [(row["ticker"], row["decision"]) for row in saved] == [
+        ("KXTRUTHSOCIAL-26OCT17-B129", "unavailable"),
+        ("KXTRUMPACT-26OCT25-T6", "block"),
+    ]
+
+
 def test_missing_key_and_early_gate_write_no_veto_rows(tmp_path, monkeypatch):
     call_path = tmp_path / "calls.jsonl"
     decision_path = tmp_path / "decisions.jsonl"
@@ -547,7 +556,7 @@ def test_missing_key_and_early_gate_write_no_veto_rows(tmp_path, monkeypatch):
     assert not decision_path.exists()
 
 
-def test_timeout_post_logs_a_block_and_a_log_failure_stays_yes(tmp_path, monkeypatch):
+def test_timeout_post_logs_unavailable_and_a_log_failure_stays_yes(tmp_path, monkeypatch):
     call_path = tmp_path / "calls.jsonl"
     decision_path = tmp_path / "decisions.jsonl"
     monkeypatch.setattr("utils.event_news_grok_veto.GROK_CALL_LOG_PATH", call_path)
@@ -569,7 +578,7 @@ def test_timeout_post_logs_a_block_and_a_log_failure_stays_yes(tmp_path, monkeyp
     assert row["skip_reason"] == "timeout"
     assert row["verdict"] == "timeout"
     saved = json.loads(decision_path.read_text(encoding="utf-8"))
-    assert saved["decision"] == "block"
+    assert saved["decision"] == "unavailable"
     monkeypatch.setattr("utils.event_news_grok_veto.GROK_CALL_LOG_PATH", tmp_path)
     monkeypatch.setattr("utils.event_news_grok_veto.VETO_DECISION_LOG_PATH", tmp_path)
 

@@ -20,16 +20,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 import requests
 
-from utils.event_news_grounding_log import (
-    append_event_news_grounding_record,
-    response_id,
-    response_sources,
-)
-from utils.event_news_grok_flags import (
-    event_news_grok_grounding_enabled,
-    event_news_grok_grounding_for_mode,
-    event_news_grok_trace_enabled,
-)
+from utils.event_news_grok_flags import event_news_grok_trace_enabled
 from utils.event_news_research import (
     event_news_executed_side_skip_reason,
     snapshot_ask_cents,
@@ -56,11 +47,6 @@ _YES_NO_SYSTEM = (
     "Answer only YES or NO. YES means the official packet supports buying "
     "this side at this snapshot price. NO means it does not."
 )
-_GROUNDED_VETO_SYSTEM = (
-    "Reply with one JSON object only. Keys are verdict, confidence, "
-    "quoted_evidence, and url. verdict is YES or NO. "
-    "A verdict without quoted_evidence is invalid."
-)
 
 
 @dataclass(frozen=True)
@@ -85,7 +71,8 @@ class EventNewsGrokVetoPacket:
         *,
         environ: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
-        payload = {
+        del environ
+        return {
             "ticker": self.ticker,
             "side": self.side,
             "yes_ask_cents": self.yes_ask_cents,
@@ -96,14 +83,6 @@ class EventNewsGrokVetoPacket:
             "fee_net_edge": self.fee_net_edge,
             "proposed_contracts": self.proposed_contracts,
         }
-        if not event_news_grok_grounding_enabled(environ):
-            return payload
-        payload["title"] = self.title
-        payload["rules"] = self.rules
-        payload["strike"] = self.strike
-        payload["close_time"] = self.close_time
-        payload["source_text"] = self.source_text
-        return payload
 
 
 def _signal_meta(analysis: Any) -> dict[str, Any]:
@@ -561,7 +540,9 @@ def _record_veto_decision(
                 "side": side,
                 "ask_cents": ask,
                 "depth": _side_depth(getattr(analysis, "market", None), side),
-                "decision": "allow" if result == "yes" else "block",
+                "decision": (
+                    "allow" if result == "yes" else "block" if result == "no" else "unavailable"
+                ),
                 "fee_net_edge": packet.fee_net_edge,
                 "contracts": packet.proposed_contracts,
             },
@@ -580,40 +561,17 @@ def event_news_grok_veto_decision(
 ) -> str:
     """Return yes, no, or timeout. Never logs the API key.
 
-    ``grounded is None`` follows the env-exact flag, which is off unless
-    EVENT_NEWS_GROK_GROUNDING=true. Paper passes True explicitly.
+    Chat completions stay ungrounded. ``grounded`` and
+    EVENT_NEWS_GROK_GROUNDING do not add search_parameters. A transport
+    error, HTTP non-200, or timeout stays timeout, which is not model no.
     """
+    del grounded
     started = time.monotonic()
 
     def _elapsed_ms() -> int:
         return int(round((time.monotonic() - started) * 1000))
 
     env = os.environ if environ is None else environ
-    use_grounding = (
-        event_news_grok_grounding_enabled(env) if grounded is None else grounded
-    )
-
-    def _remember(verdict: str, body: Any = None) -> None:
-        if not use_grounding:
-            return
-        sources = response_sources(body)
-        if not sources:
-            sources = [url for url in packet.evidence_urls if url]
-        try:
-            append_event_news_grounding_record(
-                kind="veto",
-                ticker=packet.ticker,
-                side=packet.side,
-                verdict=verdict,
-                response_id=response_id(body),
-                sources=sources,
-            )
-        except Exception:
-            log.warning(
-                "[EVENT_NEWS_GROK_GROUNDING] journal_failed ticker=%s",
-                packet.ticker,
-            )
-
     key = str(env.get(XAI_API_KEY_ENV) or "").strip()
     if not key:
         log.info(
@@ -621,14 +579,13 @@ def event_news_grok_veto_decision(
             packet.ticker,
             _elapsed_ms(),
         )
-        _remember("timeout")
         return "timeout"
 
     def _logged(body: Any, skip: str | None, verdict: str) -> None:
         append_chat_call(
             kind="veto",
             ticker=packet.ticker,
-            grounded=use_grounding,
+            grounded=False,
             body=body,
             skip_reason=skip,
             verdict=verdict,
@@ -643,15 +600,10 @@ def event_news_grok_veto_decision(
         "temperature": 0,
         "max_tokens": GROK_MAX_TOKENS,
         "messages": [
-            {
-                "role": "system",
-                "content": _GROUNDED_VETO_SYSTEM if use_grounding else _YES_NO_SYSTEM,
-            },
+            {"role": "system", "content": _YES_NO_SYSTEM},
             {"role": "user", "content": user_content},
         ],
     }
-    if use_grounding:
-        payload["search_parameters"] = {"mode": "on", "return_citations": True}
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
@@ -670,7 +622,6 @@ def event_news_grok_veto_decision(
             packet.ticker,
             _elapsed_ms(),
         )
-        _remember("timeout")
         _logged(None, "timeout", "timeout")
         return "timeout"
     except Exception:
@@ -679,7 +630,6 @@ def event_news_grok_veto_decision(
             packet.ticker,
             _elapsed_ms(),
         )
-        _remember("timeout")
         _logged(None, "request_error", "timeout")
         return "timeout"
 
@@ -691,7 +641,6 @@ def event_news_grok_veto_decision(
             _elapsed_ms(),
             status,
         )
-        _remember("timeout")
         _logged(None, "http", "timeout")
         return "timeout"
     body: Any = None
@@ -704,7 +653,6 @@ def event_news_grok_veto_decision(
             packet.ticker,
             _elapsed_ms(),
         )
-        _remember("timeout")
         _logged(body, "parse_fail", "timeout")
         return "timeout"
     if event_news_grok_trace_enabled(env):
@@ -716,43 +664,15 @@ def event_news_grok_veto_decision(
             list(packet.evidence_urls),
             latency_ms=_elapsed_ms(),
         )
-    if use_grounding:
-        parsed = event_news_grok_grounded_verdict(
-            str(content),
-            yes_no=True,
-            allowed_urls=packet.evidence_urls,
-            contract_parts=(
-                packet.title,
-                packet.rules,
-                packet.strike,
-                packet.close_time,
-                packet.source_text,
-            ),
-        )
-        result = parsed if parsed is not None else "timeout"
-    else:
-        result = _parse_yes_no(str(content))
-    if use_grounding:
-        log.info(
-            "[EVENT_NEWS_GROK_VETO] result=%s ticker=%s contracts=%s elapsed_ms=%s "
-            "response_id=%s sources=%s",
-            result,
-            packet.ticker,
-            packet.proposed_contracts,
-            _elapsed_ms(),
-            response_id(body),
-            ",".join(response_sources(body))[:500],
-        )
-    else:
-        log.info(
-            "[EVENT_NEWS_GROK_VETO] result=%s ticker=%s contracts=%s elapsed_ms=%s",
-            result,
-            packet.ticker,
-            packet.proposed_contracts,
-            _elapsed_ms(),
-        )
+    result = _parse_yes_no(str(content))
+    log.info(
+        "[EVENT_NEWS_GROK_VETO] result=%s ticker=%s contracts=%s elapsed_ms=%s",
+        result,
+        packet.ticker,
+        packet.proposed_contracts,
+        _elapsed_ms(),
+    )
     _logged(body, "parse_fail" if result == "timeout" else None, result)
-    _remember(result, body)
     return result
 
 
@@ -763,28 +683,9 @@ def event_news_paper_grounding_skip(
     environ: Mapping[str, str] | None = None,
     post: Callable[..., Any] | None = None,
 ) -> bool:
-    """Skip a paper entry only on an explicit grounded NO.
-
-    Timeout and a missing key do not skip. Live does not call this.
-    """
-    if not event_news_grok_grounding_for_mode(False, environ):
-        return False
-    meta = _signal_meta(analysis)
-    official_p = str(meta.get("blend_bypass_reason") or "") == "official_p" or str(
-        meta.get("source_lane") or ""
-    ) == "research_official_p"
-    if not official_p:
-        return False
-    packet = event_news_grok_veto_packet(analysis, contracts=contracts)
-    return (
-        event_news_grok_veto_decision(
-            packet,
-            environ=environ,
-            post=post,
-            grounded=True,
-        )
-        == "no"
-    )
+    """Chat grounding is gone. This does not call xAI and does not skip."""
+    del analysis, contracts, environ, post
+    return False
 
 
 def event_news_grok_veto_allows_live_post(
