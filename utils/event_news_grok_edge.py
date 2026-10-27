@@ -439,6 +439,14 @@ def comparison_summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "status": "ok" if settled else "not_enough_data",
     }
 
+_YES_PROBABILITY_BANDS = (
+    (Decimal(0), Decimal("0.2"), "0.0-0.2"),
+    (Decimal("0.2"), Decimal("0.4"), "0.2-0.4"),
+    (Decimal("0.4"), Decimal("0.6"), "0.4-0.6"),
+    (Decimal("0.6"), Decimal("0.8"), "0.6-0.8"),
+    (Decimal("0.8"), Decimal("1.0000001"), "0.8-1.0"),
+)
+
 def brier_report(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     scored = [
         (probability, outcome)
@@ -449,15 +457,8 @@ def brier_report(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     if not scored:
         return {"status": "not_enough_data", "n": 0, "brier": None, "buckets": []}
     brier = sum((p - o) ** 2 for p, o in scored) / Decimal(len(scored))
-    edges = (
-        (Decimal(0), Decimal("0.2"), "0.0-0.2"),
-        (Decimal("0.2"), Decimal("0.4"), "0.2-0.4"),
-        (Decimal("0.4"), Decimal("0.6"), "0.4-0.6"),
-        (Decimal("0.6"), Decimal("0.8"), "0.6-0.8"),
-        (Decimal("0.8"), Decimal("1.0000001"), "0.8-1.0"),
-    )
     buckets = []
-    for low, high, name in edges:
+    for low, high, name in _YES_PROBABILITY_BANDS:
         members = [(p, o) for p, o in scored if low <= p < high]
         count = len(members)
         buckets.append({
@@ -2066,6 +2067,26 @@ def promotion_label(*, n: int, cluster_n: int, cluster_low: Decimal | None, q: D
 def _cell(value: Decimal | None) -> str:
     return "" if value is None else format(value, "f")
 
+def _side_band_table(samples: Sequence[tuple]) -> list[str]:
+    """Settled paper and live fee-net. Same YES bands as brier_report. n<15 is withheld."""
+    groups: dict[str, list[Decimal]] = {"yes": [], "no": []}
+    groups.update({name: [] for _low, _high, name in _YES_PROBABILITY_BANDS})
+    for item in samples:
+        side = str(item[4] or "")
+        if side in ("yes", "no"):
+            groups[side].append(item[1])
+        for low, high, name in _YES_PROBABILITY_BANDS:
+            if low <= item[2] < high:
+                groups[name].append(item[1])
+                break
+    lines = ["", "Fee-net by side and by Grok YES probability.", "| bucket | n | fee_net |", "|---|---:|---:|"]
+    for label in ("yes", "no", *(name for _low, _high, name in _YES_PROBABILITY_BANDS)):
+        values = groups[label]
+        count = len(values)
+        shown = f"not enough data (n={count})" if count < 15 else _cell(sum(values, Decimal(0)))
+        lines.append(f"| {label} | {count} | {shown} |")
+    return lines
+
 def _cluster_means(samples: Sequence[tuple]) -> list[Decimal]:
     groups: dict[str, list[Decimal]] = {}
     for item in samples:
@@ -2428,8 +2449,9 @@ def write_paper_scorecard(
         if pnl is None:
             continue
         outcome = Decimal(1 if result == "yes" else 0)
+        side_name = str(side or "").strip().lower()
         grouped.setdefault((venue_name, name), []).append(
-            ((str(side) == "yes") == (result == "yes"), pnl, p_yes, outcome, str(ticker or ""))
+            ((str(side) == "yes") == (result == "yes"), pnl, p_yes, outcome, side_name, str(ticker or ""))
         )
         calibration.append(
             {
@@ -2484,6 +2506,7 @@ def write_paper_scorecard(
             f"{_cell(mean)} | {_cell(low)} | {_cell(high)} | {brier_cell} | {cn} | "
             f"{_guard_cell(clow, cn)} | {_guard_cell(chigh, cn)} | {_cell(q)} | {len(bh)} | {shown} |"
         )
+    lines.extend(_side_band_table([row for rows in grouped.values() for row in rows]))
     lines.extend(
         _polymarket_section(
             polymarket_observation_rows(

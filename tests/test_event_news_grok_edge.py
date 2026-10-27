@@ -2443,6 +2443,9 @@ def test_scorecard_matches_the_hand_interval_and_promotion(tmp_path: Path) -> No
     assert "-0.9975000000000000000000000003" in text
     assert "0.9625000000000000000000000003" in text
     assert "not enough data (n=2)" in text
+    assert "| yes | 2 | not enough data (n=2) |" in text
+    assert "| no | 0 | not enough data (n=0) |" in text
+    assert "| 0.8-1.0 | 2 | not enough data (n=2) |" in text
     assert "eligible for live" not in text
     assert "recommend off" not in text
 
@@ -2478,6 +2481,10 @@ def test_scorecard_matches_the_hand_interval_and_promotion(tmp_path: Path) -> No
     )
     assert "| eligible for live |" in eligible
     assert "decide at n>=15 allowed rows" in eligible
+    # WHY: fifteen settled rows may show the fee-net sum. Fourteen must stay unnamed.
+    assert f"| yes | 15 | {format(win * 15, 'f')} |" in eligible
+    assert f"| 0.8-1.0 | 15 | {format(win * 15, 'f')} |" in eligible
+    assert "| no | 0 | not enough data (n=0) |" in eligible
     lucky_db = tmp_path / "lucky.db"
     for index in range(15):
         _insert_paper_row(lucky_db, "paper_candidates", _score_row(f"KXLUCKY-26OCT25-{index}", "KXLUCKY"))
