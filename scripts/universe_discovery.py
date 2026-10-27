@@ -38,9 +38,8 @@ MAX_SPREAD_EXCLUSIVE = 15
 MOUNTAIN = ZoneInfo("America/Denver")
 PROMOTION_RULE = (
     "A series is eligible for live after at least 15 settled paper trades "
-    "when the fee-net EV 95% CI lower bound is above 0. A live series is "
-    "recommend off when that many trades have a CI upper bound below 0. "
-    "A promotion shows the clustered CI low and the BH q. Under 15 settled trades the bucket says not enough data. "
+    "and 15 clustered events, with clustered fee-net CI low above 0 and BH q at or below 0.10. "
+    "Otherwise it says recommend off or not enough data and names the failing condition. "
     "This report does not change modes."
 )
 POLITICS_CATEGORIES = frozenset({"politics", "elections"})

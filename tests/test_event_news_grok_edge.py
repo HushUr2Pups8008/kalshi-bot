@@ -635,7 +635,7 @@ def test_cost_ticks_replace_the_reserve(tmp_path: Path) -> None:
                     "cost_in_usd_ticks": ticks if grounded else 0,
                     "input_tokens": 12,
                     "output_tokens": 4,
-                    "cached_tokens": 7,
+                    "input_tokens_details": {"cached_tokens": 7},
                 }
             return _Response(body)
 
@@ -2403,18 +2403,20 @@ def test_scorecard_matches_the_hand_interval_and_promotion(tmp_path: Path) -> No
     flat_loss = scorecard_interval([Decimal("-0.10")] * 15)
     assert flat_win["ci95_low"] == Decimal("0.10")
     assert flat_loss["ci95_high"] == Decimal("-0.10")
-    assert promotion_label(
-        mode="paper", effective="paper", n=15, low=flat_win["ci95_low"], high=flat_win["ci95_high"]
-    ) == "eligible for live"
-    assert promotion_label(
-        mode="live", effective="live", n=15, low=flat_loss["ci95_low"], high=flat_loss["ci95_high"]
-    ) == "recommend off"
-    assert promotion_label(
-        mode="paper", effective="paper", n=14, low=Decimal("0.10"), high=Decimal("0.10")
-    ) == ""
-    assert promotion_label(
-        mode="paper", effective="live", n=15, low=Decimal("0.10"), high=Decimal("0.10")
-    ) == ""
+    assert promotion_label(n=15, cluster_n=15, cluster_low=Decimal("0.10"), q=Decimal("0.10")) == "eligible for live"
+    assert promotion_label(n=15, cluster_n=15, cluster_low=Decimal("-0.10"), q=Decimal(1)) == (
+        "recommend off clustered CI, BH q"
+    )
+    # WHY: one event, or a q above 0.10, must not be promoted on the unclustered CI.
+    assert promotion_label(n=15, cluster_n=1, cluster_low=Decimal("0.10"), q=Decimal(0)) == (
+        "not enough data (n=15, clustered n=1) clustered events"
+    )
+    assert promotion_label(n=14, cluster_n=15, cluster_low=Decimal("0.10"), q=Decimal(0)) == (
+        "not enough data (n=14, clustered n=15) settled trades"
+    )
+    assert "eligible for live" not in promotion_label(
+        n=15, cluster_n=15, cluster_low=Decimal("0.10"), q=Decimal("0.11")
+    )
 
     db_path = tmp_path / "grok_paper.db"
     _insert_paper_row(db_path, "paper_candidates", _score_row("KXHORMUZWEEKLY-A", "KXHORMUZWEEKLY"))
@@ -2457,7 +2459,8 @@ def test_scorecard_matches_the_hand_interval_and_promotion(tmp_path: Path) -> No
         report_path=tmp_path / "off.md",
         now=NOW,
     )
-    assert "recommend off; ci_low=-0.5175; clustered_low=-0.5175; bh_q=1; tested=1" in off
+    assert "recommend off clustered CI, BH q" in off
+    assert "eligible for live" not in off
     assert "| KXTRUMPSAY | live | 15 | 0 |" in off
 
     paper_db = tmp_path / "paper.db"
@@ -2473,8 +2476,20 @@ def test_scorecard_matches_the_hand_interval_and_promotion(tmp_path: Path) -> No
         report_path=tmp_path / "eligible.md",
         now=NOW,
     )
-    assert "eligible for live; ci_low=0.4825; clustered_low=0.4825; bh_q=0; tested=1" in eligible
+    assert "| eligible for live |" in eligible
     assert "decide at n>=15 allowed rows" in eligible
+    lucky_db = tmp_path / "lucky.db"
+    for index in range(15):
+        _insert_paper_row(lucky_db, "paper_candidates", _score_row(f"KXLUCKY-26OCT25-{index}", "KXLUCKY"))
+    lucky = write_paper_scorecard(
+        db_path=lucky_db,
+        market_lookup=lambda _ticker: {"status": "finalized", "result": "yes"},
+        report_path=tmp_path / "lucky.md",
+        now=NOW,
+    )
+    # WHY: fifteen brackets of one settlement date are one event.
+    assert "not enough data (n=15, clustered n=1) clustered events" in lucky
+    assert "eligible for live" not in lucky
     empty = write_paper_scorecard(
         db_path=tmp_path / "missing.db",
         market_lookup=lookup,
@@ -2550,8 +2565,8 @@ def test_same_date_brackets_share_one_cluster_and_bh_steps_down(tmp_path: Path) 
     )
     assert "| KXHORMUZWEEKLY | paper | 2 |" in text
     assert "not enough data (n=1)" in text
-    assert "| 0 | 2 | not enough data (n=5) |" in text
-    assert "| 1 | 2 | not enough data (n=5) |" in text
+    assert "| 0 | 2 | not enough data (n=5, clustered n=5) settled trades, clustered events |" in text
+    assert "| 1 | 2 | not enough data (n=5, clustered n=5) settled trades, clustered events |" in text
     assert "| allowed | 1 | not enough data (n=1) |" in text
     assert "decide at n>=15 allowed rows" in text
 
