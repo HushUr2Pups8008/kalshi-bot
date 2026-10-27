@@ -19,6 +19,10 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.45] - 2026-10-27
+### Changed
+- A paper series is eligible for live only when it has 15 settled trades, 15 clustered events, a clustered fee-net CI lower bound above 0, and a BH q at or below 0.10. The label names the failing condition. It still does not change modes. Call logs read cached_tokens from prompt or input token details.
+
 ## [0.37.44] - 2026-10-26
 
 ### Changed

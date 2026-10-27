@@ -2051,15 +2051,17 @@ def scorecard_interval(values: Sequence[Decimal]) -> dict[str, Decimal | int | N
     half = Decimal("1.96") * variance.sqrt() / Decimal(count).sqrt()
     return {"n": count, "mean": mean, "ci95_low": mean - half, "ci95_high": mean + half}
 
-def promotion_label(*, mode: str, effective: str, n: int, low: Decimal | None, high: Decimal | None) -> str:
+def promotion_label(*, n: int, cluster_n: int, cluster_low: Decimal | None, q: Decimal | None) -> str:
     """Report-only. This does not edit the universe file."""
-    if n < 15 or low is None or high is None:
-        return ""
-    if effective == "live" and high < 0:
-        return "recommend off"
-    if mode == "paper" and effective != "live" and low > 0:
-        return "eligible for live"
-    return ""
+    short = [name for name, failed in (("settled trades", n < 15), ("clustered events", cluster_n < 15)) if failed]
+    if short:
+        return f"not enough data (n={n}, clustered n={cluster_n}) {', '.join(short)}"
+    failed = []
+    if not isinstance(cluster_low, Decimal) or cluster_low <= 0:
+        failed.append("clustered CI")
+    if not isinstance(q, Decimal) or q > Decimal("0.10"):
+        failed.append("BH q")
+    return "recommend off " + ", ".join(failed) if failed else "eligible for live"
 
 def _cell(value: Decimal | None) -> str:
     return "" if value is None else format(value, "f")
@@ -2441,8 +2443,8 @@ def write_paper_scorecard(
     lines = [
         f"# Paper scorecard {moment.strftime('%Y-%m-%d')}",
         "",
-        "Report only. Eligible for live: paper, n>=15, fee-net EV CI low > 0.",
-        "Recommend off: effective live, n>=15, CI high < 0. Modes do not change. A promotion shows that CI low, the clustered CI low, and the BH q.",
+        "Report only. Eligible for live needs n>=15, clustered n>=15, clustered CI low > 0, and BH q at or below 0.10.",
+        "Otherwise the cell names the miss. Modes do not change.",
         "EV is per-contract taker-fee-net. One settled row per ticker. CI is mean +/- 1.96 sample stdev / sqrt(n). n<2 has none. Same settlement date is one event.",
         "BH q tests mean fee-net > 0 when n>=5. Brier is the mean squared error of the YES probability against the settlement.",
         "",
@@ -2468,7 +2470,6 @@ def write_paper_scorecard(
         high = stats["ci95_high"] if isinstance(stats["ci95_high"], Decimal) else None
         mean = stats["mean"] if isinstance(stats["mean"], Decimal) else None
         rate = None if n == 0 else Decimal(hits) / Decimal(n)
-        label = promotion_label(mode=mode, effective=effective, n=n, low=low, high=high)
         squared = sum((item[2] - item[3]) ** 2 for item in samples)
         brier = None if n == 0 else squared / Decimal(n)
         brier_cell = "" if brier is None else format(brier.normalize(), "f")
@@ -2477,11 +2478,7 @@ def write_paper_scorecard(
         clow = clustered["ci95_low"] if isinstance(clustered["ci95_low"], Decimal) else None
         chigh = clustered["ci95_high"] if isinstance(clustered["ci95_high"], Decimal) else None
         q = bh.get((venue_name, series))
-        cluster_text = _cell(clow) if cn >= 15 else f"not enough data (n={cn})"
-        shown = f"not enough data (n={n})" if n < 15 else (
-            f"{label}; ci_low={_cell(low)}; clustered_low={cluster_text}; bh_q={_cell(q)}; tested={len(bh)}"
-            if label else ""
-        )
+        shown = promotion_label(n=n, cluster_n=cn, cluster_low=clow, q=q)
         lines.append(
             f"| {venue_name} | {series} | {effective or mode} | {n} | {hits} | {_cell(rate)} | "
             f"{_cell(mean)} | {_cell(low)} | {_cell(high)} | {brier_cell} | {cn} | "
@@ -2780,6 +2777,12 @@ def _provider_usage(body: Any) -> tuple[Decimal | None, dict[str, Any]]:
         raw = usage.get(key)
         if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0:
             meta[key] = raw
+    if "cached_tokens" not in meta:
+        for nest in (usage.get("prompt_tokens_details"), usage.get("input_tokens_details")):
+            raw = nest.get("cached_tokens") if isinstance(nest, dict) else None
+            if type(raw) is int and raw >= 0:
+                meta["cached_tokens"] = raw
+                break
     details = usage.get("server_side_tool_usage_details")
     if isinstance(details, dict):
         for key in ("web_search_calls", "x_search_calls", "x_posts_fetched", "x_users_fetched"):
