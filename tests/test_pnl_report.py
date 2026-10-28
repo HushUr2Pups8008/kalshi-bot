@@ -10,7 +10,10 @@ from decimal import Decimal
 from scripts.pnl_report import (
     assemble_pnl,
     collect_pages,
+    entry_quality_lines,
     incomplete_report,
+    live_order_entry_facts,
+    money,
     reconciliation_lines,
     replace_if_unchanged,
     run_report,
@@ -634,3 +637,136 @@ def test_same_price_on_two_orders_stays_two_rows():
     assert "| yes | 16 | 89 |" not in report
     assert "open size differs from fills" not in report
     assert "fill-order-a" not in report
+
+
+def test_entry_quality_withholds_the_total_under_fifteen():
+    """Fourteen settled fills are not a price, edge, or spread result."""
+    samples = [("KXTEST", "yes", 64, Decimal("1.00")) for _ in range(14)]
+    text = "\n".join(entry_quality_lines(samples, {}, {}))
+    assert "0.60-0.80: not enough data (n=14)" in text
+    assert "0.00-0.20: not enough data (n=0)" in text
+    assert "0.80-1.00: not enough data (n=0)" in text
+    assert "below_8: not enough data (n=0)" in text
+    assert "not stored: not enough data (n=14)" in text
+    assert "not logged: not enough data (n=14)" in text
+    assert "fee_net" not in text
+
+
+def test_entry_quality_prints_a_total_at_fifteen_except_for_a_missing_book():
+    """A missing book is not a spread result, so its fee-net stays hidden at n=15."""
+    samples = [("KXTEST", "yes", 64, Decimal("1.00")) for _ in range(15)]
+    text = "\n".join(
+        entry_quality_lines(samples, {("KXTEST", "yes", 64): Decimal("0.70")}, {})
+    )
+    assert "0.60-0.80: n=15 fee_net=15" in text
+    assert "below_8: n=15 fee_net=15" in text
+    assert "not logged: n=15" in text
+    assert "not logged: n=15 fee_net" not in text
+
+
+def test_no_side_edge_uses_one_minus_the_stored_yes_probability():
+    """NO at 64c with P(YES)=0.20 has 16 cents of edge, which is the 12_19 band."""
+    text = "\n".join(
+        entry_quality_lines(
+            [("KXTEST", "no", 64, Decimal("1"))],
+            {("KXTEST", "no", 64): Decimal("0.20")},
+            {("KXTEST", "no", 64): 4},
+        )
+    )
+    assert "12_19: not enough data (n=1)" in text
+    assert "4c: not enough data (n=1)" in text
+    assert "not logged" not in text
+
+
+def test_entry_samples_keep_settled_fills_and_leave_open_fills_out():
+    samples: list = []
+    assemble_pnl(
+        fill_rows=[
+            _buy(),
+            _buy(
+                ticker="KXTRUMPACT-26OCT25-T3",
+                side="no",
+                yes_price_dollars="0.6200",
+                no_price_dollars="0.3800",
+                order_id="open-order",
+            ),
+        ],
+        settlement_rows=[_settlement()],
+        fill_log_text=_log_line(),
+        paper_rows=[],
+        open_tickers={"KXTRUMPACT-26OCT25-T3"},
+        now=datetime(2026, 10, 20, tzinfo=timezone.utc),
+        entry_samples=samples,
+    )
+    assert len(samples) == 1
+    assert samples[0][:3] == ("KXTRUMPSAY-26OCT19-ZACH", "yes", 64)
+    assert money(samples[0][3]) == "2.7509"
+    assert "open-order" not in str(samples)
+
+
+def test_conflicting_yes_probabilities_stay_unset(tmp_path):
+    path = tmp_path / "trades.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                '{"type":"LIVE_ORDER","ticker":"KXTEST","side":"yes","price_cents":64,"model_probability":0.70,"signal_meta":{"bid_cents":60,"ask_cents":64}}',
+                '{"type":"LIVE_ORDER","ticker":"KXTEST","side":"yes","price_cents":64,"model_probability":0.80,"signal_meta":{"bid_cents":61,"ask_cents":64}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    yes, book = live_order_entry_facts(tmp_path)
+    assert yes[("KXTEST", "yes", 64)] is None
+    assert book[("KXTEST", "yes", 64)] is None
+
+
+def test_entry_quality_flag_prints_and_does_not_write_the_report(tmp_path, capsys):
+    class Client:
+        def list_fills_page(self, **_kwargs):
+            return [_buy()], None
+
+        def list_settlements_page(self, **_kwargs):
+            return [_settlement()], None
+
+        def get_open_positions(self, **_kwargs):
+            return []
+
+    trades = tmp_path / "logs" / "trades" / "live"
+    trades.mkdir(parents=True)
+    (trades / "trades.jsonl").write_text(
+        '{"type":"LIVE_ORDER","ticker":"KXTRUMPSAY-26OCT19-ZACH","side":"yes","price_cents":64,"model_probability":0.70}\n',
+        encoding="utf-8",
+    )
+    code = run_report(
+        Client(),
+        repo=tmp_path,
+        write_fill_log=True,
+        entry_quality=True,
+        now=datetime(2026, 10, 20, tzinfo=timezone.utc),
+    )
+    captured = capsys.readouterr().out
+    assert code == 0
+    assert not (tmp_path / "logs" / "reports").exists()
+    assert "settled_fills=1" in captured
+    assert "0.60-0.80: not enough data (n=1)" in captured
+    assert "below_8: not enough data (n=1)" in captured
+    assert "not logged: not enough data (n=1)" in captured
+    assert "fee_net" not in captured
+
+
+def test_entry_quality_failure_does_not_write_a_report(tmp_path, capsys):
+    class Broken:
+        def list_fills_page(self, **_kwargs):
+            raise ValueError("unread")
+
+    code = run_report(
+        Broken(),
+        repo=tmp_path,
+        write_fill_log=False,
+        entry_quality=True,
+        now=datetime(2026, 10, 20, tzinfo=timezone.utc),
+    )
+    assert code == 1
+    assert capsys.readouterr().out.strip() == "complete=no"
+    assert not (tmp_path / "logs" / "reports").exists()

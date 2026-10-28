@@ -19,6 +19,12 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.50] - 2026-10-28
+
+### Added
+- `scripts/pnl_report.py --entry-quality` prints settled fee-net by entry price band, by edge at entry, and by spread at entry. Under 15 samples it prints not enough data and no total. A missing book prints not logged. The flag does not write the daily report and does not set an exit rule.
+- The paper sidecar logs the open bid to logs/state/grok_edge_marks.jsonl every hour during the scan wait. The scan interval is unchanged.
+
 ## [0.37.49] - 2026-10-28
 
 ### Fixed

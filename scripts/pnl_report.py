@@ -18,7 +18,7 @@ import sys
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 
 COHORT_START = datetime(2026, 8, 20, tzinfo=timezone.utc)
@@ -129,6 +129,139 @@ def price_cents_of(price: Decimal) -> int | None:
     if abs(cents - cents.to_integral_value()) > Decimal("0.001"):
         return None
     return int(cents.to_integral_value())
+
+
+_PRICE_BANDS = (
+    (0, 20, "0.00-0.20"),
+    (20, 40, "0.20-0.40"),
+    (40, 60, "0.40-0.60"),
+    (60, 80, "0.60-0.80"),
+    (80, 101, "0.80-1.00"),
+)
+_EDGE_BANDS = ("below_8", "8_11", "12_19", "20_plus", "not stored")
+_BOOK_PAIRS = (
+    ("bid_cents", "ask_cents"),
+    ("bid", "ask"),
+    ("yes_bid", "yes_ask"),
+    ("no_bid", "no_ask"),
+)
+
+
+def _shown(values: list[Decimal], *, allow_total: bool) -> str:
+    """Under 15, withhold the fee-net total. A missing book never totals."""
+    count = len(values)
+    if count < 15:
+        return f"not enough data (n={count})"
+    if not allow_total:
+        return f"n={count}"
+    return f"n={count} fee_net={money(sum(values, Decimal(0)))}"
+
+
+def _edge_band(side: str, cents: int, probability: Decimal | None) -> str:
+    if probability is None:
+        return "not stored"
+    price = Decimal(cents) / Decimal(100)
+    edge = probability - price if side == "yes" else (Decimal(1) - probability) - price
+    rounded = int((edge * Decimal(100)).quantize(Decimal(1), rounding=ROUND_HALF_UP))
+    if rounded < 8:
+        return "below_8"
+    if rounded < 12:
+        return "8_11"
+    if rounded < 20:
+        return "12_19"
+    return "20_plus"
+
+
+def _spread_cents(record: dict) -> int | None:
+    sources = [record]
+    meta = record.get("signal_meta")
+    if isinstance(meta, dict):
+        sources.append(meta)
+    for source in sources:
+        for bid_name, ask_name in _BOOK_PAIRS:
+            bid, ask = source.get(bid_name), source.get(ask_name)
+            if isinstance(bid, bool) or isinstance(ask, bool):
+                continue
+            if isinstance(bid, int) and isinstance(ask, int) and ask >= bid:
+                return ask - bid
+    return None
+
+
+def live_order_entry_facts(
+    root: Path,
+) -> tuple[dict[tuple[str, str, int], Decimal | None], dict[tuple[str, str, int], int | None]]:
+    """YES probability and spread at the logged order price. Conflicts stay unset."""
+    from utils.trade_log_reader import iter_trade_records
+
+    probabilities: dict[tuple[str, str, int], set[Decimal]] = defaultdict(set)
+    spreads: dict[tuple[str, str, int], set[int]] = defaultdict(set)
+    if not root.is_dir():
+        return {}, {}
+    for record in iter_trade_records(root, event_types={"LIVE_ORDER"}):
+        ticker = str(record.get("ticker") or "").strip()
+        side = str(record.get("side") or "").strip().lower()
+        price = record.get("price_cents")
+        if not ticker or side not in {"yes", "no"} or isinstance(price, bool) or not isinstance(price, int):
+            continue
+        key = (ticker, side, price)
+        raw = record.get("model_probability")
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            probabilities[key].add(Decimal(str(raw)))
+        spread = _spread_cents(record)
+        if spread is not None:
+            spreads[key].add(spread)
+    yes = {
+        key: (next(iter(values)) if len(values) == 1 else None)
+        for key, values in probabilities.items()
+    }
+    book = {
+        key: (next(iter(values)) if len(values) == 1 else None)
+        for key, values in spreads.items()
+    }
+    return yes, book
+
+
+def entry_quality_lines(
+    samples: list[tuple[str, str, int, Decimal]],
+    yes_probability: dict[tuple[str, str, int], Decimal | None],
+    spread_cents: dict[tuple[str, str, int], int | None],
+) -> list[str]:
+    """Fee-net of settled fills by entry price, edge, and spread. No exit rule."""
+    prices: dict[str, list[Decimal]] = {name: [] for _low, _high, name in _PRICE_BANDS}
+    edges: dict[str, list[Decimal]] = {name: [] for name in _EDGE_BANDS}
+    logged: dict[str, list[Decimal]] = defaultdict(list)
+    missing_book: list[Decimal] = []
+    for ticker, side, cents, fee_net in samples:
+        band = "outside"
+        for low, high, name in _PRICE_BANDS:
+            if low <= cents < high:
+                band = name
+                break
+        prices.setdefault(band, []).append(fee_net)
+        probability = yes_probability.get((ticker, side, cents))
+        edges[_edge_band(side, cents, probability)].append(fee_net)
+        spread = spread_cents.get((ticker, side, cents))
+        if spread is None:
+            missing_book.append(fee_net)
+        else:
+            logged[f"{spread}c"].append(fee_net)
+    lines = ["", "## Entry price", ""]
+    for _low, _high, name in _PRICE_BANDS:
+        lines.append(f"{name}: {_shown(prices[name], allow_total=True)}")
+    if prices.get("outside"):
+        lines.append(f"outside: {_shown(prices['outside'], allow_total=True)}")
+    lines.extend(["", "## Entry edge", ""])
+    for name in _EDGE_BANDS:
+        lines.append(f"{name}: {_shown(edges[name], allow_total=True)}")
+    lines.extend(["", "## Entry spread", ""])
+    if not logged:
+        lines.append(f"not logged: {_shown(missing_book, allow_total=False)}")
+    else:
+        for name in sorted(logged):
+            lines.append(f"{name}: {_shown(logged[name], allow_total=True)}")
+        if missing_book:
+            lines.append(f"not logged: {_shown(missing_book, allow_total=False)}")
+    return lines
 
 
 def _hold(start: datetime | None, end: datetime | None) -> str:
@@ -369,6 +502,7 @@ def assemble_pnl(
     cash: Decimal | None = None,
     portfolio_value: Decimal | None = None,
     starting_balance: Decimal | None = None,
+    entry_samples: list[tuple[str, str, int, Decimal]] | None = None,
 ) -> tuple[str, str, list[str]]:
     """Return the report, the possibly backfilled log, and the backfilled tickers."""
     fills, mismatches = fills_since_cohort(fill_rows)
@@ -471,6 +605,10 @@ def assemble_pnl(
             )
             running += fee_net
             settled.append((series_of(fill.ticker), fill.side, fee_net))
+            if entry_samples is not None:
+                cents = price_cents_of(fill.price)
+                if cents is not None:
+                    entry_samples.append((fill.ticker, fill.side, cents, fee_net))
 
     trades, open_premium, open_fees = _collapse_display(allocated)
     extra_ids, extra_tickers, extra_mismatches = reconcile_log(
@@ -982,10 +1120,18 @@ def replace_if_unchanged(path: Path, original: str, updated: str) -> bool:
     return True
 
 
-def run_report(client: object, *, repo: Path, write_fill_log: bool, now: datetime | None = None) -> int:
+def run_report(
+    client: object,
+    *,
+    repo: Path,
+    write_fill_log: bool,
+    now: datetime | None = None,
+    entry_quality: bool = False,
+) -> int:
     stamp = (now or datetime.now(timezone.utc)).strftime("%Y%m%d")
     report_path = repo / "logs" / "reports" / f"pnl-{stamp}.md"
-    report_path.parent.mkdir(parents=True, exist_ok=True)
+    if not entry_quality:
+        report_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         fill_rows, settlement_rows, open_tickers = load_exchange(client)
         log_path = repo / FILL_LOG_RELATIVE
@@ -994,10 +1140,11 @@ def run_report(client: object, *, repo: Path, write_fill_log: bool, now: datetim
         cash, portfolio_value, starting_balance = read_account(client)
         grok_db = repo / "logs" / "state" / "grok_paper.db"
         polymarket_rows: list[dict] = []
-        if grok_db.is_file():
+        if grok_db.is_file() and not entry_quality:
             from utils.event_news_grok_edge import polymarket_observation_rows
 
             polymarket_rows = polymarket_observation_rows(grok_db)
+        samples: list[tuple[str, str, int, Decimal]] = []
         report, new_log, tickers = assemble_pnl(
             fill_rows=fill_rows,
             settlement_rows=settlement_rows,
@@ -1010,7 +1157,14 @@ def run_report(client: object, *, repo: Path, write_fill_log: bool, now: datetim
             cash=cash,
             portfolio_value=portfolio_value,
             starting_balance=starting_balance,
+            entry_samples=samples if entry_quality else None,
         )
+        if entry_quality:
+            yes_probability, book = live_order_entry_facts(repo / "logs" / "trades")
+            for line in entry_quality_lines(samples, yes_probability, book):
+                print(line)
+            print(f"settled_fills={len(samples)}")
+            return 0
         wrote = False
         if write_fill_log and new_log != log_text:
             wrote = replace_if_unchanged(log_path, log_text, new_log)
@@ -1028,6 +1182,9 @@ def run_report(client: object, *, repo: Path, write_fill_log: bool, now: datetim
         print("backfill_written=" + ("yes" if wrote else "no"))
         return 0
     except Exception:
+        if entry_quality:
+            print("complete=no")
+            return 1
         report_path.write_text(incomplete_report("exchange read failed", now=now), encoding="utf-8")
         print(f"report={report_path}")
         print("complete=no")
@@ -1040,6 +1197,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo", default=str(Path(__file__).resolve().parents[1]))
     parser.add_argument("--env-file", default="")
     parser.add_argument("--write-fill-log", action="store_true")
+    parser.add_argument("--entry-quality", action="store_true")
     args = parser.parse_args(argv)
     repo = Path(args.repo)
     env_file = Path(args.env_file) if args.env_file else repo / ".env"
@@ -1053,6 +1211,7 @@ def main(argv: list[str] | None = None) -> int:
         KalshiRestClient(),
         repo=repo,
         write_fill_log=args.write_fill_log,
+        entry_quality=args.entry_quality,
     )
 
 

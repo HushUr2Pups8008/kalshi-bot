@@ -357,6 +357,26 @@ def _wait_until(deadline: float, sleep=None, clock=None) -> float:
         now = clock()
     return now
 
+def _mark_until(rest, deadline: float, next_mark: float, sleep=None, clock=None) -> float:
+    """Log the open bid every hour until the next scan. Does not sell."""
+    clock = time.monotonic if clock is None else clock
+    while clock() < deadline:
+        wake = deadline if deadline < next_mark else next_mark
+        _wait_until(wake, sleep=sleep, clock=clock)
+        now = clock()
+        if now >= next_mark:
+            try:
+                logged = _run_exit(rest)
+            except Exception as exc:
+                print(
+                    f"grok paper exit failed error_type={type(exc).__name__}",
+                    file=sys.stderr,
+                )
+            else:
+                _log_exit_cycle(logged)
+            next_mark = now + 3600
+    return next_mark
+
 def main(argv: list[str] | None = None) -> int:
     refuse_live_trading()
     arm_sidecar_environment()
@@ -414,7 +434,15 @@ def main(argv: list[str] | None = None) -> int:
                         file=sys.stderr,
                     )
                 report_day = day
-            time.sleep(edge_scan_interval_seconds())
+            next_exit = _mark_until(
+                rest,
+                time.monotonic() + edge_scan_interval_seconds(),
+                next_exit,
+            )
+            # The helper returns the following hour. Waiting on that value
+            # stacks an hour onto the scan interval from the second cycle.
+            if next_exit > time.monotonic():
+                next_exit = time.monotonic()
     finally:
         lock.close()
 

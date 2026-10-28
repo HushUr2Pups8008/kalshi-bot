@@ -376,6 +376,65 @@ def test_exit_watch_waits_out_the_sixty_seconds_before_the_long_sleep(monkeypatc
     assert sleeps[1][1] > 60
 
 
+def test_hourly_marks_do_not_stretch_the_next_scan(monkeypatch) -> None:
+    """The third scan stays one scan interval after the second."""
+    import kalshi.rest_client as rest_client
+    import scripts.grok_paper_sidecar as sidecar
+    import utils.event_news_grok_edge as edge
+
+    scans: list[float] = []
+    clock = {"t": 0.0}
+
+    def sleep(seconds: float) -> None:
+        clock["t"] += seconds
+
+    def scan(rest, **kwargs):
+        scans.append(clock["t"])
+        if len(scans) >= 3:
+            raise SystemExit(0)
+        return {}, {}, None
+
+    monkeypatch.setattr(edge, "edge_scan_interval_seconds", lambda: 7200)
+    monkeypatch.setattr(sidecar.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(sidecar.time, "sleep", sleep)
+    monkeypatch.setattr(sidecar, "refuse_live_trading", lambda: None)
+    monkeypatch.setattr(sidecar, "arm_sidecar_environment", lambda: None)
+    monkeypatch.setattr(
+        sidecar,
+        "_acquire_lock",
+        lambda path: type("Lock", (), {"close": lambda self: None})(),
+    )
+    monkeypatch.setattr(sidecar, "run_score_then_scan", scan)
+    monkeypatch.setattr(sidecar, "_run_exit", lambda rest: 0)
+    monkeypatch.setattr(sidecar, "_run_daily", lambda rest: None)
+    monkeypatch.setattr(rest_client, "KalshiRestClient", lambda: object())
+    with pytest.raises(SystemExit):
+        sidecar.main([])
+    assert scans == [0.0, 7260.0, 14460.0]
+
+
+def test_mark_until_logs_the_open_bid_every_hour(monkeypatch) -> None:
+    """Three hours of scan wait log three bids and do not start another scan."""
+    import scripts.grok_paper_sidecar as sidecar
+
+    clock = {"t": 0.0}
+    marks: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        clock["t"] += seconds
+
+    monkeypatch.setattr(sidecar, "_run_exit", lambda rest: marks.append(clock["t"]) or 1)
+    returned = sidecar._mark_until(
+        object(),
+        10800,
+        3600,
+        sleep=sleep,
+        clock=lambda: clock["t"],
+    )
+    assert marks == [3600.0, 7200.0, 10800.0]
+    assert returned == 14400.0
+
+
 def test_wait_until_sleeps_only_the_remainder() -> None:
     import scripts.grok_paper_sidecar as sidecar
 
