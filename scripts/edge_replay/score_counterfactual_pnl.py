@@ -15,23 +15,6 @@ from typing import Any
 GROUP_KEYS = ("signal_source", "series_ticker", "signal_type", "news_class")
 
 
-def _entry_price_cents(row: dict[str, Any]) -> float | None:
-    """F-11 P1-C: read the canonical post-P1-A entry-price key, falling
-    back to the legacy ``market_yes_price`` key for pre-bounce JSONL
-    records and historical replay corpora. Missing stays missing -- no
-    silent default to 0 or 50.
-
-    Result is always in cents (Kalshi convention). The canonical key
-    represents the executed-side entry price; when present it does NOT
-    need the YES/NO complement flip applied to legacy ``market_yes_price``
-    values that were originally YES-side midpoints.
-    """
-    val = row.get("entry_price_cents")
-    if val is None:
-        val = row.get("market_yes_price")
-    return _as_float(val)
-
-
 def _as_float(value: Any) -> float | None:
     if value is None:
         return None

@@ -376,6 +376,28 @@ def test_exit_watch_waits_out_the_sixty_seconds_before_the_long_sleep(monkeypatc
     assert sleeps[1][1] > 60
 
 
+def test_mark_until_logs_the_open_bid_every_hour(monkeypatch) -> None:
+    """Three hours of scan wait log three bids and do not start another scan."""
+    import scripts.grok_paper_sidecar as sidecar
+
+    clock = {"t": 0.0}
+    marks: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        clock["t"] += seconds
+
+    monkeypatch.setattr(sidecar, "_run_exit", lambda rest: marks.append(clock["t"]) or 1)
+    returned = sidecar._mark_until(
+        object(),
+        10800,
+        3600,
+        sleep=sleep,
+        clock=lambda: clock["t"],
+    )
+    assert marks == [3600.0, 7200.0, 10800.0]
+    assert returned == 14400.0
+
+
 def test_wait_until_sleeps_only_the_remainder() -> None:
     import scripts.grok_paper_sidecar as sidecar
 
