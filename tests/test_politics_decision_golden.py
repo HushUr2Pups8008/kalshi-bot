@@ -1,7 +1,7 @@
 """Desk decision grid. No orders, no Grok, no secret output.
 
-The hash is the live 13 plus the paper series, the alien series, and the
-fee-net edge cases. A gate change has to change this hash on purpose.
+The hash covers every universe series, the alien series, and the fee-net
+edge cases. A gate change has to change this hash on purpose.
 """
 from __future__ import annotations
 
@@ -35,8 +35,10 @@ from utils.series_universe import (
 # v0.37.13 removes PMHORMUZ and adds six paper Polymarket series. Rows for
 # every series that stayed are unchanged. Each new series matches the
 # PMTRUMPAPPROVE gate rows aside from its name.
+# v0.37.47 drops KXPOLLPOTUS. That series is absent from the grid. Series
+# that stayed keep their rows. The count is 29 and the row count is 3316.
 POLITICS_DECISION_SHA256 = (
-    "326b6fc9a8d34e49dec6b6822fa7a67b0fcbfb1f5c3f5bd8d4afed53510d699c"
+    "02f9f61446d70b51514838097577d1b9cb93db74090ea51747b11f666fcc7548"
 )
 
 POLITICS = SimpleNamespace(
@@ -275,6 +277,6 @@ def test_politics_decision_grid_matches_the_desk(monkeypatch) -> None:
     payload = json.dumps(rows, separators=(",", ":"), sort_keys=True).encode("utf-8")
     digest = hashlib.sha256(payload).hexdigest()
 
-    assert series_count == 30
-    assert len(rows) == 3425
+    assert series_count == 29
+    assert len(rows) == 3316
     assert digest == POLITICS_DECISION_SHA256
