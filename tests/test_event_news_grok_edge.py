@@ -2524,6 +2524,81 @@ def test_scorecard_matches_the_hand_interval_and_promotion(tmp_path: Path) -> No
     assert "| 0.3832 |" in dup
 
 
+def test_count_shadow_uses_the_last_row_before_close_and_does_not_promote(tmp_path: Path) -> None:
+    """p_yes 0.25 is NO at 60c. The later row before close wins. The row after close does not.
+
+    Settlement is YES, so the NO loses. Fee-net is -0.60 minus the 60c taker
+    fee, -0.6168. Brier is (0.25 - 1)^2 = 0.5625. The ask brier is
+    (0.40 - 1)^2 = 0.36. One settled row is not a promotion.
+    An open ticker stays at n=0. A missing log does not read another file.
+    """
+    log = tmp_path / "shadow.jsonl"
+    rows = [
+        {
+            "ts": "2026-10-02T00:00:00Z",
+            "ticker": "KXTRUTHSOCIAL-26OCT03-B129",
+            "series": "KXTRUTHSOCIAL",
+            "yes_ask": 60,
+            "probability": "0.800000",
+        },
+        {
+            "ts": "2026-10-02T12:00:00Z",
+            "ticker": "KXTRUTHSOCIAL-26OCT03-B129",
+            "series": "KXTRUTHSOCIAL",
+            "yes_ask": 40,
+            "probability": "0.250000",
+        },
+        {
+            "ts": "2026-10-03T01:00:00Z",
+            "ticker": "KXTRUTHSOCIAL-26OCT03-B129",
+            "series": "KXTRUTHSOCIAL",
+            "yes_ask": 90,
+            "probability": "0.990000",
+        },
+        {
+            "ts": "2026-10-02T00:00:00Z",
+            "ticker": "KXTRUMPACT-26OCT25-T3",
+            "series": "KXTRUMPACT",
+            "yes_ask": 38,
+            "probability": "0.400000",
+        },
+    ]
+    log.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+    def lookup(ticker: str) -> dict:
+        if ticker == "KXTRUTHSOCIAL-26OCT03-B129":
+            return {"status": "finalized", "result": "yes", "close_time": "2026-10-03T00:00:00Z"}
+        return {"status": "active", "result": ""}
+
+    text = write_paper_scorecard(
+        db_path=tmp_path / "missing.db",
+        market_lookup=lookup,
+        report_path=tmp_path / "card.md",
+        now=NOW,
+        shadow_log_path=log,
+    )
+    fee = contract_fee_net_dollars("no", 60, True)
+    assert fee is not None
+    assert format(fee.normalize(), "f") == "-0.6168"
+    assert (
+        "| KXTRUTHSOCIAL | 1 | 0.5625 | 0.36 | "
+        f"{format(fee.normalize(), 'f')} | 1 |  | "
+        "not enough data (n=1, clustered n=1) settled trades, clustered events |"
+    ) in text
+    assert "| KXTRUMPACT | 0 | not enough data (n=0) | not enough data (n=0) | not enough data (n=0) | 0 |  |" in text
+    assert "0.990000" not in text
+    assert "eligible for live" not in text
+    assert "No paid call. No mode change." in text
+    quiet = write_paper_scorecard(
+        db_path=tmp_path / "missing.db",
+        market_lookup=lookup,
+        report_path=tmp_path / "quiet.md",
+        now=NOW,
+    )
+    assert "| KXTRUTHSOCIAL | 0 | not enough data (n=0) |" in quiet
+    assert "0.5625" not in quiet
+
+
 def test_same_date_brackets_share_one_cluster_and_bh_steps_down(tmp_path: Path) -> None:
     """One date is one CI observation. BH q steps down so a lucky series cannot pass alone."""
     values = [Decimal(1), Decimal(3)]

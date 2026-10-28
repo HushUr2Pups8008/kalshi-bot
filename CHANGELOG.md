@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.48] - 2026-10-28
+
+### Added
+- The paper scorecard grades the free count shadow for KXTRUTHSOCIAL and KXTRUMPACT. It uses the last shadow row before close. It prints n, the Brier of that probability and of the yes ask against the settlement, and the fee-net of one contract at the then-ask. Promotion text uses the clustered event count and BH q. It does not call Grok and does not change modes.
+
 ## [0.37.47] - 2026-10-28
 
 ### Added
