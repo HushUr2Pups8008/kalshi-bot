@@ -504,7 +504,7 @@ def test_rank_keeps_politics_inside_72h_and_drops_kxdji() -> None:
     )
     assert scanned == yaml_names
     assert set(live_series_tickers()) < set(scanned)
-    assert len(live_series_tickers()) == 13
+    assert len(live_series_tickers()) == 12
     assert "KXDJI" not in scanned
     assert "KXNEWPOL" not in scanned
     assert "KXTRUMPSAY" in scanned

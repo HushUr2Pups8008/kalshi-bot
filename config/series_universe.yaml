@@ -114,21 +114,6 @@
     Desk default favorite band, 55c through 99c. 99c is outside
     the half-open band. Asks at or above 91c still fail the
     near-certain gate.
-- series: KXPOLLPOTUS
-  venue: kalshi
-  mode: live
-  favorite_lo_cents: 55
-  favorite_hi_cents: 99
-  transcript_skip: false
-  paper_score: false
-  category: politics
-  max_contracts: 8
-  edge_min: "0.04"
-  x_search: true
-  notes: >-
-    Desk default favorite band, 55c through 99c. 99c is outside
-    the half-open band. Asks at or above 91c still fail the
-    near-certain gate.
 - series: KXEFFTARIFF
   venue: kalshi
   mode: live
