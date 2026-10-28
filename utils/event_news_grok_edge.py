@@ -2393,6 +2393,119 @@ def _polymarket_section(rows: Sequence[Mapping[str, str]]) -> list[str]:
         )
     return lines
 
+_SHADOW_SERIES = ("KXTRUMPACT", "KXTRUTHSOCIAL")
+
+
+def _market_close(market: Any) -> datetime | None:
+    """Close used to pick the last shadow row. Settlement time is the fallback."""
+    if market is None:
+        return None
+    names = ("close_time", "expiration_time", "settled_time")
+    for name in names:
+        raw = market.get(name) if isinstance(market, Mapping) else getattr(market, name, None)
+        found = _parse_utc(raw)
+        if found is not None:
+            return found
+    return None
+
+
+def _count_shadow_lines(
+    rows: Sequence[Mapping[str, Any]],
+    market_lookup: Callable[[str], Any],
+) -> list[str]:
+    """Grade the free count shadow. No paid call and no mode change.
+
+    The last row with ts before close is the forecast. YES if p_yes >= 0.5,
+    else NO. The NO price is 100 minus yes_ask when that ask is 1 through 99.
+    Brier scores p_yes and yes_ask/100 against the settlement. Fee-net is one
+    contract at that price, using the scorecard fee.
+    """
+    pending: dict[str, list[tuple[datetime, int, Mapping[str, Any]]]] = {}
+    for index, row in enumerate(rows):
+        ticker = str(row.get("ticker") or "").strip()
+        series = str(row.get("series") or "").strip().upper() or ticker.split("-", 1)[0].upper()
+        when = _parse_utc(row.get("ts"))
+        if series not in _SHADOW_SERIES or not ticker or when is None:
+            continue
+        pending.setdefault(ticker, []).append((when, index, row))
+    graded: dict[str, list[tuple]] = {name: [] for name in _SHADOW_SERIES}
+    for ticker, items in pending.items():
+        series = str(items[0][2].get("series") or "").strip().upper() or ticker.split("-", 1)[0].upper()
+        if series not in graded:
+            continue
+        try:
+            market = market_lookup(ticker)
+        except Exception:
+            continue
+        result = _settlement_result(market)
+        close = _market_close(market)
+        if result not in {"yes", "no"} or close is None:
+            continue
+        before = [item for item in items if item[0] < close]
+        if not before:
+            continue
+        _when, _index, row = max(before, key=lambda item: (item[0], item[1]))
+        p_yes = _decimal(row.get("probability"))
+        ask = row.get("yes_ask")
+        if p_yes is None or p_yes < 0 or p_yes > 1 or isinstance(ask, bool) or type(ask) is not int:
+            continue
+        if not 1 <= ask <= 99:
+            continue
+        outcome = Decimal(1 if result == "yes" else 0)
+        side = "yes" if p_yes >= Decimal("0.5") else "no"
+        price = ask if side == "yes" else 100 - ask
+        pnl = contract_fee_net_dollars(side, price, result == "yes")
+        if pnl is None:
+            continue
+        graded[series].append(
+            ((side == "yes") == (result == "yes"), pnl, p_yes, outcome, side, Decimal(ask) / Decimal(100), ticker)
+        )
+    lines = [
+        "",
+        "## Count shadow",
+        "",
+        "Free count model for KXTRUTHSOCIAL and KXTRUMPACT. No paid call. No mode change.",
+        "Last shadow row before close. YES when p_yes >= 0.5, else NO at 100 minus the yes ask.",
+        "The yes ask must be 1 through 99. Brier is the mean squared error against the settlement.",
+        "Fee-net is one contract at that ask with the scorecard fee. Promotion does not change modes.",
+        "",
+        "| series | n | shadow_brier | ask_brier | fee_net | cluster_n | bh_q | promotion |",
+        "|---|---:|---:|---:|---:|---:|---:|---|",
+    ]
+    tested = []
+    for series in _SHADOW_SERIES:
+        samples = graded[series]
+        if len(samples) >= 5:
+            p_value = _ev_p([item[1] for item in samples])
+            if p_value is not None:
+                tested.append((series, p_value))
+    bh = _bh_q(tested)
+    for series in _SHADOW_SERIES:
+        samples = graded[series]
+        n = len(samples)
+        if n == 0:
+            blank = "not enough data (n=0)"
+            lines.append(
+                f"| {series} | 0 | {blank} | {blank} | {blank} | 0 |  | "
+                "not enough data (n=0, clustered n=0) settled trades, clustered events |"
+            )
+            continue
+        shadow_brier = sum((item[2] - item[3]) ** 2 for item in samples) / Decimal(n)
+        ask_brier = sum((item[5] - item[3]) ** 2 for item in samples) / Decimal(n)
+        fee_net = sum((item[1] for item in samples), Decimal(0))
+        clustered = scorecard_interval(_cluster_means(samples))
+        cluster_n = int(clustered["n"] or 0)
+        cluster_low = clustered["ci95_low"] if isinstance(clustered["ci95_low"], Decimal) else None
+        q = bh.get(series)
+        label = promotion_label(n=n, cluster_n=cluster_n, cluster_low=cluster_low, q=q)
+        lines.append(
+            f"| {series} | {n} | {format(shadow_brier.normalize(), 'f')} | "
+            f"{format(ask_brier.normalize(), 'f')} | {format(fee_net.normalize(), 'f')} | "
+            f"{cluster_n} | {_cell(q)} | {label} |"
+        )
+    return lines
+
+
 def write_paper_scorecard(
     *,
     db_path: Path,
@@ -2401,6 +2514,7 @@ def write_paper_scorecard(
     now: datetime | None = None,
     polymarket_lookup: Callable[[str], Any] | None = None,
     veto_log_path: Path | None = None,
+    shadow_log_path: Path | None = None,
 ) -> str:
     """Per-series fee-net scorecard. Promotion text does not change modes."""
     moment = now or datetime.now(timezone.utc)
@@ -2518,6 +2632,8 @@ def write_paper_scorecard(
     )
     veto_rows = [] if veto_log_path is None else _read_jsonl(veto_log_path)
     lines.append(_veto_scorecard_text(veto_rows, market_lookup).strip("\n"))
+    shadow_rows = [] if shadow_log_path is None else _read_jsonl(shadow_log_path)
+    lines.extend(_count_shadow_lines(shadow_rows, market_lookup))
     text = "\n".join(lines) + "\n"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(text, encoding="utf-8")
