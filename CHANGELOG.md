@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.47] - 2026-10-28
+
+### Added
+- The daily P&L report keeps one display row per order at one price, with the settled result, hold time, and series. Bucket means and totals under 15 say not enough data, and bucket n still counts one sample per fill. The running total stays the settled fee-net sum. Reconciliation prints each term of cash + portfolio mark - applied net funding against settled fee-net + (open mark - open cost - open entry fees). A unique fill-log row within one cent of one exchange fill keeps the exchange price and is not a price mismatch. An open NO buy that Kalshi labels sell stays on the report. KXPOLLPOTUS is no longer a live universe slot because Kalshi returns 404 for that series.
+
 ## [0.37.46] - 2026-10-27
 
 ### Added

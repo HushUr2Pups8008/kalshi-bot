@@ -1,8 +1,10 @@
 """Daily fee-net P&L from Kalshi fills and settlements.
 
-Writes logs/reports/pnl-YYYYMMDD.md. The report lists ticker, side, qty,
-price, fee, payout, and fee-net P&L. It also lists series totals, the
-running total, and mismatches. Order ids are never printed.
+Writes logs/reports/pnl-YYYYMMDD.md. Fills that share a ticker, side,
+price, result, and order id are one display row. The row lists the series,
+settled result, hold time, and fee-net P&L. Bucket means and totals under
+15 are withheld and still count one sample per fill. Order ids are never
+printed.
 
 The fill log and the paper book are reconcile targets. Paper rows stay
 out of the live total. A failed exchange read omits the running total.
@@ -49,6 +51,7 @@ class Settlement:
     no_cost: Decimal | None
     revenue_cents: int | None
     fee: Decimal | None
+    settled_at: datetime | None
 
 
 @dataclass
@@ -126,6 +129,98 @@ def price_cents_of(price: Decimal) -> int | None:
     if abs(cents - cents.to_integral_value()) > Decimal("0.001"):
         return None
     return int(cents.to_integral_value())
+
+
+def _hold(start: datetime | None, end: datetime | None) -> str:
+    if start is None or end is None or end < start:
+        return "unknown"
+    return money(Decimal(str(round((end - start).total_seconds() / 3600, 2)))) + "h"
+
+
+def _bucket_lines(samples: list[tuple[str, str, Decimal]]) -> list[str]:
+    """Settled fee-net by series, side, and overall. One sample per fill."""
+    grouped: dict[str, list[Decimal]] = defaultdict(list)
+    sides: dict[str, list[Decimal]] = {"yes": [], "no": []}
+    for series, side, pnl in samples:
+        grouped[series].append(pnl)
+        if side in sides:
+            sides[side].append(pnl)
+    lines = [
+        "", "## Buckets", "", "Mean and total are withheld under 15.", "",
+        "| bucket | n | mean | fee_net |", "| --- | --- | --- | --- |",
+    ]
+
+    def add(label: str, values: list[Decimal]) -> None:
+        count = len(values)
+        if count < 15:
+            shown = f"not enough data (n={count})"
+            mean, total = shown, shown
+        else:
+            total_value = sum(values, Decimal(0))
+            mean, total = money(total_value / Decimal(count)), money(total_value)
+        lines.append(f"| {label} | {count} | {mean} | {total} |")
+
+    for name in sorted(grouped):
+        add(name, grouped[name])
+    add("yes", sides["yes"])
+    add("no", sides["no"])
+    add("overall", [pnl for _series, _side, pnl in samples])
+    return lines
+
+
+def reconciliation_lines(
+    *,
+    ledger: Decimal,
+    open_exposure: Decimal,
+    open_fees: Decimal,
+    cash: Decimal | None,
+    portfolio: Decimal | None,
+    starting: Decimal | None,
+) -> list[str]:
+    """cash + portfolio_mark - applied_net_funding = settled_fee_net + open adjustment.
+
+    open adjustment is open_mark - open_cost - open_entry_fees. open_mark is
+    the portfolio mark. The residual is the left side minus the right side.
+    """
+    lines = [
+        "", "## Reconciliation", "",
+        "identity: cash + portfolio_mark - applied_net_funding = "
+        "settled_fee_net + (open_mark - open_cost - open_entry_fees)",
+        f"settled_fee_net: {money(ledger)}",
+        f"open_cost: {money(open_exposure)}",
+        f"open_entry_fees: {money(open_fees)}",
+    ]
+    if cash is None or portfolio is None or starting is None:
+        missing = []
+        if cash is None or portfolio is None:
+            missing.append("cash or portfolio value")
+        if starting is None:
+            missing.append("starting balance")
+        lines.extend([
+            "residual: unreadable",
+            "reconciliation_gap: unreadable",
+            "reason: " + " and ".join(missing) + " unread",
+        ])
+        return lines
+    adjustment = portfolio - open_exposure - open_fees
+    left = cash + portfolio - starting
+    right = ledger + adjustment
+    residual = left - right
+    lines.extend([
+        f"cash: {money(cash)}",
+        f"portfolio_mark: {money(portfolio)}",
+        f"applied_net_funding: {money(starting)}",
+        "applied_net_funding is applied deposits net of their fees, minus applied withdrawals and their fees.",
+        f"reconciliation_left: {money(left)}",
+        f"open_mark: {money(portfolio)}",
+        f"open_mark_minus_cost_and_fees: {money(adjustment)}",
+        f"reconciliation_right: {money(right)}",
+        f"residual: {money(residual)}",
+        "closes_within_25_cents: " + ("yes" if abs(residual) <= Decimal("0.25") else "no"),
+    ])
+    if abs(residual) > Decimal("0.25"):
+        lines.append("reason: deposits, fee rounding, or unsettled mark versus cost")
+    return lines
 
 
 def collect_pages(fetch, *, what: str, max_pages: int = MAX_PAGES) -> list:
@@ -207,6 +302,7 @@ def settlements_by_ticker(rows: list[object]) -> tuple[dict[str, Settlement], li
             no_cost=_dec(raw.get("no_total_cost_dollars")),
             revenue_cents=_cents(raw.get("revenue")),
             fee=_dec(raw.get("fee_cost")),
+            settled_at=_time(raw.get("settled_time")),
         )
     return found, mismatches
 
@@ -270,6 +366,9 @@ def assemble_pnl(
     paper_note: str | None = None,
     now: datetime | None = None,
     polymarket_rows: list[dict] | None = None,
+    cash: Decimal | None = None,
+    portfolio_value: Decimal | None = None,
+    starting_balance: Decimal | None = None,
 ) -> tuple[str, str, list[str]]:
     """Return the report, the possibly backfilled log, and the backfilled tickers."""
     fills, mismatches = fills_since_cohort(fill_rows)
@@ -281,9 +380,9 @@ def assemble_pnl(
         if item.endswith(": duplicate settlement")
     }
     log_rows = [row for row in parse_fill_log(fill_log_text) if row.http_ok]
-    trades: list[tuple[str, str, str, str, str, str, str]] = []
-    series_totals: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+    settled: list[tuple[str, str, Decimal]] = []
     running = Decimal("0")
+    moment = now or datetime.now(timezone.utc)
     backfill_ids: dict[int, str] = {}
 
     buys_by_ticker: dict[str, list[LiveFill]] = defaultdict(list)
@@ -309,13 +408,15 @@ def assemble_pnl(
             buys_by_ticker[fill.ticker].append(fill)
     for ticker, group in sells_by_ticker.items():
         # A NO buy on the YES book is labeled sell. Count it when the
-        # settlement cost on that side equals the premium and no buy exists.
-        if ticker in buys_by_ticker or not _paid_for_side(group, settlements.get(ticker)):
-            mismatches.append(f"{ticker}: sell fill; not allocated")
+        # settlement cost matches, or when that ticker is still open.
+        paid = _paid_for_side(group, settlements.get(ticker))
+        still_open = ticker in open_tickers and settlements.get(ticker) is None
+        if ticker not in buys_by_ticker and (paid or still_open):
+            buys_by_ticker[ticker].extend(group)
             continue
-        buys_by_ticker[ticker].extend(group)
+        mismatches.append(f"{ticker}: sell fill; not allocated")
 
-    allocated: list[tuple[LiveFill, str, str]] = []
+    allocated: list[tuple[LiveFill, str, str, str, str]] = []
     for ticker, group in buys_by_ticker.items():
         if ticker in duplicate_tickers:
             mismatches.append(f"{ticker}: duplicate settlement; not allocated")
@@ -323,8 +424,12 @@ def assemble_pnl(
         settlement = settlements.get(ticker)
         if settlement is None:
             if ticker in open_tickers:
+                known = open_tickers.get(ticker) if isinstance(open_tickers, dict) else None
+                qty = sum((fill.qty or Decimal("0")) for fill in group)
+                if isinstance(known, Decimal) and abs(abs(known) - qty) > COUNT_TOLERANCE:
+                    mismatches.append(f"{ticker}: open size differs from fills")
                 for fill in group:
-                    allocated.append((fill, "open", "open"))
+                    allocated.append((fill, "open", "open", "open", _hold(fill.when, moment)))
             else:
                 mismatches.append(f"{ticker}: fill has no settlement and is not open")
             continue
@@ -361,25 +466,13 @@ def assemble_pnl(
             cost = fill.qty * fill.price
             payout = fill.qty if settlement.result == fill.side else Decimal("0")
             fee_net = payout - cost - fill.fee
-            allocated.append((fill, money(payout), money(fee_net)))
-            running += fee_net
-            series_totals[series_of(fill.ticker)] += fee_net
-
-    for fill, payout_text, fee_net_text in allocated:
-        assert fill.qty is not None and fill.price is not None and fill.fee is not None
-        cents = price_cents_of(fill.price)
-        assert cents is not None
-        trades.append(
-            (
-                fill.ticker,
-                fill.side,
-                money(fill.qty),
-                str(cents),
-                money(fill.fee),
-                payout_text,
-                fee_net_text,
+            allocated.append(
+                (fill, money(payout), money(fee_net), settlement.result, _hold(fill.when, settlement.settled_at))
             )
-        )
+            running += fee_net
+            settled.append((series_of(fill.ticker), fill.side, fee_net))
+
+    trades, open_premium, open_fees = _collapse_display(allocated)
     extra_ids, extra_tickers, extra_mismatches = reconcile_log(
         log_rows,
         buys_by_ticker_flat(buys_by_ticker),
@@ -393,13 +486,21 @@ def assemble_pnl(
     report = _render(
         stamp=stamp,
         trades=trades,
-        series_totals=dict(series_totals),
+        settled=settled,
         running=running,
         mismatches=mismatches,
         paper_rows=paper_rows,
         paper_note=paper_note,
         backfilled=backfilled,
         polymarket_rows=polymarket_rows or [],
+        reconciliation=reconciliation_lines(
+            ledger=running,
+            open_exposure=open_premium,
+            open_fees=open_fees,
+            cash=cash,
+            portfolio=portfolio_value,
+            starting=starting_balance,
+        ),
     )
     return report, new_log, backfilled
 
@@ -514,11 +615,105 @@ def reconcile_log(
             unused_fills.pop(id(fill), None)
         unused_logs.pop(llist[0].index, None)
 
+    # One leftover log row and one leftover fill, same ticker, side, and
+    # qty, within one cent. The report keeps the exchange price. A split
+    # such as 1 at 66c plus 7 at 67c against one 8-at-67c log row does not
+    # pair. This pass does not write the fill log.
+    logs_by_qty: dict[tuple[str, str, str], list[LogRow]] = defaultdict(list)
+    fills_by_qty: dict[tuple[str, str, str], list[LiveFill]] = defaultdict(list)
+    for row in unused_logs.values():
+        assert row.qty is not None
+        logs_by_qty[(row.ticker, row.side, format(row.qty.normalize(), "f"))].append(row)
+    for fill in unused_fills.values():
+        assert fill.qty is not None
+        fills_by_qty[(fill.ticker, fill.side, format(fill.qty.normalize(), "f"))].append(fill)
+    for key, llist in logs_by_qty.items():
+        flist = fills_by_qty.get(key, [])
+        if len(llist) != 1 or len(flist) != 1 or llist[0].price_cents is None:
+            continue
+        fill_price = flist[0].price
+        if fill_price is None:
+            continue
+        cents = price_cents_of(fill_price)
+        if cents is None or abs(llist[0].price_cents - cents) > 1:
+            continue
+        _fee_note(llist[0], flist, mismatches)
+        unused_fills.pop(id(flist[0]), None)
+        unused_logs.pop(llist[0].index, None)
+
     for fill in unused_fills.values():
         mismatches.append(f"{fill.ticker}: fill not in fill log")
     for row in unused_logs.values():
         mismatches.append(f"{row.ticker}: fill log row has no live fill")
     return backfill, backfilled, mismatches
+
+
+def _collapse_display(
+    allocated: list[tuple[LiveFill, str, str, str, str]],
+) -> tuple[list[tuple[str, ...]], Decimal, Decimal]:
+    """One display row per ticker, side, price, result, and order id.
+
+    Count and fee are summed. Hold starts at the earliest fill. Fills with
+    no order id stay separate. Settled samples are not collapsed here.
+    """
+    groups: dict[tuple, list[tuple[LiveFill, str, str, str, str]]] = {}
+    order: list[tuple] = []
+    for item in allocated:
+        fill, _payout_text, _fee_net_text, result_name, _hold_text = item
+        assert fill.price is not None and fill.qty is not None and fill.fee is not None
+        cents = price_cents_of(fill.price)
+        assert cents is not None
+        identity = fill.order_id if fill.order_id else f"row-{id(fill)}"
+        key = (fill.ticker, fill.side, cents, result_name, identity)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(item)
+    trades: list[tuple[str, ...]] = []
+    open_premium = Decimal("0")
+    open_fees = Decimal("0")
+    for key in order:
+        items = groups[key]
+        ticker, side, cents, result_name, _identity = key
+        qty = Decimal("0")
+        fee = Decimal("0")
+        payout = Decimal("0")
+        fee_net = Decimal("0")
+        earliest: datetime | None = None
+        hold = "unknown"
+        open_row = items[0][1] == "open"
+        for fill, payout_text, fee_net_text, _result_name, hold_text in items:
+            assert fill.qty is not None and fill.price is not None and fill.fee is not None
+            qty += fill.qty
+            fee += fill.fee
+            if open_row:
+                open_premium += fill.qty * fill.price
+                open_fees += fill.fee
+            else:
+                payout += Decimal(payout_text)
+                fee_net += Decimal(fee_net_text)
+            if fill.when is not None and (earliest is None or fill.when < earliest):
+                earliest = fill.when
+                hold = hold_text
+        if open_row:
+            payout_text, fee_net_text = "open", "open"
+        else:
+            payout_text, fee_net_text = money(payout), money(fee_net)
+        trades.append(
+            (
+                ticker,
+                side,
+                money(qty),
+                str(cents),
+                money(fee),
+                payout_text,
+                fee_net_text,
+                result_name,
+                hold,
+                series_of(ticker),
+            )
+        )
+    return trades, open_premium, open_fees
 
 
 def buys_by_ticker_flat(groups: dict[str, list[LiveFill]]) -> list[LiveFill]:
@@ -547,14 +742,15 @@ def _apply_backfill(text: str, ids_by_index: dict[int, str]) -> str:
 def _render(
     *,
     stamp: str,
-    trades: list[tuple[str, str, str, str, str, str, str]],
-    series_totals: dict[str, Decimal],
+    trades: list[tuple[str, ...]],
+    settled: list[tuple[str, str, Decimal]],
     running: Decimal,
     mismatches: list[str],
     paper_rows: list[dict],
     paper_note: str | None,
     backfilled: list[str],
     polymarket_rows: list[dict] | None = None,
+    reconciliation: list[str] | None = None,
 ) -> str:
     lines = [
         f"# P&L {stamp}",
@@ -566,19 +762,12 @@ def _render(
         "",
         "## Trades",
         "",
-        "| venue | ticker | side | qty | price_cents | fee_dollars | payout_dollars | fee_net_dollars |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| venue | ticker | side | count | entry_price_cents | entry_fee_dollars | payout_dollars | fee_net_dollars | settled_result | hold_time | series |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for row in sorted(trades):
         lines.append("| kalshi | " + " | ".join(row) + " |")
-    lines.extend(
-        ["", "## Series", "", "| venue | series | fee_net_dollars |", "| --- | --- | --- |"]
-    )
-    if series_totals:
-        for name in sorted(series_totals):
-            lines.append(f"| kalshi | {name} | {money(series_totals[name])} |")
-    else:
-        lines.append("| kalshi | none | 0 |")
+    lines.extend(_bucket_lines(settled))
     lines.extend(
         [
             "",
@@ -587,11 +776,13 @@ def _render(
             f"running_total_dollars: {money(running)}",
             "",
             "Settled fee-net only. Open rows are excluded.",
-            "",
-            "## Mismatches",
-            "",
         ]
     )
+    lines.extend(reconciliation or reconciliation_lines(
+        ledger=running, open_exposure=Decimal(0), open_fees=Decimal(0),
+        cash=None, portfolio=None, starting=None,
+    ))
+    lines.extend(["", "## Mismatches", ""])
     if mismatches:
         for item in sorted(set(mismatches)):
             lines.append(f"- {item}")
@@ -689,10 +880,10 @@ def read_paper(path: Path) -> tuple[list[dict], str | None]:
     return [dict(row) for row in found], None
 
 
-def _open_tickers(positions: object) -> set[str]:
+def _open_tickers(positions: object) -> dict[str, Decimal | None]:
     if not isinstance(positions, list):
         raise ValueError("open positions response is not a list")
-    tickers: set[str] = set()
+    sizes: dict[str, Decimal | None] = {}
     for row in positions:
         if not isinstance(row, dict):
             continue
@@ -705,11 +896,66 @@ def _open_tickers(positions: object) -> set[str]:
         number = _dec(size) if size is not None else None
         if number is not None and number == 0:
             continue
-        tickers.add(ticker)
-    return tickers
+        sizes[ticker] = number
+    return sizes
 
 
-def load_exchange(client: object) -> tuple[list, list, set[str]]:
+def _transfer_page(client: object, path: str, key: str) -> list:
+    def fetch(cursor):
+        params = {"limit": 200}
+        if cursor:
+            params["cursor"] = cursor
+        data = client._request("GET", path, params=params)
+        if not isinstance(data, dict) or not isinstance(data.get(key), list):
+            raise ValueError(path)
+        nxt = data.get("cursor") or None
+        if nxt is not None and not isinstance(nxt, str):
+            raise ValueError(path)
+        return data[key], nxt
+    return collect_pages(fetch, what=path)
+
+
+def _applied_net(rows: list, *, withdraw: bool) -> Decimal:
+    total = Decimal(0)
+    for row in rows:
+        if not isinstance(row, dict) or row.get("status") != "applied":
+            continue
+        amount, fee = row.get("amount_cents"), row.get("fee_cents")
+        if type(amount) is not int or type(fee) is not int:
+            raise ValueError("transfer amount absent")
+        total += Decimal(amount + fee) if withdraw else Decimal(amount - fee)
+    return total / Decimal(100)
+
+
+def read_account(client: object) -> tuple[Decimal | None, Decimal | None, Decimal | None]:
+    """Cash, portfolio mark, and net applied funding. A failed part stays None."""
+    cash: Decimal | None = None
+    portfolio: Decimal | None = None
+    starting: Decimal | None = None
+    try:
+        data = client._request("GET", "/portfolio/balance")
+        if not isinstance(data, dict):
+            raise ValueError("balance")
+        cash = _dec(data.get("balance_dollars"))
+        if cash is None and type(data.get("balance")) is int:
+            cash = Decimal(data["balance"]) / Decimal(100)
+        if cash is None or type(data.get("portfolio_value")) is not int:
+            raise ValueError("balance")
+        portfolio = Decimal(data["portfolio_value"]) / Decimal(100)
+    except Exception:
+        cash = portfolio = None
+    try:
+        deposits = _applied_net(_transfer_page(client, "/portfolio/deposits", "deposits"), withdraw=False)
+        withdrawals = _applied_net(
+            _transfer_page(client, "/portfolio/withdrawals", "withdrawals"), withdraw=True,
+        )
+        starting = deposits - withdrawals
+    except Exception:
+        starting = None
+    return cash, portfolio, starting
+
+
+def load_exchange(client: object) -> tuple[list, list, dict[str, Decimal | None]]:
     min_ts = int(COHORT_START.timestamp())
     fills = collect_pages(
         lambda cursor: client.list_fills_page(min_ts=min_ts, limit=200, cursor=cursor),
@@ -745,6 +991,7 @@ def run_report(client: object, *, repo: Path, write_fill_log: bool, now: datetim
         log_path = repo / FILL_LOG_RELATIVE
         log_text = log_path.read_text(encoding="utf-8") if log_path.is_file() else ""
         paper_rows, paper_note = read_paper(repo / PAPER_DB_RELATIVE)
+        cash, portfolio_value, starting_balance = read_account(client)
         grok_db = repo / "logs" / "state" / "grok_paper.db"
         polymarket_rows: list[dict] = []
         if grok_db.is_file():
@@ -760,6 +1007,9 @@ def run_report(client: object, *, repo: Path, write_fill_log: bool, now: datetim
             paper_note=paper_note,
             now=now,
             polymarket_rows=polymarket_rows,
+            cash=cash,
+            portfolio_value=portfolio_value,
+            starting_balance=starting_balance,
         )
         wrote = False
         if write_fill_log and new_log != log_text:

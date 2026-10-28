@@ -68,7 +68,6 @@ EXPECTED_LIVE = (
     "KXTRUMPSAY",
     "KXTRUMPMENTION",
     "KXAPRPOTUS",
-    "KXPOLLPOTUS",
     "KXEFFTARIFF",
     "KXVOTESAVEAMERICA",
     "KXSBUDGETRES",
@@ -218,7 +217,6 @@ def test_shipped_caps_families_and_x_search_match_todays_desk():
         "KXTRUMPSAY",
         "KXTRUMPMENTION",
         "KXAPRPOTUS",
-        "KXPOLLPOTUS",
         "KXVOTESAVEAMERICA",
         "KXTRUMPUFC",
         "KXTRUMPAPPROVE",
@@ -234,9 +232,11 @@ def test_yaml_exact_series_survive_the_prefix_block_and_glued_siblings_do_not(
 
     monkeypatch.setattr("config.cfg.paper_cohort_id", EVENT_NEWS_COHORT_ID)
     prefixes = ("KXTRUMPSAY", "KXAPRPOTUS", "KXPOLLPOTUS", "KXNBA", "KXMVE")
-    for series in ("KXTRUMPSAY", "KXAPRPOTUS", "KXPOLLPOTUS"):
+    for series in ("KXTRUMPSAY", "KXAPRPOTUS"):
         assert event_news_prefix_blocked(series, prefixes) is False
         assert _research_prewarm_ticker_blocked(f"{series}-26OCT19-A") is False
+    assert event_news_prefix_blocked("KXPOLLPOTUS", prefixes) is True
+    assert _research_prewarm_ticker_blocked("KXPOLLPOTUS-26OCT19-A") is True
     assert event_news_prefix_blocked("KXTRUMPSAYMONTH", prefixes) is True
     assert _research_prewarm_ticker_blocked("KXTRUMPSAYMONTH-26OCT-X") is True
     assert event_news_prefix_blocked("KXNBA", prefixes) is True

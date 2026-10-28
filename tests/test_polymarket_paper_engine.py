@@ -802,8 +802,8 @@ def test_sidecar_scan_does_not_ask_kalshi_for_polymarket_names(monkeypatch, tmp_
 def test_pnl_venue_column_does_not_change_the_live_total() -> None:
     text = _render(
         stamp="20261021",
-        trades=[("KXTRUMPSAY-1", "yes", "1", "64", "0.01", "1", "0.35")],
-        series_totals={"KXTRUMPSAY": Decimal("2.7509")},
+        trades=[("KXTRUMPSAY-1", "yes", "1", "64", "0.01", "1", "0.35", "yes", "1h", "KXTRUMPSAY")],
+        settled=[("KXTRUMPSAY", "yes", Decimal("2.7509"))],
         running=Decimal("2.7509"),
         mismatches=[],
         paper_rows=[
@@ -823,7 +823,7 @@ def test_pnl_venue_column_does_not_change_the_live_total() -> None:
         backfilled=[],
     )
     assert "running_total_dollars: 2.7509" in text
-    assert "| kalshi | KXTRUMPSAY | 2.7509 |" in text
+    assert "| KXTRUMPSAY | 1 | not enough data (n=1) | not enough data (n=1) |" in text
     assert "| polymarket_us | trmpapprv-yes |" in text
     assert "Not included in the live fee-net total." in text
-    assert "| venue | series | fee_net_dollars |" in text
+    assert "| bucket | n | mean | fee_net |" in text

@@ -5,10 +5,13 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
+from decimal import Decimal
+
 from scripts.pnl_report import (
     assemble_pnl,
     collect_pages,
     incomplete_report,
+    reconciliation_lines,
     replace_if_unchanged,
     run_report,
 )
@@ -83,7 +86,9 @@ def test_yes_win_subtracts_the_fill_fee_once_and_hides_ids():
     )
     assert "running_total_dollars: 2.7509" in report
     assert "2.6218" not in report
-    assert "| KXTRUMPSAY | 2.7509 |" in report
+    assert "| yes | 44.84h | KXTRUMPSAY |" in report
+    assert "| KXTRUMPSAY | 1 | not enough data (n=1) | not enough data (n=1) |" in report
+    assert "reconciliation_gap: unreadable" in report
     assert "KXTRUTHSOCIAL-26AUG29-T240" in report
     assert "Not included in the live fee-net total." in report
     assert "order_id" not in report
@@ -115,7 +120,7 @@ def test_polymarket_rows_do_not_change_the_live_total():
         ],
     )
     assert "running_total_dollars: 2.7509" in report
-    assert "| KXTRUMPSAY | 2.7509 |" in report
+    assert "| KXTRUMPSAY | 1 | not enough data (n=1) | not enough data (n=1) |" in report
     assert "## Polymarket paper rows" in report
     assert "| polymarket_us | PMTRUMPAPPROVE | parc-trmpapprv-wk-2026-10-23-37pt7-37pt9 | 0 | not settled |" in report
     assert report.index("## Polymarket paper rows") < report.index("## Backfill")
@@ -264,6 +269,8 @@ def test_partial_fills_with_one_shared_id_reconcile_to_the_log_qty():
         open_tickers={"KXTRUMPSAY-26OCT26-GOLF"},
     )
     assert "running_total_dollars: 0" in report
+    assert "| KXTRUMPSAY-26OCT26-GOLF | yes | 8 | 89 |" in report
+    assert "| yes | 1 | 89 |" not in report
     assert "| open | open |" in report
     assert "fill not in fill log" not in report
     assert "fill log fee differs" not in report
@@ -359,3 +366,271 @@ def test_backfill_write_uses_the_state_log_only(tmp_path):
     assert "fill-order-1" not in report
     assert "order_id" not in report
     assert "running_total_dollars: 2.7509" in report
+
+
+def test_open_sell_labeled_no_partials_stay_out_of_the_settled_total():
+    """KXTRUMPACT-26OCT25-T3 is an open NO. The exchange labels the buy as sell.
+
+    0.01 and 7.99 share one id, one price, and one 8-contract log row.
+    The display row is count 8 and fee 0.132. Fee-net stays 0 until
+    settlement. Open cost is 8 * 0.38 = 3.04. Cash 46.828 plus mark 2.80
+    minus funding 50 is -0.372, and so is the open adjustment.
+    """
+    log = (
+        "2026-10-27T07:54:56Z, KXTRUMPACT-26OCT25-T3, no, 38, 8, "
+        f"{UUID_TEXT}, 201, 8, 38, 13.2, \n"
+    )
+    report, _new_log, _tickers = assemble_pnl(
+        fill_rows=[
+            _buy(
+                ticker="KXTRUMPACT-26OCT25-T3",
+                side="no",
+                action="sell",
+                count_fp="0.01",
+                yes_price_dollars="0.6200",
+                no_price_dollars="0.3800",
+                fee_cost="0.000200",
+                order_id="fill-order-t3",
+                created_time="2026-10-27T07:54:54Z",
+            ),
+            _buy(
+                ticker="KXTRUMPACT-26OCT25-T3",
+                side="no",
+                action="sell",
+                count_fp="7.99",
+                yes_price_dollars="0.6200",
+                no_price_dollars="0.3800",
+                fee_cost="0.131800",
+                order_id="fill-order-t3",
+                created_time="2026-10-27T07:54:54Z",
+            ),
+        ],
+        settlement_rows=[],
+        fill_log_text=log,
+        paper_rows=[],
+        open_tickers={"KXTRUMPACT-26OCT25-T3": Decimal("-8.00")},
+        now=datetime(2026, 10, 27, 8, 54, 54, tzinfo=timezone.utc),
+        cash=Decimal("46.828"),
+        portfolio_value=Decimal("2.80"),
+        starting_balance=Decimal("50"),
+    )
+    assert "running_total_dollars: 0" in report
+    assert "sell fill; not allocated" not in report
+    assert "fill not in fill log" not in report
+    assert "fill log fee differs" not in report
+    assert "| KXTRUMPACT-26OCT25-T3 | no | 8 | 38 | 0.132 | open | open |" in report
+    assert "| no | 0.01 | 38 |" not in report
+    assert "| no | 7.99 | 38 |" not in report
+    assert "| open | 1h | KXTRUMPACT |" in report
+    assert "open_cost: 3.04" in report
+    assert "open_entry_fees: 0.132" in report
+    assert "reconciliation_left: -0.372" in report
+    assert "reconciliation_right: -0.372" in report
+    assert "\nresidual: 0\n" in report
+    assert "closes_within_25_cents: yes" in report
+    assert "unsettled: open cost plus open fees is not the portfolio mark" not in report
+    assert "not enough data (n=0)" in report
+    assert UUID_TEXT not in report
+    assert "fill-order-t3" not in report
+
+
+def test_reconciliation_closes_at_25_cents_and_names_a_larger_gap():
+    """25 cents is inside the band. 26 cents is not a closed book.
+
+    Left is cash + mark - funding. Right is settled fee-net when the book
+    is flat. Residual is left minus right.
+    """
+    closed = "\n".join(reconciliation_lines(
+        ledger=Decimal("1"), open_exposure=Decimal("0"), open_fees=Decimal("0"),
+        cash=Decimal("1"), portfolio=Decimal("0"), starting=Decimal("0.25"),
+    ))
+    # left 1 + 0 - 0.25 = 0.75. right 1. residual -0.25.
+    assert "cash: 1" in closed
+    assert "portfolio_mark: 0" in closed
+    assert "applied_net_funding: 0.25" in closed
+    assert "settled_fee_net: 1" in closed
+    assert "open_mark: 0" in closed
+    assert "open_cost: 0" in closed
+    assert "open_entry_fees: 0" in closed
+    assert "open_mark_minus_cost_and_fees: 0" in closed
+    assert "reconciliation_left: 0.75" in closed
+    assert "reconciliation_right: 1" in closed
+    assert "\nresidual: -0.25\n" in closed
+    assert "closes_within_25_cents: yes" in closed
+    assert "reason:" not in closed
+    open_gap = "\n".join(reconciliation_lines(
+        ledger=Decimal("1"), open_exposure=Decimal("0"), open_fees=Decimal("0"),
+        cash=Decimal("1"), portfolio=Decimal("0"), starting=Decimal("0.26"),
+    ))
+    assert "\nresidual: -0.26\n" in open_gap
+    assert "closes_within_25_cents: no" in open_gap
+    assert "deposits, fee rounding, or unsettled mark versus cost" in open_gap
+
+
+def test_reconciliation_identity_is_zero_on_the_last_account_read():
+    """The last live read closes. Open cost is not added on both sides.
+
+    53.8724 + 3.20 - 50 = 7.0724. Settled fee-net 7.0444 plus
+    (3.20 - 3.04 - 0.132) is the same 7.0724.
+    """
+    text = "\n".join(reconciliation_lines(
+        ledger=Decimal("7.0444"),
+        open_exposure=Decimal("3.04"),
+        open_fees=Decimal("0.132"),
+        cash=Decimal("53.8724"),
+        portfolio=Decimal("3.20"),
+        starting=Decimal("50"),
+    ))
+    assert "cash: 53.8724" in text
+    assert "portfolio_mark: 3.2" in text
+    assert "applied_net_funding: 50" in text
+    assert "reconciliation_left: 7.0724" in text
+    assert "settled_fee_net: 7.0444" in text
+    assert "open_mark: 3.2" in text
+    assert "open_cost: 3.04" in text
+    assert "open_entry_fees: 0.132" in text
+    assert "open_mark_minus_cost_and_fees: 0.028" in text
+    assert "reconciliation_right: 7.0724" in text
+    assert "\nresidual: 0\n" in text
+    assert "closes_within_25_cents: yes" in text
+
+
+def test_one_cent_log_price_uses_the_exchange_fill_and_a_split_stays_open():
+    """A unique log row one cent off the fill is that fill.
+
+    KXTRUMPACT-26OCT04-T6 is 8 NO at the exchange price of 42c. The log
+    says 43c and has no fee column. The row shows 42c and the log text is
+    not rewritten. One log row of 8 at 67c against 1 at 66c plus 7 at 67c
+    stays a mismatch. A two-cent gap stays a mismatch too.
+    """
+    log = (
+        "2026-10-08T00:00:00Z, KXTRUMPACT-26OCT04-T6, no, 43, 8, old-client, 201\n"
+        "2026-10-23T00:00:00Z, KXTRUMPACT-26OCT18-T6, yes, 67, 8, old-client, 201, 8, 67, 12.41, \n"
+        "2026-10-01T00:00:00Z, KXTRUMPACT-26OCT01-T1, yes, 40, 8, old-client, 201\n"
+    )
+    report, new_log, _tickers = assemble_pnl(
+        fill_rows=[
+            _buy(
+                ticker="KXTRUMPACT-26OCT04-T6",
+                side="no",
+                count_fp="8.00",
+                yes_price_dollars="0.5800",
+                no_price_dollars="0.4200",
+                fee_cost="0.136500",
+                order_id="fill-order-t6",
+            ),
+            _buy(
+                ticker="KXTRUMPACT-26OCT18-T6",
+                count_fp="1.00",
+                yes_price_dollars="0.6600",
+                fee_cost="0.015800",
+                order_id="fill-order-split",
+            ),
+            _buy(
+                ticker="KXTRUMPACT-26OCT18-T6",
+                count_fp="7.00",
+                yes_price_dollars="0.6700",
+                fee_cost="0.108300",
+                order_id="fill-order-split",
+            ),
+            _buy(
+                ticker="KXTRUMPACT-26OCT01-T1",
+                count_fp="8.00",
+                yes_price_dollars="0.4200",
+                fee_cost="0.100000",
+                order_id="fill-order-gap",
+            ),
+        ],
+        settlement_rows=[
+            _settlement(
+                ticker="KXTRUMPACT-26OCT04-T6",
+                market_result="no",
+                yes_count_fp="0.00",
+                no_count_fp="8.00",
+                yes_total_cost_dollars="0.0000",
+                no_total_cost_dollars="3.3600",
+                revenue=800,
+                fee_cost="0.1365",
+            ),
+            _settlement(
+                ticker="KXTRUMPACT-26OCT18-T6",
+                yes_count_fp="8.00",
+                yes_total_cost_dollars="5.3500",
+                revenue=800,
+                fee_cost="0.1241",
+            ),
+            _settlement(
+                ticker="KXTRUMPACT-26OCT01-T1",
+                yes_count_fp="8.00",
+                yes_total_cost_dollars="3.3600",
+                revenue=800,
+                fee_cost="0.1000",
+            ),
+        ],
+        fill_log_text=log,
+        paper_rows=[],
+        open_tickers=set(),
+    )
+    assert "| KXTRUMPACT-26OCT04-T6 | no | 8 | 42 |" in report
+    assert "| no | 8 | 43 |" not in report
+    assert "KXTRUMPACT-26OCT04-T6: fill not in fill log" not in report
+    assert "KXTRUMPACT-26OCT04-T6: fill log row has no live fill" not in report
+    assert "KXTRUMPACT-26OCT04-T6: fee column absent" in report
+    assert "| KXTRUMPACT-26OCT18-T6 | yes | 1 | 66 |" in report
+    assert "| KXTRUMPACT-26OCT18-T6 | yes | 7 | 67 |" in report
+    assert "KXTRUMPACT-26OCT18-T6: fill not in fill log" in report
+    assert "KXTRUMPACT-26OCT18-T6: fill log row has no live fill" in report
+    assert "| KXTRUMPACT-26OCT01-T1 | yes | 8 | 42 |" in report
+    assert "KXTRUMPACT-26OCT01-T1: fill not in fill log" in report
+    assert "KXTRUMPACT-26OCT01-T1: fill log row has no live fill" in report
+    assert new_log == log
+    assert "fill-order-t6" not in report
+    assert "order_id" not in report
+
+
+def test_same_price_on_two_orders_stays_two_rows():
+    """Two orders at one price are two positions. A missing order id does not merge them."""
+    report, _new_log, _tickers = assemble_pnl(
+        fill_rows=[
+            _buy(
+                ticker="KXTRUMPSAY-26OCT26-GOLF",
+                count_fp="8.00",
+                yes_price_dollars="0.8900",
+                fee_cost="0.050000",
+                order_id="fill-order-a",
+            ),
+            _buy(
+                ticker="KXTRUMPSAY-26OCT26-GOLF",
+                count_fp="8.00",
+                yes_price_dollars="0.8900",
+                fee_cost="0.050000",
+                order_id="fill-order-b",
+            ),
+            _buy(
+                ticker="KXTRUMPSAY-26OCT19-MELA",
+                count_fp="8.00",
+                yes_price_dollars="0.6400",
+                fee_cost="0.050000",
+                order_id=None,
+            ),
+            _buy(
+                ticker="KXTRUMPSAY-26OCT19-MELA",
+                count_fp="8.00",
+                yes_price_dollars="0.6400",
+                fee_cost="0.050000",
+                order_id=None,
+            ),
+        ],
+        settlement_rows=[],
+        fill_log_text="",
+        paper_rows=[],
+        open_tickers={
+            "KXTRUMPSAY-26OCT26-GOLF": Decimal("16.00"),
+            "KXTRUMPSAY-26OCT19-MELA": Decimal("16.00"),
+        },
+    )
+    assert report.count("| KXTRUMPSAY-26OCT26-GOLF | yes | 8 | 89 |") == 2
+    assert report.count("| KXTRUMPSAY-26OCT19-MELA | yes | 8 | 64 |") == 2
+    assert "| yes | 16 | 89 |" not in report
+    assert "open size differs from fills" not in report
+    assert "fill-order-a" not in report
