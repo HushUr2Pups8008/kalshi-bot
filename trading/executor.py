@@ -12,8 +12,8 @@ Live mode: tighter checks, live balance verified, source credibility applied.
 import asyncio
 import copy
 import functools
-import os
 import re
+import sys
 import threading
 import time
 import uuid
@@ -309,7 +309,7 @@ def _fill_log_row_ok(http_result: object, filled_count: object, order_id: object
 
 
 def _test_targets_runtime_fill_log(target: Path) -> bool:
-    if not os.environ.get("PYTEST_CURRENT_TEST"):
+    if "pytest" not in sys.modules:
         return False
     try:
         return target.resolve() == RUNTIME_FILL_LOG_PATH.resolve()
