@@ -439,6 +439,10 @@ def main(argv: list[str] | None = None) -> int:
                 time.monotonic() + edge_scan_interval_seconds(),
                 next_exit,
             )
+            # The helper returns the following hour. Waiting on that value
+            # stacks an hour onto the scan interval from the second cycle.
+            if next_exit > time.monotonic():
+                next_exit = time.monotonic()
     finally:
         lock.close()
 
