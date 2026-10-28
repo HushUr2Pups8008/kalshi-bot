@@ -10,6 +10,7 @@ any test file is imported), so module-level singletons in utils/logger.py are
 always initialized against the temp path, never the runtime bot.log path.
 """
 
+import io
 import os
 import re
 import shutil
@@ -185,6 +186,44 @@ def pytest_unconfigure(config: object) -> None:
     os.environ.pop("KALSHI_LOG_ROOT", None)
     if _KALSHI_TEST_LOG_DIR and os.path.isdir(_KALSHI_TEST_LOG_DIR):
         shutil.rmtree(_KALSHI_TEST_LOG_DIR, ignore_errors=True)
+
+
+_RUNTIME_FILL_LOG = Path(__file__).resolve().parents[1] / "logs" / "state" / "live-fill-log.md"
+_FILL_LOG_HITS: list[str] = []
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _fail_if_a_test_writes_the_runtime_fill_log():
+    """Fail the session when any test opens the runtime fill log for writing."""
+
+    real = _RUNTIME_FILL_LOG.resolve()
+    original = io.open
+
+    def guarded(file, mode="r", *args, **kwargs):
+        mode_text = mode if isinstance(mode, str) else ""
+        writing = any(flag in mode_text for flag in ("w", "a", "x", "+"))
+        try:
+            target = Path(file).resolve() if isinstance(file, (str, Path)) else None
+        except OSError:
+            target = None
+        if target == real and writing:
+            _FILL_LOG_HITS.append(os.environ.get("PYTEST_CURRENT_TEST", "unknown"))
+        return original(file, mode, *args, **kwargs)
+
+    io.open = guarded
+    yield
+    io.open = original
+    assert _FILL_LOG_HITS == []
+
+
+@pytest.fixture(autouse=True)
+def _isolate_runtime_fill_log(monkeypatch, tmp_path):
+    """Tests append to a temp fill log, never logs/state/live-fill-log.md."""
+
+    monkeypatch.setattr(
+        "trading.executor.LIVE_FILL_LOG_PATH",
+        tmp_path / "live-fill-log.md",
+    )
 
 
 @pytest.fixture(autouse=True)

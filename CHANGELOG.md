@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.49] - 2026-10-28
+
+### Fixed
+- The live fill log refuses a row unless it has a real order id, a numeric HTTP status, and a numeric filled count. A test appends only to a temporary path, and a mock place_limit_order result no longer reaches logs/state/live-fill-log.md. A failed fill-detail GET or a reject without an order id is not a fill row.
+
 ## [0.37.48] - 2026-10-28
 
 ### Added

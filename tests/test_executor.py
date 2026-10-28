@@ -365,7 +365,9 @@ class TestLiveSubmissionNoRetry:
         assert len(intent_kwargs["submission_id"]) == 32
 
     @pytest.mark.asyncio
-    async def test_live_fill_log_on_2xx_and_business_reject(self, monkeypatch, tmp_path):
+    async def test_live_fill_log_records_a_2xx_and_refuses_a_reject_without_an_order_id(
+        self, monkeypatch, tmp_path
+    ):
         from trading.executor import LIVE_FILL_LOG_PATH
 
         monkeypatch.setattr(_cfg_module.cfg, "is_paper_trading", False)
@@ -416,8 +418,8 @@ class TestLiveSubmissionNoRetry:
             )
         assert rejected is None
         text = log_path.read_text(encoding="utf-8")
-        assert "KXAPRPOTUS-26OCT17-MISS" in text
-        assert "404" in text
+        assert "KXAPRPOTUS-26OCT17-MISS" not in text
+        assert "404" not in text
         assert LIVE_FILL_LOG_PATH != log_path
 
     @pytest.mark.asyncio
@@ -490,10 +492,9 @@ class TestLiveSubmissionNoRetry:
                 _make_analysis(ticker="KXAPRPOTUS-26OCT17-FAIL")
             )
         assert returned == "from-201"
-        failed_detail = log_path.read_text(encoding="utf-8").splitlines()[-1].split(", ")
-        assert failed_detail[1] == "KXAPRPOTUS-26OCT17-FAIL"
-        assert failed_detail[6:] == ["201", "", "", "", ""]
-        assert "99" not in failed_detail[6:]
+        failed_text = log_path.read_text(encoding="utf-8")
+        assert "KXAPRPOTUS-26OCT17-FAIL" not in failed_text
+        assert "99" not in failed_text
         assert "detail GET failed" in caplog.text
 
         rest.get_order_receipt.reset_mock()
@@ -511,9 +512,9 @@ class TestLiveSubmissionNoRetry:
         assert rejected is None
         rest.get_order_receipt.assert_not_called()
         rest.get_fills_page.assert_not_called()
-        reject_line = log_path.read_text(encoding="utf-8").splitlines()[-1]
-        assert "KXAPRPOTUS-26OCT17-NOGET" in reject_line
-        assert "do-not-get" not in reject_line
+        reject_text = log_path.read_text(encoding="utf-8")
+        assert "KXAPRPOTUS-26OCT17-NOGET" not in reject_text
+        assert "do-not-get" not in reject_text
 
     @pytest.mark.asyncio
     async def test_live_intent_typeerror_is_logged_with_exc_info(

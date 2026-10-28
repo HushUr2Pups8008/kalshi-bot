@@ -12,6 +12,7 @@ Live mode: tighter checks, live balance verified, source credibility applied.
 import asyncio
 import copy
 import functools
+import os
 import re
 import threading
 import time
@@ -40,7 +41,8 @@ log = get_logger("executor")
 
 # Runtime appends stay out of git. The daily copy writes the report.
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-LIVE_FILL_LOG_PATH = _REPO_ROOT / "logs" / "state" / "live-fill-log.md"
+RUNTIME_FILL_LOG_PATH = _REPO_ROOT / "logs" / "state" / "live-fill-log.md"
+LIVE_FILL_LOG_PATH = RUNTIME_FILL_LOG_PATH
 LIVE_FILL_LOG_ARCHIVE_PATH = _REPO_ROOT / "docs" / "reports" / "live-fill-log.md"
 _LIVE_BUSINESS_REJECT_STATUSES = frozenset({400, 404, 409, 422})
 _LIVE_BUSINESS_REJECT_TOKENS = (
@@ -286,6 +288,35 @@ def fetch_live_fill_detail(rest: Any, order_id: str, side: str) -> dict[str, str
         )
     return detail
 
+
+def _fill_log_row_ok(http_result: object, filled_count: object, order_id: object) -> bool:
+    """True when a row has a real order id, a numeric status, and a numeric fill count."""
+
+    token = str(http_result if http_result is not None else "").strip().split(" ", 1)[0]
+    if not token.isdigit() or not 100 <= int(token) <= 599:
+        return False
+    if isinstance(filled_count, bool) or filled_count is None:
+        return False
+    try:
+        if not Decimal(str(filled_count).strip()).is_finite():
+            return False
+    except Exception:
+        return False
+    if not _is_verified_order_id(order_id):
+        return False
+    text = str(order_id)
+    return "MagicMock" not in text and "mock" not in text.lower()
+
+
+def _test_targets_runtime_fill_log(target: Path) -> bool:
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        return False
+    try:
+        return target.resolve() == RUNTIME_FILL_LOG_PATH.resolve()
+    except OSError:
+        return False
+
+
 def append_live_fill_log(
     *,
     ticker: str,
@@ -304,13 +335,18 @@ def append_live_fill_log(
 ) -> None:
     """Append one Desk Ops line. Never logs keys.
 
-    Extra columns are written only when EVENT_NEWS_FILL_LOG_DETAIL=true.
-    Callers must pass those fields from a later GET. The 201 body has no
-    exchange fee and is not a fill receipt.
+    A row is written only when the order id is real, the HTTP status is
+    numeric, and the filled count is numeric. Extra columns are written
+    only when EVENT_NEWS_FILL_LOG_DETAIL=true. Callers must pass those
+    fields from a later GET. The 201 body has no exchange fee and is not
+    a fill receipt. A test cannot append to the runtime log.
     """
     from utils.event_news_grok_flags import event_news_fill_log_detail_enabled
 
     target = path or LIVE_FILL_LOG_PATH
+    if not _fill_log_row_ok(http_result, filled_count, order_id) or _test_targets_runtime_fill_log(target):
+        log.warning("[LIVE_FILL_LOG] row refused ticker=%s", ticker)
+        return
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     line = (
         f"{stamp}, {ticker}, {side}, {price_cents}, {contracts}, "
@@ -2591,13 +2627,25 @@ class TradeExecutor:
             from utils.event_news_grok_flags import event_news_fill_log_detail_enabled
 
             http_result = _live_http_result(result)
-            detail: dict[str, str | None] = {}
+            filled_count = None
+            avg_fill_cents = None
+            fee_cents = None
+            logged_order_id = None
             if event_news_fill_log_detail_enabled() and http_result == "201":
                 detail = fetch_live_fill_detail(
                     self._rest,
                     str(getattr(result, "order_id", "") or ""),
                     str(analysis.side),
                 )
+                filled_count = detail.get("filled_count")
+                avg_fill_cents = detail.get("avg_fill_cents")
+                fee_cents = detail.get("fee_cents")
+                logged_order_id = detail.get("order_id")
+            elif not event_news_fill_log_detail_enabled():
+                filled_count = getattr(result, "filled", None)
+                raw_order_id = getattr(result, "order_id", None)
+                if isinstance(raw_order_id, str):
+                    logged_order_id = raw_order_id
             append_live_fill_log(
                 ticker=str(analysis.market.ticker),
                 side=str(analysis.side),
@@ -2605,10 +2653,10 @@ class TradeExecutor:
                 contracts=contracts,
                 client_order_id=client_order_id,
                 http_result=http_result,
-                filled_count=detail.get("filled_count"),
-                avg_fill_cents=detail.get("avg_fill_cents"),
-                fee_cents=detail.get("fee_cents"),
-                order_id=detail.get("order_id"),
+                filled_count=filled_count,
+                avg_fill_cents=avg_fill_cents,
+                fee_cents=fee_cents,
+                order_id=logged_order_id,
                 role=fill_role,
             )
 
