@@ -783,6 +783,43 @@ def test_eoweek_is_not_a_paid_grok_call(tmp_path: Path) -> None:
     assert counts.get("examined", 0) >= 1
 
 
+def test_open_eoweek_position_is_not_a_paid_grok_call(tmp_path: Path) -> None:
+    """An open KXEOWEEK position still does not post. A live series in the same book does."""
+    calls: list[dict] = []
+    weekly = _market(ticker="KXEOWEEK-26OCT31-1", series="KXEOWEEK", yes_ask=40, no_ask=62)
+    named = _market()
+    books = {weekly["ticker"]: weekly, named["ticker"]: named}
+    scored = score_open_positions(
+        [
+            {"ticker": weekly["ticker"], "position_fp": "8.00", "market_exposure_dollars": "3.20"},
+            {"ticker": named["ticker"], "position_fp": "8.00", "market_exposure_dollars": "4.40"},
+        ],
+        live=False,
+        market_lookup=lambda ticker: books[ticker],
+        environ={
+            XAI_API_KEY_ENV: "test-key",
+            "EVENT_NEWS_GROK_KALSHI_SERIES": "true",
+            EVENT_NEWS_GROK_EDGE_SCAN: "true",
+            "GROK_DAILY_USD_CAP": "3",
+        },
+        post=_poster(calls),
+        now=NOW,
+        call_log_path=tmp_path / "calls.jsonl",
+        score_log_path=tmp_path / "scores.jsonl",
+        spend_path=tmp_path / "spend.json",
+        cache_path=tmp_path / "cache.json",
+        screen_log_path=tmp_path / "screen.jsonl",
+        raw_dir=tmp_path / "raw",
+        post_lookup=lambda: "post-1",
+    )
+    blob = json.dumps(calls)
+    assert "KXEOWEEK" not in blob
+    assert "KXTRUMPSAY" in blob
+    assert scored["grounded_calls"] >= 1
+    skipped = [row for row in _rows(tmp_path / "scores.jsonl") if row["ticker"] == weekly["ticker"]]
+    assert skipped and skipped[0]["skip_reason"] == "count_shadow_only"
+
+
 def test_comparison_brier_and_ev_need_settled_rows() -> None:
     empty = comparison_summary([])
     assert empty["n"] == 0

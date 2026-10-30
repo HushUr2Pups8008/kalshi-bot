@@ -206,8 +206,22 @@ def _view_venue(view: Mapping[str, Any]) -> str:
         return _POLYMARKET_US
     return "kalshi"
 
+def _count_shadow_only(*names: object) -> bool:
+    """Paper count series never pay for a Grok call."""
+    from utils.countable_series_shadow import PAPER_COUNT_ONLY
+
+    found: set[str] = set()
+    for name in names:
+        text = str(name or "").strip().upper()
+        if text:
+            found.add(text.split("-", 1)[0])
+    return bool(found & PAPER_COUNT_ONLY)
+
+
 def _kalshi_series_paid(view: Mapping[str, Any], environ: Mapping[str, str] | None) -> bool:
     """Polymarket paper scans ignore the Kalshi series switch."""
+    if _count_shadow_only(view.get("series"), view.get("ticker")):
+        return False
     if _view_venue(view) == _POLYMARKET_US:
         return True
     return event_news_desk_flag_enabled(
@@ -1450,6 +1464,21 @@ def score_open_positions(
             market = None
         view = _position_view(ticker, market)
         ask = _mark_cents(market, side, position)
+        if _count_shadow_only(view.get("series"), ticker):
+            record = _score_record(
+                ticker=ticker,
+                side=side,
+                ask=ask,
+                probability=None,
+                sources=(),
+                skip_reason="count_shadow_only",
+                floor=floor,
+                now=moment,
+            )
+            counts["skipped"] += 1
+            _append_jsonl(score_log_path, record)
+            _insert_paper_row(db_path, "position_scores", record)
+            continue
         cached = _cache_get(cache_path, ticker)
         if _cache_fresh(cached, view, fingerprint, moment):
             counts["cache_hits"] += 1
@@ -3210,6 +3239,15 @@ def _call_grok(
             source = "provider"
         return _finish(None, body, cost, cost_source=source, usage=usage, attempt=attempt)
 
+    if _count_shadow_only(series, ticker, *tuple(expected_tickers)):
+        return _finish(
+            "count_shadow_only",
+            None,
+            Decimal("0"),
+            cost_source="reserve",
+            usage={},
+            attempt=0,
+        )
     first = _attempt(prompt, 1)
     if first.skip_reason != "malformed":
         return first
