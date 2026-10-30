@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.51] - 2026-10-30
+
+### Added
+- `scripts/countable_series_backtest.py` scores KXEOWEEK from numbered Federal Register executive orders and the existing 60-day negative-binomial count fit. It stops if the Sunday-Saturday buckets miss the 11 settled weeks. It prints Brier, reliability by strike, and fee-net at the Sunday-open and Wednesday candlestick asks. The taker fee is the scorecard quadratic quote. No Grok and no orders. The universe file is unchanged.
+
 ## [0.37.50] - 2026-10-28
 
 ### Added
