@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.53] - 2026-10-30
+
+### Added
+- KXTRUTHSOCIALD is a paper-only universe row. The free daily count shadow reuses the negative-binomial fit on Factbase posts and logs the model probability against the yes ask, with a day-open or noon clock when the scan falls in those hours. The paid Grok scan and the open-position score drop this series before any call. The count scorecard grades it. No live POST. The historical replay is not a promotion.
+
 ## [0.37.52] - 2026-10-30
 
 ### Added

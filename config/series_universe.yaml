@@ -465,3 +465,17 @@
   notes: >-
     Weekly numbered executive orders. Paper count shadow only.
     No Grok and no live POST. Band is 55c through 99c.
+- series: KXTRUTHSOCIALD
+  venue: kalshi
+  mode: paper
+  favorite_lo_cents: 55
+  favorite_hi_cents: 99
+  transcript_skip: false
+  paper_score: false
+  category: politics
+  max_contracts: 8
+  edge_min: "0.04"
+  notes: >-
+    Daily Truth Social post count. Paper count shadow only.
+    No Grok and no live POST. Promotion is not yet.
+    Band is 55c through 99c.
