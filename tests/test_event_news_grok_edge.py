@@ -759,6 +759,30 @@ def test_live_true_does_not_call_even_when_the_flag_is_true(tmp_path: Path) -> N
     assert calls == []
 
 
+def test_eoweek_is_not_a_paid_grok_call(tmp_path: Path) -> None:
+    """The Kalshi series flag can be on. KXEOWEEK still does not post."""
+    calls: list[dict] = []
+    weekly = _market(ticker="KXEOWEEK-26OCT31-1", series="KXEOWEEK", yes_ask=40, no_ask=62)
+    counts = _scan(
+        tmp_path,
+        [_market(), weekly],
+        _poster(calls),
+        {
+            XAI_API_KEY_ENV: "test-key",
+            "EVENT_NEWS_GROK_KALSHI_SERIES": "true",
+            EVENT_NEWS_GROK_EDGE_SCAN: "true",
+            "GROK_DAILY_USD_CAP": "1",
+        },
+        allowlist=("KXTRUMPSAY", "KXEOWEEK"),
+        prior_prob=None,
+    )
+    blob = json.dumps(calls)
+    assert "KXEOWEEK" not in blob
+    assert "KXTRUMPSAY" in blob
+    assert counts["grounded_calls"] >= 1
+    assert counts.get("examined", 0) >= 1
+
+
 def test_comparison_brier_and_ev_need_settled_rows() -> None:
     empty = comparison_summary([])
     assert empty["n"] == 0
@@ -2596,6 +2620,7 @@ def test_count_shadow_uses_the_last_row_before_close_and_does_not_promote(tmp_pa
         now=NOW,
     )
     assert "| KXTRUTHSOCIAL | 0 | not enough data (n=0) |" in quiet
+    assert "| KXEOWEEK | 0 | not enough data (n=0) |" in quiet
     assert "0.5625" not in quiet
 
 

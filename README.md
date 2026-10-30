@@ -1,6 +1,6 @@
 # kalshi-bot
 
-[![Version](https://img.shields.io/badge/version-0.37.51-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.37.52-blue)](CHANGELOG.md)
 [![Mode](https://img.shields.io/badge/default-paper%20trading-orange)](.env.example)
 
 Paper research for Kalshi event markets, plus a small live politics desk.

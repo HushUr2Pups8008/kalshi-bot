@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.52] - 2026-10-30
+
+### Added
+- KXEOWEEK is a paper-only universe row. The free count shadow reads numbered executive orders from the Federal Register and logs the model probability against the yes ask, including a Sunday-open or Wednesday clock when the scan falls in those hours. The paid Grok scan drops this series. The count scorecard grades it. No live POST.
+
 ## [0.37.51] - 2026-10-30
 
 ### Added

@@ -48,7 +48,7 @@ def test_shipped_rows_are_kalshi_and_a_missing_venue_stays_kalshi(tmp_path) -> N
     reset_series_universe()
     try:
         entries = get_universe().entries
-        assert len(entries) == 29
+        assert len(entries) == 30
         assert {entry.venue for entry in entries if entry.series.startswith("KX")} == {
             "kalshi"
         }

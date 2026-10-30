@@ -23,15 +23,25 @@ from xml.etree import ElementTree
 from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
-COUNTABLE = frozenset({"KXTRUTHSOCIAL", "KXTRUMPACT"})
+COUNTABLE = frozenset({"KXTRUTHSOCIAL", "KXTRUMPACT", "KXEOWEEK"})
+# These series are fetched for the free count shadow. They are not Grok inputs.
+PAPER_COUNT_ONLY = frozenset({"KXEOWEEK"})
 TRUTH_URL = (
     "https://rollcall.com/wp-json/factbase/v1/twitter"
     "?platform=truth%20social&sort=date&sort_order=desc&format=json&page={page}"
 )
 ACTION_URL = "https://www.whitehouse.gov/presidential-actions/feed/"
+EO_URL = (
+    "https://www.federalregister.gov/api/v1/documents.json"
+    "?per_page=1000&order=oldest"
+    "&conditions[type][]=PRESDOCU"
+    "&conditions[presidential_document_type][]=executive_order"
+    "&conditions[signing_date][gte]=2025-01-01"
+    "&fields[]=executive_order_number&fields[]=signing_date"
+)
 SHADOW_PATH = Path("logs/state/countable_shadow.jsonl")
 MIN_DAYS = 5
-_HOSTS = frozenset({"rollcall.com", "www.whitehouse.gov"})
+_HOSTS = frozenset({"rollcall.com", "www.whitehouse.gov", "www.federalregister.gov"})
 _MONTHS = {name: index for index, name in enumerate(
     ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"), 1
 )}
@@ -77,7 +87,7 @@ def _day(text: str) -> date | None:
 def parse_contract(rules: str, strike_type: str = "") -> dict[str, object] | None:
     """Window and strike from the market rules only."""
     found = re.search(
-        r"from ([A-Z][a-z]+ \d{1,2}, \d{4}) (?:to|through) ([A-Z][a-z]+ \d{1,2}, \d{4})",
+        r"(?:from|during) ([A-Z][a-z]+ \d{1,2}, \d{4}) (?:to|through) ([A-Z][a-z]+ \d{1,2}, \d{4})",
         rules,
     )
     if found is None:
@@ -221,7 +231,49 @@ def _actions(xml: str) -> list[datetime]:
     return found
 
 
+def _clock(moment: datetime) -> str:
+    """Sunday open and Wednesday afternoon are the backtest clocks. Other scans still log."""
+    local = moment.astimezone(ET)
+    if local.weekday() == 6 and local.hour < 6:
+        return "sunday_open"
+    if local.weekday() == 2 and 10 <= local.hour < 16:
+        return "wednesday"
+    return "other"
+
+
+def _feed_key(series: str) -> str:
+    if series == "KXTRUTHSOCIAL":
+        return "truth"
+    if series == "KXEOWEEK":
+        return "orders"
+    return "actions"
+
+
+def _orders(payload: str) -> tuple[list[datetime], bool]:
+    """Numbered executive orders at noon ET on the signing date. One page, or the row says capped."""
+    body = json.loads(payload)
+    results = body.get("results") if isinstance(body, Mapping) else None
+    if not isinstance(results, list):
+        raise ValueError("shape")
+    found: list[datetime] = []
+    for row in results:
+        if not isinstance(row, Mapping):
+            continue
+        raw = row.get("signing_date")
+        if not row.get("executive_order_number") or not isinstance(raw, str):
+            continue
+        day = date.fromisoformat(raw)
+        found.append(datetime(day.year, day.month, day.day, 12, tzinfo=ET))
+    total = body.get("count") if isinstance(body, Mapping) else None
+    capped = bool(body.get("next_page_url")) if isinstance(body, Mapping) else False
+    if isinstance(total, int) and len(results) < total:
+        capped = True
+    return found, capped
+
+
 def _posts(kind: str, need: date, fetch: Fetch, sleeper: Callable[[float], None] | None) -> tuple[list[datetime], bool]:
+    if kind == "orders":
+        return _orders(fetch(EO_URL))
     if kind == "actions":
         found = _actions(fetch(ACTION_URL))
         return found, len(found) >= 30
@@ -285,8 +337,13 @@ def _score(market: object, contract: Mapping[str, object], posts: Sequence[datet
         "so_far": so_far,
         "days_left": f"{days_left:.6f}",
         "how": contract["how"],
-        "feed": "factbase" if _series(market) == "KXTRUTHSOCIAL" else "whitehouse_rss",
+        "feed": {
+            "truth": "factbase",
+            "orders": "federal_register",
+            "actions": "whitehouse_rss",
+        }[_feed_key(_series(market))],
         "feed_capped": capped,
+        "clock": _clock(now),
     })
     if "strike" in contract:
         row["strike"] = contract["strike"]
@@ -345,7 +402,7 @@ def record_countable_shadow(
     loaded: dict[str, tuple[list[datetime], bool] | None] = {}
     earliest: dict[str, date] = {}
     for _market, contract in ready:
-        key = "truth" if _series(_market) == "KXTRUTHSOCIAL" else "actions"
+        key = _feed_key(_series(_market))
         start = contract["start"]
         assert isinstance(start, date)
         earliest[key] = start if key not in earliest else min(start, earliest[key])
@@ -355,7 +412,7 @@ def record_countable_shadow(
         except Exception:
             loaded[key] = None
     for market, contract in ready:
-        key = "truth" if _series(market) == "KXTRUTHSOCIAL" else "actions"
+        key = _feed_key(_series(market))
         got = loaded[key]
         _write(path, _row(market, moment, "feed") if got is None else _score(market, contract, got[0], got[1], moment))
         written += 1
