@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import math
-from datetime import datetime, timezone
+import urllib.request
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -60,6 +61,13 @@ def test_rules_name_the_window_and_the_strike() -> None:
     assert action is not None and action["how"] == "ge" and action["strike"] == 6
     assert band is not None and band["how"] == "between" and band["low"] == 120 and band["high"] == 139
     assert parse_contract("no dates here") is None
+    weekly = parse_contract(
+        "If the President signs above 1 executive orders during Aug 9, 2026 to Aug 15, 2026, "
+        "then the market resolves to Yes.",
+        "greater",
+    )
+    assert weekly is not None and weekly["how"] == "gt" and weekly["strike"] == 1
+    assert weekly["start"] == date(2026, 8, 9) and weekly["end"] == date(2026, 8, 15)
 
 
 def test_shadow_row_uses_the_fixture_feed_and_skips_deleted_posts(tmp_path: Path) -> None:
@@ -175,3 +183,59 @@ def test_feed_and_detail_failures_write_a_row_and_do_not_raise(tmp_path: Path) -
 def test_fetch_refuses_a_non_official_host() -> None:
     with pytest.raises(ValueError):
         fetch_text("https://example.com/feed")
+
+
+def test_federal_register_host_reaches_the_opener(monkeypatch) -> None:
+    """The count shadow may read the public register. The opener is not called in this test."""
+
+    def opened(_request, timeout=0):
+        raise AssertionError(timeout)
+
+    monkeypatch.setattr(urllib.request, "urlopen", opened)
+    with pytest.raises(AssertionError):
+        fetch_text("https://www.federalregister.gov/api/v1/documents.json")
+
+
+def test_eoweek_shadow_uses_the_register_and_not_grok(tmp_path: Path) -> None:
+    """A Sunday-open row is the free count. The register page is the only fetch."""
+    calls: list[str] = []
+
+    def fetch(url: str) -> str:
+        calls.append(url)
+        results = [
+            {"executive_order_number": "14400", "signing_date": f"2026-08-0{day}"}
+            for day in (1, 2, 3, 4, 6)
+        ]
+        return json.dumps({"count": len(results), "results": results})
+
+    market = {
+        "ticker": "KXEOWEEK-26AUG15-1",
+        "series_ticker": "KXEOWEEK",
+        "rules_primary": (
+            "If the President signs above 1 executive orders during Aug 9, 2026 "
+            "to Aug 15, 2026, then the market resolves to Yes."
+        ),
+        "strike_type": "greater",
+        "yes_ask_cents": 40,
+    }
+    path = tmp_path / "shadow.jsonl"
+    written = record_countable_shadow(
+        [market],
+        now=datetime(2026, 8, 9, 8, 0, tzinfo=timezone.utc),
+        path=path,
+        fetch=fetch,
+        sleeper=lambda _seconds: None,
+    )
+    assert written == 1
+    assert len(calls) == 1 and "federalregister.gov" in calls[0]
+    row = json.loads(path.read_text(encoding="utf-8"))
+    assert row["feed"] == "federal_register"
+    assert row["clock"] == "sunday_open"
+    assert row["so_far"] == 0
+    assert row["yes_ask"] == 40
+    assert row["reason"] is None
+    assert 0 < float(row["probability"]) < 1
+    assert "api.x.ai" not in Path(shadow.__file__).read_text(encoding="utf-8")
+    assert "place_limit_order" not in Path(shadow.__file__).read_text(encoding="utf-8")
+    wednesday = datetime(2026, 8, 12, 16, 0, tzinfo=timezone.utc)
+    assert shadow._clock(wednesday) == "wednesday"

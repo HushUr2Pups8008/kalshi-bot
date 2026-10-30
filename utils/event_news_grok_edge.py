@@ -206,8 +206,22 @@ def _view_venue(view: Mapping[str, Any]) -> str:
         return _POLYMARKET_US
     return "kalshi"
 
+def _count_shadow_only(*names: object) -> bool:
+    """Paper count series never pay for a Grok call."""
+    from utils.countable_series_shadow import PAPER_COUNT_ONLY
+
+    found: set[str] = set()
+    for name in names:
+        text = str(name or "").strip().upper()
+        if text:
+            found.add(text.split("-", 1)[0])
+    return bool(found & PAPER_COUNT_ONLY)
+
+
 def _kalshi_series_paid(view: Mapping[str, Any], environ: Mapping[str, str] | None) -> bool:
     """Polymarket paper scans ignore the Kalshi series switch."""
+    if _count_shadow_only(view.get("series"), view.get("ticker")):
+        return False
     if _view_venue(view) == _POLYMARKET_US:
         return True
     return event_news_desk_flag_enabled(
@@ -936,7 +950,10 @@ def run_paper_edge_scan(
         environ=environ,
     ):
         return {"examined": 0, "queued": 0, "skipped": 0}
+    from utils.countable_series_shadow import PAPER_COUNT_ONLY
+
     allowed = {str(series).strip().upper() for series in allowlist if str(series).strip()}
+    allowed.difference_update(PAPER_COUNT_ONLY)
     floor = event_news_yes_floor_cents(environ)
     moment = now or datetime.now(timezone.utc)
     fingerprint = latest_truth_social_fingerprint() if post_lookup is None else post_lookup()
@@ -1447,6 +1464,21 @@ def score_open_positions(
             market = None
         view = _position_view(ticker, market)
         ask = _mark_cents(market, side, position)
+        if _count_shadow_only(view.get("series"), ticker):
+            record = _score_record(
+                ticker=ticker,
+                side=side,
+                ask=ask,
+                probability=None,
+                sources=(),
+                skip_reason="count_shadow_only",
+                floor=floor,
+                now=moment,
+            )
+            counts["skipped"] += 1
+            _append_jsonl(score_log_path, record)
+            _insert_paper_row(db_path, "position_scores", record)
+            continue
         cached = _cache_get(cache_path, ticker)
         if _cache_fresh(cached, view, fingerprint, moment):
             counts["cache_hits"] += 1
@@ -2393,7 +2425,7 @@ def _polymarket_section(rows: Sequence[Mapping[str, str]]) -> list[str]:
         )
     return lines
 
-_SHADOW_SERIES = ("KXTRUMPACT", "KXTRUTHSOCIAL")
+_SHADOW_SERIES = ("KXTRUMPACT", "KXTRUTHSOCIAL", "KXEOWEEK")
 
 
 def _market_close(market: Any) -> datetime | None:
@@ -2464,7 +2496,7 @@ def _count_shadow_lines(
         "",
         "## Count shadow",
         "",
-        "Free count model for KXTRUTHSOCIAL and KXTRUMPACT. No paid call. No mode change.",
+        "Free count model for KXTRUTHSOCIAL, KXTRUMPACT, and KXEOWEEK. No paid call. No mode change.",
         "Last shadow row before close. YES when p_yes >= 0.5, else NO at 100 minus the yes ask.",
         "The yes ask must be 1 through 99. Brier is the mean squared error against the settlement.",
         "Fee-net is one contract at that ask with the scorecard fee. Promotion does not change modes.",
@@ -3207,6 +3239,15 @@ def _call_grok(
             source = "provider"
         return _finish(None, body, cost, cost_source=source, usage=usage, attempt=attempt)
 
+    if _count_shadow_only(series, ticker, *tuple(expected_tickers)):
+        return _finish(
+            "count_shadow_only",
+            None,
+            Decimal("0"),
+            cost_source="reserve",
+            usage={},
+            attempt=0,
+        )
     first = _attempt(prompt, 1)
     if first.skip_reason != "malformed":
         return first

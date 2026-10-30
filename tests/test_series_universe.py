@@ -116,6 +116,7 @@ def test_shipped_paper_series_are_not_live_and_cannot_post():
         + EXPECTED_PAPER
         + ("PMTRUMPAPPROVE",)
         + _POLYMARKET_ONLY
+        + ("KXEOWEEK",)
     )
     assert live_series_tickers() == EXPECTED_LIVE
     for series in EXPECTED_PAPER:
@@ -130,6 +131,15 @@ def test_shipped_paper_series_are_not_live_and_cannot_post():
         assert event_news_live_post_block_reason(market, config=politics) == (
             "paper_series_no_post"
         )
+    eoweek = entries["KXEOWEEK"]
+    assert eoweek.mode == "paper"
+    assert eoweek.favorite_band == (0.55, 0.99)
+    assert eoweek.transcript_skip is False
+    assert eoweek.paper_score is False
+    assert eoweek.max_contracts == 8
+    assert eoweek.edge_min == "0.04"
+    eoweek_market = SimpleNamespace(ticker="KXEOWEEK-26OCT31-1", series_ticker="KXEOWEEK")
+    assert event_news_live_post_block_reason(eoweek_market, config=politics) == "paper_series_no_post"
     for series in ("PMTRUMPAPPROVE",) + _POLYMARKET_ONLY:
         entry = entries[series]
         assert entry.venue == "polymarket_us"
