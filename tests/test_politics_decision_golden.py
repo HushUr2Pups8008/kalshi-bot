@@ -38,9 +38,10 @@ from utils.series_universe import (
 # v0.37.47 drops KXPOLLPOTUS. That series is absent from the grid. Series
 # that stayed keep their rows.
 # v0.37.52 adds paper KXEOWEEK. Rows for every series that stayed are unchanged.
-# The count is 30 and the row count is 3425.
+# v0.37.53 adds paper KXTRUTHSOCIALD. Rows for every series that stayed are unchanged.
+# The count is 31 and the row count is 3534.
 POLITICS_DECISION_SHA256 = (
-    "f8ba600b8939bcd3057cc26d2d830036a9fa2447ee2c805196e9bb22d120ec46"
+    "b7b8a487e935d7aa538589f094c59b4d93e6c310f17b4b66aedd5f8bbf30088c"
 )
 
 POLITICS = SimpleNamespace(
@@ -279,6 +280,6 @@ def test_politics_decision_grid_matches_the_desk(monkeypatch) -> None:
     payload = json.dumps(rows, separators=(",", ":"), sort_keys=True).encode("utf-8")
     digest = hashlib.sha256(payload).hexdigest()
 
-    assert series_count == 30
-    assert len(rows) == 3425
+    assert series_count == 31
+    assert len(rows) == 3534
     assert digest == POLITICS_DECISION_SHA256

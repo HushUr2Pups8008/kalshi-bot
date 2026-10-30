@@ -476,6 +476,7 @@ class TestLiveSubmissionNoRetry:
         assert "from-201" not in detail
         assert "from-fills" not in detail
 
+        before_failed_get = log_path.read_text(encoding="utf-8")
         rest.get_order_receipt.reset_mock()
         rest.get_fills_page.reset_mock()
         rest.get_order_receipt.side_effect = RuntimeError("order down")
@@ -493,8 +494,10 @@ class TestLiveSubmissionNoRetry:
             )
         assert returned == "from-201"
         failed_text = log_path.read_text(encoding="utf-8")
+        # A failed detail GET must not append a row. The client_order_id is random
+        # hex, so a search for the digits 99 matches an unrelated id.
+        assert failed_text == before_failed_get
         assert "KXAPRPOTUS-26OCT17-FAIL" not in failed_text
-        assert "99" not in failed_text
         assert "detail GET failed" in caplog.text
 
         rest.get_order_receipt.reset_mock()

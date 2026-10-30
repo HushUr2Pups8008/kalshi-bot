@@ -1,4 +1,4 @@
-"""Paper-shadow probability for two countable series. No Grok and no orders.
+"""Paper-shadow probability for countable series. No Grok and no orders.
 
 Daily counts are overdispersed, so remaining volume is a negative binomial
 fit by method of moments on days before the window. Poisson is recorded
@@ -23,9 +23,9 @@ from xml.etree import ElementTree
 from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
-COUNTABLE = frozenset({"KXTRUTHSOCIAL", "KXTRUMPACT", "KXEOWEEK"})
+COUNTABLE = frozenset({"KXTRUTHSOCIAL", "KXTRUMPACT", "KXEOWEEK", "KXTRUTHSOCIALD"})
 # These series are fetched for the free count shadow. They are not Grok inputs.
-PAPER_COUNT_ONLY = frozenset({"KXEOWEEK"})
+PAPER_COUNT_ONLY = frozenset({"KXEOWEEK", "KXTRUTHSOCIALD"})
 TRUTH_URL = (
     "https://rollcall.com/wp-json/factbase/v1/twitter"
     "?platform=truth%20social&sort=date&sort_order=desc&format=json&page={page}"
@@ -84,25 +84,45 @@ def _day(text: str) -> date | None:
         return None
 
 
-def parse_contract(rules: str, strike_type: str = "") -> dict[str, object] | None:
-    """Window and strike from the market rules only."""
+def _window(rules: str) -> tuple[date, date] | None:
+    """A from/during range wins. A single on-date is the daily contract."""
     found = re.search(
         r"(?:from|during) ([A-Z][a-z]+ \d{1,2}, \d{4}) (?:to|through) ([A-Z][a-z]+ \d{1,2}, \d{4})",
         rules,
     )
-    if found is None:
+    if found is not None:
+        start, end = _day(found.group(1)), _day(found.group(2))
+        if start is None or end is None or end < start:
+            return None
+        return start, end
+    one = re.search(r"\bon ([A-Z][a-z]+ \d{1,2}, \d{4})\b", rules)
+    if one is None:
         return None
-    start, end = _day(found.group(1)), _day(found.group(2))
-    if start is None or end is None or end < start:
+    day = _day(one.group(1))
+    return None if day is None else (day, day)
+
+
+def parse_contract(rules: str, strike_type: str = "") -> dict[str, object] | None:
+    """Window and strike from the market rules only."""
+    window = _window(rules)
+    if window is None:
         return None
+    start, end = window
     between = re.search(r"\bbetween (\d+) and (\d+)\b", rules)
     if between is not None and int(between.group(2)) >= int(between.group(1)):
         return {"start": start, "end": end, "how": "between", "low": int(between.group(1)), "high": int(between.group(2))}
-    above, least = re.search(r"\babove (\d+)\b", rules), re.search(r"\bat least (\d+)\b", rules)
+    above = re.search(r"\b(?:above|more than|greater than) (\d+)\b", rules)
+    least = re.search(r"\bat least (\d+)\b", rules)
+    or_more = re.search(r"\b(\d+) or more\b", rules)
+    below = re.search(r"\b(?:below|less than) (\d+)\b", rules)
     if above is not None and strike_type.strip().lower() != "greater_or_equal":
         return {"start": start, "end": end, "how": "gt", "strike": int(above.group(1))}
     if least is not None:
         return {"start": start, "end": end, "how": "ge", "strike": int(least.group(1))}
+    if or_more is not None:
+        return {"start": start, "end": end, "how": "ge", "strike": int(or_more.group(1))}
+    if below is not None:
+        return {"start": start, "end": end, "how": "lt", "strike": int(below.group(1))}
     return None
 
 
@@ -162,6 +182,8 @@ def yes_probability(so_far: int, days: float, mean: float, var: float, contract:
         value = _ge(int(contract["strike"]) - so_far, model, r_tot, success, lam)
     elif how == "between":
         value = _ge(int(contract["low"]) - so_far, model, r_tot, success, lam) - _ge(int(contract["high"]) - so_far + 1, model, r_tot, success, lam)
+    elif how == "lt":
+        value = 1.0 - _ge(int(contract["strike"]) - so_far, model, r_tot, success, lam)
     else:
         return None
     if not math.isfinite(value):
@@ -231,9 +253,15 @@ def _actions(xml: str) -> list[datetime]:
     return found
 
 
-def _clock(moment: datetime) -> str:
-    """Sunday open and Wednesday afternoon are the backtest clocks. Other scans still log."""
+def _clock(moment: datetime, series: str = "") -> str:
+    """Weekly series keep Sunday open and Wednesday. The daily series uses day open and noon."""
     local = moment.astimezone(ET)
+    if series == "KXTRUTHSOCIALD":
+        if local.hour < 2:
+            return "day_open"
+        if 11 <= local.hour < 15:
+            return "noon"
+        return "other"
     if local.weekday() == 6 and local.hour < 6:
         return "sunday_open"
     if local.weekday() == 2 and 10 <= local.hour < 16:
@@ -242,7 +270,7 @@ def _clock(moment: datetime) -> str:
 
 
 def _feed_key(series: str) -> str:
-    if series == "KXTRUTHSOCIAL":
+    if series in {"KXTRUTHSOCIAL", "KXTRUTHSOCIALD"}:
         return "truth"
     if series == "KXEOWEEK":
         return "orders"
@@ -343,7 +371,7 @@ def _score(market: object, contract: Mapping[str, object], posts: Sequence[datet
             "actions": "whitehouse_rss",
         }[_feed_key(_series(market))],
         "feed_capped": capped,
-        "clock": _clock(now),
+        "clock": _clock(now, _series(market)),
     })
     if "strike" in contract:
         row["strike"] = contract["strike"]

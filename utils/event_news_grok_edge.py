@@ -2425,7 +2425,7 @@ def _polymarket_section(rows: Sequence[Mapping[str, str]]) -> list[str]:
         )
     return lines
 
-_SHADOW_SERIES = ("KXTRUMPACT", "KXTRUTHSOCIAL", "KXEOWEEK")
+_SHADOW_SERIES = ("KXTRUMPACT", "KXTRUTHSOCIAL", "KXEOWEEK", "KXTRUTHSOCIALD")
 
 
 def _market_close(market: Any) -> datetime | None:
@@ -2496,7 +2496,7 @@ def _count_shadow_lines(
         "",
         "## Count shadow",
         "",
-        "Free count model for KXTRUTHSOCIAL, KXTRUMPACT, and KXEOWEEK. No paid call. No mode change.",
+        "Free count model for KXTRUTHSOCIAL, KXTRUMPACT, KXEOWEEK, and KXTRUTHSOCIALD. No paid call. No mode change.",
         "Last shadow row before close. YES when p_yes >= 0.5, else NO at 100 minus the yes ask.",
         "The yes ask must be 1 through 99. Brier is the mean squared error against the settlement.",
         "Fee-net is one contract at that ask with the scorecard fee. Promotion does not change modes.",

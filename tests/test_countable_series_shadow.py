@@ -68,6 +68,27 @@ def test_rules_name_the_window_and_the_strike() -> None:
     )
     assert weekly is not None and weekly["how"] == "gt" and weekly["strike"] == 1
     assert weekly["start"] == date(2026, 8, 9) and weekly["end"] == date(2026, 8, 15)
+    both = parse_contract(
+        "from Oct 18, 2026 to Oct 24, 2026 is above 240. Recorded on Oct 25, 2026.",
+        "greater",
+    )
+    assert both is not None and both["start"] == date(2026, 10, 18) and both["end"] == date(2026, 10, 24)
+    daily = parse_contract(
+        "Resolves Yes if the number of Truth Social posts by Donald Trump "
+        "on Oct 3, 2026 is between 15 and 19.",
+        "between",
+    )
+    assert daily is not None and daily["start"] == daily["end"] == date(2026, 10, 3)
+    assert daily["how"] == "between" and daily["low"] == 15 and daily["high"] == 19
+    below = parse_contract(
+        "Resolves Yes if the number of Truth Social posts by Donald Trump on Oct 3, 2026 is below 10.",
+        "",
+    )
+    assert below is not None and below["how"] == "lt" and below["strike"] == 10
+    model, probability = yes_probability(0, 1, 1, 2, {"how": "lt", "strike": 1})
+    assert model == "nb" and probability == pytest.approx(0.5)
+    certain = yes_probability(5, 1, 1, 2, {"how": "lt", "strike": 5})
+    assert certain is not None and certain[1] == 0
 
 
 def test_shadow_row_uses_the_fixture_feed_and_skips_deleted_posts(tmp_path: Path) -> None:
@@ -239,3 +260,62 @@ def test_eoweek_shadow_uses_the_register_and_not_grok(tmp_path: Path) -> None:
     assert "place_limit_order" not in Path(shadow.__file__).read_text(encoding="utf-8")
     wednesday = datetime(2026, 8, 12, 16, 0, tzinfo=timezone.utc)
     assert shadow._clock(wednesday) == "wednesday"
+    sunday = datetime(2026, 8, 9, 4, 0, tzinfo=timezone.utc)
+    assert shadow._clock(sunday, "KXEOWEEK") == "sunday_open"
+    assert shadow._clock(sunday, "KXTRUTHSOCIALD") == "day_open"
+
+
+def test_daily_shadow_uses_factbase_and_the_day_open_clock(tmp_path: Path) -> None:
+    """A daily row is the same free feed. Midnight ET is day_open, and noon is noon."""
+    calls: list[str] = []
+
+    def fetch(url: str) -> str:
+        calls.append(url)
+        rows = [
+            {
+                "date": "2026-08-01T16:00:00+00:00",
+                "handle": "realDonaldTrump",
+                "platform": "Truth Social",
+                "deleted_flag": False,
+                "type": "Social",
+            }
+        ]
+        for day in range(1, 7):
+            rows.append({
+                "date": f"2026-09-0{day}T16:00:00+00:00",
+                "handle": "realDonaldTrump",
+                "platform": "Truth Social",
+                "deleted_flag": False,
+                "type": "Social",
+            })
+        return json.dumps({"data": rows})
+
+    market = {
+        "ticker": "KXTRUTHSOCIALD-26OCT03-B17",
+        "series_ticker": "KXTRUTHSOCIALD",
+        "rules_primary": (
+            "Resolves Yes if the number of Truth Social posts by Donald Trump "
+            "on Oct 3, 2026 is between 15 and 19."
+        ),
+        "strike_type": "between",
+        "yes_ask_cents": 40,
+    }
+    path = tmp_path / "shadow.jsonl"
+    written = record_countable_shadow(
+        [market],
+        now=datetime(2026, 10, 3, 4, 0, tzinfo=timezone.utc),
+        path=path,
+        fetch=fetch,
+        sleeper=lambda _seconds: None,
+    )
+    assert written == 1
+    assert len(calls) == 1 and "rollcall.com" in calls[0]
+    row = json.loads(path.read_text(encoding="utf-8"))
+    assert row["feed"] == "factbase"
+    assert row["clock"] == "day_open"
+    assert row["so_far"] == 0
+    assert row["yes_ask"] == 40
+    assert row["reason"] is None
+    noon = datetime(2026, 10, 3, 16, 0, tzinfo=timezone.utc)
+    assert shadow._clock(noon, "KXTRUTHSOCIALD") == "noon"
+    assert shadow._clock(noon, "KXEOWEEK") == "other"
