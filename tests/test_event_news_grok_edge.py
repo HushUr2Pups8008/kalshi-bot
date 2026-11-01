@@ -2665,7 +2665,7 @@ def test_count_shadow_uses_the_last_row_before_close_and_does_not_promote(tmp_pa
     )
     assert "| KXTRUTHSOCIAL | 0 | not enough data (n=0) |" in quiet
     assert "| KXEOWEEK | 0 | not enough data (n=0) |" in quiet
-    assert "| KXTRUTHSOCIALD | 0 | not enough data (n=0) |" in quiet
+    assert "KXTRUTHSOCIALD" not in quiet
     assert "0.5625" not in quiet
 
 

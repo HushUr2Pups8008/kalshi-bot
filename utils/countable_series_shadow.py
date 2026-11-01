@@ -23,8 +23,9 @@ from xml.etree import ElementTree
 from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
-COUNTABLE = frozenset({"KXTRUTHSOCIAL", "KXTRUMPACT", "KXEOWEEK", "KXTRUTHSOCIALD"})
-# These series are fetched for the free count shadow. They are not Grok inputs.
+COUNTABLE = frozenset({"KXTRUTHSOCIAL", "KXTRUMPACT", "KXEOWEEK"})
+# KXEOWEEK is the paper count shadow. KXTRUTHSOCIALD left that desk and stays
+# in this set so a stray ticker still cannot call Grok.
 PAPER_COUNT_ONLY = frozenset({"KXEOWEEK", "KXTRUTHSOCIALD"})
 TRUTH_URL = (
     "https://rollcall.com/wp-json/factbase/v1/twitter"
@@ -254,14 +255,8 @@ def _actions(xml: str) -> list[datetime]:
 
 
 def _clock(moment: datetime, series: str = "") -> str:
-    """Weekly series keep Sunday open and Wednesday. The daily series uses day open and noon."""
+    """Sunday open and Wednesday. Other hours stay other."""
     local = moment.astimezone(ET)
-    if series == "KXTRUTHSOCIALD":
-        if local.hour < 2:
-            return "day_open"
-        if 11 <= local.hour < 15:
-            return "noon"
-        return "other"
     if local.weekday() == 6 and local.hour < 6:
         return "sunday_open"
     if local.weekday() == 2 and 10 <= local.hour < 16:
@@ -270,7 +265,7 @@ def _clock(moment: datetime, series: str = "") -> str:
 
 
 def _feed_key(series: str) -> str:
-    if series in {"KXTRUTHSOCIAL", "KXTRUTHSOCIALD"}:
+    if series == "KXTRUTHSOCIAL":
         return "truth"
     if series == "KXEOWEEK":
         return "orders"

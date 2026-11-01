@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import statistics
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -140,11 +141,59 @@ def book_cents(candle: dict, name: str) -> int | None:
     return dollars_to_cents(book.get("close_dollars"))
 
 
+# The clock's own hour is often empty: Kalshi labels a candle by its end, and
+# the 23:00 hour does not trade. A minute quote within 5 minutes is that open.
+# The previous hourly close is the nearest earlier print. The next hour is not.
+QUOTE_AFTER_SECONDS = 300
+EARLIER_CANDLE_SECONDS = 3600
+
+
 def pick_candle(candles: list[dict], target: int) -> dict | None:
     """The hourly close at the snapshot. A later hour is not that print."""
     for candle in candles:
         if candle.get("end_period_ts") == target:
             return candle
+    return None
+
+
+def empty_book(candle: dict) -> bool:
+    """A 0 bid and a 99 or 100 ask with no volume is an empty-book placeholder."""
+    bid = book_cents(candle, "yes_bid")
+    ask = book_cents(candle, "yes_ask")
+    raw = candle.get("volume_fp")
+    if raw is None:
+        quiet = True
+    else:
+        try:
+            quiet = Decimal(str(raw)) == 0
+        except Exception:
+            quiet = False
+    return quiet and bid in (None, 0) and ask in (None, 99, 100)
+
+
+def pick_print(hourly: list[dict], minute: list[dict], target: int) -> dict | None:
+    """Exact hourly end, else the first real minute quote within 300s, else the previous hour."""
+    exact = pick_candle(hourly, target)
+    if exact is not None:
+        return exact
+    quotes = [
+        candle for candle in minute
+        if isinstance(candle.get("end_period_ts"), int)
+        and not isinstance(candle.get("end_period_ts"), bool)
+        and target < candle["end_period_ts"] <= target + QUOTE_AFTER_SECONDS
+        and not empty_book(candle)
+    ]
+    if quotes:
+        return min(quotes, key=lambda candle: candle["end_period_ts"])
+    earlier = [
+        candle for candle in hourly
+        if isinstance(candle.get("end_period_ts"), int)
+        and not isinstance(candle.get("end_period_ts"), bool)
+        and target - EARLIER_CANDLE_SECONDS <= candle["end_period_ts"] < target
+        and not empty_book(candle)
+    ]
+    if earlier:
+        return max(earlier, key=lambda candle: candle["end_period_ts"])
     return None
 
 
@@ -184,7 +233,12 @@ def _deduped(markets: list[dict]) -> list[dict]:
     return list(chosen.values())
 
 
-def score_markets(signing: list[date], markets: list[dict], candles_of: Fetch | Callable[..., list]) -> dict:
+def score_markets(
+    signing: list[date],
+    markets: list[dict],
+    candles_of: Fetch | Callable[..., list],
+    quotes_of: Callable[..., list] | None = None,
+) -> dict:
     """Score the 11 weeks. A count miss or a finalized result that disagrees raises Stop."""
     counts = bucket(signing)
     bad = week_mismatches(counts)
@@ -224,6 +278,9 @@ def score_markets(signing: list[date], markets: list[dict], candles_of: Fetch | 
             for name, moment in (opened, wednesday):
                 target = int(moment.timestamp())
                 candle = pick_candle(candles, target)
+                if candle is None:
+                    minute = [] if quotes_of is None else quotes_of(ticker, target)
+                    candle = pick_print(candles, minute, target)
                 if candle is None:
                     rows[name].append({"ticker": ticker, "strike": strike, "missing": True})
                     continue
@@ -304,13 +361,24 @@ def fetch_json(url: str) -> dict:
     if parsed.scheme != "https" or parsed.hostname not in _HOSTS:
         raise ValueError("host")
     request = urllib.request.Request(url, headers={"User-Agent": "kalshi-bot-paper-backtest"})
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            payload = json.load(response)
-    except urllib.error.HTTPError as exc:
-        raise OSError(f"status {exc.code}") from None
-    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
-        raise OSError(type(exc).__name__) from None
+    delay = 5
+    last = "status"
+    payload: object = None
+    for _attempt in range(6):
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                payload = json.load(response)
+            break
+        except urllib.error.HTTPError as exc:
+            last = f"status {exc.code}"
+            if exc.code not in {429, 503}:
+                raise OSError(last) from None
+            time.sleep(delay)
+            delay = min(delay * 2, 45)
+        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+            raise OSError(type(exc).__name__) from None
+    else:
+        raise OSError(last)
     if not isinstance(payload, dict):
         raise ValueError("shape")
     return payload
@@ -362,10 +430,12 @@ def load_markets(fetch: Fetch) -> list[dict]:
     raise ValueError("capped")
 
 
-def load_candles(fetch: Fetch, ticker: str, start: int, end: int) -> list[dict]:
+def load_candles(fetch: Fetch, ticker: str, start: int, end: int, period: int = 60) -> list[dict]:
     if not ticker.startswith("KXEOWEEK-"):
         raise ValueError("ticker")
-    query = urllib.parse.urlencode({"start_ts": str(start), "end_ts": str(end), "period_interval": "60"})
+    query = urllib.parse.urlencode(
+        {"start_ts": str(start), "end_ts": str(end), "period_interval": str(period)}
+    )
     url = f"{_KALSHI}/series/KXEOWEEK/markets/{urllib.parse.quote(ticker)}/candlesticks?{query}"
     payload = fetch(url)
     candles = payload.get("candlesticks")
@@ -408,6 +478,17 @@ def _candles_of(ticker: str, start: int, end: int) -> list[dict]:
         raise
 
 
+def _quotes_of(ticker: str, target: int) -> list[dict]:
+    """Minute quotes from the clock through 300 seconds. A 404 is no quote."""
+    time.sleep(0.15)
+    try:
+        return load_candles(fetch_json, ticker, target, target + QUOTE_AFTER_SECONDS, 1)
+    except OSError as exc:
+        if str(exc) == "status 404":
+            return []
+        raise
+
+
 def main() -> int:
     try:
         signing = load_signing_dates(fetch_json)
@@ -423,7 +504,11 @@ def main() -> int:
         coefficient = fee_coefficient_for(schedule, FeeRole.TAKER)
         print(f"taker_fee quadratic schedule={schedule.name} coefficient={coefficient}")
         print("ask_rule yes=yes_ask.close no=100-yes_bid.close one contract")
-        scored = score_markets(signing, load_markets(fetch_json), _candles_of)
+        print(
+            f"price_rule exact_hour else minute_quote_within_{QUOTE_AFTER_SECONDS}s "
+            f"else earlier_hour_within_{EARLIER_CANDLE_SECONDS}s"
+        )
+        scored = score_markets(signing, load_markets(fetch_json), _candles_of, _quotes_of)
     except Stop as exc:
         print(f"stop {exc}")
         return 2
