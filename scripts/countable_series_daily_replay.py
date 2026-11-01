@@ -24,7 +24,15 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from scripts.countable_series_backtest import book_cents, pick_candle, quote_edge, side_ask
+from scripts.countable_series_backtest import (
+    QUOTE_AFTER_SECONDS,
+    EARLIER_CANDLE_SECONDS,
+    book_cents,
+    pick_candle,
+    pick_print,
+    quote_edge,
+    side_ask,
+)
 from trading.fees import FeeRole, Venue, fee_coefficient_for, fee_schedule_at
 from utils.countable_series_shadow import _fit, _posts, parse_contract, yes_probability
 from utils.event_news_grok_edge import contract_fee_net_dollars
@@ -116,6 +124,7 @@ def score_days(
     candles_of: Candles,
     *,
     capped: bool,
+    quotes_of: Candles | None = None,
 ) -> dict:
     """Score settled days at midnight and noon. A finalized mismatch raises Stop."""
     settled, open_days = group_markets(markets)
@@ -139,7 +148,11 @@ def score_days(
                 disagreements.append(ticker)
             candles = candles_of(ticker, span_start, span_end)
             for name, moment in (opened, noon):
-                candle = pick_candle(candles, int(moment.timestamp()))
+                target = int(moment.timestamp())
+                candle = pick_candle(candles, target)
+                if candle is None:
+                    minute = [] if quotes_of is None else quotes_of(ticker, target, target)
+                    candle = pick_print(candles, minute, target)
                 label = _label(contract)
                 if candle is None:
                     rows[name].append({"ticker": ticker, "label": label, "missing": True})
@@ -278,10 +291,14 @@ def load_markets(fetch: Callable[[str], dict]) -> list[dict]:
     raise ValueError("capped")
 
 
-def load_candles(fetch: Callable[[str], dict], ticker: str, start: int, end: int) -> list[dict]:
+def load_candles(
+    fetch: Callable[[str], dict], ticker: str, start: int, end: int, period: int = 60,
+) -> list[dict]:
     if not ticker.startswith("KXTRUTHSOCIALD-"):
         raise ValueError("ticker")
-    query = urllib.parse.urlencode({"start_ts": str(start), "end_ts": str(end), "period_interval": "60"})
+    query = urllib.parse.urlencode(
+        {"start_ts": str(start), "end_ts": str(end), "period_interval": str(period)}
+    )
     url = f"{_KALSHI}/series/KXTRUTHSOCIALD/markets/{urllib.parse.quote(ticker)}/candlesticks?{query}"
     try:
         payload = fetch(url)
@@ -314,12 +331,20 @@ def main() -> int:
         coefficient = fee_coefficient_for(schedule, FeeRole.TAKER)
         print(f"taker_fee quadratic schedule={schedule.name} coefficient={coefficient}")
         print("ask_rule yes=yes_ask.close no=100-yes_bid.close one contract")
+        print(
+            f"price_rule exact_hour else minute_quote_within_{QUOTE_AFTER_SECONDS}s "
+            f"else earlier_hour_within_{EARLIER_CANDLE_SECONDS}s"
+        )
 
         def candles_of(ticker: str, start: int, end: int) -> list[dict]:
             time.sleep(0.15)
             return load_candles(fetch_json, ticker, start, end)
 
-        scored = score_days(posts, markets, candles_of, capped=capped)
+        def quotes_of(ticker: str, target: int, _end: int) -> list[dict]:
+            time.sleep(0.15)
+            return load_candles(fetch_json, ticker, target, target + QUOTE_AFTER_SECONDS, 1)
+
+        scored = score_days(posts, markets, candles_of, capped=capped, quotes_of=quotes_of)
     except Stop as exc:
         print(f"stop {exc}")
         return 2

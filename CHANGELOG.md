@@ -19,6 +19,14 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.54] - 2026-11-01
+
+### Fixed
+- Countable replay prices keep the exact hourly candle at the decision clock. When that hour has no trades, the print is the first real one-minute quote within 300 seconds, or else the latest non-empty hourly candle in the previous 3600 seconds. An empty book (no volume, a 0 bid, and a 99 or 100 ask) is not a price, and a later hour is not the print. Candlesticks are labeled by period end, so midnight America/New_York is the end of an hour that does not trade.
+
+### Removed
+- KXTRUTHSOCIALD left the paper universe. The day-open replay on that rule was fee-net -14.770500 over 177 settled asks (Brier 0.106002, n=216, 32 still missing). The series stays excluded from paid Grok calls. KXEOWEEK stays paper. Live gates are unchanged.
+
 ## [0.37.53] - 2026-10-30
 
 ### Added

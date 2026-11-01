@@ -8,14 +8,18 @@ from decimal import Decimal
 import pytest
 
 from scripts.countable_series_backtest import (
+    EARLIER_CANDLE_SECONDS,
     ET,
+    QUOTE_AFTER_SECONDS,
     SETTLED,
     Stop,
     bucket,
     days_left,
+    empty_book,
     fetch_json,
     known,
     pick_candle,
+    pick_print,
     prior,
     quote_edge,
     score_markets,
@@ -78,12 +82,35 @@ def test_fee_net_uses_the_quadratic_taker_quote_at_zero_and_one() -> None:
     assert inside == Decimal("0.600000") - Decimal("0.40") - fee
 
 
+def _book(end: int, ask: str, bid: str, volume: str = "1.00") -> dict:
+    return {
+        "end_period_ts": end,
+        "yes_ask": {"close_dollars": ask},
+        "yes_bid": {"close_dollars": bid},
+        "volume_fp": volume,
+    }
+
+
 def test_a_later_hour_is_not_the_snapshot() -> None:
     """Sunday open is the close at that timestamp. The next hour is a different print."""
     target = 1_700_000_000
     assert pick_candle([{"end_period_ts": target + 3600}], target) is None
     chosen = pick_candle([{"end_period_ts": target}, {"end_period_ts": target + 3600}], target)
     assert chosen is not None and chosen["end_period_ts"] == target
+    # The hour that ends on the clock is missing. A quote 60s later is the open.
+    # The candle that ends an hour later is not, and an empty 0/99 book is not a quote.
+    assert empty_book(_book(target + 60, "0.9900", "0.0000", "0.00")) is True
+    quote = _book(target + 60, "0.4000", "0.3200", "0.00")
+    later = _book(target + 3600, "0.2000", "0.1000")
+    chosen = pick_print([later], [_book(target + 60, "0.9900", "0.0000", "0.00"), quote], target)
+    assert chosen is not None and chosen["end_period_ts"] == target + 60
+    assert pick_print([later], [_book(target + QUOTE_AFTER_SECONDS + 1, "0.4000", "0.3200", "0")], target) is None
+    earlier = _book(target - EARLIER_CANDLE_SECONDS, "0.5100", "0.4700")
+    chosen = pick_print([later, earlier], [], target)
+    assert chosen is not None and chosen["end_period_ts"] == target - EARLIER_CANDLE_SECONDS
+    # An exact hourly print stays the print even when a nearer minute quote exists.
+    exact = _book(target, "0.3300", "0.2500")
+    assert pick_print([exact, later], [quote], target)["end_period_ts"] == target
 
 
 def test_finalized_result_that_disagrees_with_the_count_stops() -> None:
