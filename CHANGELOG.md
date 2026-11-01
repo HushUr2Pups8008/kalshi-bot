@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.55] - 2026-11-01
+
+### Removed
+- `scripts/countable_series_daily_replay.py` and its test. Nothing else imported them. The decision-clock price rule stays in `scripts/countable_series_backtest.py`. Live trading and the remaining paper desks are unchanged.
+
 ## [0.37.54] - 2026-11-01
 
 ### Fixed
