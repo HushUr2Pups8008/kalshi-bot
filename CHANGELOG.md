@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.56] - 2026-11-01
+
+### Fixed
+- The 06:05 fill-log job exits 1 when the copied report stays unpublished or git rejects the push. A report already on `ops/live-fill-log` restores the checkout and exits 0. The job used to write `logs/state/fill-log-push.err` and exit 0.
+
 ## [0.37.55] - 2026-11-01
 
 ### Removed

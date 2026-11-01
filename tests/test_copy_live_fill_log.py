@@ -1,8 +1,4 @@
-"""The daily live-fill copy must not wipe the committed report.
-
-The push half of the job may stage only docs/reports/live-fill-log.md.
-A failed push is recorded and still exits 0 so the desk keeps running.
-"""
+"""The daily copy may stage only the fill-log report. A rejected push exits 1."""
 
 from __future__ import annotations
 
@@ -194,7 +190,7 @@ def test_already_staged_other_file_is_left_alone(tmp_path):
         source=source,
         dest=repo / REPORT_RELATIVE,
     )
-    assert rc == 0
+    assert rc == 1
     assert _git(remote, "rev-parse", "main").stdout.strip() == before
     staged = _git(repo, "diff", "--cached", "--name-only").stdout.strip().splitlines()
     assert staged == ["README.md"]
@@ -219,7 +215,7 @@ def test_push_failure_retries_once_then_writes_err(tmp_path, capsys):
         run_git=_recording_runner(commands),
         now=datetime(2026, 10, 13, tzinfo=timezone.utc),
     )
-    assert rc == 0
+    assert rc == 1
     assert commands.count(["push"]) == 2
     assert ["pull", "--rebase"] not in commands
     err = (repo / "logs" / "state" / "fill-log-push.err").read_text(encoding="utf-8")
@@ -255,7 +251,7 @@ def test_rebase_runs_when_origin_is_ahead_and_aborts_on_conflict(tmp_path):
         run_git=_recording_runner(commands),
         now=datetime(2026, 10, 13, tzinfo=timezone.utc),
     )
-    assert rc == 0
+    assert rc == 1
     assert ["pull", "--rebase"] in commands
     err = (repo / "logs" / "state" / "fill-log-push.err").read_text(encoding="utf-8")
     assert "git pull --rebase failed" in err
@@ -304,6 +300,21 @@ def test_push_ref_publishes_a_side_branch_and_leaves_main(tmp_path, monkeypatch,
     assert "ops: live fill log 2026-10-15" in subjects
     assert "ops: live fill log 2026-10-14" in subjects
     assert not (repo / "logs" / "state" / "fill-log-push.err").exists()
+    before_tip = _git(remote, "rev-parse", "ops/live-fill-log").stdout.strip()
+    capsys.readouterr()
+    rc = publish_live_fill_report(
+        repo,
+        dry_run=False,
+        source=source,
+        dest=repo / REPORT_RELATIVE,
+        now=datetime(2026, 10, 16, tzinfo=timezone.utc),
+    )
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "unchanged" in out
+    assert "pushed" not in out
+    assert _git(remote, "rev-parse", "ops/live-fill-log").stdout.strip() == before_tip
+    assert _git(repo, "status", "--porcelain").stdout == ""
 
 
 def test_invalid_push_ref_does_not_move_main(tmp_path, monkeypatch):
@@ -319,7 +330,7 @@ def test_invalid_push_ref_does_not_move_main(tmp_path, monkeypatch):
         source=source,
         dest=repo / REPORT_RELATIVE,
     )
-    assert rc == 0
+    assert rc == 1
     assert _git(remote, "rev-parse", "main").stdout.strip() == before
     err = (repo / "logs" / "state" / "fill-log-push.err").read_text(encoding="utf-8")
     assert "FILL_LOG_PUSH_REF is not a branch name" in err
