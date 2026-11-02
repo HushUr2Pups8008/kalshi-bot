@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import math
 import urllib.request
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -262,3 +262,76 @@ def test_eoweek_shadow_uses_the_register_and_not_grok(tmp_path: Path) -> None:
     assert shadow._clock(wednesday) == "wednesday"
     sunday = datetime(2026, 8, 9, 4, 0, tzinfo=timezone.utc)
     assert shadow._clock(sunday, "KXEOWEEK") == "sunday_open"
+
+
+def _action_rss(day: date, link: str) -> str:
+    stamp = datetime(day.year, day.month, day.day, 18, tzinfo=shadow.ET).strftime("%a, %d %b %Y %H:%M:%S %z")
+    return f"<item><link>{link}</link><pubDate>{stamp}</pubDate></item>"
+
+
+def test_action_pages_cover_sixty_days_and_drop_the_cap(tmp_path: Path) -> None:
+    """Page 1 is the 30-item cap. Page 2 reaches the 60-day window, so the fit is not truncated."""
+    calls: list[str] = []
+
+    def fetch(url: str) -> str:
+        calls.append(url)
+        page = 1 if "paged=" not in url else int(url.rsplit("=", 1)[-1])
+        origin = date(2026, 10, 20) - timedelta(days=(page - 1) * 30)
+        rows = [_action_rss(origin - timedelta(days=offset), f"https://www.whitehouse.gov/a/{page}-{offset}") for offset in range(30)]
+        if page == 2:
+            rows.append(_action_rss(date(2026, 8, 1), "https://www.whitehouse.gov/a/old"))
+            rows.append(_action_rss(date(2026, 10, 18), "https://www.whitehouse.gov/a/1-2"))
+        return "<rss><channel>" + "".join(rows) + "</channel></rss>"
+
+    path = tmp_path / "shadow.jsonl"
+    assert record_countable_shadow(
+        [{
+            "ticker": "KXTRUMPACT-26OCT24-T6",
+            "series_ticker": "KXTRUMPACT",
+            "rules_primary": ACTION_RULE,
+            "strike_type": "greater_or_equal",
+            "yes_ask_cents": 40,
+        }],
+        now=datetime(2026, 10, 20, 16, tzinfo=timezone.utc),
+        path=path,
+        fetch=fetch,
+        sleeper=lambda _seconds: None,
+    ) == 1
+    row = json.loads(path.read_text(encoding="utf-8"))
+    assert calls == [shadow.ACTION_URL, f"{shadow.ACTION_URL}?paged=2"]
+    assert row["feed"] == "whitehouse_rss" and row["feed_capped"] is False and row["so_far"] == 2
+    start = date(2026, 10, 18)
+    need = start - timedelta(days=60)
+    last = start - timedelta(days=1)
+    posts = [
+        datetime(need.year, need.month, need.day, 18, tzinfo=shadow.ET),
+        datetime(last.year, last.month, last.day, 18, tzinfo=shadow.ET),
+    ]
+    full, short = shadow._fit(posts, start, False, need), shadow._fit(posts, start, True, need)
+    # One event on the window's first day counts only when the feed is not capped.
+    assert full is not None and short is not None
+    assert full[0] == pytest.approx(2 / 60) and short[0] == pytest.approx(1 / 59)
+    capped_calls: list[str] = []
+
+    def capped(url: str) -> str:
+        capped_calls.append(url)
+        page = 1 if "paged=" not in url else int(url.rsplit("=", 1)[-1])
+        rows = "".join(_action_rss(date(2026, 10, 1), f"https://www.whitehouse.gov/a/{page}-{i}") for i in range(30))
+        return f"<rss><channel>{rows}</channel></rss>"
+
+    assert record_countable_shadow(
+        [{
+            "ticker": "KXTRUMPACT-26OCT24-T6",
+            "series_ticker": "KXTRUMPACT",
+            "rules_primary": ACTION_RULE,
+            "strike_type": "greater_or_equal",
+            "yes_ask": 40,
+        }],
+        now=datetime(2026, 10, 20, 16, tzinfo=timezone.utc),
+        path=path,
+        fetch=capped,
+        sleeper=lambda _seconds: None,
+    ) == 1
+    again = json.loads(path.read_text(encoding="utf-8").splitlines()[-1])
+    assert again["feed_capped"] is True and len(capped_calls) == shadow._ACTION_PAGES
+    assert shadow._action_posts(date(2026, 1, 1), lambda _url: "<rss></rss>", None) == ([], False)

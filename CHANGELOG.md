@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.57] - 2026-11-02
+
+### Fixed
+- The KXTRUMPACT count shadow pages the White House presidential-actions RSS (`?paged=`) until the oldest item is older than the 60-day fit window, deduped by link, and stops at 8 pages. One 30-item page was marking `feed_capped` on every fetch and starting the fit the day after the oldest item. The live gate probability is unchanged.
+
 ## [0.37.56] - 2026-11-01
 
 ### Fixed
