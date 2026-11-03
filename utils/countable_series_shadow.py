@@ -42,6 +42,7 @@ EO_URL = (
 )
 SHADOW_PATH = Path("logs/state/countable_shadow.jsonl")
 MIN_DAYS = 5
+_ACTION_PAGES = 8
 _HOSTS = frozenset({"rollcall.com", "www.whitehouse.gov", "www.federalregister.gov"})
 _MONTHS = {name: index for index, name in enumerate(
     ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"), 1
@@ -243,15 +244,38 @@ def _truth_page(payload: object) -> tuple[list[datetime], date | None]:
     return kept, oldest
 
 
-def _actions(xml: str) -> list[datetime]:
-    found: list[datetime] = []
+def _actions(xml: str) -> list[tuple[str, datetime]]:
+    found: list[tuple[str, datetime]] = []
     for item in ElementTree.fromstring(xml).iter("item"):
         raw = item.findtext("pubDate")
         if not raw:
             continue
         moment = parsedate_to_datetime(raw)
-        found.append(moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc))
+        found.append(((item.findtext("link") or raw).strip(), moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)))
     return found
+
+
+def _action_posts(need: date, fetch: Fetch, sleeper: Callable[[float], None] | None) -> tuple[list[datetime], bool]:
+    """Page the RSS until an item is older than the fit window. The page cap stays capped."""
+    seen: set[str] = set()
+    found: list[datetime] = []
+    oldest: date | None = None
+    for page in range(1, _ACTION_PAGES + 1):
+        if page > 1 and sleeper is not None:
+            sleeper(0.25)
+        batch = _actions(fetch(ACTION_URL if page == 1 else f"{ACTION_URL}?paged={page}"))
+        if not batch:
+            return found, False
+        for key, moment in batch:
+            if key in seen:
+                continue
+            seen.add(key)
+            found.append(moment)
+            day = moment.astimezone(ET).date()
+            oldest = day if oldest is None else min(oldest, day)
+        if oldest is not None and oldest <= need:
+            return found, False
+    return found, True
 
 
 def _clock(moment: datetime, series: str = "") -> str:
@@ -298,8 +322,7 @@ def _posts(kind: str, need: date, fetch: Fetch, sleeper: Callable[[float], None]
     if kind == "orders":
         return _orders(fetch(EO_URL))
     if kind == "actions":
-        found = _actions(fetch(ACTION_URL))
-        return found, len(found) >= 30
+        return _action_posts(need, fetch, sleeper)
     found: list[datetime] = []
     for page in range(1, 41):
         if page > 1 and sleeper is not None:
