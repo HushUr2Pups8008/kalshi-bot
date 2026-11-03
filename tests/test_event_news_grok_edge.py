@@ -2616,6 +2616,7 @@ def test_count_shadow_uses_the_last_row_before_close_and_does_not_promote(tmp_pa
             "yes_ask": 40,
             "probability": "0.250000",
             "hour_probability": "0.900000",
+            "clock": "other",
         },
         {
             "ts": "2026-10-03T01:00:00Z",
@@ -2630,12 +2631,23 @@ def test_count_shadow_uses_the_last_row_before_close_and_does_not_promote(tmp_pa
             "series": "KXTRUMPACT",
             "yes_ask": 38,
             "probability": "0.400000",
+            "clock": "saturday",
+        },
+        {
+            "ts": "2026-10-02T22:00:00Z",
+            "ticker": "KXTRUMPACT-26OCT03-T2",
+            "series": "KXTRUMPACT",
+            "yes_ask": 40,
+            "probability": "0.250000",
+            "clock": "friday_evening",
         },
     ]
     log.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
 
     def lookup(ticker: str) -> dict:
         if ticker == "KXTRUTHSOCIAL-26OCT03-B129":
+            return {"status": "finalized", "result": "yes", "close_time": "2026-10-03T00:00:00Z"}
+        if ticker == "KXTRUMPACT-26OCT03-T2":
             return {"status": "finalized", "result": "yes", "close_time": "2026-10-03T00:00:00Z"}
         return {"status": "active", "result": ""}
 
@@ -2647,17 +2659,22 @@ def test_count_shadow_uses_the_last_row_before_close_and_does_not_promote(tmp_pa
         shadow_log_path=log,
     )
     fee = contract_fee_net_dollars("no", 60, True)
-    hour_fee = contract_fee_net_dollars("yes", 40, True)
-    assert fee is not None and hour_fee is not None
+    assert fee is not None
     assert format(fee.normalize(), "f") == "-0.6168"
-    hour_brier = format(((Decimal("0.9") - 1) ** 2).normalize(), "f")
+    # WHY: a stored hour_probability must not open a second grade. The flat NO at 60c stays -0.6168.
+    assert "0.01 |" not in text
     assert (
         "| KXTRUTHSOCIAL | 1 | 0.5625 | 0.36 | "
         f"{format(fee.normalize(), 'f')} | 1 |  | "
-        "not enough data (n=1, clustered n=1) settled trades, clustered events | "
-        f"{hour_brier} | {format(hour_fee.normalize(), 'f')} |"
+        "not enough data (n=1, clustered n=1) settled trades, clustered events |"
     ) in text
-    assert "| KXTRUMPACT | 0 | not enough data (n=0) | not enough data (n=0) | not enough data (n=0) | 0 |  |" in text
+    assert (
+        "| KXTRUMPACT | 1 | 0.5625 | 0.36 | "
+        f"{format(fee.normalize(), 'f')} | 1 |  | "
+        "not enough data (n=1, clustered n=1) settled trades, clustered events |"
+    ) in text
+    assert "| friday_evening | 1 | 0.5625 | -0.6168 |" in text
+    assert "| saturday | 0 | not enough data (n=0) | not enough data (n=0) |" in text
     assert "0.990000" not in text
     assert "eligible for live" not in text
     assert "No paid call. No mode change." in text
