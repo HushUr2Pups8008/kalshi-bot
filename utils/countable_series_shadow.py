@@ -279,71 +279,6 @@ def _action_posts(need: date, fetch: Fetch, sleeper: Callable[[float], None] | N
     return found, True
 
 
-_HOLIDAYS: dict[int, frozenset[date]] = {}
-
-
-def _holidays(year: int) -> frozenset[date]:
-    cached = _HOLIDAYS.get(year)
-    if cached is not None:
-        return cached
-
-    def nth(month: int, weekday: int, n: int) -> date:
-        first = date(year, month, 1)
-        return first + timedelta(days=(weekday - first.weekday()) % 7 + 7 * (n - 1))
-
-    def observed(month: int, day: int) -> date:
-        raw = date(year, month, day)
-        if raw.weekday() >= 5:
-            return raw + timedelta(days=-1 if raw.weekday() == 5 else 1)
-        return raw
-
-    memorial = date(year, 5, 31)
-    memorial -= timedelta(days=memorial.weekday())
-    found = frozenset({
-        observed(1, 1), observed(6, 19), observed(7, 4), observed(11, 11), observed(12, 25),
-        nth(1, 0, 3), nth(2, 0, 3), memorial, nth(9, 0, 1), nth(10, 0, 2), nth(11, 3, 4),
-    })
-    _HOLIDAYS[year] = found
-    return found
-
-
-def _dow(day: date) -> int:
-    """A federal holiday uses Saturday's hour-of-week. Inauguration Day is not one."""
-    if day in _holidays(day.year) or day in _holidays(day.year + 1):
-        return 5
-    return day.weekday()
-
-
-def _hour_scale(
-    posts: Sequence[datetime], first: date, start: date, moment: datetime, end: datetime, mean: float,
-) -> float:
-    """Remaining expected count divided by the flat daily mean. Same negative binomial."""
-    counts, seen = [0] * 168, [0] * 168
-    day = first
-    while day < start:
-        base = _dow(day) * 24
-        for hour in range(24):
-            seen[base + hour] += 1
-        day += timedelta(days=1)
-    for item in posts:
-        local = item.astimezone(ET)
-        if first <= local.date() < start:
-            counts[_dow(local.date()) * 24 + local.hour] += 1
-    rates = [counts[index] / seen[index] if seen[index] else 0.0 for index in range(168)]
-    if moment >= end or mean <= 0:
-        return 0.0
-    total, cursor, stop = 0.0, moment.astimezone(ET), end.astimezone(ET)
-    while cursor < stop:
-        nxt = cursor.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-        end_at = stop if nxt > stop else nxt
-        if end_at <= cursor:
-            break
-        slot = _dow(cursor.date()) * 24 + cursor.hour
-        total += rates[slot] * (end_at - cursor).total_seconds() / 3600.0
-        cursor = end_at
-    return total / mean
-
-
 def _clock(moment: datetime, series: str = "") -> str:
     """KXTRUMPACT adds Friday 15:00-21:00 ET and Saturday beside Sunday open and Wednesday."""
     local = moment.astimezone(ET)
@@ -480,15 +415,6 @@ def _score(market: object, contract: Mapping[str, object], posts: Sequence[datet
         row["reason"] = "probability"
         return row
     row["model"], row["probability"], row["reason"] = scored[0], f"{scored[1]:.6f}", None
-    if _series(market) != "KXTRUMPACT":
-        return row
-    first = _fit_start(posts, start_day, capped, start_day - timedelta(days=60))
-    if first is None:
-        return row
-    scale = _hour_scale(posts, first, start_day, moment, end, fitted[0])
-    hour = yes_probability(so_far, scale, fitted[0], fitted[1], contract)
-    if hour is not None:
-        row["hour_probability"] = f"{hour[1]:.6f}"
     return row
 
 

@@ -347,23 +347,32 @@ def test_action_pages_cover_sixty_days_and_drop_the_cap(tmp_path: Path) -> None:
     assert shadow._action_posts(date(2026, 1, 1), lambda _url: "<rss></rss>", None) == ([], False)
 
 
-def test_trumpact_hour_exposure_is_not_applied_to_truth_social() -> None:
-    """Weekday-only history makes Friday evening and Saturday cheaper than the flat rate. Truth Social stays flat."""
+def test_trumpact_row_matches_the_flat_row_except_the_clock() -> None:
+    """Friday 18:00 ET was other. The clock label is the only change, and the probability stays flat."""
     start = date(2026, 10, 18)
     day = start - timedelta(days=60)
     posts = []
     while day < start:
-        if shadow._dow(day) <= 3:
+        if day.weekday() <= 3:
             posts.append(datetime(day.year, day.month, day.day, 12, tzinfo=shadow.ET))
         day += timedelta(days=1)
     moment = datetime(2026, 10, 23, 22, tzinfo=timezone.utc)
-    action = shadow._score(
-        {"ticker": "KXTRUMPACT-26OCT24-T1", "series_ticker": "KXTRUMPACT", "yes_ask_cents": 40},
-        {"start": start, "end": date(2026, 10, 24), "how": "ge", "strike": 1},
-        posts,
-        False,
-        moment,
+    market = {"ticker": "KXTRUMPACT-26OCT24-T1", "series_ticker": "KXTRUMPACT", "yes_ask_cents": 40}
+    contract = {"start": start, "end": date(2026, 10, 24), "how": "ge", "strike": 1}
+    action = shadow._score(market, contract, posts, False, moment)
+    assert action["clock"] == "friday_evening"
+    assert "hour_probability" not in action
+    # WHY: these strings are the pre-#386 flat row. Only the clock label moved.
+    assert action["model"] == "poisson" and action["probability"] == "0.507536"
+    fitted = shadow._fit(posts, start, False, start - timedelta(days=60))
+    assert fitted is not None
+    flat = shadow.yes_probability(action["so_far"], float(action["days_left"]), fitted[0], fitted[1], contract)
+    assert flat is not None and action["probability"] == f"{flat[1]:.6f}"
+    saturday = shadow._score(
+        market, contract, posts, False, datetime(2026, 10, 24, 16, tzinfo=timezone.utc),
     )
+    assert saturday["clock"] == "saturday" and saturday["probability"] == "0.246731"
+    assert "hour_probability" not in saturday
     truth = shadow._score(
         {"ticker": "KXTRUTHSOCIAL-26OCT24-T240", "series_ticker": "KXTRUTHSOCIAL"},
         parse_contract(TRUTH_RULE, "greater"),
@@ -371,10 +380,4 @@ def test_trumpact_hour_exposure_is_not_applied_to_truth_social() -> None:
         False,
         moment,
     )
-    assert action["clock"] == "friday_evening"
-    assert action["probability"] is not None and action["hour_probability"] == "0.000000"
-    assert float(action["hour_probability"]) < float(action["probability"])
-    assert "hour_probability" not in truth
-    assert shadow._dow(date(2026, 7, 3)) == 5 and shadow._dow(date(2026, 7, 4)) == 5
-    assert shadow._dow(date(2026, 11, 11)) == 5 and shadow._dow(date(2026, 7, 6)) == 0
-    assert shadow._clock(datetime(2026, 7, 3, 22, tzinfo=timezone.utc), "KXTRUMPACT") == "friday_evening"
+    assert truth["clock"] == "other" and "hour_probability" not in truth

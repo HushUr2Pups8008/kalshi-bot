@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.59] - 2026-11-03
+
+### Removed
+- The KXTRUMPACT hour-of-week probability. A 33-week replay lost log score (mean -0.080, 90% CI -0.144 to -0.017) and was worse at every priced clock. Friday 15:00-21:00 ET and Saturday stay clock labels, and the count scorecard grades the flat probability on those clocks. The White House RSS pager and the live gate probability are unchanged.
+
 ## [0.37.58] - 2026-11-02
 
 ### Added
