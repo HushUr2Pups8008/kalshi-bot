@@ -251,7 +251,8 @@ def _actions(xml: str) -> list[tuple[str, datetime]]:
         if not raw:
             continue
         moment = parsedate_to_datetime(raw)
-        found.append(((item.findtext("link") or raw).strip(), moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)))
+        link = (item.findtext("link") or raw).strip()
+        found.append((link, moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)))
     return found
 
 
@@ -278,9 +279,78 @@ def _action_posts(need: date, fetch: Fetch, sleeper: Callable[[float], None] | N
     return found, True
 
 
+_HOLIDAYS: dict[int, frozenset[date]] = {}
+
+
+def _holidays(year: int) -> frozenset[date]:
+    cached = _HOLIDAYS.get(year)
+    if cached is not None:
+        return cached
+
+    def nth(month: int, weekday: int, n: int) -> date:
+        first = date(year, month, 1)
+        return first + timedelta(days=(weekday - first.weekday()) % 7 + 7 * (n - 1))
+
+    def observed(month: int, day: int) -> date:
+        raw = date(year, month, day)
+        if raw.weekday() >= 5:
+            return raw + timedelta(days=-1 if raw.weekday() == 5 else 1)
+        return raw
+
+    memorial = date(year, 5, 31)
+    memorial -= timedelta(days=memorial.weekday())
+    found = frozenset({
+        observed(1, 1), observed(6, 19), observed(7, 4), observed(11, 11), observed(12, 25),
+        nth(1, 0, 3), nth(2, 0, 3), memorial, nth(9, 0, 1), nth(10, 0, 2), nth(11, 3, 4),
+    })
+    _HOLIDAYS[year] = found
+    return found
+
+
+def _dow(day: date) -> int:
+    """A federal holiday uses Saturday's hour-of-week. Inauguration Day is not one."""
+    if day in _holidays(day.year) or day in _holidays(day.year + 1):
+        return 5
+    return day.weekday()
+
+
+def _hour_scale(
+    posts: Sequence[datetime], first: date, start: date, moment: datetime, end: datetime, mean: float,
+) -> float:
+    """Remaining expected count divided by the flat daily mean. Same negative binomial."""
+    counts, seen = [0] * 168, [0] * 168
+    day = first
+    while day < start:
+        base = _dow(day) * 24
+        for hour in range(24):
+            seen[base + hour] += 1
+        day += timedelta(days=1)
+    for item in posts:
+        local = item.astimezone(ET)
+        if first <= local.date() < start:
+            counts[_dow(local.date()) * 24 + local.hour] += 1
+    rates = [counts[index] / seen[index] if seen[index] else 0.0 for index in range(168)]
+    if moment >= end or mean <= 0:
+        return 0.0
+    total, cursor, stop = 0.0, moment.astimezone(ET), end.astimezone(ET)
+    while cursor < stop:
+        nxt = cursor.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        end_at = stop if nxt > stop else nxt
+        if end_at <= cursor:
+            break
+        slot = _dow(cursor.date()) * 24 + cursor.hour
+        total += rates[slot] * (end_at - cursor).total_seconds() / 3600.0
+        cursor = end_at
+    return total / mean
+
+
 def _clock(moment: datetime, series: str = "") -> str:
-    """Sunday open and Wednesday. Other hours stay other."""
+    """KXTRUMPACT adds Friday 15:00-21:00 ET and Saturday beside Sunday open and Wednesday."""
     local = moment.astimezone(ET)
+    if series == "KXTRUMPACT" and local.weekday() == 4 and 15 <= local.hour < 21:
+        return "friday_evening"
+    if series == "KXTRUMPACT" and local.weekday() == 5:
+        return "saturday"
     if local.weekday() == 6 and local.hour < 6:
         return "sunday_open"
     if local.weekday() == 2 and 10 <= local.hour < 16:
@@ -347,17 +417,23 @@ def _row(market: object, now: datetime, reason: str) -> dict[str, object]:
     }
 
 
-def _fit(posts: Sequence[datetime], start: date, capped: bool, need: date) -> tuple[float, float] | None:
+def _fit_start(posts: Sequence[datetime], start: date, capped: bool, need: date) -> date | None:
     days = [item.astimezone(ET).date() for item in posts]
     if not days:
         return None
     oldest = min(days)
     first = oldest + timedelta(days=1) if capped else (need if oldest <= need else oldest)
-    if first >= start:
+    return None if first >= start else first
+
+
+def _fit(posts: Sequence[datetime], start: date, capped: bool, need: date) -> tuple[float, float] | None:
+    first = _fit_start(posts, start, capped, need)
+    if first is None:
         return None
     counts, cursor = [], first
     daily: dict[date, int] = {}
-    for day in days:
+    for item in posts:
+        day = item.astimezone(ET).date()
         daily[day] = daily.get(day, 0) + 1
     while cursor < start:
         counts.append(daily.get(cursor, 0))
@@ -404,6 +480,15 @@ def _score(market: object, contract: Mapping[str, object], posts: Sequence[datet
         row["reason"] = "probability"
         return row
     row["model"], row["probability"], row["reason"] = scored[0], f"{scored[1]:.6f}", None
+    if _series(market) != "KXTRUMPACT":
+        return row
+    first = _fit_start(posts, start_day, capped, start_day - timedelta(days=60))
+    if first is None:
+        return row
+    scale = _hour_scale(posts, first, start_day, moment, end, fitted[0])
+    hour = yes_probability(so_far, scale, fitted[0], fitted[1], contract)
+    if hour is not None:
+        row["hour_probability"] = f"{hour[1]:.6f}"
     return row
 
 

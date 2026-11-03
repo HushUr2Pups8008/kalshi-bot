@@ -2615,6 +2615,7 @@ def test_count_shadow_uses_the_last_row_before_close_and_does_not_promote(tmp_pa
             "series": "KXTRUTHSOCIAL",
             "yes_ask": 40,
             "probability": "0.250000",
+            "hour_probability": "0.900000",
         },
         {
             "ts": "2026-10-03T01:00:00Z",
@@ -2646,12 +2647,15 @@ def test_count_shadow_uses_the_last_row_before_close_and_does_not_promote(tmp_pa
         shadow_log_path=log,
     )
     fee = contract_fee_net_dollars("no", 60, True)
-    assert fee is not None
+    hour_fee = contract_fee_net_dollars("yes", 40, True)
+    assert fee is not None and hour_fee is not None
     assert format(fee.normalize(), "f") == "-0.6168"
+    hour_brier = format(((Decimal("0.9") - 1) ** 2).normalize(), "f")
     assert (
         "| KXTRUTHSOCIAL | 1 | 0.5625 | 0.36 | "
         f"{format(fee.normalize(), 'f')} | 1 |  | "
-        "not enough data (n=1, clustered n=1) settled trades, clustered events |"
+        "not enough data (n=1, clustered n=1) settled trades, clustered events | "
+        f"{hour_brier} | {format(hour_fee.normalize(), 'f')} |"
     ) in text
     assert "| KXTRUMPACT | 0 | not enough data (n=0) | not enough data (n=0) | not enough data (n=0) | 0 |  |" in text
     assert "0.990000" not in text
