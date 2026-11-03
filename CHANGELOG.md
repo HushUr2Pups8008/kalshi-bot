@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.58] - 2026-11-02
+
+### Added
+- The KXTRUMPACT count shadow logs an hour-of-week probability beside the flat negative-binomial probability. Federal holidays use Saturday's slots. Friday 15:00-21:00 ET and Saturday are clock labels for that series only. The count scorecard grades both. KXTRUTHSOCIAL, KXEOWEEK, and the live gate probability are unchanged.
+
 ## [0.37.57] - 2026-11-02
 
 ### Fixed

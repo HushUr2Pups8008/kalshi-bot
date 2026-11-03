@@ -2489,20 +2489,27 @@ def _count_shadow_lines(
         pnl = contract_fee_net_dollars(side, price, result == "yes")
         if pnl is None:
             continue
-        graded[series].append(
-            ((side == "yes") == (result == "yes"), pnl, p_yes, outcome, side, Decimal(ask) / Decimal(100), ticker)
-        )
+        hour_p = _decimal(row.get("hour_probability"))
+        hour_pnl = None
+        if hour_p is not None and 0 <= hour_p <= 1:
+            hour_side = "yes" if hour_p >= Decimal("0.5") else "no"
+            hour_price = ask if hour_side == "yes" else 100 - ask
+            hour_pnl = contract_fee_net_dollars(hour_side, hour_price, result == "yes")
+        graded[series].append((
+            (side == "yes") == (result == "yes"), pnl, p_yes, outcome, side, Decimal(ask) / Decimal(100),
+            None if hour_pnl is None else hour_p, hour_pnl, ticker,
+        ))
     lines = [
         "",
         "## Count shadow",
         "",
         "Free count model for KXTRUTHSOCIAL, KXTRUMPACT, and KXEOWEEK. No paid call. No mode change.",
         "Last shadow row before close. YES when p_yes >= 0.5, else NO at 100 minus the yes ask.",
-        "The yes ask must be 1 through 99. Brier is the mean squared error against the settlement.",
-        "Fee-net is one contract at that ask with the scorecard fee. Promotion does not change modes.",
+        "Hour columns grade hour_probability the same way. A blank cell has no hour probability.",
+        "Promotion uses the flat probability.",
         "",
-        "| series | n | shadow_brier | ask_brier | fee_net | cluster_n | bh_q | promotion |",
-        "|---|---:|---:|---:|---:|---:|---:|---|",
+        "| series | n | shadow_brier | ask_brier | fee_net | cluster_n | bh_q | promotion | hour_brier | hour_fee_net |",
+        "|---|---:|---:|---:|---:|---:|---:|---|---:|---:|",
     ]
     tested = []
     for series in _SHADOW_SERIES:
@@ -2519,7 +2526,7 @@ def _count_shadow_lines(
             blank = "not enough data (n=0)"
             lines.append(
                 f"| {series} | 0 | {blank} | {blank} | {blank} | 0 |  | "
-                "not enough data (n=0, clustered n=0) settled trades, clustered events |"
+                "not enough data (n=0, clustered n=0) settled trades, clustered events |  |  |"
             )
             continue
         shadow_brier = sum((item[2] - item[3]) ** 2 for item in samples) / Decimal(n)
@@ -2530,10 +2537,18 @@ def _count_shadow_lines(
         cluster_low = clustered["ci95_low"] if isinstance(clustered["ci95_low"], Decimal) else None
         q = bh.get(series)
         label = promotion_label(n=n, cluster_n=cluster_n, cluster_low=cluster_low, q=q)
+        hour_rows = [item for item in samples if item[6] is not None and item[7] is not None]
+        if hour_rows:
+            count = Decimal(len(hour_rows))
+            hour_brier = sum((item[6] - item[3]) ** 2 for item in hour_rows) / count
+            hour_fee = sum((item[7] for item in hour_rows), Decimal(0))
+            hour_cells = f"{format(hour_brier.normalize(), 'f')} | {format(hour_fee.normalize(), 'f')}"
+        else:
+            hour_cells = " | "
         lines.append(
             f"| {series} | {n} | {format(shadow_brier.normalize(), 'f')} | "
             f"{format(ask_brier.normalize(), 'f')} | {format(fee_net.normalize(), 'f')} | "
-            f"{cluster_n} | {_cell(q)} | {label} |"
+            f"{cluster_n} | {_cell(q)} | {label} | {hour_cells} |"
         )
     return lines
 

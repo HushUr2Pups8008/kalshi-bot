@@ -163,6 +163,7 @@ def test_shadow_row_uses_the_fixture_feed_and_skips_deleted_posts(tmp_path: Path
     assert float(row["probability"]) < 0.05
     assert row["minute_counter"] is False
     assert row["reason"] is None
+    assert "hour_probability" not in row
     assert "api.x.ai" not in Path(shadow.__file__).read_text(encoding="utf-8")
     assert "place_limit_order" not in Path(shadow.__file__).read_text(encoding="utf-8")
 
@@ -256,12 +257,18 @@ def test_eoweek_shadow_uses_the_register_and_not_grok(tmp_path: Path) -> None:
     assert row["yes_ask"] == 40
     assert row["reason"] is None
     assert 0 < float(row["probability"]) < 1
+    assert "hour_probability" not in row
     assert "api.x.ai" not in Path(shadow.__file__).read_text(encoding="utf-8")
     assert "place_limit_order" not in Path(shadow.__file__).read_text(encoding="utf-8")
     wednesday = datetime(2026, 8, 12, 16, 0, tzinfo=timezone.utc)
     assert shadow._clock(wednesday) == "wednesday"
+    assert shadow._clock(wednesday, "KXTRUMPACT") == "wednesday"
     sunday = datetime(2026, 8, 9, 4, 0, tzinfo=timezone.utc)
     assert shadow._clock(sunday, "KXEOWEEK") == "sunday_open"
+    assert shadow._clock(datetime(2026, 10, 23, 22, tzinfo=timezone.utc), "KXTRUMPACT") == "friday_evening"
+    assert shadow._clock(datetime(2026, 10, 23, 22, tzinfo=timezone.utc), "KXTRUTHSOCIAL") == "other"
+    assert shadow._clock(datetime(2026, 10, 24, 16, tzinfo=timezone.utc), "KXTRUMPACT") == "saturday"
+    assert shadow._clock(datetime(2026, 10, 24, 16, tzinfo=timezone.utc)) == "other"
 
 
 def _action_rss(day: date, link: str) -> str:
@@ -277,7 +284,10 @@ def test_action_pages_cover_sixty_days_and_drop_the_cap(tmp_path: Path) -> None:
         calls.append(url)
         page = 1 if "paged=" not in url else int(url.rsplit("=", 1)[-1])
         origin = date(2026, 10, 20) - timedelta(days=(page - 1) * 30)
-        rows = [_action_rss(origin - timedelta(days=offset), f"https://www.whitehouse.gov/a/{page}-{offset}") for offset in range(30)]
+        rows = [
+            _action_rss(origin - timedelta(days=offset), f"https://www.whitehouse.gov/a/{page}-{offset}")
+            for offset in range(30)
+        ]
         if page == 2:
             rows.append(_action_rss(date(2026, 8, 1), "https://www.whitehouse.gov/a/old"))
             rows.append(_action_rss(date(2026, 10, 18), "https://www.whitehouse.gov/a/1-2"))
@@ -335,3 +345,36 @@ def test_action_pages_cover_sixty_days_and_drop_the_cap(tmp_path: Path) -> None:
     again = json.loads(path.read_text(encoding="utf-8").splitlines()[-1])
     assert again["feed_capped"] is True and len(capped_calls) == shadow._ACTION_PAGES
     assert shadow._action_posts(date(2026, 1, 1), lambda _url: "<rss></rss>", None) == ([], False)
+
+
+def test_trumpact_hour_exposure_is_not_applied_to_truth_social() -> None:
+    """Weekday-only history makes Friday evening and Saturday cheaper than the flat rate. Truth Social stays flat."""
+    start = date(2026, 10, 18)
+    day = start - timedelta(days=60)
+    posts = []
+    while day < start:
+        if shadow._dow(day) <= 3:
+            posts.append(datetime(day.year, day.month, day.day, 12, tzinfo=shadow.ET))
+        day += timedelta(days=1)
+    moment = datetime(2026, 10, 23, 22, tzinfo=timezone.utc)
+    action = shadow._score(
+        {"ticker": "KXTRUMPACT-26OCT24-T1", "series_ticker": "KXTRUMPACT", "yes_ask_cents": 40},
+        {"start": start, "end": date(2026, 10, 24), "how": "ge", "strike": 1},
+        posts,
+        False,
+        moment,
+    )
+    truth = shadow._score(
+        {"ticker": "KXTRUTHSOCIAL-26OCT24-T240", "series_ticker": "KXTRUTHSOCIAL"},
+        parse_contract(TRUTH_RULE, "greater"),
+        posts,
+        False,
+        moment,
+    )
+    assert action["clock"] == "friday_evening"
+    assert action["probability"] is not None and action["hour_probability"] == "0.000000"
+    assert float(action["hour_probability"]) < float(action["probability"])
+    assert "hour_probability" not in truth
+    assert shadow._dow(date(2026, 7, 3)) == 5 and shadow._dow(date(2026, 7, 4)) == 5
+    assert shadow._dow(date(2026, 11, 11)) == 5 and shadow._dow(date(2026, 7, 6)) == 0
+    assert shadow._clock(datetime(2026, 7, 3, 22, tzinfo=timezone.utc), "KXTRUMPACT") == "friday_evening"
