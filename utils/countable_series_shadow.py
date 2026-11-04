@@ -244,19 +244,25 @@ def _truth_page(payload: object) -> tuple[list[datetime], date | None]:
     return kept, oldest
 
 
-def _actions(xml: str) -> list[tuple[str, datetime]]:
-    found: list[tuple[str, datetime]] = []
+def _actions(xml: str) -> list[tuple[str, datetime, tuple[str, ...]]]:
+    found: list[tuple[str, datetime, tuple[str, ...]]] = []
     for item in ElementTree.fromstring(xml).iter("item"):
         raw = item.findtext("pubDate")
         if not raw:
             continue
         moment = parsedate_to_datetime(raw)
         link = (item.findtext("link") or raw).strip()
-        found.append((link, moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)))
+        cats = tuple((node.text or "").strip() for node in item.findall("category"))
+        found.append((link, moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc), cats))
     return found
 
 
-def _action_posts(need: date, fetch: Fetch, sleeper: Callable[[float], None] | None) -> tuple[list[datetime], bool]:
+def _action_posts(
+    need: date,
+    fetch: Fetch,
+    sleeper: Callable[[float], None] | None,
+    category: str = "",
+) -> tuple[list[datetime], bool]:
     """Page the RSS until an item is older than the fit window. The page cap stays capped."""
     seen: set[str] = set()
     found: list[datetime] = []
@@ -267,13 +273,14 @@ def _action_posts(need: date, fetch: Fetch, sleeper: Callable[[float], None] | N
         batch = _actions(fetch(ACTION_URL if page == 1 else f"{ACTION_URL}?paged={page}"))
         if not batch:
             return found, False
-        for key, moment in batch:
+        for key, moment, cats in batch:
             if key in seen:
                 continue
             seen.add(key)
-            found.append(moment)
             day = moment.astimezone(ET).date()
             oldest = day if oldest is None else min(oldest, day)
+            if not category or category in cats:
+                found.append(moment)
         if oldest is not None and oldest <= need:
             return found, False
     return found, True
@@ -380,14 +387,24 @@ def _fit(posts: Sequence[datetime], start: date, capped: bool, need: date) -> tu
     return mean, var
 
 
-def _score(market: object, contract: Mapping[str, object], posts: Sequence[datetime], capped: bool, now: datetime) -> dict[str, object]:
+def _score(
+    market: object,
+    contract: Mapping[str, object],
+    posts: Sequence[datetime],
+    capped: bool,
+    now: datetime,
+    rss: Sequence[datetime] = (),
+) -> dict[str, object]:
     start_day, end_day = contract["start"], contract["end"]
     assert isinstance(start_day, date) and isinstance(end_day, date)
     start = datetime(start_day.year, start_day.month, start_day.day, tzinfo=ET)
     end = datetime(end_day.year, end_day.month, end_day.day, tzinfo=ET) + timedelta(days=1)
     moment = now.astimezone(ET)
     stop = min(moment, end)
-    so_far = sum(1 for item in posts if start <= item.astimezone(ET) < stop)
+    series = _series(market)
+    register = sum(1 for item in posts if start <= item.astimezone(ET) < stop)
+    rss_count = sum(1 for item in rss if start <= item.astimezone(ET) < stop)
+    so_far = max(register, rss_count) if series == "KXEOWEEK" else register
     days_left = 0.0 if moment >= end else ((end - start) if moment <= start else (end - moment)).total_seconds() / 86400
     row = _row(market, now, "short_history")
     row.update({
@@ -398,9 +415,9 @@ def _score(market: object, contract: Mapping[str, object], posts: Sequence[datet
             "truth": "factbase",
             "orders": "federal_register",
             "actions": "whitehouse_rss",
-        }[_feed_key(_series(market))],
+        }[_feed_key(series)],
         "feed_capped": capped,
-        "clock": _clock(now, _series(market)),
+        "clock": _clock(now, series),
     })
     if "strike" in contract:
         row["strike"] = contract["strike"]
@@ -415,6 +432,9 @@ def _score(market: object, contract: Mapping[str, object], posts: Sequence[datet
         row["reason"] = "probability"
         return row
     row["model"], row["probability"], row["reason"] = scored[0], f"{scored[1]:.6f}", None
+    if series == "KXEOWEEK":
+        other = yes_probability(register, days_left, fitted[0], fitted[1], contract)
+        row["register_probability"] = None if other is None else f"{other[1]:.6f}"
     return row
 
 
@@ -468,10 +488,20 @@ def record_countable_shadow(
             loaded[key] = _posts(key, start - timedelta(days=60), fetch, sleeper)
         except Exception:
             loaded[key] = None
+    rss_orders: list[datetime] = []
+    if "orders" in earliest:
+        try:
+            rss_orders = _action_posts(earliest["orders"], fetch, sleeper, "Executive Orders")[0]
+        except Exception:
+            rss_orders = []
     for market, contract in ready:
         key = _feed_key(_series(market))
         got = loaded[key]
-        _write(path, _row(market, moment, "feed") if got is None else _score(market, contract, got[0], got[1], moment))
+        if got is None:
+            scored_row: dict[str, object] = _row(market, moment, "feed")
+        else:
+            scored_row = _score(market, contract, got[0], got[1], moment, rss_orders if key == "orders" else ())
+        _write(path, scored_row)
         written += 1
     return written
 

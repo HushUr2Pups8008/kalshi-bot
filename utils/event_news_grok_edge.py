@@ -2453,6 +2453,7 @@ def _count_shadow_lines(
     contract at that price, using the scorecard fee.
     """
     pending: dict[str, list[tuple[datetime, int, Mapping[str, Any]]]] = {}
+    biased = 0
     for index, row in enumerate(rows):
         ticker = str(row.get("ticker") or "").strip()
         series = str(row.get("series") or "").strip().upper() or ticker.split("-", 1)[0].upper()
@@ -2489,6 +2490,9 @@ def _count_shadow_lines(
         pnl = contract_fee_net_dollars(side, price, result == "yes")
         if pnl is None:
             continue
+        if series == "KXEOWEEK" and "register_probability" not in row:
+            biased += 1
+            continue
         graded[series].append((
             (side == "yes") == (result == "yes"), pnl, p_yes, outcome, side, Decimal(ask) / Decimal(100),
             str(row.get("clock") or ""), ticker,
@@ -2499,7 +2503,8 @@ def _count_shadow_lines(
         "",
         "Free count model for KXTRUTHSOCIAL, KXTRUMPACT, and KXEOWEEK. No paid call. No mode change.",
         "Last shadow row before close. YES when p_yes >= 0.5, else NO at 100 minus the yes ask.",
-        "Friday evening and Saturday grade that same flat probability for KXTRUMPACT.",
+        "Friday evening and Saturday grade the flat KXTRUMPACT probability. "
+        f"KXEOWEEK grades before the count fix: {biased} biased, excluded from promotion.",
         "",
         "| series | n | shadow_brier | ask_brier | fee_net | cluster_n | bh_q | promotion |",
         "|---|---:|---:|---:|---:|---:|---:|---|",

@@ -97,44 +97,23 @@ def test_shadow_row_uses_the_fixture_feed_and_skips_deleted_posts(tmp_path: Path
 
     def fetch(url: str) -> str:
         calls.append(url)
-        rows = []
-        for day, count in (("11", 1), ("12", 8), ("13", 1), ("14", 8), ("15", 1), ("16", 8), ("17", 1)):
-            for _ in range(count):
-                rows.append({
-                    "date": f"2026-10-{day}T15:00:00+00:00",
-                    "handle": "realDonaldTrump",
-                    "platform": "Truth Social",
-                    "deleted_flag": False,
-                    "type": "Social",
-                })
-        rows.append({
-            "date": "2026-08-01T15:00:00+00:00",
-            "handle": "realDonaldTrump",
-            "platform": "Truth Social",
-            "deleted_flag": False,
-            "type": "Social",
-        })
-        rows.append({
-            "date": "2026-10-18T15:00:00+00:00",
-            "handle": "realDonaldTrump",
-            "platform": "Truth Social",
-            "deleted_flag": True,
-            "type": "Social",
-        })
-        rows.append({
-            "date": "2026-10-18T16:00:00+00:00",
-            "handle": "someoneelse",
-            "platform": "Truth Social",
-            "deleted_flag": False,
-            "type": "Social",
-        })
-        rows.append({
-            "date": "2026-10-18T17:00:00+00:00",
-            "handle": "realDonaldTrump",
-            "platform": "Truth Social",
-            "deleted_flag": False,
-            "type": "Social",
-        })
+
+        def one(stamp: str, **extra: object) -> dict[str, object]:
+            row: dict[str, object] = {
+                "date": stamp, "handle": "realDonaldTrump", "platform": "Truth Social",
+                "deleted_flag": False, "type": "Social",
+            }
+            row.update(extra)
+            return row
+
+        counts = (("11", 1), ("12", 8), ("13", 1), ("14", 8), ("15", 1), ("16", 8), ("17", 1))
+        rows = [one(f"2026-10-{day}T15:00:00+00:00") for day, count in counts for _ in range(count)]
+        rows += [
+            one("2026-08-01T15:00:00+00:00"),
+            one("2026-10-18T15:00:00+00:00", deleted_flag=True),
+            one("2026-10-18T16:00:00+00:00", handle="someoneelse"),
+            one("2026-10-18T17:00:00+00:00"),
+        ]
         return json.dumps({"data": rows})
 
     market = {
@@ -219,16 +198,32 @@ def test_federal_register_host_reaches_the_opener(monkeypatch) -> None:
 
 
 def test_eoweek_shadow_uses_the_register_and_not_grok(tmp_path: Path) -> None:
-    """A Sunday-open row is the free count. The register page is the only fetch."""
+    """Wednesday keeps the higher count. A proclamation is not an executive order."""
     calls: list[str] = []
 
-    def fetch(url: str) -> str:
-        calls.append(url)
+    def item(day: date, link: str, category: str) -> str:
+        stamp = datetime(day.year, day.month, day.day, 18, tzinfo=shadow.ET).strftime("%a, %d %b %Y %H:%M:%S %z")
+        return f"<item><link>{link}</link><pubDate>{stamp}</pubDate><category>{category}</category></item>"
+
+    def register_page() -> str:
         results = [
             {"executive_order_number": "14400", "signing_date": f"2026-08-0{day}"}
             for day in (1, 2, 3, 4, 6)
         ]
+        results.append({"executive_order_number": "14410", "signing_date": "2026-08-10"})
         return json.dumps({"count": len(results), "results": results})
+
+    def fetch(url: str) -> str:
+        calls.append(url)
+        if "federalregister.gov" in url:
+            return register_page()
+        rows = (
+            item(date(2026, 8, 10), "https://www.whitehouse.gov/eo/published", "Executive Orders"),
+            item(date(2026, 8, 11), "https://www.whitehouse.gov/eo/unpublished", "Executive Orders"),
+            item(date(2026, 8, 11), "https://www.whitehouse.gov/eo/proclamation", "Proclamations"),
+            item(date(2026, 8, 1), "https://www.whitehouse.gov/eo/old", "Executive Orders"),
+        )
+        return "<rss><channel>" + "".join(rows) + "</channel></rss>"
 
     market = {
         "ticker": "KXEOWEEK-26AUG15-1",
@@ -243,23 +238,49 @@ def test_eoweek_shadow_uses_the_register_and_not_grok(tmp_path: Path) -> None:
     path = tmp_path / "shadow.jsonl"
     written = record_countable_shadow(
         [market],
-        now=datetime(2026, 8, 9, 8, 0, tzinfo=timezone.utc),
+        now=datetime(2026, 8, 12, 16, tzinfo=timezone.utc),
         path=path,
         fetch=fetch,
         sleeper=lambda _seconds: None,
     )
     assert written == 1
-    assert len(calls) == 1 and "federalregister.gov" in calls[0]
-    row = json.loads(path.read_text(encoding="utf-8"))
+    assert [url for url in calls if "federalregister.gov" in url]
+    assert shadow.ACTION_URL in calls
+    row = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
     assert row["feed"] == "federal_register"
-    assert row["clock"] == "sunday_open"
-    assert row["so_far"] == 0
+    assert row["clock"] == "wednesday"
+    assert row["so_far"] == 2
     assert row["yes_ask"] == 40
     assert row["reason"] is None
-    assert 0 < float(row["probability"]) < 1
+    contract = parse_contract(str(market["rules_primary"]), "greater")
+    posts = [datetime(2026, 8, day, 12, tzinfo=shadow.ET) for day in (1, 2, 3, 4, 6, 10)]
+    fitted = shadow._fit(posts, date(2026, 8, 9), False, date(2026, 8, 9) - timedelta(days=60))
+    assert contract is not None and fitted is not None
+    days = float(row["days_left"])
+    # WHY: the Register has the Aug 10 order only. The RSS also has Aug 11, which is not published yet.
+    assert row["register_probability"] == f"{yes_probability(1, days, fitted[0], fitted[1], contract)[1]:.6f}"
+    assert row["probability"] == f"{yes_probability(2, days, fitted[0], fitted[1], contract)[1]:.6f}"
+    assert row["probability"] != row["register_probability"]
     assert "hour_probability" not in row
     assert "api.x.ai" not in Path(shadow.__file__).read_text(encoding="utf-8")
     assert "place_limit_order" not in Path(shadow.__file__).read_text(encoding="utf-8")
+
+    def register_only(url: str) -> str:
+        if "whitehouse.gov" in url:
+            raise OSError("rss")
+        return register_page()
+
+    assert record_countable_shadow(
+        [market],
+        now=datetime(2026, 8, 12, 16, tzinfo=timezone.utc),
+        path=path,
+        fetch=register_only,
+        sleeper=lambda _seconds: None,
+    ) == 1
+    fallen = json.loads(path.read_text(encoding="utf-8").splitlines()[-1])
+    assert fallen["so_far"] == 1
+    assert fallen["probability"] == fallen["register_probability"]
+    assert fallen["reason"] is None
     wednesday = datetime(2026, 8, 12, 16, 0, tzinfo=timezone.utc)
     assert shadow._clock(wednesday) == "wednesday"
     assert shadow._clock(wednesday, "KXTRUMPACT") == "wednesday"

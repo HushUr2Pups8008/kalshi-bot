@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.60] - 2026-11-04
+
+### Fixed
+- The KXEOWEEK count shadow takes the higher of the Federal Register published orders and the White House RSS Executive Orders dated this week. The row logs both probabilities for this grading cycle, and the kept probability is the higher count. Scorecard promotion skips KXEOWEEK rows written before that field. No Grok call and no live order.
+
 ## [0.37.59] - 2026-11-03
 
 ### Removed

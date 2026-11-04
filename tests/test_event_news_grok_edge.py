@@ -2641,6 +2641,14 @@ def test_count_shadow_uses_the_last_row_before_close_and_does_not_promote(tmp_pa
             "probability": "0.250000",
             "clock": "friday_evening",
         },
+        {
+            "ts": "2026-10-02T16:00:00Z",
+            "ticker": "KXEOWEEK-26OCT03-1",
+            "series": "KXEOWEEK",
+            "yes_ask": 40,
+            "probability": "0.200000",
+            "clock": "wednesday",
+        },
     ]
     log.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
 
@@ -2648,6 +2656,8 @@ def test_count_shadow_uses_the_last_row_before_close_and_does_not_promote(tmp_pa
         if ticker == "KXTRUTHSOCIAL-26OCT03-B129":
             return {"status": "finalized", "result": "yes", "close_time": "2026-10-03T00:00:00Z"}
         if ticker == "KXTRUMPACT-26OCT03-T2":
+            return {"status": "finalized", "result": "yes", "close_time": "2026-10-03T00:00:00Z"}
+        if ticker == "KXEOWEEK-26OCT03-1":
             return {"status": "finalized", "result": "yes", "close_time": "2026-10-03T00:00:00Z"}
         return {"status": "active", "result": ""}
 
@@ -2675,6 +2685,8 @@ def test_count_shadow_uses_the_last_row_before_close_and_does_not_promote(tmp_pa
     ) in text
     assert "| friday_evening | 1 | 0.5625 | -0.6168 |" in text
     assert "| saturday | 0 | not enough data (n=0) | not enough data (n=0) |" in text
+    assert "KXEOWEEK grades before the count fix: 1 biased, excluded from promotion." in text
+    assert "| KXEOWEEK | 0 | not enough data (n=0) |" in text
     assert "0.990000" not in text
     assert "eligible for live" not in text
     assert "No paid call. No mode change." in text
@@ -2686,6 +2698,7 @@ def test_count_shadow_uses_the_last_row_before_close_and_does_not_promote(tmp_pa
     )
     assert "| KXTRUTHSOCIAL | 0 | not enough data (n=0) |" in quiet
     assert "| KXEOWEEK | 0 | not enough data (n=0) |" in quiet
+    assert "KXEOWEEK grades before the count fix: 0 biased, excluded from promotion." in quiet
     assert "KXTRUTHSOCIALD" not in quiet
     assert "0.5625" not in quiet
 
