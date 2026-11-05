@@ -11,11 +11,12 @@ import hashlib
 import json
 import os
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 import requests
 
@@ -463,22 +464,199 @@ def _log_veto_refusal(analysis: Any, reason: str) -> None:
     )
 
 
+_VETO_SELECTORS = ("first", "last", "all")
+_VETO_DECISIONS = {"yes": "allow", "no": "block"}
+
+
+def _attempt_day(row: Mapping[str, Any]) -> str:
+    day = str(row.get("date") or "")
+    if day:
+        return day
+    moment = _parse_utc_stamp(row.get("ts"))
+    return "" if moment is None else moment.strftime("%Y-%m-%d")
+
+
+def _attempt_order(index: int, row: Mapping[str, Any]) -> tuple[int, float, int]:
+    moment = _parse_utc_stamp(row.get("ts"))
+    if moment is None:
+        return (1, 0.0, index)
+    return (0, moment.timestamp(), index)
+
+
+def _depth_contracts(value: Any) -> Decimal | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        number = Decimal(text)
+    except Exception:
+        return None
+    if not number.is_finite() or number < 0:
+        return None
+    return number
+
+
+def _fill_contracts() -> int:
+    from utils.event_news_desk_flags import HARD_MAX_CONTRACTS
+
+    return HARD_MAX_CONTRACTS
+
+
+def veto_fill_evidence(row: Mapping[str, Any]) -> bool:
+    """True when a timestamp, an integer ask, and depth can support an 8-lot fill."""
+    if _parse_utc_stamp(row.get("ts")) is None or type(row.get("ask_cents")) is not int:
+        return False
+    depth = _depth_contracts(row.get("depth"))
+    return depth is not None and depth >= _fill_contracts()
+
+
+def select_veto_attempts(
+    rows: Sequence[Mapping[str, Any]],
+    selector: str,
+) -> list[dict[str, Any]]:
+    """Pick attempts without dropping later ones at write time.
+
+    ``first`` is the old ticker + side + UTC day view. ``last`` keeps the
+    latest attempt that day. ``all`` keeps every attempt. A missing
+    timestamp stays in file order behind timestamped rows.
+    """
+    if selector not in _VETO_SELECTORS:
+        raise ValueError(f"veto selector must be first, last, or all, not {selector!r}")
+    ordered = sorted(enumerate(rows), key=lambda item: _attempt_order(item[0], item[1]))
+    if selector == "all":
+        return [dict(row) for _index, row in ordered]
+    chosen: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for _index, row in ordered:
+        ticker, side, day = str(row.get("ticker") or ""), str(row.get("side") or ""), _attempt_day(row)
+        if not ticker or not side or not day:
+            continue
+        key = (ticker, side, day)
+        if selector == "first" and key in chosen:
+            continue
+        chosen[key] = dict(row)
+    return list(chosen.values())
+
+
+def select_attempts_before_fills(
+    rows: Sequence[Mapping[str, Any]],
+    fills: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Latest attempt at or before each fill. This is the settlement review."""
+    indexed = list(enumerate(rows))
+    chosen: list[dict[str, Any]] = []
+    for fill in fills:
+        ticker, side = str(fill.get("ticker") or ""), str(fill.get("side") or "")
+        fill_at = _parse_utc_stamp(fill.get("ts"))
+        if not ticker or not side or fill_at is None:
+            continue
+        eligible: list[tuple[datetime, int, Mapping[str, Any]]] = []
+        for index, row in indexed:
+            if str(row.get("ticker") or "") != ticker or str(row.get("side") or "") != side:
+                continue
+            moment = _parse_utc_stamp(row.get("ts"))
+            if moment is None or moment > fill_at:
+                continue
+            eligible.append((moment, index, row))
+        if not eligible:
+            continue
+        eligible.sort(key=lambda item: (item[0], item[1]))
+        chosen.append(dict(eligible[-1][2]))
+    return chosen
+
+
+def veto_same_day_reversals(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Block to allow, or allow to block, inside one ticker, side, and UTC day."""
+    grouped: dict[tuple[str, str, str], list[Mapping[str, Any]]] = {}
+    ordered = sorted(enumerate(rows), key=lambda item: _attempt_order(item[0], item[1]))
+    for _index, row in ordered:
+        decision = str(row.get("decision") or "")
+        if decision not in {"allow", "block"}:
+            continue
+        ticker, side, day = str(row.get("ticker") or ""), str(row.get("side") or ""), _attempt_day(row)
+        if not ticker or not side or not day:
+            continue
+        grouped.setdefault((ticker, side, day), []).append(row)
+    found: list[dict[str, Any]] = []
+    for (ticker, side, day), attempts in grouped.items():
+        previous: Mapping[str, Any] | None = None
+        for row in attempts:
+            if previous is not None and str(previous.get("decision") or "") != str(row.get("decision") or ""):
+                found.append({
+                    "ticker": ticker,
+                    "side": side,
+                    "date": day,
+                    "from_decision": str(previous.get("decision") or ""),
+                    "to_decision": str(row.get("decision") or ""),
+                    "from_ts": previous.get("ts"),
+                    "to_ts": row.get("ts"),
+                    "from_attempt_id": previous.get("attempt_id"),
+                    "to_attempt_id": row.get("attempt_id"),
+                })
+            previous = row
+    return found
+
+
+def veto_counterfactual_fee_net(row: Mapping[str, Any], settlement: str) -> Decimal | None:
+    """8-contract taker result if this attempt filled at its ask.
+
+    None means not estimable. A blocked side that matches the settlement
+    would have won. That match is not this number and is not EV.
+    """
+    if settlement not in {"yes", "no"} or not veto_fill_evidence(row):
+        return None
+    ask = row.get("ask_cents")
+    contracts = _fill_contracts()
+    if type(ask) is not int:
+        return None
+    scored = event_news_fee_net_edge(Decimal("0.5"), ask, contracts)
+    if scored is None:
+        return None
+    price = Decimal(ask) / Decimal(100) * contracts
+    won = (str(row.get("side") or "") == "yes") == (settlement == "yes")
+    return (Decimal(contracts) - price - scored[1]) if won else (-price - scored[1])
+
+
+def veto_blocked_settlement_rows(
+    rows: Sequence[Mapping[str, Any]],
+    settled: Mapping[str, str],
+    *,
+    selector: str = "last",
+) -> list[dict[str, str]]:
+    """One row per selected block. Agreement is not a profit figure."""
+    found: list[dict[str, str]] = []
+    for row in select_veto_attempts(rows, selector):
+        if str(row.get("decision") or "") != "block":
+            continue
+        ticker, side = str(row.get("ticker") or ""), str(row.get("side") or "")
+        result = settled.get(ticker)
+        if result == side:
+            agreement = "blocked side would have won"
+        elif result in {"yes", "no"}:
+            agreement = "blocked side would have lost"
+        else:
+            agreement = "open"
+        amount = veto_counterfactual_fee_net(row, result) if result in {"yes", "no"} else None
+        found.append({
+            "date": _attempt_day(row),
+            "ticker": ticker,
+            "side": side,
+            "settlement": result if result in {"yes", "no"} else "open",
+            "agreement": agreement,
+            "fee_net_if_filled": "not estimable" if amount is None else format(amount, "f"),
+        })
+    return found
+
+
 def _record_veto_decision(
     analysis: Any, packet: EventNewsGrokVetoPacket, result: str, *,
     now: datetime | None, usage: Mapping[str, Any],
 ) -> None:
-    """First ticker, side, and UTC date wins. A log error does not change the veto."""
+    """Append every attempt. A log error does not change the veto."""
     try:
         path, stamp = VETO_DECISION_LOG_PATH, _utc_stamp(now)
         day, ticker, side = stamp[:10], packet.ticker, packet.side
-        if path.is_file():
-            for line in path.read_text(encoding="utf-8").splitlines():
-                try:
-                    prior = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if (prior.get("ticker"), prior.get("side"), prior.get("date")) == (ticker, side, day):
-                    return
         market, depth = getattr(analysis, "market", None), None
         for name in (f"{side}_ask_size_fp", f"{side}_ask_size"):
             found = getattr(market, name, None)
@@ -487,10 +665,17 @@ def _record_veto_decision(
                 break
         ask = packet.yes_ask_cents if side == "yes" else packet.no_ask_cents
         tokens = usage.get("total_tokens")
+        verdict = result if result in {"yes", "no", "timeout"} else "timeout"
         _append_jsonl(path, {
-            "ts": stamp, "date": day, "ticker": ticker, "side": side, "depth": depth,
+            "attempt_id": uuid.uuid4().hex,
+            "ts": stamp,
+            "date": day,
+            "ticker": ticker,
+            "side": side,
+            "verdict": verdict,
+            "depth": depth,
             "ask_cents": ask if type(ask) is int else None,
-            "decision": {"yes": "allow", "no": "block"}.get(result, "unavailable"),
+            "decision": _VETO_DECISIONS.get(result, "unavailable"),
             "total_tokens": tokens if type(tokens) is int else None,
             "cost_usd": str(usage.get("cost_usd") or "0"),
         })
@@ -498,33 +683,55 @@ def _record_veto_decision(
         return
 
 
-def grade_veto_decisions(rows: list[Mapping[str, Any]], settled: Mapping[str, str]) -> str:
-    """8-contract taker per market-day. Unavailable is skipped. n under 15 is not enough."""
-    sums, counts, seen = {"allow": Decimal(0), "block": Decimal(0)}, {"allow": 0, "block": 0}, set()
-    for row in rows:
+def grade_veto_decisions(
+    rows: list[Mapping[str, Any]],
+    settled: Mapping[str, str],
+    *,
+    selector: str = "last",
+    fills: Sequence[Mapping[str, Any]] | None = None,
+) -> str:
+    """Grade an explicit attempt view. Fee-net needs a plausible 8-lot fill.
+
+    ``fills`` uses the latest attempt at or before each fill and ignores
+    ``selector``. That is the settlement review. Without fills, ``last``
+    is the latest attempt of the UTC day. ``first`` is only the derived
+    old view. A missing timestamp, ask, or 8-contract depth is not estimable.
+    """
+    if fills is not None:
+        chosen = select_attempts_before_fills(rows, fills)
+        review = "before_fill"
+    else:
+        chosen = select_veto_attempts(rows, selector)
+        review = selector
+    buckets: dict[str, list[Decimal | None]] = {"allow": [], "block": []}
+    for row in chosen:
         decision, ask = str(row.get("decision") or ""), row.get("ask_cents")
-        key = (str(row.get("ticker") or ""), str(row.get("side") or ""), str(row.get("date") or ""))
-        result = settled.get(key[0])
-        if decision not in sums or not all(key) or key in seen or type(ask) is not int or result not in {"yes", "no"}:
+        result = settled.get(str(row.get("ticker") or ""))
+        if decision not in buckets or type(ask) is not int or result not in {"yes", "no"}:
             continue
-        seen.add(key)
-        scored = event_news_fee_net_edge(Decimal("0.5"), ask, 8)
-        if scored is None:
-            continue
-        price = Decimal(ask) / Decimal(100) * 8
-        won = (key[1] == "yes") == (result == "yes")
-        sums[decision] += (Decimal(8) - price - scored[1]) if won else (-price - scored[1])
-        counts[decision] += 1
+        buckets[decision].append(veto_counterfactual_fee_net(row, result))
 
     def _cell(name: str) -> str:
-        if counts[name] < 15:
-            return f"not enough data (n={counts[name]})"
-        return format(sums[name], "f")
+        amounts = buckets[name]
+        priced = [amount for amount in amounts if amount is not None]
+        if not amounts or len(priced) != len(amounts):
+            return "not estimable"
+        if len(priced) < 15:
+            return f"not enough data (n={len(priced)})"
+        return format(sum(priced, Decimal(0)), "f")
 
+    contracts = _fill_contracts()
     return (
-        "\n## Veto counterfactual\n\ndecide at n>=15 allowed rows\n\n| decision | n | fee-net sum |\n| --- | --- | --- |\n"
-        f"| allowed | {counts['allow']} | {_cell('allow')} |\n"
-        f"| blocked | {counts['block']} | {_cell('block')} |\n"
+        "\n## Veto counterfactual\n\n"
+        "decide at n>=15 allowed rows. "
+        "Fee-net is counterfactual only when the attempt has a timestamp, an integer ask, "
+        f"and depth for {contracts} contracts. Otherwise not estimable. "
+        "A blocked side that matches the settlement would have won at settlement. "
+        "That is not fee-net EV.\n\n"
+        f"review={review}\n\n"
+        "| decision | n | fee-net if filled |\n| --- | --- | --- |\n"
+        f"| allowed | {len(buckets['allow'])} | {_cell('allow')} |\n"
+        f"| blocked | {len(buckets['block'])} | {_cell('block')} |\n"
     )
 
 

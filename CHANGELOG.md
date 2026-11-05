@@ -19,6 +19,14 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.62] - 2026-11-05
+
+### Fixed
+- The veto decision log appends every attempt, with a timestamp, ticker, side, verdict, cost, and attempt id. A later yes on the same ticker, side, and UTC day is kept. Grading can take the first attempt, the last attempt, or every attempt. Settlement review uses the latest attempt at or before a fill. Fee-net is shown only when that attempt has a timestamp, an integer ask, and depth for 8 contracts. Otherwise it is not estimable. A blocked side that matches the settlement would have won at settlement. That is not fee-net EV.
+
+### Removed
+- The unused rules-check hard timeout. The retired rules-check and settled-watch flag names stay on the boot line. The politics plist still sets the watch name. Neither name calls Grok or arms a live desk path.
+
 ## [0.37.61] - 2026-11-05
 
 ### Removed

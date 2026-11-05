@@ -2164,7 +2164,7 @@ def _veto_scorecard_text(rows: Sequence[Mapping[str, Any]], market_lookup: Calla
                 result = None
             if result in {"yes", "no"}:
                 settled[ticker] = result
-    return grade_veto_decisions(list(rows), settled)
+    return grade_veto_decisions(list(rows), settled, selector="last")
 
 def _scorecard_modes() -> dict[str, tuple[str, str]]:
     universe = get_universe()

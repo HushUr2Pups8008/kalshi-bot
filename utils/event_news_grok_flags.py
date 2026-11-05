@@ -15,6 +15,8 @@ from typing import Mapping
 
 EVENT_NEWS_GROK_TRACE = "EVENT_NEWS_GROK_TRACE"
 EVENT_NEWS_GROK_GROUNDING = "EVENT_NEWS_GROK_GROUNDING"
+# Deprecated. The settled-watch loop is gone. The politics plist still sets
+# this name, and the boot line still prints it. The order path does not read it.
 EVENT_NEWS_GROK_WATCH_SKIP_SETTLED = "EVENT_NEWS_GROK_WATCH_SKIP_SETTLED"
 EVENT_NEWS_FILL_LOG_DETAIL = "EVENT_NEWS_FILL_LOG_DETAIL"
 EVENT_NEWS_REQUOTE_BAND_CHECK = "EVENT_NEWS_REQUOTE_BAND_CHECK"
@@ -80,6 +82,7 @@ def event_news_grok_grounding_for_mode(
 def event_news_watch_skip_settled_enabled(
     environ: Mapping[str, str] | None = None,
 ) -> bool:
+    """Deprecated. Kept so the boot line can print the plist value."""
     return event_news_flag_enabled(EVENT_NEWS_GROK_WATCH_SKIP_SETTLED, environ)
 
 

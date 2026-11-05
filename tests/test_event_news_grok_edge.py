@@ -22,6 +22,7 @@ from utils.event_news_desk_flags import (
     EVENT_NEWS_GROK_EDGE_SCAN,
     EVENT_NEWS_GROK_EXIT_WATCH,
     EVENT_NEWS_GROK_KALSHI_SERIES,
+    EVENT_NEWS_GROK_RULES_CHECK,
     _DESK_FLAG_NAMES,
     event_news_any_live_desk_flag,
 )
@@ -1332,6 +1333,8 @@ def test_scan_interval_cannot_drop_below_five_minutes() -> None:
 
 
 def test_new_flags_do_not_arm_the_live_order_path_or_the_plist() -> None:
+    assert EVENT_NEWS_GROK_RULES_CHECK not in _DESK_FLAG_NAMES
+    assert event_news_any_live_desk_flag({EVENT_NEWS_GROK_RULES_CHECK: "true"}) is False
     assert EVENT_NEWS_GROK_EDGE_SCAN not in _DESK_FLAG_NAMES
     assert EVENT_NEWS_GROK_EXIT_WATCH not in _DESK_FLAG_NAMES
     assert EVENT_NEWS_GROK_KALSHI_SERIES not in _DESK_FLAG_NAMES
@@ -2753,7 +2756,7 @@ def test_same_date_brackets_share_one_cluster_and_bh_steps_down(tmp_path: Path) 
     assert "not enough data (n=1)" in text
     assert "| 0 | 2 | not enough data (n=5, clustered n=5) settled trades, clustered events |" in text
     assert "| 1 | 2 | not enough data (n=5, clustered n=5) settled trades, clustered events |" in text
-    assert "| allowed | 1 | not enough data (n=1) |" in text
+    assert "| allowed | 1 | not estimable |" in text
     assert "decide at n>=15 allowed rows" in text
 
 
@@ -3173,8 +3176,8 @@ def test_daily_report_warns_when_spend_exceeds_half_the_week(tmp_path: Path) -> 
 def test_veto_table_grades_eight_contracts_and_hides_small_samples(tmp_path: Path) -> None:
     """An 8-lot fee is the quadratic quote, not eight times the one-lot fee.
 
-    One settled row is not enough data. Unavailable, a bad ask, an open
-    market, and a second row for the same market-day stay out of the sum.
+    The later same-day row replaces the first. Rows without a timestamp and
+    depth are not estimable, so the old 15-ask sum is not printed.
     """
     from utils.event_news_research import event_news_fee_net_edge
 
@@ -3251,7 +3254,9 @@ def test_veto_table_grades_eight_contracts_and_hides_small_samples(tmp_path: Pat
         call_log_path=calls,
         decision_log_path=decisions,
     )
-    assert f"| allowed | 15 | {format(allowed, 'f')} |" in text
-    assert "| blocked | 1 | not enough data (n=1) |" in text
+    veto_section = text.split("## Veto counterfactual", 1)[1]
+    assert "| allowed | 14 | not estimable |" in veto_section
+    assert "| blocked | 2 | not estimable |" in veto_section
+    assert format(allowed, "f") not in veto_section
     assert "veto-call cost" not in text
-    assert "9.00" not in text.split("## Veto counterfactual", 1)[1]
+    assert "9.00" not in veto_section

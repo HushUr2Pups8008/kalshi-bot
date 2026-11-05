@@ -384,8 +384,8 @@ def _usage_body(text: str, ticks: int) -> dict:
     }
 
 
-def test_veto_logs_chat_usage_and_one_decision_per_market_day(tmp_path, monkeypatch):
-    """A second same-day call is logged again. The first allow/block row stays."""
+def test_veto_logs_chat_usage_and_every_same_day_attempt(tmp_path, monkeypatch):
+    """A later same-day verdict is kept. The first row is no longer the only row."""
     call_path = tmp_path / "calls.jsonl"
     decision_path = tmp_path / "decisions.jsonl"
     monkeypatch.setattr("utils.event_news_grok_veto.GROK_CALL_LOG_PATH", call_path)
@@ -435,20 +435,24 @@ def test_veto_logs_chat_usage_and_one_decision_per_market_day(tmp_path, monkeypa
     assert "ask_size" not in user
     assert "search_parameters" not in posted[0]
     saved = [json.loads(line) for line in decision_path.read_text(encoding="utf-8").splitlines()]
-    assert [(row["ticker"], row["decision"]) for row in saved] == [
-        ("KXTRUTHSOCIAL-26OCT17-B129", "allow"),
-        ("KXOTHER-NODEPTH", "allow"),
+    assert [(row["ticker"], row["decision"], row["verdict"]) for row in saved] == [
+        ("KXTRUTHSOCIAL-26OCT17-B129", "allow", "yes"),
+        ("KXTRUTHSOCIAL-26OCT17-B129", "block", "no"),
+        ("KXOTHER-NODEPTH", "allow", "yes"),
     ]
     assert saved[0]["ask_cents"] == 85
     assert saved[0]["depth"] == "4.00"
     assert saved[0]["total_tokens"] == 104
     assert saved[0]["cost_usd"] == "0.125"
+    assert saved[1]["cost_usd"] == "0.2"
     assert "fee_net_edge" not in saved[0]
     assert "contracts" not in saved[0]
     assert saved[0]["date"] == "2026-10-25"
     assert saved[0]["side"] == "no"
     assert saved[0]["ts"] == "2026-10-25T15:00:00Z"
-    assert saved[1]["depth"] is None
+    assert saved[2]["depth"] is None
+    assert len({row["attempt_id"] for row in saved}) == 3
+    assert all(len(row["attempt_id"]) == 32 for row in saved)
 
 
 def test_timeout_is_unavailable_and_model_no_stays_a_block(tmp_path, monkeypatch):
@@ -657,33 +661,35 @@ def test_weekly_cap_fails_closed_and_ignores_veto_rows(tmp_path):
     )
 
 
-def test_production_edge_call_does_not_post_or_log(tmp_path):
+def test_production_edge_call_does_not_post_or_log(tmp_path, monkeypatch):
+    """Production research has no poster. Unset cap and a set cap both stay off HTTP."""
     from decimal import Decimal
 
     from utils.event_news_grok_edge import _call_grok
 
-    calls = tmp_path / "calls.jsonl"
-    moment = datetime(2026, 11, 5, tzinfo=timezone.utc)
-
     def _post(*_args, **_kwargs):
         raise AssertionError("responses client must not run")
 
-    blocked = _call_grok(
-        ticker="KXTEST",
-        prompt="p",
-        system="s",
-        grounded=True,
-        environ={},
-        post=None,
-        call_log_path=calls,
-        spend_path=tmp_path / "spend.json",
-        now=moment,
-    )
-    assert blocked is not None
-    assert blocked.skip_reason == "weekly_cap_unset"
-    assert blocked.cost_usd == Decimal("0")
-    assert not calls.exists()
-    del _post
+    monkeypatch.setattr("utils.event_news_grok_edge.requests.post", _post)
+    calls = tmp_path / "calls.jsonl"
+    moment = datetime(2026, 11, 5, tzinfo=timezone.utc)
+    for kind in ("scan", "series", "source", "watch", "exit", "position_score"):
+        blocked = _call_grok(
+            ticker="KXTEST",
+            prompt="p",
+            system="s",
+            grounded=True,
+            environ={},
+            post=None,
+            call_log_path=calls,
+            spend_path=tmp_path / "spend.json",
+            now=moment,
+            kind=kind,
+        )
+        assert blocked is not None
+        assert blocked.skip_reason == "weekly_cap_unset"
+        assert blocked.cost_usd == Decimal("0")
+        assert not calls.exists()
     allowed_cap = _call_grok(
         ticker="KXTEST",
         prompt="p",
@@ -698,3 +704,242 @@ def test_production_edge_call_does_not_post_or_log(tmp_path):
     assert allowed_cap is not None
     assert allowed_cap.skip_reason == "xai_research_disabled"
     assert not calls.exists()
+
+
+def test_only_explicit_yes_allows_the_live_post(tmp_path, monkeypatch):
+    """NO, a malformed answer, and a timeout stay False. Only YES is True."""
+    call_path = tmp_path / "calls.jsonl"
+    decision_path = tmp_path / "decisions.jsonl"
+    monkeypatch.setattr("utils.event_news_grok_veto.GROK_CALL_LOG_PATH", call_path)
+    monkeypatch.setattr("utils.event_news_grok_veto.VETO_DECISION_LOG_PATH", decision_path)
+    posted: list[str] = []
+
+    def _post(*_args, **_kwargs):
+        text = ("NO", "maybe later", "YES")[len(posted)]
+        posted.append(text)
+        return _FakeResponse(200, _chat_payload(text))
+
+    env = {"XAI_API_KEY": "secret-key"}
+    assert event_news_grok_veto_allows_live_post(
+        _analysis(ticker="KX-NO"), contracts=8, environ=env, post=_post,
+    ) is False
+    assert event_news_grok_veto_allows_live_post(
+        _analysis(ticker="KX-MALFORMED"), contracts=8, environ=env, post=_post,
+    ) is False
+    assert event_news_grok_veto_allows_live_post(
+        _analysis(ticker="KX-YES"), contracts=8, environ=env, post=_post,
+    ) is True
+
+    def _timeout(*_args, **_kwargs):
+        raise requests.Timeout("slow")
+
+    assert event_news_grok_veto_allows_live_post(
+        _analysis(ticker="KX-TIMEOUT"), contracts=8, environ=env, post=_timeout,
+    ) is False
+
+
+def test_reversals_repeated_decisions_and_utc_days_keep_every_attempt(tmp_path, monkeypatch):
+    """Block then allow, allow then block, a repeat, and a next-UTC-day allow all stay."""
+    from utils.event_news_grok_veto import (
+        select_attempts_before_fills,
+        select_veto_attempts,
+        veto_same_day_reversals,
+    )
+
+    decision_path = tmp_path / "decisions.jsonl"
+    monkeypatch.setattr("utils.event_news_grok_veto.GROK_CALL_LOG_PATH", tmp_path / "calls.jsonl")
+    monkeypatch.setattr("utils.event_news_grok_veto.VETO_DECISION_LOG_PATH", decision_path)
+    script = (
+        ("KX-BLOCK-ALLOW", "yes", "NO", datetime(2026, 11, 2, 23, 13, tzinfo=timezone.utc), False),
+        ("KX-BLOCK-ALLOW", "yes", "YES", datetime(2026, 11, 2, 23, 18, tzinfo=timezone.utc), True),
+        ("KX-ALLOW-BLOCK", "no", "YES", datetime(2026, 11, 2, 10, tzinfo=timezone.utc), True),
+        ("KX-ALLOW-BLOCK", "no", "NO", datetime(2026, 11, 2, 11, tzinfo=timezone.utc), False),
+        ("KX-REPEAT", "yes", "NO", datetime(2026, 11, 2, 12, tzinfo=timezone.utc), False),
+        ("KX-REPEAT", "yes", "NO", datetime(2026, 11, 2, 12, 5, tzinfo=timezone.utc), False),
+        ("KX-NEXT-DAY", "no", "NO", datetime(2026, 11, 2, 23, 50, tzinfo=timezone.utc), False),
+        ("KX-NEXT-DAY", "no", "YES", datetime(2026, 11, 3, 0, 10, tzinfo=timezone.utc), True),
+    )
+    cursor = {"n": 0}
+
+    def _post(*_args, **_kwargs):
+        text = script[cursor["n"]][2]
+        cursor["n"] += 1
+        return _FakeResponse(200, _chat_payload(text))
+
+    for ticker, side, _text, moment, expected in script:
+        assert event_news_grok_veto_allows_live_post(
+            _analysis(ticker=ticker, side=side, ask=40 if side == "yes" else 85),
+            contracts=8,
+            environ={"XAI_API_KEY": "secret-key"},
+            post=_post,
+            now=moment,
+        ) is expected
+    saved = [json.loads(line) for line in decision_path.read_text(encoding="utf-8").splitlines()]
+    assert len(saved) == 8
+    assert len({row["attempt_id"] for row in saved}) == 8
+    assert [(row["decision"], row["verdict"], row["cost_usd"]) for row in saved] == [
+        ("block", "no", "0"),
+        ("allow", "yes", "0"),
+        ("allow", "yes", "0"),
+        ("block", "no", "0"),
+        ("block", "no", "0"),
+        ("block", "no", "0"),
+        ("block", "no", "0"),
+        ("allow", "yes", "0"),
+    ]
+    first = select_veto_attempts(saved, "first")
+    last = select_veto_attempts(saved, "last")
+    assert _decision_for(first, "KX-BLOCK-ALLOW", "yes") == "block"
+    assert _decision_for(last, "KX-BLOCK-ALLOW", "yes") == "allow"
+    assert _decision_for(first, "KX-ALLOW-BLOCK", "no") == "allow"
+    assert _decision_for(last, "KX-ALLOW-BLOCK", "no") == "block"
+    assert [row["decision"] for row in select_veto_attempts(saved, "all") if row["ticker"] == "KX-REPEAT"] == [
+        "block",
+        "block",
+    ]
+    next_day = [row for row in select_veto_attempts(saved, "all") if row["ticker"] == "KX-NEXT-DAY"]
+    assert [(row["date"], row["decision"]) for row in next_day] == [
+        ("2026-11-02", "block"),
+        ("2026-11-03", "allow"),
+    ]
+    assert [(row["ticker"], row["from_decision"], row["to_decision"]) for row in veto_same_day_reversals(saved)] == [
+        ("KX-ALLOW-BLOCK", "allow", "block"),
+        ("KX-BLOCK-ALLOW", "block", "allow"),
+    ]
+    before_fill = select_attempts_before_fills(
+        saved,
+        [{"ticker": "KX-BLOCK-ALLOW", "side": "yes", "ts": "2026-11-02T23:18:00Z"}],
+    )
+    assert [(row["decision"], row["verdict"]) for row in before_fill] == [("allow", "yes")]
+    earlier_fill = select_attempts_before_fills(
+        saved,
+        [{"ticker": "KX-BLOCK-ALLOW", "side": "yes", "ts": "2026-11-02T23:13:00Z"}],
+    )
+    assert [row["decision"] for row in earlier_fill] == ["block"]
+    with pytest.raises(ValueError):
+        select_veto_attempts(saved, "middle")
+
+
+def _decision_for(rows, ticker: str, side: str) -> str:
+    matched = [row["decision"] for row in rows if row["ticker"] == ticker and row["side"] == side]
+    assert len(matched) == 1
+    return matched[0]
+
+
+def test_fee_net_needs_timestamp_ask_and_eight_contract_depth() -> None:
+    """Depth of 4 cannot fill 8 contracts. Fifteen evidenced rows may show the if-filled number."""
+    from decimal import Decimal
+
+    from utils.event_news_desk_flags import HARD_MAX_CONTRACTS
+    from utils.event_news_grok_veto import (
+        grade_veto_decisions,
+        veto_blocked_settlement_rows,
+        veto_counterfactual_fee_net,
+    )
+    from utils.event_news_research import event_news_fee_net_edge
+
+    thin = {
+        "ts": "2026-11-02T23:13:12Z",
+        "date": "2026-11-02",
+        "ticker": "KXTRUTHSOCIAL-26NOV07-T360",
+        "side": "no",
+        "ask_cents": 67,
+        "depth": "4.00",
+        "decision": "block",
+        "verdict": "no",
+        "cost_usd": "0.0001",
+        "attempt_id": "a" * 32,
+    }
+    # WHY: a blocked NO that settles NO would have won. The book still cannot fill 8.
+    assert veto_counterfactual_fee_net(thin, "no") is None
+    agreement = veto_blocked_settlement_rows([thin], {"KXTRUTHSOCIAL-26NOV07-T360": "no"})
+    assert agreement[0]["agreement"] == "blocked side would have won"
+    assert agreement[0]["fee_net_if_filled"] == "not estimable"
+    lost = veto_blocked_settlement_rows(
+        [{**thin, "side": "yes", "decision": "block"}],
+        {"KXTRUTHSOCIAL-26NOV07-T360": "no"},
+    )
+    assert lost[0]["agreement"] == "blocked side would have lost"
+    text = grade_veto_decisions([thin], {"KXTRUTHSOCIAL-26NOV07-T360": "no"}, selector="first")
+    assert "review=first" in text
+    assert "| blocked | 1 | not estimable |" in text
+    assert "That is not fee-net EV." in text
+    missing_time = {**thin, "depth": HARD_MAX_CONTRACTS}
+    del missing_time["ts"]
+    assert veto_counterfactual_fee_net(missing_time, "no") is None
+    full = [
+        {
+            "ts": f"2026-10-{day:02d}T00:00:00Z",
+            "date": f"2026-10-{day:02d}",
+            "ticker": "KXTEST-A",
+            "side": "yes",
+            "ask_cents": 67,
+            "depth": HARD_MAX_CONTRACTS,
+            "decision": "allow",
+        }
+        for day in range(1, 16)
+    ]
+    scored = event_news_fee_net_edge(Decimal("0.5"), 67, HARD_MAX_CONTRACTS)
+    assert scored is not None
+    price = Decimal(67) / Decimal(100) * HARD_MAX_CONTRACTS
+    one = Decimal(HARD_MAX_CONTRACTS) - price - scored[1]
+    priced = grade_veto_decisions(full, {"KXTEST-A": "yes"}, selector="all")
+    assert f"| allowed | 15 | {format(one * 15, 'f')} |" in priced
+    assert "review=all" in priced
+    before = grade_veto_decisions(
+        full,
+        {"KXTEST-A": "yes"},
+        fills=[{"ticker": "KXTEST-A", "side": "yes", "ts": "2026-10-01T00:00:00Z"}],
+    )
+    assert "review=before_fill" in before
+    assert "| allowed | 1 | not enough data (n=1) |" in before
+
+
+def test_retired_rules_and_watch_flags_do_not_change_the_live_veto(tmp_path, monkeypatch):
+    """The checker and the watch loop are gone. The names stay for the boot line and plist."""
+    import importlib
+    from pathlib import Path
+
+    from utils.event_news_desk_flags import (
+        EVENT_NEWS_GROK_RULES_CHECK,
+        _DESK_FLAG_NAMES,
+        event_news_any_live_desk_flag,
+    )
+    from utils.event_news_grok_flags import (
+        EVENT_NEWS_GROK_WATCH_SKIP_SETTLED,
+        event_news_flags_boot_line,
+    )
+
+    for name in ("utils.event_news_grok_watch", "utils.event_news_rules_check"):
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(name)
+    plist = Path("deploy/com.jake.kalshi-bot-politics.plist").read_text(encoding="utf-8")
+    assert "EVENT_NEWS_GROK_WATCH_SKIP_SETTLED" in plist
+    executor = Path("trading/executor.py").read_text(encoding="utf-8")
+    assert "_rules_hard_timeout_s" not in executor
+    assert "event_news_rules_check" not in executor
+    assert "RULES_CHECK " in event_news_flags_boot_line({})
+    assert "GROK_WATCH_SKIP_SETTLED=" in event_news_flags_boot_line({})
+    assert EVENT_NEWS_GROK_RULES_CHECK not in _DESK_FLAG_NAMES
+    assert event_news_any_live_desk_flag({EVENT_NEWS_GROK_RULES_CHECK: "true"}) is False
+    decision_path = tmp_path / "decisions.jsonl"
+    monkeypatch.setattr("utils.event_news_grok_veto.GROK_CALL_LOG_PATH", tmp_path / "calls.jsonl")
+    monkeypatch.setattr("utils.event_news_grok_veto.VETO_DECISION_LOG_PATH", decision_path)
+    calls = {"n": 0}
+
+    def _post(*_args, **_kwargs):
+        calls["n"] += 1
+        return _FakeResponse(200, _chat_payload("NO" if calls["n"] == 1 else "YES"))
+
+    flagged = {
+        "XAI_API_KEY": "secret-key",
+        EVENT_NEWS_GROK_RULES_CHECK: "true",
+        EVENT_NEWS_GROK_WATCH_SKIP_SETTLED: "true",
+    }
+    assert event_news_grok_veto_allows_live_post(
+        _analysis(ticker="KX-FLAG-NO"), contracts=8, environ=flagged, post=_post,
+    ) is False
+    assert event_news_grok_veto_allows_live_post(
+        _analysis(ticker="KX-FLAG-YES"), contracts=8, environ=flagged, post=_post,
+    ) is True
+    assert calls["n"] == 2

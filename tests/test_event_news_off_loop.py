@@ -23,14 +23,12 @@ from trading.execution_terms import FinalExecutionTerms
 from trading.executor import (
     _grok_hard_timeout_s,
     _kalshi_read_hard_timeout_s,
-    _rules_hard_timeout_s,
 )
 from utils.event_news_grok_veto import GROK_TIMEOUT_SECONDS
 
 
 def test_hard_timeouts_stay_above_the_http_timeouts() -> None:
     assert _grok_hard_timeout_s() > GROK_TIMEOUT_SECONDS
-    assert _rules_hard_timeout_s() > GROK_TIMEOUT_SECONDS + 5.0
     assert _kalshi_read_hard_timeout_s(3) > 10.0 * 4 * 3
 
 

@@ -477,12 +477,6 @@ def _grok_hard_timeout_s() -> float:
 
     return float(GROK_TIMEOUT_SECONDS) + 5.0
 
-def _rules_hard_timeout_s() -> float:
-    """Cover the 5s source fetch plus the Grok request timeout."""
-    from utils.event_news_grok_veto import GROK_TIMEOUT_SECONDS
-
-    return float(GROK_TIMEOUT_SECONDS) + 15.0
-
 def _kalshi_read_hard_timeout_s(reads: int = 3) -> float:
     """Cover each GET's 10s socket timeout and its four attempts.
 
