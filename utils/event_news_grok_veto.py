@@ -12,7 +12,7 @@ import json
 import os
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -36,6 +36,7 @@ GROK_TIMEOUT_SECONDS = 45.0
 GROK_MAX_TOKENS = 256
 GROK_CALL_LOG_PATH = Path("logs/state/grok_edge_calls.jsonl")
 VETO_DECISION_LOG_PATH = Path("logs/state/grok_veto_decisions.jsonl")
+GROK_WEEKLY_USD_CAP_ENV = "GROK_WEEKLY_USD_CAP"
 _COST_TICKS_PER_USD = Decimal("10000000000")
 _TOOL_USAGE_KEYS = (
     "web_search_calls",
@@ -361,6 +362,107 @@ def append_chat_call(
         return None
 
 
+def _parse_utc_stamp(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        moment = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc)
+
+
+def weekly_xai_spend(
+    path: Path,
+    now: datetime | None = None,
+) -> tuple[Decimal, Decimal]:
+    """Return ``(non_veto_usd, veto_usd)`` for the current UTC ISO week.
+
+    A missing file is zero. A read error or a row that cannot be priced
+    raises. Veto rows stay in the second total and are not part of the cap.
+    """
+    moment = now or datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    moment = moment.astimezone(timezone.utc)
+    start = datetime.combine(
+        moment.date() - timedelta(days=moment.weekday()),
+        datetime.min.time(),
+        tzinfo=timezone.utc,
+    )
+    if not path.exists():
+        return Decimal("0"), Decimal("0")
+    non_veto = Decimal("0")
+    veto = Decimal("0")
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if not isinstance(row, dict):
+            raise ValueError("call log row was not an object")
+        when = _parse_utc_stamp(row.get("ts"))
+        if when is None or when < start or when > moment:
+            continue
+        cost = Decimal(str(row.get("cost_usd")))
+        if not cost.is_finite() or cost < 0:
+            raise ValueError("call log cost was not a non-negative amount")
+        if str(row.get("kind") or "") == "veto":
+            veto += cost
+        else:
+            non_veto += cost
+    return non_veto, veto
+
+
+def non_veto_weekly_block(
+    *,
+    environ: Mapping[str, str] | None = None,
+    call_log_path: Path | None = None,
+    now: datetime | None = None,
+) -> str | None:
+    """Why a non-veto xAI call must not run.
+
+    ``None`` means the weekly cap would allow it. An unset, blank, or
+    unparseable cap fails closed. An unreadable spend log fails closed.
+    The live veto does not call this, and its rows are not in the sum.
+    """
+    env = os.environ if environ is None else environ
+    raw = env.get(GROK_WEEKLY_USD_CAP_ENV)
+    if raw is None or not str(raw).strip():
+        return "weekly_cap_unset"
+    try:
+        cap = Decimal(str(raw).strip())
+    except Exception:
+        return "weekly_cap_unset"
+    if not cap.is_finite() or cap < 0:
+        return "weekly_cap_unset"
+    path = GROK_CALL_LOG_PATH if call_log_path is None else call_log_path
+    try:
+        spent, _veto_spent = weekly_xai_spend(path, now)
+    except Exception:
+        return "weekly_cap_unreadable"
+    if spent >= cap:
+        return "weekly_cap"
+    return None
+
+
+def _log_veto_refusal(analysis: Any, reason: str) -> None:
+    """One unpaid veto row. A log failure must not change the False return."""
+    market = getattr(analysis, "market", None)
+    append_chat_call(
+        kind="veto",
+        ticker=str(getattr(market, "ticker", "") or ""),
+        grounded=False,
+        body=None,
+        skip_reason=reason,
+        verdict="",
+    )
+
+
 def _record_veto_decision(
     analysis: Any, packet: EventNewsGrokVetoPacket, result: str, *,
     now: datetime | None, usage: Mapping[str, Any],
@@ -569,18 +671,22 @@ def event_news_grok_veto_allows_live_post(
     market = getattr(analysis, "market", None)
     side = str(getattr(analysis, "side", "") or "")
     if event_news_executed_side_skip_reason(market, side) is not None:
+        _log_veto_refusal(analysis, "side_skip")
         return False
     meta = _signal_meta(analysis)
     skip = str(meta.get("skip_reason") or meta.get("research_skip_reason") or "")
     if skip == "no_edge":
+        _log_veto_refusal(analysis, "no_edge")
         return False
     official_p = str(meta.get("blend_bypass_reason") or "") == "official_p" or str(
         meta.get("source_lane") or ""
     ) == "research_official_p"
     if not official_p:
+        _log_veto_refusal(analysis, "no_official_p")
         return False
     edge = _as_float(getattr(analysis, "edge", None))
     if edge is not None and edge <= 0:
+        _log_veto_refusal(analysis, "nonpositive_edge")
         return False
     packet = event_news_grok_veto_packet(analysis, contracts=contracts)
     usage: dict[str, Any] = {}

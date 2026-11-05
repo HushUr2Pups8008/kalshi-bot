@@ -1,37 +1,25 @@
-"""Politics-only Grok source reader for a homepage or an empty PDF.
+"""Free settlement-source reader for a homepage or an empty PDF.
 
-Grok may name a count, vote, or status and the URL that states it. A count
-becomes a probability only through the existing Truth Social or White House
-calculator. A vote, a status, a timeout, or a parse failure stays
-needs_counter_evidence. This module does not place orders and does not log
-the API key.
+A Truth Social count comes from the Factbase counter. A White House action
+count comes from the existing presidential-actions archive parser. Either
+result is priced only by that existing calculator. A failed fetch, a missing
+count, or any other contract returns no evidence. This module does not call
+xAI, does not place orders, and does not invent a probability.
 """
 
 from __future__ import annotations
 
-import json
-import os
 import time
 import urllib.parse
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping
 
-import requests
-
+from analysis import truth_social_forecast
 from analysis.truth_social_forecast import (
     TRUTH_SOCIAL_RANGE_PROBABILITY_METRIC,
     TruthSocialCountObservation,
     parse_truth_social_count_contract,
-    remaining_threshold_probability,
     truth_social_range_probability,
-)
-from utils.event_news_grok_veto import (
-    GROK_MAX_TOKENS,
-    GROK_MODEL,
-    GROK_TIMEOUT_SECONDS,
-    XAI_API_KEY_ENV,
-    XAI_CHAT_URL,
-    append_chat_call,
 )
 from utils.event_news_research import (
     event_news_executed_side_skip_reason,
@@ -42,24 +30,7 @@ from utils.logger import get_logger
 
 log = get_logger("event_news_grok_source")
 
-_SOURCE_SYSTEM = (
-    "Reply with one JSON object only. Keys are kind, value, and url. "
-    "kind is count, vote, or status. value is the count, vote, or status. "
-    "url is the https page that states it. Do not include a probability. "
-    'If unknown, reply {"kind":"none","value":"","url":""}.'
-)
-_SOURCE_USER = "What is the count, vote, or status, and the URL that states it?"
 _NO_EDGE_SKIPS = frozenset({"no_edge", "negative_net_edge_after_costs"})
-_PROBABILITY_KEYS = frozenset(
-    {
-        "estimated_probability",
-        "estimated_probability_yes",
-        "official_p",
-        "p",
-        "probability",
-        "probability_yes",
-    }
-)
 
 
 def event_news_grok_source_skip_reason(
@@ -70,7 +41,7 @@ def event_news_grok_source_skip_reason(
     skip_reason: str | None = None,
     cache_only: bool = False,
 ) -> str | None:
-    """Why this book must not call Grok. None means the packet may be sent."""
+    """Why this book must not fetch. None means a free count may be tried."""
     if cache_only:
         return "cache_only"
     if event_news_has_structured_official_metric(evidence):
@@ -103,7 +74,7 @@ def event_news_grok_source_evidence(
     now: datetime | None = None,
 ) -> tuple[Any, ...]:
     """Return priced structured evidence, or nothing. Never invents p."""
-    del yes_ask, no_ask
+    del yes_ask, no_ask, environ, post
     ticker = str(getattr(market, "ticker", "") or "")
     try:
         return _source_evidence(
@@ -112,8 +83,6 @@ def event_news_grok_source_evidence(
             bad_urls=bad_urls,
             skip_reason=skip_reason,
             cache_only=cache_only,
-            environ=environ,
-            post=post,
             now=now,
         )
     except Exception:
@@ -135,8 +104,6 @@ def _source_evidence(
     bad_urls: tuple[str, ...] | list[str],
     skip_reason: str | None,
     cache_only: bool,
-    environ: Mapping[str, str] | None,
-    post: Callable[..., Any] | None,
     now: datetime | None,
 ) -> tuple[Any, ...]:
     ticker = str(getattr(market, "ticker", "") or "")
@@ -152,208 +119,83 @@ def _source_evidence(
         return ()
 
     started = time.monotonic()
-    urls = tuple(str(url).strip() for url in bad_urls if str(url).strip())
-    content, failure = _post_source(
-        _packet(market, urls),
-        ticker=ticker,
-        environ=environ,
-        post=post,
-        started=started,
-    )
-    if failure is not None:
+    try:
+        priced = _free_settlement_evidence(market, now=now)
+    except Exception:
+        _log_source("timeout", ticker, _elapsed_ms(started), "fetch_error")
         return ()
-    parsed = _parse_source_object(content or "")
-    if parsed is None:
-        _log_source("timeout", ticker, _elapsed_ms(started), "parse_fail")
-        return ()
-    kind = parsed[0]
-    if kind == "parse_fail":
-        _log_source("timeout", ticker, _elapsed_ms(started), "parse_fail")
-        return ()
-    if kind != "count":
-        _log_source("no_fact", ticker, _elapsed_ms(started), kind)
-        return ()
-    _kind, count, fact_url = parsed
-    priced = _priced_count_evidence(
-        market,
-        count=count,
-        fact_url=fact_url,
-        bad_urls=urls,
-        now=now,
-    )
-    if priced is None:
-        _log_source("no_fact", ticker, _elapsed_ms(started), "unpriced_contract")
+    if not priced:
+        _log_source("no_fact", ticker, _elapsed_ms(started), "no_free_count")
         return ()
     _log_source(
         "fact",
         ticker,
         _elapsed_ms(started),
-        str(getattr(priced, "metric_name", "") or "named_count"),
+        str(getattr(priced[0], "metric_name", "") or "named_count"),
     )
-    return (priced,)
+    return priced
 
 
-def _packet(market: Any, bad_urls: tuple[str, ...]) -> dict[str, Any]:
-    return {
-        "ticker": str(getattr(market, "ticker", "") or ""),
-        "settlement_sources": _settlement_urls(market),
-        "contract_terms_url": str(getattr(market, "contract_terms_url", "") or ""),
-        "bad_url": bad_urls[0],
-        "bad_urls": list(bad_urls),
-    }
-
-
-def _post_source(
-    packet: Mapping[str, Any],
-    *,
-    ticker: str,
-    environ: Mapping[str, str] | None,
-    post: Callable[..., Any] | None,
-    started: float,
-) -> tuple[str | None, str | None]:
-    env = os.environ if environ is None else environ
-    key = str(env.get(XAI_API_KEY_ENV) or "").strip()
-    if not key:
-        _log_source("timeout", ticker, _elapsed_ms(started), "missing_key")
-        return None, "missing_key"
-
-    def _logged(skip: str | None, body: Any = None) -> None:
-        append_chat_call(
-            kind="source",
-            ticker=ticker,
-            grounded=False,
-            body=body,
-            skip_reason=skip,
-            verdict="",
-        )
-
-    payload = {
-        "model": GROK_MODEL,
-        "temperature": 0,
-        "max_tokens": GROK_MAX_TOKENS,
-        "messages": [
-            {"role": "system", "content": _SOURCE_SYSTEM},
-            {
-                "role": "user",
-                "content": _SOURCE_USER
-                + "\n"
-                + json.dumps(packet, separators=(",", ":")),
-            },
-        ],
-    }
-    headers = {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-    }
-    sender = post if post is not None else requests.post
-    try:
-        response = sender(
-            XAI_CHAT_URL,
-            json=payload,
-            headers=headers,
-            timeout=GROK_TIMEOUT_SECONDS,
-        )
-    except requests.Timeout:
-        _log_source("timeout", ticker, _elapsed_ms(started), "timeout")
-        _logged("timeout")
-        return None, "timeout"
-    except Exception:
-        _log_source("timeout", ticker, _elapsed_ms(started), "request_error")
-        _logged("request_error")
-        return None, "request_error"
-    status = getattr(response, "status_code", None)
-    if status != 200:
-        _log_source("timeout", ticker, _elapsed_ms(started), f"http_{status}")
-        _logged("http")
-        return None, "http"
-    body: Any = None
-    try:
-        body = response.json()
-        content = body["choices"][0]["message"]["content"]
-    except Exception:
-        _log_source("timeout", ticker, _elapsed_ms(started), "parse_fail")
-        _logged("parse_fail", body)
-        return None, "parse_fail"
-    _logged(None, body)
-    return str(content), None
-
-
-def _parse_source_object(content: str) -> tuple[str, int, str] | None:
-    """Return (kind, count, url). kind none/vote/status has count 0 and url ''."""
-    try:
-        obj = _last_json_object(content)
-    except ValueError:
-        return None
-    if any(key in obj for key in _PROBABILITY_KEYS) and "kind" not in obj:
-        return ("parse_fail", 0, "")
-    kind = str(obj.get("kind") or "").strip().lower()
-    if kind == "none":
-        return ("none", 0, "")
-    if kind in {"vote", "status"}:
-        return ("unpriced_kind", 0, "")
-    if kind != "count":
-        return ("parse_fail", 0, "") if _PROBABILITY_KEYS & set(obj) else None
-    count = _count_value(obj.get("value"))
-    fact_url = str(obj.get("url") or "").strip()
-    if count is None or not fact_url:
-        return ("unpriced_contract", 0, "")
-    return ("count", count, fact_url)
-
-
-def _last_json_object(text: str) -> dict[str, Any]:
-    decoder = json.JSONDecoder()
-    last: dict[str, Any] | None = None
-    index = 0
-    while index < len(text):
-        pos = text.find("{", index)
-        if pos < 0:
-            break
-        try:
-            obj, _end = decoder.raw_decode(text, pos)
-        except json.JSONDecodeError:
-            obj = None
-        if isinstance(obj, dict):
-            last = obj
-        index = pos + 1
-    if last is None:
-        raise ValueError("no json object")
-    return last
-
-
-def _count_value(value: Any) -> int | None:
-    if isinstance(value, bool) or value is None:
-        return None
-    if isinstance(value, int):
-        return value if value >= 0 else None
-    text = str(value).strip().replace(",", "")
-    if not text.isdigit():
-        return None
-    return int(text)
-
-
-def _priced_count_evidence(
+def _free_settlement_evidence(
     market: Any,
     *,
-    count: int,
-    fact_url: str,
-    bad_urls: tuple[str, ...],
     now: datetime | None,
-) -> Any | None:
-    if not _path_specific_https(fact_url) or fact_url in bad_urls:
-        return None
+) -> tuple[Any, ...]:
+    """One priced item from a free counter, or nothing. No model call."""
     query = _market_query(market)
     clock = now or datetime.now(timezone.utc)
     if clock.tzinfo is None:
         clock = clock.replace(tzinfo=timezone.utc)
     contract = parse_truth_social_count_contract(query)
     if contract is not None:
-        return _truth_social_evidence(contract, count, fact_url, clock)
-    from analysis.research_gate import _white_house_action_count_spec_from_text
+        observation = truth_social_forecast.fetch_truth_social_count(query)
+        if observation is None or not observation.complete:
+            return ()
+        fact_url = str(observation.source_url or "").strip()
+        if not _path_specific_https(fact_url):
+            return ()
+        priced = _truth_social_evidence(
+            contract,
+            int(observation.count),
+            fact_url,
+            clock,
+        )
+        return () if priced is None else (priced,)
 
-    spec = _white_house_action_count_spec_from_text(query)
-    if spec is None:
-        return None
-    return _white_house_evidence(spec, count, fact_url, clock)
+    from analysis.research_gate import (
+        ResearchQuery,
+        _white_house_action_count_spec_from_text,
+        _white_house_presidential_actions_search,
+    )
+
+    if _white_house_action_count_spec_from_text(query) is None:
+        return ()
+    found = _white_house_presidential_actions_search(
+        ResearchQuery(
+            query=query,
+            query_intent="official_count",
+            source_class="official_primary",
+        ),
+        now=clock,
+    )
+    for item in found:
+        if str(getattr(item, "metric_name", "") or "") != "white_house_action_range_probability":
+            continue
+        probability = getattr(item, "metric_value", None)
+        confidence = getattr(item, "supports_confidence", None)
+        fact_url = str(getattr(item, "source_url", "") or "").strip()
+        if isinstance(probability, bool) or not isinstance(probability, (int, float)):
+            continue
+        if not 0.0 < float(probability) < 1.0:
+            continue
+        if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+            continue
+        if float(confidence) < 0.65:
+            continue
+        if not _path_specific_https(fact_url):
+            continue
+        return (item,)
+    return ()
 
 
 def _truth_social_evidence(contract: Any, count: int, fact_url: str, now: datetime) -> Any | None:
@@ -383,40 +225,6 @@ def _truth_social_evidence(contract: Any, count: int, fact_url: str, now: dateti
             f"Named official count is {count} for {observation.window_start.isoformat()} "
             f"through {observation.window_end.isoformat()} ({state}). "
             f"Range calculator YES probability {probability:.3f}. Source {fact_url}."
-        ),
-        now=now,
-    )
-
-
-def _white_house_evidence(spec: Any, count: int, fact_url: str, now: datetime) -> Any | None:
-    from zoneinfo import ZoneInfo
-
-    et = ZoneInfo("America/New_York")
-    start_et = datetime.combine(spec.start_date, datetime.min.time(), tzinfo=et)
-    current_et = now.astimezone(et)
-    elapsed_days = (current_et - start_et).total_seconds() / 86400.0
-    remaining_days = (
-        spec.cutoff_at.astimezone(et) - current_et
-    ).total_seconds() / 86400.0
-    forecast = remaining_threshold_probability(
-        count=count,
-        threshold=spec.threshold,
-        elapsed_days=elapsed_days,
-        remaining_days=remaining_days,
-    )
-    if forecast is None:
-        return None
-    probability, state, confidence = forecast
-    return _range_evidence(
-        metric_name="white_house_action_range_probability",
-        probability=probability,
-        confidence=confidence,
-        fact_url=fact_url,
-        title=f"Named White House action count {count}",
-        snippet=(
-            f"Named official count is {count} versus threshold {spec.threshold} "
-            f"({state}). Range calculator YES probability {probability:.3f}. "
-            f"Source {fact_url}."
         ),
         now=now,
     )
@@ -468,21 +276,6 @@ def _market_query(market: Any) -> str:
         getattr(market, "rules_secondary", ""),
     ]
     return " ".join(str(part) for part in parts if part)
-
-
-def _settlement_urls(market: Any) -> list[str]:
-    found: list[str] = []
-    for source in getattr(market, "settlement_sources", ()) or ():
-        if isinstance(source, str):
-            url = source
-        elif isinstance(source, dict):
-            url = str(source.get("url") or "")
-        else:
-            url = str(getattr(source, "url", "") or "")
-        url = url.strip()
-        if url and url not in found:
-            found.append(url)
-    return found
 
 
 def _path_specific_https(url: str) -> bool:

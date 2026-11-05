@@ -20,10 +20,6 @@ EVENT_NEWS_FILL_LOG_DETAIL = "EVENT_NEWS_FILL_LOG_DETAIL"
 EVENT_NEWS_REQUOTE_BAND_CHECK = "EVENT_NEWS_REQUOTE_BAND_CHECK"
 EVENT_NEWS_EXCLUDE_EXACT_35 = "EVENT_NEWS_EXCLUDE_EXACT_35"
 
-_SETTLED_MARKET_STATUSES = frozenset(
-    {"closed", "determined", "settled", "finalized"}
-)
-
 
 def event_news_flag_enabled(
     name: str,
@@ -150,7 +146,3 @@ def event_news_live_band_guard_off(
     return (not event_news_requote_band_check_enabled(environ)) or (
         not event_news_exclude_exact_35_enabled(environ)
     )
-
-
-def event_news_market_status_settled(status: object) -> bool:
-    return str(status or "").strip().lower() in _SETTLED_MARKET_STATUSES

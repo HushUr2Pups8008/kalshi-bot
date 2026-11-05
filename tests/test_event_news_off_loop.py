@@ -120,28 +120,24 @@ async def test_grok_timeout_places_no_order_and_a_late_yes_does_not_post(
 
 
 @pytest.mark.asyncio
-async def test_rules_timeout_places_no_order(monkeypatch, tmp_path) -> None:
+async def test_live_path_has_no_rules_check_and_veto_no_places_no_order(
+    monkeypatch, tmp_path
+) -> None:
+    """The rules-check call is gone. A veto that is not yes still blocks the POST."""
+    from pathlib import Path
+
     _band_flags_unset(monkeypatch)
     monkeypatch.delenv("EVENT_NEWS_MAKER_FIRST", raising=False)
-    monkeypatch.setenv("EVENT_NEWS_GROK_RULES_CHECK", "true")
-    monkeypatch.setattr("trading.executor._rules_hard_timeout_s", lambda: 0.05)
     executor = _executor(monkeypatch, tmp_path)
     analysis = _analysis()
-
-    def slow_allow(analysis, *, live):
-        time.sleep(0.3)
-        return False
-
     executor._rest.place_limit_order.side_effect = AssertionError("posted")
     journal, fill_log = _quiet_live_side_effects()
+    source = Path("trading/executor.py").read_text(encoding="utf-8")
+    assert "event_news_rules_check" not in source
     with (
         patch(
-            "utils.event_news_rules_check.event_news_rules_check_skip",
-            side_effect=slow_allow,
-        ),
-        patch(
             "utils.event_news_grok_veto.event_news_grok_veto_allows_live_post",
-            return_value=True,
+            return_value=False,
         ),
         journal,
         fill_log,
@@ -150,7 +146,6 @@ async def test_rules_timeout_places_no_order(monkeypatch, tmp_path) -> None:
             analysis,
             execution_plan=FinalExecutionTerms(89, 8, 7.12),
         )
-        await asyncio.sleep(0.4)
     assert order_id is None
     executor._rest.place_limit_order.assert_not_called()
 
