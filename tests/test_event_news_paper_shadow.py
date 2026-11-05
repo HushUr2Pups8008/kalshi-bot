@@ -366,42 +366,20 @@ async def test_fee_net_admission_error_does_not_raise(monkeypatch) -> None:
     rest.place_limit_order.assert_not_called()
 
 
-def _hold_rules(monkeypatch: pytest.MonkeyPatch) -> tuple[threading.Event, list[str]]:
-    """Block inside the paper rules check until the test releases it."""
-    entered: list[str] = []
-    release = threading.Event()
-
-    def slow_rules(*_args: object, **_kwargs: object) -> bool:
-        entered.append("rules")
-        if len(entered) == 1:
-            release.wait(2)
-        return False
-
-    monkeypatch.setattr(
-        "utils.event_news_rules_check.event_news_rules_check_skip",
-        slow_rules,
-    )
-    return release, entered
-
-
 @pytest.mark.asyncio
-async def test_rules_check_does_not_hold_the_live_caller(monkeypatch) -> None:
-    """The next live decision must not wait on the paper Grok rules check."""
+async def test_paper_shadow_does_not_call_a_rules_check(monkeypatch) -> None:
+    """Paper recording stays local. The Grok rules check is not on this path."""
+    from pathlib import Path
+
     executor, rest, paper = _executor(monkeypatch)
-    release, entered = _hold_rules(monkeypatch)
     analysis = _analysis("no", 60)
     executor._schedule_paper_shadow(analysis)
-    for _ in range(50):
-        if entered:
-            break
-        await asyncio.sleep(0.02)
-    assert entered == ["rules"]
-    assert paper.record_trade.call_count == 0
-    assert analysis.capped_dollars == 10.0
-    assert getattr(analysis, "signal_type", None) is None
-    release.set()
     await asyncio.wait(set(executor._paper_shadow_tasks))
+    assert "event_news_rules_check" not in Path("trading/executor.py").read_text(
+        encoding="utf-8"
+    )
     assert paper.record_trade.call_count == 1
+    assert analysis.capped_dollars == 10.0
     rest.place_limit_order.assert_not_called()
     rest._request.assert_not_called()
     rest.cancel_order.assert_not_called()
@@ -412,10 +390,14 @@ async def test_queued_shadows_see_the_earlier_paper_row(monkeypatch) -> None:
     """A second paper row waits until the first row is on the paper book."""
     executor, rest, paper = _executor(monkeypatch)
     monkeypatch.setattr(config_module.cfg, "paper_ticker_cooldown", 14400)
-    release, entered = _hold_rules(monkeypatch)
+    entered: list[str] = []
+    release = threading.Event()
 
     def _record(analysis: SimpleNamespace, execution_terms: object = None) -> str:
         del execution_terms
+        entered.append("record")
+        if len(entered) == 1:
+            release.wait(2)
         paper.portfolio.open_positions.return_value = [
             SimpleNamespace(ticker=analysis.market.ticker, paper_shadow=True)
         ]
@@ -427,13 +409,13 @@ async def test_queued_shadows_see_the_earlier_paper_row(monkeypatch) -> None:
         if entered:
             break
         await asyncio.sleep(0.02)
-    assert entered == ["rules"]
+    assert entered == ["record"]
     executor._schedule_paper_shadow(_analysis("no", 60))
     await asyncio.sleep(0.1)
-    assert entered == ["rules"]
+    assert entered == ["record"]
     release.set()
     await asyncio.wait(set(executor._paper_shadow_tasks))
-    assert entered == ["rules"]
+    assert entered == ["record"]
     assert paper.record_trade.call_count == 1
     rest.place_limit_order.assert_not_called()
     rest._request.assert_not_called()

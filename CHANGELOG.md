@@ -19,6 +19,11 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.61] - 2026-11-05
+
+### Removed
+- Grok is the live veto only. The open-position watch, the rules-check call, and the source-reader model call are gone. A Truth Social count comes from the Factbase counter, and a White House action count comes from the archive parser. The sidecar scan does not call xAI. Any other non-veto xAI call needs GROK_WEEKLY_USD_CAP and stops when the cap is missing or spent. The live order path still posts only after an explicit Grok yes. A refusal before that call is logged. Polymarket paper stays, without a Grok call.
+
 ## [0.37.60] - 2026-11-04
 
 ### Fixed

@@ -1,17 +1,16 @@
-"""Politics Grok source reader: a homepage is not official-p without a named count."""
+"""Politics source reader: a homepage is not official-p without a free count."""
 
 from __future__ import annotations
 
-import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from urllib import request as urllib_request
 
 import pytest
-import requests
 
 from analysis.research_gate import (
+    ResearchEvidence,
     _BAD_OFFICIAL_FETCHES,
     _append_grok_source_evidence,
     _deterministic_decision_signal,
@@ -20,20 +19,19 @@ from analysis.research_gate import (
 )
 from analysis.truth_social_forecast import (
     TRUTH_SOCIAL_RANGE_PROBABILITY_METRIC,
-    remaining_threshold_probability,
+    TruthSocialCountObservation,
+    parse_truth_social_count_contract,
 )
-from utils.event_news_grok_source import event_news_grok_source_evidence
-from utils.event_news_grok_veto import GROK_MAX_TOKENS, GROK_MODEL, GROK_TIMEOUT_SECONDS
 from utils.event_news_research import (
     event_news_google_counter_not_required,
     event_news_has_structured_official_metric,
     event_news_official_p_ready,
 )
 
-_SECRET = "xai-source-key-do-not-log"
 _NOW = datetime(2026, 10, 11, 18, 0, tzinfo=timezone.utc)
 _FACT_URL = "https://rollcall.com/factbase/trump/topic/social/"
 _HOME = "https://www.whitehouse.gov/"
+_ACTIONS = "https://www.whitehouse.gov/presidential-actions/"
 
 
 def _market(**overrides):
@@ -54,43 +52,57 @@ def _market(**overrides):
     return SimpleNamespace(**base)
 
 
-class _Response:
-    def __init__(self, status_code: int, payload: dict | None = None):
-        self.status_code = status_code
-        self._payload = payload or {}
+def _observation(market, count: int, *, source_url: str = _FACT_URL, complete: bool = True):
+    contract = parse_truth_social_count_contract(
+        " ".join(
+            str(part)
+            for part in (market.ticker, market.title, market.rules_primary)
+            if part
+        )
+    )
+    assert contract is not None
+    return TruthSocialCountObservation(
+        count=count,
+        deleted_count=0,
+        window_start=contract.week_start,
+        window_end=contract.week_start + timedelta(days=6),
+        lower=contract.lower,
+        upper=contract.upper,
+        complete=complete,
+        pages=1,
+        source_url=source_url,
+        observed_at=_NOW.isoformat(),
+    )
 
-    def json(self):
-        return self._payload
 
+def _evidence(market=None, **kwargs):
+    from utils.event_news_grok_source import event_news_grok_source_evidence
 
-def _chat(text: str) -> _Response:
-    return _Response(200, {"choices": [{"message": {"content": text}}]})
-
-
-def _run(text: str, market=None, **kwargs):
-    calls = []
-
-    def _post(url, json=None, headers=None, timeout=None):
-        calls.append({"url": url, "json": json, "headers": headers, "timeout": timeout})
-        return _chat(text)
-
-    evidence = event_news_grok_source_evidence(
+    return event_news_grok_source_evidence(
         market=market or _market(),
         evidence=kwargs.pop("evidence", []),
         bad_urls=kwargs.pop("bad_urls", (_HOME, "https://assets.kalshi.com/empty.pdf")),
-        environ={"XAI_API_KEY": _SECRET},
-        post=_post,
+        post=kwargs.pop("post", None),
         now=_NOW,
         **kwargs,
     )
-    return evidence, calls
 
 
-def test_homepage_without_named_fact_is_not_official_p(politics_cohort):
+def test_homepage_without_a_free_count_is_not_official_p(politics_cohort, monkeypatch):
     market = _market()
-    evidence, calls = _run('{"kind":"none","value":"","url":""}', market)
+    monkeypatch.setattr(
+        "analysis.truth_social_forecast.fetch_truth_social_count",
+        lambda *_args, **_kwargs: None,
+    )
+    called = []
+
+    def _post(*_args, **_kwargs):
+        called.append(1)
+        raise AssertionError("source reader must not call xAI")
+
+    evidence = _evidence(market, post=_post)
     assert evidence == ()
-    assert len(calls) == 1
+    assert called == []
     assert event_news_has_structured_official_metric(list(evidence)) is False
     assert (
         event_news_official_p_ready(
@@ -105,80 +117,71 @@ def test_homepage_without_named_fact_is_not_official_p(politics_cohort):
             force_side="yes",
         )
     ) is False
-    assert (
-        event_news_google_counter_not_required(
-            market=market,
-            evidence=[],
-            estimated_probability=0.9,
-            force_side="yes",
-        )
-        is False
-    )
 
 
-def test_probability_only_reply_does_not_set_p(politics_cohort, caplog):
+def test_failed_free_fetch_does_not_invent_p(politics_cohort, monkeypatch, caplog):
     market = _market()
+
+    def _boom(*_args, **_kwargs):
+        raise TimeoutError("factbase down")
+
+    monkeypatch.setattr(
+        "analysis.truth_social_forecast.fetch_truth_social_count",
+        _boom,
+    )
     with caplog.at_level(logging.INFO):
-        evidence, calls = _run('{"estimated_probability_yes":0.9}', market)
+        evidence = _evidence(market)
     assert evidence == ()
-    assert len(calls) == 1
-    assert any("reason=parse_fail" in record.message for record in caplog.records)
-    assert _SECRET not in " ".join(record.message for record in caplog.records)
+    assert any("reason=fetch_error" in record.message for record in caplog.records)
     assert _deterministic_decision_signal([], market, allow_evidence_signal=True) is None
 
 
-def test_named_count_uses_calculator_not_grok_probability(politics_cohort):
-    evidence, calls = _run(
-        '{"kind":"count","value":"150","url":"%s","estimated_probability":0.1}'
-        % _FACT_URL
+def test_named_count_uses_the_calculator(politics_cohort, monkeypatch):
+    market = _market()
+    monkeypatch.setattr(
+        "analysis.truth_social_forecast.fetch_truth_social_count",
+        lambda *_args, **_kwargs: _observation(market, 150),
     )
-    assert len(calls) == 1
+    evidence = _evidence(market)
     assert len(evidence) == 1
     item = evidence[0]
     assert item.metric_name == TRUTH_SOCIAL_RANGE_PROBABILITY_METRIC
     assert item.metric_value == pytest.approx(0.98)
-    assert item.metric_value != pytest.approx(0.1)
     assert item.supports_direction == "yes"
     assert item.source_url == _FACT_URL
     signal = _deterministic_decision_signal(
         list(evidence),
-        _market(),
+        market,
         allow_evidence_signal=True,
     )
     assert signal is not None
     assert signal["estimated_probability_yes"] == pytest.approx(0.98)
     assert signal["direction"] == "yes"
     assert event_news_google_counter_not_required(
-        market=_market(),
+        market=market,
         evidence=list(evidence),
         estimated_probability=signal["estimated_probability_yes"],
         force_side=signal["direction"],
     )
 
 
-def test_structured_count_does_not_call_source_reader(politics_cohort):
+def test_structured_count_does_not_fetch(politics_cohort, monkeypatch):
     existing = [
         SimpleNamespace(
             metric_name=TRUTH_SOCIAL_RANGE_PROBABILITY_METRIC,
             metric_value=0.64,
         )
     ]
-    calls = []
 
-    def _post(*_args, **_kwargs):
-        calls.append(1)
-        raise AssertionError("structured count must not call Grok")
+    def _fetch(*_args, **_kwargs):
+        raise AssertionError("structured count must not fetch")
 
-    evidence = event_news_grok_source_evidence(
-        market=_market(),
-        evidence=existing,
-        bad_urls=(_HOME,),
-        environ={"XAI_API_KEY": _SECRET},
-        post=_post,
-        now=_NOW,
+    monkeypatch.setattr(
+        "analysis.truth_social_forecast.fetch_truth_social_count",
+        _fetch,
     )
+    evidence = _evidence(evidence=existing, bad_urls=(_HOME,))
     assert evidence == ()
-    assert calls == []
     assert existing[0].metric_value == 0.64
 
 
@@ -239,107 +242,44 @@ async def test_gate_invokes_reader_for_homepage_without_structured_count(politic
     assert called[0]["bad_urls"] == (_HOME,)
 
 
-def test_excluded_band_and_no_edge_do_not_call(politics_cohort):
-    calls = []
+def test_excluded_band_and_no_edge_do_not_fetch(politics_cohort, monkeypatch):
+    def _fetch(*_args, **_kwargs):
+        raise AssertionError("must not fetch")
 
-    def _post(*_args, **_kwargs):
-        calls.append(1)
-        raise AssertionError("must not call")
-
+    monkeypatch.setattr(
+        "analysis.truth_social_forecast.fetch_truth_social_count",
+        _fetch,
+    )
     longshot = _market(ticker="KXTRUMPACT-26OCT11-T5", yes_ask_cents=30, no_ask_cents=20)
-    event_news_grok_source_evidence(
-        market=longshot,
-        evidence=[],
-        bad_urls=(_HOME,),
-        environ={"XAI_API_KEY": _SECRET},
-        post=_post,
-        now=_NOW,
-    )
-    event_news_grok_source_evidence(
-        market=_market(yes_ask_cents=10, no_ask_cents=10),
-        evidence=[],
-        bad_urls=(_HOME,),
-        environ={"XAI_API_KEY": _SECRET},
-        post=_post,
-        now=_NOW,
-    )
-    event_news_grok_source_evidence(
-        market=_market(),
-        evidence=[],
-        bad_urls=(_HOME,),
-        skip_reason="no_edge",
-        environ={"XAI_API_KEY": _SECRET},
-        post=_post,
-        now=_NOW,
-    )
-    event_news_grok_source_evidence(
-        market=_market(),
-        evidence=[],
-        bad_urls=(_HOME,),
-        cache_only=True,
-        environ={"XAI_API_KEY": _SECRET},
-        post=_post,
-        now=_NOW,
-    )
-    assert calls == []
+    _evidence(longshot, bad_urls=(_HOME,))
+    _evidence(_market(yes_ask_cents=10, no_ask_cents=10), bad_urls=(_HOME,))
+    _evidence(skip_reason="no_edge", bad_urls=(_HOME,))
+    _evidence(cache_only=True, bad_urls=(_HOME,))
 
 
-def test_missing_key_timeout_and_parse_fail_add_no_evidence(politics_cohort, caplog):
-    def _boom(*_args, **_kwargs):
-        raise requests.Timeout("slow")
+def test_incomplete_count_and_homepage_url_add_no_evidence(politics_cohort, monkeypatch, caplog):
+    market = _market()
+    seen = {"n": 0}
 
+    def _fetch(*_args, **_kwargs):
+        seen["n"] += 1
+        if seen["n"] == 1:
+            return None
+        return _observation(market, 150, source_url=_HOME)
+
+    monkeypatch.setattr(
+        "analysis.truth_social_forecast.fetch_truth_social_count",
+        _fetch,
+    )
     with caplog.at_level(logging.INFO):
-        missing = event_news_grok_source_evidence(
-            market=_market(),
-            evidence=[],
-            bad_urls=(_HOME,),
-            environ={},
-            post=_boom,
-            now=_NOW,
-        )
-        timed_out = event_news_grok_source_evidence(
-            market=_market(),
-            evidence=[],
-            bad_urls=(_HOME,),
-            environ={"XAI_API_KEY": _SECRET},
-            post=_boom,
-            now=_NOW,
-        )
-        failed = event_news_grok_source_evidence(
-            market=_market(),
-            evidence=[],
-            bad_urls=(_HOME,),
-            environ={"XAI_API_KEY": _SECRET},
-            post=lambda *_args, **_kwargs: _chat("not json"),
-            now=_NOW,
-        )
-    assert missing == timed_out == failed == ()
+        missing = _evidence(market)
+        homepage = _evidence(market)
+    assert missing == homepage == ()
     text = " ".join(record.message for record in caplog.records)
-    assert "reason=missing_key" in text
-    assert "reason=timeout" in text
-    assert "reason=parse_fail" in text
-    assert _SECRET not in text
+    assert "reason=no_free_count" in text
 
 
-def test_packet_asks_for_count_not_a_probability(politics_cohort):
-    _evidence, calls = _run('{"kind":"none","value":"","url":""}')
-    payload = calls[0]["json"]
-    assert payload["model"] == GROK_MODEL
-    assert payload["max_tokens"] == GROK_MAX_TOKENS
-    assert calls[0]["timeout"] == GROK_TIMEOUT_SECONDS
-    user = payload["messages"][1]["content"]
-    assert "What is the count, vote, or status, and the URL that states it?" in user
-    assert "KXTRUTHSOCIAL-26AUG22-B149" in user
-    assert _HOME in user
-    assert "https://kalshi.com/contracts/truth-social-weekly" in user
-    assert "probability" not in payload["messages"][0]["content"].lower() or (
-        "Do not include a probability" in payload["messages"][0]["content"]
-    )
-    assert _SECRET not in user
-    assert calls[0]["headers"]["Authorization"] == f"Bearer {_SECRET}"
-
-
-def test_white_house_count_uses_remaining_threshold(politics_cohort):
+def test_white_house_keeps_only_a_priced_archive_probability(politics_cohort, monkeypatch):
     market = _market(
         ticker="KXTRUMPACT-26OCT04-T6",
         title="Will Trump take at least 6 presidential actions",
@@ -350,37 +290,100 @@ def test_white_house_count_uses_remaining_threshold(politics_cohort):
         yes_ask_cents=70,
         no_ask_cents=40,
     )
-    fact = "https://www.whitehouse.gov/presidential-actions/example/"
-    evidence, _calls = _run(
-        '{"kind":"count","value":"2","url":"%s","estimated_probability_yes":0.77}'
-        % fact,
-        market,
+    calls = []
+
+    def _search(*_args, **_kwargs):
+        calls.append(1)
+        return [
+            ResearchEvidence(
+                source_class="official_primary",
+                source_name="White House Presidential Actions",
+                source_url=_ACTIONS,
+                title="count only",
+                snippet="2 actions",
+                claim_type="official_resolution",
+                metric_name="white_house_presidential_actions_count",
+                metric_value=2.0,
+                supports_confidence=0.98,
+            ),
+            ResearchEvidence(
+                source_class="official_primary",
+                source_name="White House Presidential Actions",
+                source_url=_ACTIONS,
+                title="priced",
+                snippet="calculator",
+                claim_type="official_resolution",
+                supports_direction="no",
+                supports_confidence=0.9,
+                metric_name="white_house_action_range_probability",
+                metric_value=0.02,
+                metric_unit="probability",
+            ),
+        ]
+
+    monkeypatch.setattr(
+        "analysis.research_gate._white_house_presidential_actions_search",
+        _search,
     )
+    evidence = _evidence(market)
+    assert calls == [1]
     assert len(evidence) == 1
-    item = evidence[0]
-    assert item.metric_name == "white_house_action_range_probability"
-    assert item.metric_value == pytest.approx(0.02)
-    assert item.metric_value != pytest.approx(0.77)
-    assert item.supports_direction == "no"
-    priced = remaining_threshold_probability(
-        count=2,
-        threshold=6,
-        elapsed_days=30.0,
-        remaining_days=0.0,
-    )
-    assert priced is not None
-    assert item.metric_value == pytest.approx(priced[0])
+    assert evidence[0].metric_name == "white_house_action_range_probability"
+    assert evidence[0].metric_value == pytest.approx(0.02)
+    assert evidence[0].supports_direction == "no"
 
 
-def test_vote_and_homepage_fact_url_do_not_set_p(politics_cohort):
-    vote, _calls = _run(
-        '{"kind":"status","value":"passed","url":"%s"}' % _FACT_URL
+def test_white_house_count_without_a_probability_stays_empty(politics_cohort, monkeypatch):
+    market = _market(
+        ticker="KXTRUMPACT-26OCT04-T6",
+        title="Will Trump take at least 6 presidential actions",
+        rules_primary=(
+            "from October 1, 2026 through October 4, 2026 at 11:59 PM ET on "
+            "October 4, 2026 using whitehouse.gov"
+        ),
     )
-    homepage, _calls = _run(
-        '{"kind":"count","value":"150","url":"%s"}' % _HOME
+
+    def _search(*_args, **_kwargs):
+        return [
+            ResearchEvidence(
+                source_class="official_primary",
+                source_name="White House Presidential Actions",
+                source_url=_ACTIONS,
+                title="count only",
+                snippet="2 actions",
+                claim_type="official_resolution",
+                metric_name="white_house_presidential_actions_count",
+                metric_value=2.0,
+                supports_confidence=0.98,
+            )
+        ]
+
+    monkeypatch.setattr(
+        "analysis.research_gate._white_house_presidential_actions_search",
+        _search,
     )
-    assert vote == ()
-    assert homepage == ()
+    assert _evidence(market) == ()
+
+
+def test_unsupported_contract_does_not_fetch(politics_cohort, monkeypatch):
+    market = _market(
+        ticker="KXOTHER-26OCT-A",
+        title="Will it rain tomorrow",
+        rules_primary="",
+    )
+
+    def _fetch(*_args, **_kwargs):
+        raise AssertionError("must not fetch")
+
+    monkeypatch.setattr(
+        "analysis.truth_social_forecast.fetch_truth_social_count",
+        _fetch,
+    )
+    monkeypatch.setattr(
+        "analysis.research_gate._white_house_presidential_actions_search",
+        _fetch,
+    )
+    assert _evidence(market) == ()
 
 
 def test_empty_pdf_is_still_none_and_can_be_noted(monkeypatch):
@@ -428,59 +431,24 @@ def test_empty_pdf_is_still_none_and_can_be_noted(monkeypatch):
     assert _HOME in bucket
 
 
-def test_reader_module_does_not_place_orders():
+def test_reader_module_does_not_call_xai_or_place_orders():
     from pathlib import Path
 
     text = Path("utils/event_news_grok_source.py").read_text(encoding="utf-8")
     assert "place_limit_order" not in text
     assert "trading.executor" not in text
+    assert "api.x.ai" not in text
+    assert "requests" not in text
 
 
-def test_source_call_logs_usage_and_returns_the_same_text(tmp_path, monkeypatch):
-    from utils.event_news_grok_source import _post_source
-
+def test_free_fetch_writes_no_source_call_row(tmp_path, monkeypatch):
+    market = _market()
     call_path = tmp_path / "calls.jsonl"
     monkeypatch.setattr("utils.event_news_grok_veto.GROK_CALL_LOG_PATH", call_path)
-
-    def _post(*_args, **_kwargs):
-        return _Response(
-            200,
-            {
-                "choices": [{"message": {"content": '{"kind":"none","value":"","url":""}'}}],
-                "usage": {
-                    "prompt_tokens": 11,
-                    "completion_tokens": 2,
-                    "cost_in_usd_ticks": 3000000000,
-                },
-            },
-        )
-
-    missing, why = _post_source(
-        {"ticker": "KXTEST-SOURCE"},
-        ticker="KXTEST-SOURCE",
-        environ={},
-        post=_post,
-        started=0.0,
+    monkeypatch.setattr(
+        "analysis.truth_social_forecast.fetch_truth_social_count",
+        lambda *_args, **_kwargs: _observation(market, 150),
     )
-    assert missing is None and why == "missing_key"
+    evidence = _evidence(market)
+    assert len(evidence) == 1
     assert not call_path.exists()
-    text, reason = _post_source(
-        {"ticker": "KXTEST-SOURCE"},
-        ticker="KXTEST-SOURCE",
-        environ={"XAI_API_KEY": _SECRET},
-        post=_post,
-        started=0.0,
-    )
-    assert reason is None
-    assert text == '{"kind":"none","value":"","url":""}'
-    row = json.loads(call_path.read_text(encoding="utf-8"))
-    assert row["kind"] == "source"
-    assert row["input_tokens"] == 11
-    assert row["output_tokens"] == 2
-    assert row["total_tokens"] == 13
-    assert row["cost_usd"] == "0.3"
-    assert row["cost_source"] == "provider"
-    assert row["grounded"] is False
-    assert row["rationale"] == ""
-    assert row["prompt_hash"] == ""
-    assert _SECRET not in call_path.read_text(encoding="utf-8")

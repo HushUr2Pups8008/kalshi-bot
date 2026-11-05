@@ -199,64 +199,63 @@ def test_parse_final_yes_no_token(politics_cohort):
     )
 
 
-def test_excluded_band_does_not_call_grok(politics_cohort):
+def _refusal_row(tmp_path, monkeypatch, analysis) -> dict:
+    call_path = tmp_path / "calls.jsonl"
+    monkeypatch.setattr("utils.event_news_grok_veto.GROK_CALL_LOG_PATH", call_path)
+    called = []
+
+    def _post(*args, **kwargs):
+        called.append(1)
+        return _FakeResponse(200, _chat_payload("YES"))
+
+    allowed = event_news_grok_veto_allows_live_post(
+        analysis,
+        contracts=8,
+        environ={"XAI_API_KEY": "secret-key"},
+        post=_post,
+    )
+    assert allowed is False
+    assert called == []
+    return json.loads(call_path.read_text(encoding="utf-8"))
+
+
+def test_excluded_band_logs_side_skip_and_does_not_call_grok(politics_cohort, tmp_path, monkeypatch):
     analysis = _analysis(side="no", ask=33, edge=0.24)
     analysis.executed_price_cents = 33
     analysis.market.no_ask_cents = 33
     analysis.market.no_ask = 33
     analysis.market.yes_ask_cents = 67
-    called = []
-
-    def _post(*args, **kwargs):
-        called.append(1)
-        return _FakeResponse(200, _chat_payload("YES"))
-
-    allowed = event_news_grok_veto_allows_live_post(
-        analysis,
-        contracts=8,
-        environ={"XAI_API_KEY": "secret-key"},
-        post=_post,
-    )
-    assert allowed is False
-    assert called == []
+    row = _refusal_row(tmp_path, monkeypatch, analysis)
+    assert row["kind"] == "veto"
+    assert row["skip_reason"] == "side_skip"
+    assert row["cost_usd"] == "0"
+    assert row["cost_source"] == "none"
+    assert row["verdict"] == ""
+    assert row["grounded"] is False
 
 
-def test_non_official_p_does_not_call_grok(politics_cohort):
+def test_non_official_p_logs_and_does_not_call_grok(politics_cohort, tmp_path, monkeypatch):
     analysis = _analysis()
     analysis.signal_meta = {"source_lane": "blend"}
-    called = []
-
-    def _post(*args, **kwargs):
-        called.append(1)
-        return _FakeResponse(200, _chat_payload("YES"))
-
-    allowed = event_news_grok_veto_allows_live_post(
-        analysis,
-        contracts=8,
-        environ={"XAI_API_KEY": "secret-key"},
-        post=_post,
-    )
-    assert allowed is False
-    assert called == []
+    row = _refusal_row(tmp_path, monkeypatch, analysis)
+    assert row["skip_reason"] == "no_official_p"
+    assert row["kind"] == "veto"
+    assert row["cost_source"] == "none"
 
 
-def test_no_edge_does_not_call_grok(politics_cohort):
+def test_no_edge_logs_and_does_not_call_grok(politics_cohort, tmp_path, monkeypatch):
     analysis = _analysis(edge=-0.01)
     analysis.signal_meta["skip_reason"] = "no_edge"
-    called = []
+    row = _refusal_row(tmp_path, monkeypatch, analysis)
+    assert row["skip_reason"] == "no_edge"
+    assert row["ticker"] == "KXTRUTHSOCIAL-26OCT17-B129"
 
-    def _post(*args, **kwargs):
-        called.append(1)
-        return _FakeResponse(200, _chat_payload("YES"))
 
-    allowed = event_news_grok_veto_allows_live_post(
-        analysis,
-        contracts=8,
-        environ={"XAI_API_KEY": "secret-key"},
-        post=_post,
-    )
-    assert allowed is False
-    assert called == []
+def test_nonpositive_edge_logs_and_does_not_call_grok(politics_cohort, tmp_path, monkeypatch):
+    analysis = _analysis(edge=0)
+    row = _refusal_row(tmp_path, monkeypatch, analysis)
+    assert row["skip_reason"] == "nonpositive_edge"
+    assert row["cost_usd"] == "0"
 
 
 def _live_executor(monkeypatch, tmp_path):
@@ -518,8 +517,19 @@ def test_missing_key_and_early_gate_write_no_veto_rows(tmp_path, monkeypatch):
         environ={"XAI_API_KEY": "secret-key"},
         post=_post,
     ) is False
-    assert not call_path.exists()
+    rows = [json.loads(line) for line in call_path.read_text(encoding="utf-8").splitlines()]
+    assert [row["skip_reason"] for row in rows] == ["no_edge"]
+    assert rows[0]["kind"] == "veto"
+    assert rows[0]["cost_source"] == "none"
+    assert rows[0]["verdict"] == ""
     assert not decision_path.exists()
+    monkeypatch.setattr("utils.event_news_grok_veto.GROK_CALL_LOG_PATH", tmp_path)
+    assert event_news_grok_veto_allows_live_post(
+        gated,
+        contracts=8,
+        environ={"XAI_API_KEY": "secret-key"},
+        post=_post,
+    ) is False
 
 
 def test_timeout_post_logs_unavailable_and_a_log_failure_stays_yes(tmp_path, monkeypatch):
@@ -562,3 +572,129 @@ def test_timeout_post_logs_unavailable_and_a_log_failure_stays_yes(tmp_path, mon
         environ={"XAI_API_KEY": "secret-key"},
         post=_yes,
     ) is True
+
+
+def test_weekly_cap_fails_closed_and_ignores_veto_rows(tmp_path):
+    from decimal import Decimal
+
+    from utils.event_news_grok_veto import non_veto_weekly_block, weekly_xai_spend
+
+    path = tmp_path / "calls.jsonl"
+    moment = datetime(2026, 11, 5, 12, tzinfo=timezone.utc)
+    assert non_veto_weekly_block(environ={}, call_log_path=path, now=moment) == "weekly_cap_unset"
+    assert (
+        non_veto_weekly_block(
+            environ={"GROK_WEEKLY_USD_CAP": "nope"},
+            call_log_path=path,
+            now=moment,
+        )
+        == "weekly_cap_unset"
+    )
+    assert (
+        non_veto_weekly_block(
+            environ={"GROK_WEEKLY_USD_CAP": "1"},
+            call_log_path=path,
+            now=moment,
+        )
+        is None
+    )
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "ts": "2026-11-03T00:00:00Z",
+                        "kind": "veto",
+                        "cost_usd": "0.80",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "ts": "2026-11-04T00:00:00Z",
+                        "kind": "source",
+                        "cost_usd": "0.20",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "ts": "2026-10-01T00:00:00Z",
+                        "kind": "scan",
+                        "cost_usd": "9",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    non_veto, veto = weekly_xai_spend(path, moment)
+    assert non_veto == Decimal("0.20")
+    assert veto == Decimal("0.80")
+    assert (
+        non_veto_weekly_block(
+            environ={"GROK_WEEKLY_USD_CAP": "0.20"},
+            call_log_path=path,
+            now=moment,
+        )
+        == "weekly_cap"
+    )
+    assert (
+        non_veto_weekly_block(
+            environ={"GROK_WEEKLY_USD_CAP": "0.21"},
+            call_log_path=path,
+            now=moment,
+        )
+        is None
+    )
+    path.write_text("{not json}\n", encoding="utf-8")
+    assert (
+        non_veto_weekly_block(
+            environ={"GROK_WEEKLY_USD_CAP": "1"},
+            call_log_path=path,
+            now=moment,
+        )
+        == "weekly_cap_unreadable"
+    )
+
+
+def test_production_edge_call_does_not_post_or_log(tmp_path):
+    from decimal import Decimal
+
+    from utils.event_news_grok_edge import _call_grok
+
+    calls = tmp_path / "calls.jsonl"
+    moment = datetime(2026, 11, 5, tzinfo=timezone.utc)
+
+    def _post(*_args, **_kwargs):
+        raise AssertionError("responses client must not run")
+
+    blocked = _call_grok(
+        ticker="KXTEST",
+        prompt="p",
+        system="s",
+        grounded=True,
+        environ={},
+        post=None,
+        call_log_path=calls,
+        spend_path=tmp_path / "spend.json",
+        now=moment,
+    )
+    assert blocked is not None
+    assert blocked.skip_reason == "weekly_cap_unset"
+    assert blocked.cost_usd == Decimal("0")
+    assert not calls.exists()
+    del _post
+    allowed_cap = _call_grok(
+        ticker="KXTEST",
+        prompt="p",
+        system="s",
+        grounded=True,
+        environ={"GROK_WEEKLY_USD_CAP": "1"},
+        post=None,
+        call_log_path=calls,
+        spend_path=tmp_path / "spend.json",
+        now=moment,
+    )
+    assert allowed_cap is not None
+    assert allowed_cap.skip_reason == "xai_research_disabled"
+    assert not calls.exists()

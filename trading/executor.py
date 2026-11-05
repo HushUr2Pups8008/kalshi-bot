@@ -2249,22 +2249,6 @@ class TradeExecutor:
             if await self._event_news_plan_skip_off_loop(analysis, execution_plan):
                 return None
             self._event_news_log_paper_maker(analysis, execution_plan)
-            from utils.event_news_rules_check import event_news_rules_check_skip
-
-            rules_skip = await self._wait_off_loop(
-                functools.partial(
-                    event_news_rules_check_skip,
-                    analysis,
-                    live=True,
-                ),
-                timeout=_rules_hard_timeout_s(),
-            )
-            if rules_skip is _OFF_LOOP_TIMEOUT or rules_skip:
-                log.info(
-                    "[EVENT_NEWS_RULES] skip=rules_check ticker=%s",
-                    analysis.market.ticker,
-                )
-                return None
         posted_cents = (
             execution_plan.price_cents
             if execution_plan is not None
@@ -2426,7 +2410,6 @@ class TradeExecutor:
             return None
 
         from utils.event_news_desk_flags import (
-            EVENT_NEWS_GROK_RULES_CHECK,
             EVENT_NEWS_MAKER_FIRST,
             event_news_desk_flag_enabled,
         )
@@ -2451,23 +2434,6 @@ class TradeExecutor:
                 analysis.market.ticker,
             )
             return None
-        if event_news_desk_flag_enabled(EVENT_NEWS_GROK_RULES_CHECK, live=True):
-            from utils.event_news_rules_check import event_news_rules_check_skip
-
-            rules_skip = await self._wait_off_loop(
-                functools.partial(
-                    event_news_rules_check_skip,
-                    analysis,
-                    live=True,
-                ),
-                timeout=_rules_hard_timeout_s(),
-            )
-            if rules_skip is _OFF_LOOP_TIMEOUT or rules_skip:
-                log.info(
-                    "[EVENT_NEWS_RULES] skip=rules_check ticker=%s",
-                    analysis.market.ticker,
-                )
-                return None
         if await self._event_news_plan_skip_off_loop(
             analysis,
             FinalExecutionTerms(

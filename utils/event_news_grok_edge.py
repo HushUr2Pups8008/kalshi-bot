@@ -3094,6 +3094,31 @@ def _call_grok(
     venue: str = "kalshi",
 ) -> GrokEdgeCall | None:
     env = os.environ if environ is None else environ
+    # Production passes no poster. The responses client is not a live path.
+    # An injected poster remains for the paper-scorecard tests. The weekly
+    # cap still fails closed, and this return writes no call-log row.
+    if post is None:
+        from utils.event_news_grok_veto import non_veto_weekly_block
+
+        reason = non_veto_weekly_block(
+            environ=env,
+            call_log_path=call_log_path,
+            now=now,
+        )
+        return GrokEdgeCall(
+            ticker=ticker,
+            grounded=False,
+            probability=None,
+            confidence=None,
+            verdict="",
+            sources=(),
+            tools=(),
+            prompt_hash="",
+            latency_ms=0,
+            cost_usd=Decimal("0"),
+            skip_reason=reason or "xai_research_disabled",
+            detail="",
+        )
     hard = _call_cap(_daily_cap(env), "exit")
     cap = hard if kind == "exit" else _call_cap(_daily_cap(env), kind, _trailing_fee_net(spend_path, now))
     tools = _SCAN_TOOLS if grounded else ()
