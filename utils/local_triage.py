@@ -15,15 +15,19 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Mapping
 
-CLASSES = (
-    "countable",
-    "lookup",
-    "market_price",
-    "opinion",
-    "sports",
-    "other",
-    "ambiguous",
-)
+DOMAINS = ("sports", "politics", "macro", "weather", "other", "ambiguous")
+SETTLEMENTS = ("countable", "lookup", "market_price", "opinion", "other", "ambiguous")
+_CATEGORY_DOMAIN = {
+    "sports": "sports",
+    "politics": "politics",
+    "elections": "politics",
+    "economics": "macro",
+    "financials": "macro",
+    "finance": "macro",
+    "climate": "weather",
+    "weather": "weather",
+    "climate and weather": "weather",
+}
 _CONTENT_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "countable",
@@ -72,6 +76,31 @@ _CONTENT_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "surveys",
             "opinion",
         ),
+    ),
+)
+_DOMAIN_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "politics",
+        ("president", "congress", "senate", "approval rating", "election", "white house"),
+    ),
+    (
+        "macro",
+        (
+            "cpi",
+            "unemployment",
+            "federal funds",
+            "gross domestic product",
+            "gdp",
+            "gas price",
+            "gas prices",
+            "consumer price",
+            "federal reserve",
+            "aaa",
+        ),
+    ),
+    (
+        "weather",
+        ("temperature", "hurricane", "rainfall", "precipitation", "national weather service", "snowfall"),
     ),
 )
 _MVE_TYPES = {"mve", "multivariate", "multivariate_event"}
@@ -304,8 +333,10 @@ def screen_market(
         "rules_secondary": secondary,
         "settlement_sources": list(labels),
         "rule_version": "missing",
-        "deterministic_class": "",
+        "deterministic_domain": "",
+        "deterministic_settlement": "",
         "deterministic_ambiguity": "",
+        "track": "",
         "rejection_reason": "",
         "provisional": True,
         **_blank_depth(),
@@ -394,10 +425,10 @@ def keep_best_per_event(rows: list[dict[str, Any]]) -> None:
             loser["rejection_reason"] = "not_best_in_event"
 
 
-def _hits(text: str) -> set[str]:
+def _keyword_hits(text: str, patterns: tuple[tuple[str, tuple[str, ...]], ...]) -> set[str]:
     folded = text.lower()
     found: set[str] = set()
-    for name, phrases in _CONTENT_PATTERNS:
+    for name, phrases in patterns:
         for phrase in phrases:
             if re.search(rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])", folded):
                 found.add(name)
@@ -405,45 +436,82 @@ def _hits(text: str) -> set[str]:
     return found
 
 
-def deterministic_class(
-    row: Mapping[str, Any],
-    *,
-    sports_prefixes: tuple[str, ...],
-) -> tuple[str, str]:
-    """Provisional class. Two content hits, or title-only text, stay ambiguous.
-
-    A sports prefix or a sports category is a strong sports label. It is still
-    not settlement truth.
-    """
-    series = str(row.get("series_ticker") or "")
-    category = str(row.get("category") or "").strip().lower()
-    if category == "sports" or any(prefix and series.startswith(prefix) for prefix in sports_prefixes):
-        return "sports", "none"
-    rules = " ".join(
+def _rules_text(row: Mapping[str, Any]) -> str:
+    return " ".join(
         (
             str(row.get("rules_primary") or ""),
             str(row.get("rules_secondary") or ""),
             " ".join(str(label) for label in row.get("settlement_sources") or ()),
         )
     ).strip()
+
+
+def deterministic_axes(
+    row: Mapping[str, Any],
+    *,
+    sports_prefixes: tuple[str, ...],
+) -> tuple[str, str, str]:
+    """Provisional domain and settlement. The axes stay separate.
+
+    A sports prefix or a sports category sets the domain and still leaves
+    the settlement free. An NFL count prop is sports and countable. A title
+    by itself is not a settlement. Empty rules leave settlement ambiguous.
+    """
+    series = str(row.get("series_ticker") or "")
+    category = str(row.get("category") or "").strip().lower()
+    sports_domain = category == "sports" or any(
+        prefix and series.startswith(prefix) for prefix in sports_prefixes
+    )
+    rules = _rules_text(row)
+    if sports_domain:
+        domain = "sports"
+    elif not rules and category not in _CATEGORY_DOMAIN:
+        domain = "ambiguous"
+    else:
+        keywords = _keyword_hits(rules, _DOMAIN_PATTERNS) if rules else set()
+        cat_domain = "" if sports_domain else _CATEGORY_DOMAIN.get(category, "")
+        if len(keywords) > 1:
+            domain = "ambiguous"
+        elif len(keywords) == 1:
+            only = next(iter(keywords))
+            domain = "ambiguous" if cat_domain and cat_domain != only else only
+        elif cat_domain:
+            domain = cat_domain
+        elif rules:
+            domain = "other"
+        else:
+            domain = "ambiguous"
     if not rules:
-        return "ambiguous", "insufficient_evidence"
-    found = _hits(rules)
-    if len(found) > 1:
-        return "ambiguous", "ambiguous"
-    if len(found) == 1:
-        return next(iter(found)), "none"
-    return "other", "none"
+        settlement = "ambiguous"
+        thin_rules = True
+    else:
+        found = _keyword_hits(rules, _CONTENT_PATTERNS)
+        thin_rules = False
+        if len(found) > 1:
+            settlement = "ambiguous"
+        elif len(found) == 1:
+            settlement = next(iter(found))
+        else:
+            settlement = "other"
+    if domain != "ambiguous" and settlement != "ambiguous":
+        ambiguity = "none"
+    elif thin_rules:
+        ambiguity = "insufficient_evidence"
+    else:
+        ambiguity = "ambiguous"
+    return domain, settlement, ambiguity
 
 
-def apply_deterministic_class(rows: list[dict[str, Any]], *, sports_prefixes: tuple[str, ...]) -> None:
+def apply_deterministic_axes(rows: list[dict[str, Any]], *, sports_prefixes: tuple[str, ...]) -> None:
     for row in rows:
         if row["rejection_reason"]:
-            row["deterministic_class"] = ""
+            row["deterministic_domain"] = ""
+            row["deterministic_settlement"] = ""
             row["deterministic_ambiguity"] = ""
             continue
-        label, ambiguity = deterministic_class(row, sports_prefixes=sports_prefixes)
-        row["deterministic_class"] = label
+        domain, settlement, ambiguity = deterministic_axes(row, sports_prefixes=sports_prefixes)
+        row["deterministic_domain"] = domain
+        row["deterministic_settlement"] = settlement
         row["deterministic_ambiguity"] = ambiguity
         row["rule_version"] = rule_version(
             str(row.get("rules_primary") or ""),
@@ -477,17 +545,22 @@ def touch_depth(book: Any) -> dict[str, str | None]:
     }
 
 
-def review_class(deterministic: str, local_outcome: str, local_class: str) -> str:
-    """A third label. Disagreement stays ambiguous. The stored classes stay put.
+def review_axis(
+    deterministic: str,
+    local_outcome: str,
+    local_value: str,
+    allowed: tuple[str, ...],
+) -> str:
+    """One axis. A disagreement makes only this axis ambiguous.
 
     A local failure is ``local_unavailable``. Agreement keeps the shared
-    provisional class and does not promote it.
+    provisional value and does not promote it. The other axis is untouched.
     """
     if local_outcome != "ok":
         return "local_unavailable"
-    if not deterministic or deterministic not in CLASSES or local_class not in CLASSES:
+    if deterministic not in allowed or local_value not in allowed:
         return "ambiguous"
-    if deterministic == local_class:
+    if deterministic == local_value:
         return deterministic
     return "ambiguous"
 
@@ -517,8 +590,10 @@ def public_row(row: Mapping[str, Any], *, ts: str) -> dict[str, Any]:
         "rules_secondary": row.get("rules_secondary") or "",
         "settlement_sources": list(row.get("settlement_sources") or ()),
         "rule_version": row.get("rule_version") or "missing",
-        "deterministic_class": row.get("deterministic_class") or "",
+        "deterministic_domain": row.get("deterministic_domain") or "",
+        "deterministic_settlement": row.get("deterministic_settlement") or "",
         "deterministic_ambiguity": row.get("deterministic_ambiguity") or "",
+        "track": row.get("track") or "",
         "rejection_reason": row.get("rejection_reason") or "",
         "provisional": True,
     }
@@ -533,3 +608,188 @@ def count_reasons(rows: list[Mapping[str, Any]]) -> dict[str, int]:
             continue
         counts[reason] = counts.get(reason, 0) + 1
     return dict(sorted(counts.items()))
+
+
+_PILOT_BUCKETS = ("aaa_gas", "approval", "lookup", "countable", "ambiguous", "other")
+
+
+def pilot_bucket(row: Mapping[str, Any]) -> str:
+    """Which stratified seat a non-sports row fills. Sports never reach this."""
+    series = str(row.get("series_ticker") or "")
+    ticker = str(row.get("ticker") or "")
+    text = " ".join(
+        (
+            str(row.get("title") or ""),
+            str(row.get("rules_primary") or ""),
+            str(row.get("rules_secondary") or ""),
+        )
+    ).lower()
+    if series.startswith("KXAAAGAS") or ticker.startswith("KXAAAGAS") or ("aaa" in text and "gas" in text):
+        return "aaa_gas"
+    if (
+        series.startswith(("KXAPRPOTUS", "KXTRUMPAPPROVE"))
+        or ticker.startswith(("KXAPRPOTUS", "KXTRUMPAPPROVE"))
+        or "approval" in text
+    ):
+        return "approval"
+    settlement = str(row.get("deterministic_settlement") or "")
+    domain = str(row.get("deterministic_domain") or "")
+    ambiguity = str(row.get("deterministic_ambiguity") or "")
+    if settlement == "lookup":
+        return "lookup"
+    if settlement == "countable":
+        return "countable"
+    if domain == "ambiguous" or settlement == "ambiguous" or ambiguity not in ("", "none"):
+        return "ambiguous"
+    return "other"
+
+
+def select_pilot(rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    """Round-robin the buckets so one large bucket cannot fill the pilot."""
+    if limit < 0:
+        raise ValueError("pilot limit must be zero or positive")
+    grouped: dict[str, list[dict[str, Any]]] = {name: [] for name in _PILOT_BUCKETS}
+    ordered = sorted(rows, key=lambda row: str(row.get("ticker") or ""))
+    for row in ordered:
+        grouped[pilot_bucket(row)].append(row)
+    picked: list[dict[str, Any]] = []
+    cursors = {name: 0 for name in _PILOT_BUCKETS}
+    while len(picked) < limit:
+        moved = False
+        for name in _PILOT_BUCKETS:
+            index = cursors[name]
+            if index >= len(grouped[name]):
+                continue
+            picked.append(grouped[name][index])
+            cursors[name] = index + 1
+            moved = True
+            if len(picked) >= limit:
+                break
+        if not moved:
+            break
+    return picked
+
+
+def pilot_composition(rows: list[Mapping[str, Any]]) -> dict[str, int]:
+    counts = {name: 0 for name in _PILOT_BUCKETS}
+    for row in rows:
+        counts[pilot_bucket(row)] += 1
+    return counts
+
+
+def _axis_rate(pairs: list[tuple[str, str]]) -> float | None:
+    if not pairs:
+        return None
+    hits = sum(1 for human, model in pairs if human == model)
+    return hits / len(pairs)
+
+
+def _confusion(pairs: list[tuple[str, str]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for human, model in pairs:
+        if human == model:
+            continue
+        key = f"{human}->{model}"
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def match_human_label(record: Mapping[str, Any], labels: list[Mapping[str, Any]]) -> Mapping[str, Any] | None:
+    """Exact ticker wins. Otherwise the longest series prefix wins."""
+    ticker = str(record.get("ticker") or "")
+    series = str(record.get("series_ticker") or "")
+    best: Mapping[str, Any] | None = None
+    best_len = -1
+    for label in labels:
+        exact = str(label.get("ticker") or "")
+        if exact and exact == ticker:
+            return label
+        pref = str(label.get("series_prefix") or "")
+        if pref and (series.startswith(pref) or ticker.startswith(pref)) and len(pref) > best_len:
+            best = label
+            best_len = len(pref)
+    return best
+
+
+def human_axis_scores(
+    records: list[Mapping[str, Any]],
+    labels: list[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Accuracy is only against human labels. A malformed row is not relabeled."""
+    domain_pairs: list[tuple[str, str]] = []
+    settlement_pairs: list[tuple[str, str]] = []
+    domain_examples: list[dict[str, str]] = []
+    settlement_examples: list[dict[str, str]] = []
+    labeled_not_ok: list[dict[str, str]] = []
+    for record in records:
+        label = match_human_label(record, labels)
+        if label is None:
+            continue
+        outcome = str(record.get("outcome") or "")
+        if outcome != "ok":
+            labeled_not_ok.append({"ticker": str(record.get("ticker") or ""), "outcome": outcome})
+            continue
+        human_domain = str(label.get("human_domain") or "")
+        human_settlement = str(label.get("human_settlement") or "")
+        model_domain = str(record.get("domain") or "")
+        model_settlement = str(record.get("settlement") or "")
+        domain_pairs.append((human_domain, model_domain))
+        settlement_pairs.append((human_settlement, model_settlement))
+        rules = str(record.get("rules_primary") or "")[:160]
+        if human_domain != model_domain and len(domain_examples) < 8:
+            domain_examples.append(
+                {
+                    "ticker": str(record.get("ticker") or ""),
+                    "human": human_domain,
+                    "model": model_domain,
+                    "rules": rules,
+                }
+            )
+        if human_settlement != model_settlement and len(settlement_examples) < 8:
+            settlement_examples.append(
+                {
+                    "ticker": str(record.get("ticker") or ""),
+                    "human": human_settlement,
+                    "model": model_settlement,
+                    "rules": rules,
+                }
+            )
+    return {
+        "labeled_ok": len(domain_pairs),
+        "labeled_not_ok": labeled_not_ok,
+        "domain_accuracy": _axis_rate(domain_pairs),
+        "settlement_accuracy": _axis_rate(settlement_pairs),
+        "domain_confusion": _confusion(domain_pairs),
+        "settlement_confusion": _confusion(settlement_pairs),
+        "domain_confusion_examples": domain_examples,
+        "settlement_confusion_examples": settlement_examples,
+    }
+
+
+def det_match_rates(records: list[Mapping[str, Any]]) -> dict[str, Any]:
+    """Agreement between the deterministic axes and the local axes. Not accuracy."""
+    ok = [row for row in records if row.get("outcome") == "ok"]
+    if not ok:
+        return {
+            "ok": 0,
+            "domain_det_match_rate": None,
+            "settlement_det_match_rate": None,
+            "det_match_rate": None,
+            "det_match_rate_meaning": "agreement_not_accuracy",
+        }
+    domain_hit = sum(1 for row in ok if row.get("domain") == row.get("deterministic_domain"))
+    settlement_hit = sum(1 for row in ok if row.get("settlement") == row.get("deterministic_settlement"))
+    both = sum(
+        1
+        for row in ok
+        if row.get("domain") == row.get("deterministic_domain")
+        and row.get("settlement") == row.get("deterministic_settlement")
+    )
+    count = len(ok)
+    return {
+        "ok": count,
+        "domain_det_match_rate": domain_hit / count,
+        "settlement_det_match_rate": settlement_hit / count,
+        "det_match_rate": both / count,
+        "det_match_rate_meaning": "agreement_not_accuracy",
+    }

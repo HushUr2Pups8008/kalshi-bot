@@ -19,6 +19,13 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.65] - 2026-11-06
+### Changed
+- Local triage classifies domain and settlement as separate axes. A sports countable prop stays sports and countable. Deterministic sports-domain markets are written to a sports shadow file and are not sent to the local classifier.
+- The local client records the HTTP status, the schema mode, the parser failure category, and the retry result. A retry uses the same mode. Prompt text is not treated as schema enforcement. json_object is not a fallback.
+### Added
+- A pilot cap and a hand-label score. Agreement with the deterministic axes is det_match_rate. Accuracy is only against human labels.
+
 ## [0.37.64] - 2026-11-06
 ### Fixed
 - Local triage copies a series settlement source onto a market that already has rules. The market rule is left as it is. The finished 0.37.63 shadow rows still have empty source lists; the series cache from that run holds the labels.
