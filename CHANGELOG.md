@@ -19,6 +19,14 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.63] - 2026-11-06
+
+### Fixed
+- USD-cap boot lines say unset, empty, numeric, or invalid. An absent GROK_WEEKLY_USD_CAP is unset. The number is not printed. Non-veto research still fails closed when the cap is unset. The politics watch flag is unchanged.
+
+### Added
+- A paper-only local triage job screens open non-MVE markets and writes shadow JSONL under logs/state/local_triage/. A configured local model may classify settlement rules. That classification cannot place an order, enter live admission, change the live series, or call xAI. No probability is produced.
+
 ## [0.37.62] - 2026-11-05
 
 ### Fixed
