@@ -360,6 +360,46 @@ def test_malformed_retries_once_then_fails_and_timeout_skips_the_rest() -> None:
     assert refused["n"] == 1
 
 
+def test_series_sources_attach_when_the_market_already_has_rules(tmp_path: Path) -> None:
+    """A market rule does not block the series settlement source. The market rule stays."""
+    market = _market(rules_primary="Resolves when the named bill is signed.")
+    pages = _Pages(
+        [market],
+        [
+            {
+                "ticker": "KXTEST",
+                "title": "Bill",
+                "category": "Politics",
+                "rules_primary": "Series rules that must not replace the market rule.",
+                "settlement_sources": [{"name": "Congress.gov"}],
+            }
+        ],
+    )
+    details: list[str] = []
+
+    def _detail(ticker: str) -> dict[str, str]:
+        details.append(ticker)
+        return {"rules_primary": "Fetched rule", "settlement_sources": [{"name": "Should not win"}]}
+
+    funnel = run_shadow(
+        pages,
+        now=NOW,
+        out_dir=tmp_path / "local_triage",
+        filters=FILTERS,
+        classifier=LocalClassifier(base_url="", model_id="", runtime="mlx", timeout_s=0.05, clock=lambda: NOW),
+        sports_prefixes=(),
+        orderbook_for=lambda _ticker: _Book(None, None),
+        market_for=_detail,
+    )
+    assert details == []
+    discovery = Path(funnel["paths"]["discovery"]).read_text(encoding="utf-8").splitlines()
+    row = json.loads(discovery[0])
+    assert row["rules_primary"] == "Resolves when the named bill is signed."
+    assert row["settlement_sources"] == ["Congress.gov"]
+    assert row["rule_version"] != "missing"
+    assert funnel["missing"]["rules"] == 0
+
+
 def test_shadow_funnel_does_not_fabricate_depth_or_leave_the_directory(tmp_path: Path) -> None:
     """Rejected rows are not booked. A list size of 8 does not become depth. Files stay in the shadow dir."""
     kept = _market(rules_primary="")

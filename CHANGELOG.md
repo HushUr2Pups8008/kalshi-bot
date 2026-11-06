@@ -19,6 +19,10 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.64] - 2026-11-06
+### Fixed
+- Local triage copies a series settlement source onto a market that already has rules. The market rule is left as it is. The finished 0.37.63 shadow rows still have empty source lists; the series cache from that run holds the labels.
+
 ## [0.37.63] - 2026-11-06
 
 ### Fixed
