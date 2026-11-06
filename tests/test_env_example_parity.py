@@ -339,3 +339,37 @@ def test_boot_config_masks_client_id(monkeypatch) -> None:
     assert [line for line in lines if line.startswith("KALSHI_ENV=")] == ["KALSHI_ENV=demo"]
     for line in lines:
         assert "client-id-sentinel" not in line
+
+
+def test_usd_cap_boot_states_do_not_print_the_value(monkeypatch) -> None:
+    """An absent weekly cap is unset. A present number is the word numeric, not the number.
+
+    The politics boot used to print default when .env.example listed the key and
+    the environment did not set it. Non-veto research still fails closed.
+    """
+    from utils.event_news_grok_veto import non_veto_weekly_block
+    from utils.output_paths import boot_config_lines, classify_env_cap
+
+    monkeypatch.delenv("GROK_WEEKLY_USD_CAP", raising=False)
+    monkeypatch.delenv("GROK_DAILY_USD_CAP", raising=False)
+    monkeypatch.delenv("EVENT_NEWS_GROK_WATCH_SKIP_SETTLED", raising=False)
+    assert classify_env_cap(None) == "absent"
+    lines = boot_config_lines()
+    assert "GROK_WEEKLY_USD_CAP=unset" in lines
+    assert "GROK_DAILY_USD_CAP=unset" in lines
+    assert "EVENT_NEWS_GROK_WATCH_SKIP_SETTLED=default" in lines
+    assert non_veto_weekly_block() == "weekly_cap_unset"
+
+    monkeypatch.setenv("GROK_WEEKLY_USD_CAP", "   ")
+    assert classify_env_cap("   ") == "empty"
+    assert "GROK_WEEKLY_USD_CAP=empty" in boot_config_lines()
+
+    monkeypatch.setenv("GROK_WEEKLY_USD_CAP", "1.5")
+    assert classify_env_cap("1.5") == "numeric"
+    weekly = next(line for line in boot_config_lines() if line.startswith("GROK_WEEKLY_USD_CAP="))
+    assert weekly == "GROK_WEEKLY_USD_CAP=numeric"
+
+    monkeypatch.setenv("GROK_WEEKLY_USD_CAP", "nope")
+    assert classify_env_cap("nope") == "non_numeric_present"
+    assert "GROK_WEEKLY_USD_CAP=invalid" in boot_config_lines()
+    assert non_veto_weekly_block() == "weekly_cap_unset"

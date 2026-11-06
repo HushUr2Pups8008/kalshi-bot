@@ -4,14 +4,40 @@ from __future__ import annotations
 
 import os
 import re
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 _BOOL_TRUE = {"1", "true", "yes", "on"}
+_USD_CAP_BOOT = {
+    "absent": "unset",
+    "empty": "empty",
+    "numeric": "numeric",
+    "non_numeric_present": "invalid",
+}
 
 
 def parse_bool_text(value: str) -> bool:
     """Single bool parser. True only for 1, true, yes, or on."""
     return value.strip().lower() in _BOOL_TRUE
+
+
+def classify_env_cap(raw: str | None) -> str:
+    """Classify one cap value as absent, empty, numeric, or non_numeric_present.
+
+    The return value is one of those four words. It is never the raw text.
+    """
+    if raw is None:
+        return "absent"
+    text = str(raw).strip()
+    if not text:
+        return "empty"
+    try:
+        value = Decimal(text)
+    except (InvalidOperation, ValueError):
+        return "non_numeric_present"
+    if not value.is_finite():
+        return "non_numeric_present"
+    return "numeric"
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -32,6 +58,8 @@ def boot_config_lines() -> list[str]:
         raw = os.environ.get(name)
         if _BOOT_SECRET.search(name):
             state = "unset" if raw is None else ("empty" if not raw.strip() else "set")
+        elif name.endswith("_USD_CAP"):
+            state = _USD_CAP_BOOT[classify_env_cap(raw)]
         elif raw is None:
             state = "default"
         elif not raw.isascii() or any(ord(ch) < 32 for ch in raw) or "PRIVATE" in raw:
