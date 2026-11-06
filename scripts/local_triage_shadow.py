@@ -104,6 +104,15 @@ def _detail_text(detail: Any) -> tuple[str, str, tuple[str, ...]]:
     )
 
 
+def _series_source_labels(series: Any) -> list[str]:
+    labels: list[str] = []
+    for source in getattr(series, "settlement_sources", ()) or ():
+        label = str(getattr(source, "label", "") or "").strip()
+        if label:
+            labels.append(label)
+    return labels
+
+
 def _enrich_rules(row: dict[str, Any], series: Any, detail_fetcher: Callable[[str], Any] | None) -> None:
     if series is not None and not row["category"]:
         row["category"] = str(getattr(series, "category", "") or "")
@@ -111,12 +120,9 @@ def _enrich_rules(row: dict[str, Any], series: Any, detail_fetcher: Callable[[st
         row["rules_primary"] = str(getattr(series, "rules_primary", "") or "")
         if not str(row["rules_secondary"]).strip():
             row["rules_secondary"] = str(getattr(series, "rules_secondary", "") or "")
-        if not row["settlement_sources"]:
-            row["settlement_sources"] = [
-                source.label
-                for source in (getattr(series, "settlement_sources", ()) or ())
-                if getattr(source, "label", "")
-            ]
+    # Market rules do not carry the series source list. Copy it whenever the row has none.
+    if series is not None and not row["settlement_sources"]:
+        row["settlement_sources"] = _series_source_labels(series)
     if not str(row["rules_primary"]).strip() and detail_fetcher is not None:
         try:
             detail = detail_fetcher(row["ticker"])
