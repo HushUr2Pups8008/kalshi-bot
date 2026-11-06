@@ -13,21 +13,39 @@ from urllib.parse import urlparse
 
 import pytest
 
-from scripts.local_triage_shadow import assert_shadow_dir, run_shadow, sports_prefixes
+from scripts.local_triage_shadow import (
+    assert_shadow_dir,
+    load_human_labels,
+    run_shadow,
+    schema_rates,
+    sports_prefixes,
+)
 from utils.local_triage import (
+    DOMAINS,
+    SETTLEMENTS,
     DiscoveryFilters,
-    deterministic_class,
-    review_class,
+    apply_deterministic_axes,
+    det_match_rates,
+    deterministic_axes,
+    human_axis_scores,
+    review_axis,
     screen_market,
+    select_pilot,
     touch_depth,
 )
-from utils.local_triage_classifier import LocalClassifier, is_paid_research_host, parse_classification
+from utils.local_triage_classifier import (
+    LocalClassifier,
+    is_paid_research_host,
+    parse_classification,
+    schema_mode_from_probe,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 NOW = datetime(2026, 11, 6, 12, 0, tzinfo=timezone.utc)
 FILTERS = DiscoveryFilters()
 VALID = {
-    "class": "countable",
+    "domain": "politics",
+    "settlement": "countable",
     "settlement_source": "Factbase",
     "rationale": "The rules count posts.",
     "ambiguity": "none",
@@ -185,10 +203,14 @@ def test_filter_order_and_bounds() -> None:
 
 
 def test_best_market_per_event_and_provisional_class() -> None:
-    """Lowest spread wins. The loser stays unclassified. Title text is not a class."""
-    from utils.local_triage import apply_deterministic_class, keep_best_per_event
+    """Lowest spread wins. The loser stays unclassified. Title text is not a settlement."""
+    from utils.local_triage import keep_best_per_event
 
-    tight = screen_market(_market(ticker="KXTEST-26NOV20-B", yes_bid_dollars="0.41", yes_ask_dollars="0.42"), FILTERS, now=NOW)
+    tight = screen_market(
+        _market(ticker="KXTEST-26NOV20-B", yes_bid_dollars="0.41", yes_ask_dollars="0.42"),
+        FILTERS,
+        now=NOW,
+    )
     wide = screen_market(_market(ticker="KXTEST-26NOV20-A", volume_24h_fp="9000"), FILTERS, now=NOW)
     other_event = screen_market(
         _market(ticker="KXOTHER-26NOV20-A", event_ticker="KXOTHER-26NOV20", series_ticker="KXOTHER"),
@@ -200,9 +222,10 @@ def test_best_market_per_event_and_provisional_class() -> None:
     by_ticker = {row["ticker"]: row for row in rows}
     assert by_ticker["KXTEST-26NOV20-B"]["rejection_reason"] == ""
     assert by_ticker["KXTEST-26NOV20-A"]["rejection_reason"] == "not_best_in_event"
-    apply_deterministic_class(rows, sports_prefixes=("KXNFL",))
-    assert by_ticker["KXTEST-26NOV20-A"]["deterministic_class"] == ""
-    assert by_ticker["KXTEST-26NOV20-B"]["deterministic_class"] == "countable"
+    apply_deterministic_axes(rows, sports_prefixes=("KXNFL",))
+    assert by_ticker["KXTEST-26NOV20-A"]["deterministic_domain"] == ""
+    assert by_ticker["KXTEST-26NOV20-B"]["deterministic_domain"] == "politics"
+    assert by_ticker["KXTEST-26NOV20-B"]["deterministic_settlement"] == "countable"
     assert by_ticker["KXTEST-26NOV20-B"]["deterministic_ambiguity"] == "none"
 
     same_spread_low_volume = screen_market(_market(ticker="KXTEST-26NOV20-C", volume_24h_fp="600"), FILTERS, now=NOW)
@@ -214,7 +237,7 @@ def test_best_market_per_event_and_provisional_class() -> None:
 
 
 def test_heuristic_is_provisional_and_title_only_is_ambiguous() -> None:
-    """Sports is strong. Two content classes, or no rules, stay ambiguous."""
+    """Sports is a domain. A count inside a sports rule stays countable. A title is not a settlement."""
     rules = {
         "series_ticker": "KXTEST",
         "category": "Politics",
@@ -223,17 +246,17 @@ def test_heuristic_is_provisional_and_title_only_is_ambiguous() -> None:
         "rules_secondary": "",
         "settlement_sources": [],
     }
-    assert deterministic_class(rules, sports_prefixes=("KXNFL",)) == ("ambiguous", "insufficient_evidence")
+    assert deterministic_axes(rules, sports_prefixes=("KXNFL",)) == ("politics", "ambiguous", "insufficient_evidence")
     sports = dict(rules, series_ticker="KXNFLGAME-26", rules_primary="Resolves on the count of posts.")
-    assert deterministic_class(sports, sports_prefixes=("KXNFL",)) == ("sports", "none")
+    assert deterministic_axes(sports, sports_prefixes=("KXNFL",)) == ("sports", "countable", "none")
     category = dict(rules, category="Sports", rules_primary="Resolves on the count of posts.")
-    assert deterministic_class(category, sports_prefixes=("KXNFL",)) == ("sports", "none")
+    assert deterministic_axes(category, sports_prefixes=("KXNFL",)) == ("sports", "countable", "none")
     both = dict(rules, rules_primary="The federal register count of posts settles the market.")
-    assert deterministic_class(both, sports_prefixes=("KXNFL",)) == ("ambiguous", "ambiguous")
+    assert deterministic_axes(both, sports_prefixes=("KXNFL",)) == ("politics", "ambiguous", "ambiguous")
     other = dict(rules, rules_primary="Resolves when the named bill is signed.")
-    assert deterministic_class(other, sports_prefixes=("KXNFL",)) == ("other", "none")
+    assert deterministic_axes(other, sports_prefixes=("KXNFL",)) == ("politics", "other", "none")
     poll = dict(rules, series_ticker="KXAPRPOTUS", rules_primary="Resolves on the approval rating.")
-    assert deterministic_class(poll, sports_prefixes=sports_prefixes())[0] == "opinion"
+    assert deterministic_axes(poll, sports_prefixes=sports_prefixes()) == ("politics", "opinion", "none")
     assert "KXAPRPOTUS" not in sports_prefixes()
     assert "KXNFL" in sports_prefixes()
 
@@ -261,11 +284,12 @@ def test_missing_depth_stays_missing() -> None:
 
 
 def test_review_keeps_both_classes_and_disagreement_stays_ambiguous() -> None:
-    """The model is not chosen when it disagrees, and a failure does not invent a class."""
-    assert review_class("countable", "ok", "lookup") == "ambiguous"
-    assert review_class("countable", "ok", "countable") == "countable"
-    assert review_class("countable", "malformed", "countable") == "local_unavailable"
-    assert review_class("countable", "unconfigured", "") == "local_unavailable"
+    """A disagreement changes only the axis that disagreed. The other axis can agree."""
+    assert review_axis("countable", "ok", "lookup", SETTLEMENTS) == "ambiguous"
+    assert review_axis("countable", "ok", "countable", SETTLEMENTS) == "countable"
+    assert review_axis("sports", "ok", "sports", DOMAINS) == "sports"
+    assert review_axis("countable", "malformed", "countable", SETTLEMENTS) == "local_unavailable"
+    assert review_axis("countable", "unconfigured", "", SETTLEMENTS) == "local_unavailable"
 
 
 def test_parse_rejects_probability_and_accepts_schema() -> None:
@@ -276,9 +300,21 @@ def test_parse_rejects_probability_and_accepts_schema() -> None:
     assert parse_classification(json.dumps(_envelope(leaked))) is None
     assert parse_classification(json.dumps(_envelope(dict(VALID, p_final=0.5)))) is None
     assert parse_classification(json.dumps(_envelope(dict(VALID, probability=0.5)))) is None
-    thin = {"class": "ambiguous", "settlement_source": "", "rationale": "Rules are missing.", "ambiguity": "insufficient_evidence"}
+    assert parse_classification(json.dumps(_envelope(dict(VALID, trade="buy")))) is None
+    assert parse_classification(json.dumps(_envelope(dict(VALID, side="yes")))) is None
+    assert parse_classification(json.dumps(_envelope(dict(VALID, order="1")))) is None
+    sports_count = dict(VALID, domain="sports", settlement="countable", rationale="Rushing attempts are a count.")
+    assert parse_classification(json.dumps(sports_count)) == sports_count
+    thin = {
+        "domain": "ambiguous",
+        "settlement": "ambiguous",
+        "settlement_source": "",
+        "rationale": "Rules are missing.",
+        "ambiguity": "insufficient_evidence",
+    }
     assert parse_classification(json.dumps(thin)) == thin
     assert parse_classification(json.dumps(dict(VALID, ambiguity="insufficient_evidence"))) is None
+    assert parse_classification(json.dumps(dict(VALID, domain="ambiguous"))) is None
     assert parse_classification("not-json") is None
 
 
@@ -312,7 +348,7 @@ def test_malformed_retries_once_then_fails_and_timeout_skips_the_rest() -> None:
         if len(calls) == 1:
             return _response(_envelope(dict(VALID, p_raw=0.4)))(request)
         fixed = dict(VALID)
-        fixed["class"] = "lookup"
+        fixed["settlement"] = "lookup"
         fixed["rationale"] = "A published lookup."
         return _response(_envelope(fixed))(request)
 
@@ -320,18 +356,23 @@ def test_malformed_retries_once_then_fails_and_timeout_skips_the_rest() -> None:
     first = client.classify(_market())
     assert first["outcome"] == "ok"
     assert first["retries"] == 1
-    assert first["class"] == "lookup"
-    assert calls == ["json_schema", "json_object"]
+    assert first["settlement"] == "lookup"
+    assert first["retry_outcome"] == "ok_on_retry"
+    assert first["parser_failure"] == "probability_field"
+    assert calls == ["json_schema", "json_schema"]
+    assert "json_object" not in calls
     assert "p_raw" not in first
 
     def _always_bad(request: Any, timeout: float = 0) -> Any:
         del timeout
-        return _response(_envelope({"class": "countable", "probability": 0.2}))(request)
+        return _response(_envelope({"domain": "politics", "settlement": "countable", "probability": 0.2}))(request)
 
     bad = _classifier(_always_bad).classify(_market())
     assert bad["outcome"] == "malformed"
-    assert bad["class"] == ""
+    assert bad["domain"] == ""
+    assert bad["settlement"] == ""
     assert bad["retries"] == 1
+    assert bad["retry_outcome"] == "malformed"
 
     timeouts = {"n": 0}
 
@@ -447,11 +488,17 @@ def test_shadow_funnel_does_not_fabricate_depth_or_leave_the_directory(tmp_path:
     assert books == ["KXTEST-26NOV20-A"]
     assert details == []
     assert funnel["shortlist"] == 1
+    assert funnel["shortlist_before_sports"] == 1
+    assert funnel["sports_excluded"] == 0
+    assert funnel["pilot"] == 1
     assert funnel["passed_filters"] == 1
     assert funnel["rejected"]["volume_below_min"] == 1
     assert funnel["local_outcomes"] == {"unconfigured": 1}
-    assert funnel["review_classes"] == {"local_unavailable": 1}
-    assert funnel["deterministic_classes"] == {"countable": 1}
+    assert funnel["review_domains"] == {"local_unavailable": 1}
+    assert funnel["review_settlements"] == {"local_unavailable": 1}
+    assert funnel["deterministic_domains"] == {"politics": 1}
+    assert funnel["deterministic_settlements"] == {"countable": 1}
+    assert funnel["schema_enforced"] is False
     assert funnel["missing"]["depth"] == 1
     assert funnel["missing"]["rules"] == 0
     discovery = Path(funnel["paths"]["discovery"]).read_text(encoding="utf-8").splitlines()
@@ -459,7 +506,10 @@ def test_shadow_funnel_does_not_fabricate_depth_or_leave_the_directory(tmp_path:
     kept_row = next(row for row in rows if row["ticker"] == "KXTEST-26NOV20-A")
     assert kept_row["yes_bid_size"] is None
     assert kept_row["yes_ask_size"] is None
-    assert kept_row["deterministic_class"] == "countable"
+    assert kept_row["deterministic_domain"] == "politics"
+    assert kept_row["deterministic_settlement"] == "countable"
+    assert kept_row["deterministic_ambiguity"] == "none"
+    assert kept_row["track"] == "main"
     assert kept_row["rules_primary"] == "Resolves on the count of posts."
     assert kept_row["settlement_sources"] == ["Factbase"]
     assert kept_row["rule_version"] != "missing"
@@ -472,8 +522,10 @@ def test_shadow_funnel_does_not_fabricate_depth_or_leave_the_directory(tmp_path:
     cache = json.loads(Path(funnel["paths"]["series_cache"]).read_text(encoding="utf-8"))
     assert "raw_payload" not in cache[0]
     review = json.loads(Path(funnel["paths"]["review"]).read_text(encoding="utf-8"))
-    assert review["rows"][0]["human_class"] is None
-    assert review["rows"][0]["review_class"] == "local_unavailable"
+    assert review["rows"][0]["human_domain"] is None
+    assert review["rows"][0]["human_settlement"] is None
+    assert review["rows"][0]["review_domain"] == "local_unavailable"
+    assert review["rows"][0]["review_settlement"] == "local_unavailable"
     with pytest.raises(RuntimeError):
         assert_shadow_dir(tmp_path / "grok_edge_calls.jsonl")
 
@@ -488,8 +540,10 @@ def test_disagreement_in_the_shadow_sample_stays_ambiguous(tmp_path: Path) -> No
         body = json.loads(request.data.decode("utf-8"))
         assert body["model"] == "studio-model"
         assert urlparse(request.full_url).hostname == "127.0.0.1"
+        assert body["response_format"]["type"] == "json_schema"
         return _response(_envelope({
-            "class": "lookup",
+            "domain": "politics",
+            "settlement": "lookup",
             "settlement_source": "Federal Register",
             "rationale": "The model read a lookup.",
             "ambiguity": "none",
@@ -511,13 +565,21 @@ def test_disagreement_in_the_shadow_sample_stays_ambiguous(tmp_path: Path) -> No
         market_for=lambda ticker: None,
     )
     assert calls["n"] == 2
-    assert funnel["local_classes"] == {"lookup": 2}
-    assert funnel["review_classes"] == {"ambiguous": 2}
+    assert funnel["local_domains"] == {"politics": 2}
+    assert funnel["local_settlements"] == {"lookup": 2}
+    assert funnel["review_domains"] == {"politics": 2}
+    assert funnel["review_settlements"] == {"ambiguous": 2}
+    assert funnel["schema_enforced"] is False
     assert funnel["missing"]["depth"] == 0
     review = json.loads(Path(funnel["paths"]["review"]).read_text(encoding="utf-8"))
-    assert {row["deterministic_class"] for row in review["rows"]} == {"countable"}
-    assert {row["local_class"] for row in review["rows"]} == {"lookup"}
-    assert {row["review_class"] for row in review["rows"]} == {"ambiguous"}
+    assert {row["deterministic_domain"] for row in review["rows"]} == {"politics"}
+    assert {row["deterministic_settlement"] for row in review["rows"]} == {"countable"}
+    assert {row["local_domain"] for row in review["rows"]} == {"politics"}
+    assert {row["local_settlement"] for row in review["rows"]} == {"lookup"}
+    assert {row["review_domain"] for row in review["rows"]} == {"politics"}
+    assert {row["review_settlement"] for row in review["rows"]} == {"ambiguous"}
+    assert {row["human_domain"] for row in review["rows"]} == {None}
+    assert {row["human_settlement"] for row in review["rows"]} == {None}
     classified = [
         json.loads(line)
         for line in Path(funnel["paths"]["classification"]).read_text(encoding="utf-8").splitlines()
@@ -540,7 +602,9 @@ def test_disagreement_in_the_shadow_sample_stays_ambiguous(tmp_path: Path) -> No
     assert kept["yes_ask_size"] == "3.00"
     assert kept["no_bid_size"] == "3.00"
     assert kept["no_ask_size"] == "12.50"
-    assert kept["deterministic_class"] == "countable"
+    assert kept["deterministic_domain"] == "politics"
+    assert kept["deterministic_settlement"] == "countable"
+    assert kept["deterministic_ambiguity"] == "none"
 
 
 def test_fake_local_server_and_no_external_host() -> None:
@@ -579,7 +643,10 @@ def test_fake_local_server_and_no_external_host() -> None:
         thread.join(timeout=2)
         server.server_close()
     assert record["outcome"] == "ok"
-    assert record["class"] == "countable"
+    assert record["domain"] == "politics"
+    assert record["settlement"] == "countable"
+    assert record["schema_enforced"] is False
+    assert "class" not in record
     assert record["runtime"] == "ollama"
     assert seen[0]["model"] == "fake-local"
     assert seen[0]["response_format"]["type"] == "json_schema"
@@ -608,5 +675,323 @@ def test_local_output_cannot_reach_orders_admission_or_xai() -> None:
             assert "local_triage" not in text
     shadow = (ROOT / "scripts" / "local_triage_shadow.py").read_text(encoding="utf-8")
     assert "get_universe" not in shadow
+    assert 'add_argument("--max-classify", type=int, default=50)' in shadow
     veto = (ROOT / "utils" / "event_news_grok_veto.py").read_text(encoding="utf-8")
     assert 'return result == "yes"' in veto
+
+
+def test_sports_domain_is_excluded_before_local_classification(tmp_path: Path) -> None:
+    """A sports countable prop stays sports and countable, and the model never sees it."""
+    calls: list[str] = []
+
+    def _open(request: Any, timeout: float = 0) -> Any:
+        del timeout
+        body = json.loads(request.data.decode("utf-8"))
+        prompt = body["messages"][1]["content"]
+        calls.append(prompt)
+        assert "KXNFLRSH" not in prompt
+        return _response(_envelope(VALID))(request)
+
+    sports = _market(
+        ticker="KXNFLRSH-26NOV20-A",
+        event_ticker="KXNFLRSH-26NOV20",
+        series_ticker="KXNFLRSH",
+        category="Sports",
+        title="Rushing attempts",
+        rules_primary="Resolves on the count of rushing attempts.",
+    )
+    books: list[str] = []
+
+    def _book(ticker: str) -> _Book:
+        books.append(ticker)
+        return _Book("4.00", "6.00")
+
+    funnel = run_shadow(
+        _Pages([_market(), sports], []),
+        now=NOW,
+        out_dir=tmp_path / "local_triage",
+        filters=FILTERS,
+        classifier=_classifier(_open),
+        sports_prefixes=("KXNFL",),
+        orderbook_for=_book,
+        market_for=lambda _ticker: None,
+    )
+    assert len(calls) == 1
+    assert "KXTEST-26NOV20-A" in calls[0]
+    assert books == ["KXTEST-26NOV20-A", "KXNFLRSH-26NOV20-A"]
+    assert funnel["sports_excluded"] == 1
+    assert funnel["shortlist"] == 1
+    assert funnel["shortlist_before_sports"] == 2
+    assert funnel["passed_filters"] == 2
+    assert funnel["rejected"] == {}
+    assert funnel["local_outcomes"] == {"ok": 1}
+    sports_row = json.loads(Path(funnel["paths"]["sports"]).read_text(encoding="utf-8").splitlines()[0])
+    assert sports_row["ticker"] == "KXNFLRSH-26NOV20-A"
+    assert sports_row["deterministic_domain"] == "sports"
+    assert sports_row["deterministic_settlement"] == "countable"
+    assert sports_row["deterministic_ambiguity"] == "none"
+    assert sports_row["yes_bid_size"] == "4.00"
+    assert sports_row["track"] == "sports_shadow"
+    classified = Path(funnel["paths"]["classification"]).read_text(encoding="utf-8")
+    assert "KXNFLRSH" not in classified
+
+
+def test_select_pilot_round_robin_keeps_aaa_ahead_of_a_larger_bucket() -> None:
+    """One bucket cannot fill the pilot. AAA is seated before later other rows."""
+
+    def _row(ticker: str, **overrides: Any) -> dict[str, Any]:
+        row = {
+            "ticker": ticker,
+            "series_ticker": ticker.split("-", 1)[0],
+            "title": "Plain bill",
+            "rules_primary": "Resolves when the named bill is signed.",
+            "rules_secondary": "",
+            "deterministic_domain": "politics",
+            "deterministic_settlement": "other",
+            "deterministic_ambiguity": "none",
+        }
+        row.update(overrides)
+        return row
+
+    aaa = _row(
+        "Z-GAS",
+        series_ticker="KXAAAGAS",
+        title="AAA regular gas",
+        rules_primary="AAA national average gas price",
+        deterministic_domain="macro",
+    )
+    others = [_row("A-1"), _row("A-2"), _row("A-3")]
+    picked = select_pilot([*others, aaa], 1)
+    assert [row["ticker"] for row in picked] == ["Z-GAS"]
+    assert select_pilot(others, 0) == []
+    with pytest.raises(ValueError):
+        select_pilot(others, -1)
+
+
+def test_human_accuracy_is_not_called_det_match() -> None:
+    """Agreement with the heuristic is det_match_rate. Accuracy uses human labels only."""
+    ok = {
+        "ticker": "KXAAAGASW-26NOV09-4.0100",
+        "series_ticker": "KXAAAGAS",
+        "outcome": "ok",
+        "domain": "macro",
+        "settlement": "other",
+        "deterministic_domain": "macro",
+        "deterministic_settlement": "other",
+        "rules_primary": "AAA average regular gas price",
+    }
+    malformed = dict(ok, ticker="KXAAAGASW-26NOV16-4.0100", outcome="malformed", settlement="")
+    labels = [{"series_prefix": "KXAAAGAS", "human_domain": "macro", "human_settlement": "lookup"}]
+    match = det_match_rates([ok])
+    assert match["det_match_rate"] == 1
+    assert match["det_match_rate_meaning"] == "agreement_not_accuracy"
+    scores = human_axis_scores([ok, malformed], labels)
+    assert scores["labeled_ok"] == 1
+    assert scores["labeled_not_ok"] == [{"ticker": "KXAAAGASW-26NOV16-4.0100", "outcome": "malformed"}]
+    assert scores["domain_accuracy"] == 1
+    assert scores["settlement_accuracy"] == 0
+    assert scores["settlement_confusion"] == {"lookup->other": 1}
+
+
+def test_schema_gate_keeps_timeouts_out_of_the_valid_rate() -> None:
+    """49 of 50 is a miss. A timeout is reported beside the schema rate and is not relabeled."""
+    miss = schema_rates([{"outcome": "ok"}] * 49 + [{"outcome": "malformed"}])
+    assert miss["schema_valid_rate"] == pytest.approx(0.98)
+    assert miss["gate_met"] is False
+    hung = schema_rates([{"outcome": "timeout"}])
+    assert hung["schema_valid_rate"] is None
+    assert hung["timeout_rate"] == 1
+    assert hung["gate_met"] is False
+    separate = schema_rates([{"outcome": "ok"}] * 99 + [{"outcome": "timeout"}])
+    assert separate["schema_valid_rate"] == 1
+    assert separate["valid_rate"] == pytest.approx(0.99)
+    assert separate["timeout_rate"] == pytest.approx(0.01)
+    assert separate["gate_met"] is True
+    down = schema_rates([{"outcome": "ok"}] * 99 + [{"outcome": "endpoint_unavailable"}])
+    assert down["timeout_rate"] == 0
+    assert down["schema_valid_rate"] == pytest.approx(0.99)
+    assert down["gate_met"] is True
+
+
+def test_schema_mode_from_probe_never_selects_json_object() -> None:
+    """JSON-only output is not the schema. An unconstrained probe stays unenforced."""
+    loose = [
+        {"mode": "openai_json_schema", "constrained": False},
+        {"mode": "openai_json_object", "constrained": True},
+        {"mode": "ollama_native", "constrained": False},
+    ]
+    assert schema_mode_from_probe(loose) == ("openai_json_schema", False)
+    native = [
+        {"mode": "openai_json_schema", "constrained": False},
+        {"mode": "openai_json_object", "constrained": True},
+        {"mode": "ollama_native", "constrained": True},
+    ]
+    assert schema_mode_from_probe(native) == ("ollama_native", True)
+
+
+def _probe_client(opener: Any, model: str) -> LocalClassifier:
+    return LocalClassifier(
+        base_url="http://127.0.0.1:11434/v1",
+        model_id=model,
+        runtime="ollama",
+        timeout_s=1,
+        opener=opener,
+        clock=lambda: NOW,
+    )
+
+
+def test_hello_probe_is_not_schema_enforcement() -> None:
+    """A structured-output request that returns the word hello did not enforce the schema."""
+    modes: list[str] = []
+    paths: list[str] = []
+
+    def _open(request: Any, timeout: float = 0) -> Any:
+        del timeout
+        body = json.loads(request.data.decode("utf-8"))
+        native = "response_format" not in body
+        modes.append("native" if native else body["response_format"]["type"])
+        paths.append(urlparse(request.full_url).path)
+        if native:
+            payload = {"message": {"content": "hello"}}
+        else:
+            payload = {"choices": [{"message": {"content": "hello"}}]}
+        return _response(payload)(request)
+
+    client = _probe_client(_open, "qwen2.5:7b")
+    report = client.probe()
+    assert modes == ["json_schema", "json_object", "native"]
+    assert paths == ["/v1/chat/completions", "/v1/chat/completions", "/api/chat"]
+    assert report["schema_enforced"] is False
+    assert report["selected_mode"] == "openai_json_schema"
+    assert client.schema_enforced is False
+    assert [row["constrained"] for row in report["attempts"]] == [False, False, False]
+    assert [row["parser_failure"] for row in report["attempts"]] == ["not_json", "not_json", "not_json"]
+    assert [row["http_status"] for row in report["attempts"]] == [200, 200, 200]
+    dumped = json.dumps(report)
+    assert "hello" not in dumped
+
+
+def test_native_schema_can_enforce_when_json_schema_does_not() -> None:
+    """The native format schema is selected only when the hello probe comes back as the schema."""
+
+    def _open(request: Any, timeout: float = 0) -> Any:
+        del timeout
+        body = json.loads(request.data.decode("utf-8"))
+        if "response_format" not in body:
+            assert body["format"]["additionalProperties"] is False
+            assert "think" not in body
+            payload = {"message": {"content": json.dumps(VALID)}}
+        elif body["response_format"]["type"] == "json_object":
+            payload = {"choices": [{"message": {"content": json.dumps(VALID)}}]}
+        else:
+            payload = {"choices": [{"message": {"content": "hello"}}]}
+        return _response(payload)(request)
+
+    client = _probe_client(_open, "qwen2.5:7b")
+    report = client.probe()
+    assert report["selected_mode"] == "ollama_native"
+    assert report["schema_enforced"] is True
+    assert "Factbase" not in json.dumps(report)
+    assert client.schema_mode == "ollama_native"
+
+
+def test_qwen3_native_request_sets_think_false_and_qwen25_does_not() -> None:
+    """think false is native qwen3 only. Prompt text is not the schema."""
+    seen: list[tuple[str, dict[str, Any]]] = []
+
+    def _open(request: Any, timeout: float = 0) -> Any:
+        del timeout
+        seen.append((urlparse(request.full_url).path, json.loads(request.data.decode("utf-8"))))
+        payload = {"message": {"content": json.dumps(VALID)}}
+        return _response(payload)(request)
+
+    qwen3 = _probe_client(_open, "qwen3:14b")
+    qwen3.schema_mode = "ollama_native"
+    assert qwen3.classify(_market())["outcome"] == "ok"
+    qwen25 = _probe_client(_open, "qwen2.5:7b")
+    qwen25.schema_mode = "ollama_native"
+    assert qwen25.classify(_market())["outcome"] == "ok"
+    assert seen[0][0] == "/api/chat"
+    assert seen[0][1]["think"] is False
+    assert seen[0][1]["stream"] is False
+    assert "response_format" not in seen[0][1]
+    assert seen[1][0] == "/api/chat"
+    assert "think" not in seen[1][1]
+    assert "response_format" not in seen[1][1]
+
+
+def test_compare_model_does_not_replace_the_primary_row(tmp_path: Path) -> None:
+    """The comparison pass is a second record. It does not overwrite the primary axes."""
+
+    def _open(request: Any, timeout: float = 0) -> Any:
+        del timeout
+        body = json.loads(request.data.decode("utf-8"))
+        settlement = "lookup" if body["model"] == "qwen3:14b" else "countable"
+        payload = dict(VALID, settlement=settlement, rationale="Compared axes.")
+        return _response(_envelope(payload))(request)
+
+    funnel = run_shadow(
+        _Pages([_market()], []),
+        now=NOW,
+        out_dir=tmp_path / "local_triage",
+        filters=FILTERS,
+        classifier=_classifier(_open, model="qwen2.5:7b"),
+        sports_prefixes=(),
+        orderbook_for=lambda _ticker: _Book("4.00", "6.00"),
+        market_for=lambda _ticker: None,
+        compare_model="qwen3:14b",
+    )
+    review = json.loads(Path(funnel["paths"]["review"]).read_text(encoding="utf-8"))
+    assert review["rows"][0]["local_settlement"] == "countable"
+    assert review["rows"][0]["review_settlement"] == "countable"
+    primary = json.loads(Path(funnel["paths"]["classification"]).read_text(encoding="utf-8").splitlines()[0])
+    compared = json.loads(
+        Path(funnel["paths"]["classification_compare"]).read_text(encoding="utf-8").splitlines()[0]
+    )
+    assert primary["model_id"] == "qwen2.5:7b"
+    assert primary["settlement"] == "countable"
+    assert compared["model_id"] == "qwen3:14b"
+    assert compared["settlement"] == "lookup"
+
+
+def test_discover_only_writes_the_pilot_without_a_model_call(tmp_path: Path) -> None:
+    """Discovery can select the pilot before any classification HTTP."""
+
+    def _boom(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("model called")
+
+    funnel = run_shadow(
+        _Pages([_market()], []),
+        now=NOW,
+        out_dir=tmp_path / "local_triage",
+        filters=FILTERS,
+        classifier=_classifier(_boom),
+        sports_prefixes=(),
+        orderbook_for=lambda _ticker: _Book(None, None),
+        market_for=lambda _ticker: None,
+        max_classify=50,
+        send_to_model=False,
+    )
+    assert funnel["attempted"] == 0
+    assert funnel["pilot"] == 1
+    assert funnel["sports_excluded"] == 0
+    assert funnel["local_outcomes"] == {}
+    pilot = json.loads(Path(funnel["paths"]["pilot"]).read_text(encoding="utf-8"))
+    assert len(pilot["rows"]) == 1
+    assert pilot["rows"][0]["deterministic_settlement"] == "countable"
+
+
+def test_hand_label_fixture_uses_both_axes() -> None:
+    """Human labels stay inside the schema. Sports countable and AAA lookup are both present."""
+    rows = load_human_labels()
+    assert rows
+    for row in rows:
+        assert row["human_domain"] in DOMAINS
+        assert row["human_settlement"] in SETTLEMENTS
+    by_prefix = {str(row["series_prefix"]): row for row in rows}
+    assert by_prefix["KXAAAGAS"]["human_domain"] == "macro"
+    assert by_prefix["KXAAAGAS"]["human_settlement"] == "lookup"
+    assert by_prefix["KXNFLRSH"]["human_domain"] == "sports"
+    assert by_prefix["KXNFLRSH"]["human_settlement"] == "countable"
+    assert by_prefix["KXTRUMPACT"]["human_settlement"] == "ambiguous"
+    assert "probability" not in json.dumps(rows)

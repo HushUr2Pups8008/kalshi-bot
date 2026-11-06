@@ -1,8 +1,14 @@
-"""Local settlement-class client. Not a probability and not an order path.
+"""Local two-axis client. Not a probability and not an order path.
 
-The client talks only to a configured OpenAI-compatible base URL. A missing
-server, a timeout, or a malformed body fails that classification. Paid hosts
-are refused before any socket. xAI is never a fallback.
+The client talks only to a configured local base URL. A missing server, a
+timeout, or a malformed body fails that classification. Paid hosts are
+refused before any socket. xAI is never a fallback.
+
+Sending ``response_format`` is not schema enforcement. ``schema_enforced``
+is true only after a probe where the server returns the schema object for a
+prompt that asked for the single word hello. A JSON-object mode can force
+JSON and still is not schema enforcement. Prompt instructions are not
+enforcement either.
 """
 
 from __future__ import annotations
@@ -19,32 +25,41 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Mapping
 from urllib.parse import urlparse
 
-from utils.local_triage import CLASSES
+from utils.local_triage import DOMAINS, SETTLEMENTS
 
 _AMBIGUITY = ("none", "ambiguous", "insufficient_evidence")
-_ALLOWED_KEYS = {"class", "settlement_source", "rationale", "ambiguity"}
+_ALLOWED_KEYS = {"domain", "settlement", "settlement_source", "rationale", "ambiguity"}
 _PROBABILITY_KEYS = {"p_raw", "p_final", "probability"}
+_ORDER_KEYS = {"trade", "side", "order"}
 _PAID_HOSTS = ("x.ai", "openai.com", "anthropic.com")
+_PROBE_MODES = ("openai_json_schema", "openai_json_object", "ollama_native")
+_ENFORCING_MODES = ("openai_json_schema", "ollama_native")
 _SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["class", "settlement_source", "rationale", "ambiguity"],
+    "required": ["domain", "settlement", "settlement_source", "rationale", "ambiguity"],
     "properties": {
-        "class": {"type": "string", "enum": list(CLASSES)},
+        "domain": {"type": "string", "enum": list(DOMAINS)},
+        "settlement": {"type": "string", "enum": list(SETTLEMENTS)},
         "settlement_source": {"type": "string"},
         "rationale": {"type": "string"},
         "ambiguity": {"type": "string", "enum": list(_AMBIGUITY)},
     },
 }
 _SYSTEM = (
-    "Classify Kalshi settlement rules and the settlement source. "
-    "This is not a probability and not a trading signal. "
-    "Do not return a probability. "
-    "If the rules are missing or more than one class fits, use class ambiguous. "
-    "Use ambiguity insufficient_evidence when the rules do not support a class. "
-    "Use ambiguity ambiguous when more than one class fits. "
-    "Use ambiguity none only when one class fits."
+    "Classify two axes of a Kalshi market. "
+    "domain is sports, politics, macro, weather, other, or ambiguous. "
+    "settlement is countable, lookup, market_price, opinion, other, or ambiguous. "
+    "A sports domain can have a countable settlement. That pair is valid. "
+    "Do not collapse the two axes into one label. "
+    "This is not a probability and not a trade. "
+    "Do not return a probability, a side, or an order. "
+    "Use ambiguity none only when both axes are specific. "
+    "If either axis is ambiguous because the rules are missing, use insufficient_evidence. "
+    "If either axis is ambiguous because more than one value fits, use ambiguous."
 )
+_PROBE_SYSTEM = "Reply with only the single word hello."
+_PROBE_USER = "hello"
 
 
 class EndpointDown(Exception):
@@ -54,13 +69,19 @@ class EndpointDown(Exception):
     An HTTP 5xx is not fatal: the server answered.
     """
 
-    def __init__(self, fatal: bool = True) -> None:
+    def __init__(self, fatal: bool = True, status: int | None = None) -> None:
         super().__init__("local endpoint unavailable")
         self.fatal = fatal
+        self.status = status
 
 
 class MalformedBody(Exception):
     """The server answered, but the body is not the schema."""
+
+    def __init__(self, status: int | None = None, text: str = "") -> None:
+        super().__init__("malformed")
+        self.status = status
+        self.text = text
 
 
 def is_paid_research_host(base_url: str) -> bool:
@@ -74,6 +95,18 @@ def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def schema_mode_from_probe(attempts: list[Mapping[str, Any]]) -> tuple[str, bool]:
+    """Pick a mode only when that mode constrained the hello probe.
+
+    ``openai_json_object`` is never selected. JSON-only output is not the schema.
+    """
+    by_mode = {str(row.get("mode") or ""): row for row in attempts}
+    for mode in _ENFORCING_MODES:
+        if (by_mode.get(mode) or {}).get("constrained") is True:
+            return mode, True
+    return "openai_json_schema", False
+
+
 def build_prompt(item: Mapping[str, Any]) -> str:
     sources = item.get("settlement_sources") or ()
     if isinstance(sources, str):
@@ -82,7 +115,7 @@ def build_prompt(item: Mapping[str, Any]) -> str:
         source_text = ", ".join(str(label) for label in sources)
     return "\n".join(
         (
-            "Classify the settlement rules. This is not a probability and not a trade.",
+            "Classify domain and settlement. This is not a probability and not a trade.",
             f"ticker: {item.get('ticker') or ''}",
             f"series: {item.get('series_ticker') or ''}",
             f"title: {item.get('title') or ''}",
@@ -90,10 +123,12 @@ def build_prompt(item: Mapping[str, Any]) -> str:
             f"rules_secondary: {item.get('rules_secondary') or ''}",
             f"settlement_sources: {source_text}",
             f"rule_version: {item.get('rule_version') or 'missing'}",
-            "classes: countable, lookup, market_price, opinion, sports, other, ambiguous",
+            "domain: sports, politics, macro, weather, other, ambiguous",
+            "settlement: countable, lookup, market_price, opinion, other, ambiguous",
+            "Sports and countable together are valid.",
             "ambiguity: none, ambiguous, insufficient_evidence",
-            "If the evidence is thin, class is ambiguous and ambiguity is insufficient_evidence.",
-            "Do not return p_raw, p_final, or probability.",
+            "Use ambiguity none only when both axes are specific.",
+            "Do not return p_raw, p_final, probability, trade, side, or order.",
         )
     )
 
@@ -137,41 +172,51 @@ def _load_object(text: str) -> dict[str, Any] | None:
     return None
 
 
-def parse_classification(raw: str) -> dict[str, str] | None:
-    """Schema object, or None when the body is malformed.
+def parse_classification_detail(raw: str) -> tuple[dict[str, str] | None, str]:
+    """Schema object and a failure category. An empty category means valid.
 
-    A probability field is malformed and is not returned.
+    A probability, trade, side, or order field is malformed and is not returned.
     """
     payload = _load_object(raw)
     if payload is None:
-        return None
+        return None, "not_json"
     lowered = {str(key).lower() for key in payload}
     if lowered & _PROBABILITY_KEYS:
-        return None
+        return None, "probability_field"
+    if lowered & _ORDER_KEYS:
+        return None, "order_field"
     if set(payload) != _ALLOWED_KEYS:
-        return None
-    label = payload.get("class")
+        return None, "extra_or_missing_keys"
+    domain = payload.get("domain")
+    settlement = payload.get("settlement")
     source = payload.get("settlement_source")
     rationale = payload.get("rationale")
     ambiguity = payload.get("ambiguity")
-    if not isinstance(label, str) or label not in CLASSES:
-        return None
+    if not isinstance(domain, str) or domain not in DOMAINS:
+        return None, "bad_domain"
+    if not isinstance(settlement, str) or settlement not in SETTLEMENTS:
+        return None, "bad_settlement"
     if not isinstance(source, str) or not isinstance(rationale, str):
-        return None
+        return None, "bad_text"
     if not isinstance(ambiguity, str) or ambiguity not in _AMBIGUITY:
-        return None
-    if label == "ambiguous" and ambiguity == "none":
-        return None
-    if ambiguity == "insufficient_evidence" and label != "ambiguous":
-        return None
-    if ambiguity == "ambiguous" and label != "ambiguous":
-        return None
+        return None, "bad_ambiguity"
+    axes_ambiguous = domain == "ambiguous" or settlement == "ambiguous"
+    if ambiguity == "none" and axes_ambiguous:
+        return None, "ambiguity_conflict"
+    if ambiguity in {"ambiguous", "insufficient_evidence"} and not axes_ambiguous:
+        return None, "ambiguity_conflict"
     return {
-        "class": label,
+        "domain": domain,
+        "settlement": settlement,
         "settlement_source": " ".join(source.split())[:300],
         "rationale": " ".join(rationale.split())[:400],
         "ambiguity": ambiguity,
-    }
+    }, ""
+
+
+def parse_classification(raw: str) -> dict[str, str] | None:
+    parsed, _category = parse_classification_detail(raw)
+    return parsed
 
 
 def _timeout_seconds(env: Mapping[str, str]) -> float:
@@ -188,7 +233,12 @@ def _timeout_seconds(env: Mapping[str, str]) -> float:
 
 
 class LocalClassifier:
-    """One shortlist item per call. The first dead endpoint skips the rest."""
+    """One shortlist item per call. The first dead endpoint skips the rest.
+
+    The retry repeats the selected mode. It does not drop to json_object.
+    A timeout is not retried. ``schema_enforced`` stays false until a probe
+    shows a mode constrained the hello prompt.
+    """
 
     def __init__(
         self,
@@ -199,6 +249,7 @@ class LocalClassifier:
         timeout_s: float,
         opener: Callable[..., Any] | None = None,
         clock: Callable[[], datetime] | None = None,
+        schema_mode: str = "openai_json_schema",
     ) -> None:
         self.base_url = base_url.strip().rstrip("/")
         self.model_id = model_id.strip()
@@ -207,6 +258,8 @@ class LocalClassifier:
         self._opener = opener or urllib.request.urlopen
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._down = False
+        self.schema_mode = schema_mode
+        self.schema_enforced = False
         self.refused_paid_host = bool(self.base_url) and is_paid_research_host(self.base_url)
 
     @classmethod
@@ -232,34 +285,64 @@ class LocalClassifier:
             moment = moment.replace(tzinfo=timezone.utc)
         return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    def _url(self) -> str:
+    def _request_url(self, mode: str) -> str:
+        if mode == "ollama_native":
+            if self.base_url.endswith("/api/chat"):
+                return self.base_url
+            parsed = urlparse(self.base_url)
+            return f"{parsed.scheme}://{parsed.netloc}/api/chat"
         if self.base_url.endswith("/chat/completions"):
             return self.base_url
         return self.base_url + "/chat/completions"
 
-    def _post(self, prompt: str, *, schema: bool) -> str:
-        if self.refused_paid_host or is_paid_research_host(self._url()):
-            raise EndpointDown
-        response_format: dict[str, Any]
-        if schema:
+    def _body(self, mode: str, system: str, user: str) -> dict[str, Any]:
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+        if mode == "ollama_native":
+            body: dict[str, Any] = {
+                "model": self.model_id,
+                "stream": False,
+                "messages": messages,
+                "format": _SCHEMA,
+            }
+            if "qwen3" in self.model_id.lower():
+                body["think"] = False
+            return body
+        if mode == "openai_json_object":
+            response_format: dict[str, Any] = {"type": "json_object"}
+        else:
             response_format = {
                 "type": "json_schema",
-                "json_schema": {"name": "settlement_class", "strict": True, "schema": _SCHEMA},
+                "json_schema": {"name": "settlement_axes", "strict": True, "schema": _SCHEMA},
             }
-        else:
-            response_format = {"type": "json_object"}
-        body = {
+        return {
             "model": self.model_id,
             "temperature": 0,
-            "messages": [
-                {"role": "system", "content": _SYSTEM},
-                {"role": "user", "content": prompt},
-            ],
+            "messages": messages,
             "response_format": response_format,
         }
-        encoded = json.dumps(body).encode("utf-8")
+
+    def _interpret(self, raw: str, mode: str) -> str:
+        if mode != "ollama_native":
+            return raw
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return raw
+        message = payload.get("message") if isinstance(payload, dict) else None
+        if isinstance(message, dict) and isinstance(message.get("content"), str):
+            return message["content"]
+        return raw
+
+    def _exchange(self, mode: str, system: str, user: str) -> tuple[int | None, str]:
+        url = self._request_url(mode)
+        if self.refused_paid_host or is_paid_research_host(url):
+            raise EndpointDown
+        encoded = json.dumps(self._body(mode, system, user)).encode("utf-8")
         request = urllib.request.Request(
-            self._url(),
+            url,
             data=encoded,
             headers={"Content-Type": "application/json"},
             method="POST",
@@ -267,6 +350,7 @@ class LocalClassifier:
         try:
             with self._opener(request, timeout=self.timeout_s) as response:
                 raw = response.read()
+                status = getattr(response, "status", None)
         except TimeoutError as exc:
             raise TimeoutError(str(exc)) from exc
         except socket.timeout as exc:
@@ -278,15 +362,81 @@ class LocalClassifier:
             except Exception:
                 detail = ""
             if exc.code in (408, 429) or exc.code >= 500:
-                raise EndpointDown(fatal=False) from exc
-            raise MalformedBody(detail) from exc
+                raise EndpointDown(fatal=False, status=exc.code) from exc
+            raise MalformedBody(status=exc.code, text=detail) from exc
         except urllib.error.URLError as exc:
             raise EndpointDown(fatal=True) from exc
         except OSError as exc:
             raise EndpointDown(fatal=True) from exc
         if isinstance(raw, bytes):
-            return raw.decode("utf-8", "replace")
-        return str(raw)
+            text = raw.decode("utf-8", "replace")
+        else:
+            text = str(raw)
+        code = status if isinstance(status, int) else None
+        return code, self._interpret(text, mode)
+
+    def probe(self) -> dict[str, Any]:
+        """Ask for the word hello under each request format. Record the result.
+
+        The body of the reply is not kept. A constrained result means the
+        returned text parsed as the schema anyway.
+        """
+        attempts: list[dict[str, Any]] = []
+        if self.refused_paid_host:
+            selected, enforced = "openai_json_schema", False
+        elif not self.base_url or not self.model_id:
+            selected, enforced = "openai_json_schema", False
+        else:
+            for mode in _PROBE_MODES:
+                attempts.append(self._probe_one(mode))
+                if attempts[-1].get("fatal"):
+                    break
+            selected, enforced = schema_mode_from_probe(attempts)
+        self.schema_mode = selected
+        self.schema_enforced = enforced
+        return {
+            "model_id": self.model_id,
+            "runtime": self.runtime,
+            "selected_mode": selected,
+            "schema_enforced": enforced,
+            "attempts": attempts,
+        }
+
+    def _probe_one(self, mode: str) -> dict[str, Any]:
+        started = time.perf_counter()
+        row: dict[str, Any] = {
+            "mode": mode,
+            "http_status": None,
+            "constrained": False,
+            "parser_failure": "",
+            "error_type": "",
+            "fatal": False,
+            "think_false": mode == "ollama_native" and "qwen3" in self.model_id.lower(),
+            "latency_ms": 0,
+        }
+        try:
+            status, text = self._exchange(mode, _PROBE_SYSTEM, _PROBE_USER)
+        except TimeoutError:
+            row["parser_failure"] = "timeout"
+            row["error_type"] = "TimeoutError"
+        except EndpointDown as exc:
+            row["http_status"] = exc.status
+            row["parser_failure"] = "endpoint_unavailable"
+            row["error_type"] = "EndpointDown"
+            row["fatal"] = exc.fatal
+            if exc.fatal:
+                self._down = True
+        except MalformedBody as exc:
+            row["http_status"] = exc.status
+            row["parser_failure"] = "http_error"
+            row["error_type"] = "HTTPError"
+        else:
+            parsed, category = parse_classification_detail(text)
+            row["http_status"] = status
+            row["constrained"] = parsed is not None
+            row["parser_failure"] = "" if parsed is not None else category
+        row["latency_ms"] = int((time.perf_counter() - started) * 1000)
+        return row
 
     def classify(self, item: Mapping[str, Any]) -> dict[str, Any]:
         started = time.perf_counter()
@@ -296,11 +446,17 @@ class LocalClassifier:
             "ticker": str(item.get("ticker") or ""),
             "model_id": self.model_id,
             "runtime": self.runtime,
+            "schema_mode": self.schema_mode,
+            "schema_enforced": self.schema_enforced,
+            "http_status": None,
+            "parser_failure": "",
+            "retry_outcome": "",
             "prompt_hash": _sha256(prompt),
             "response_hash": "",
             "latency_ms": 0,
             "rule_version": str(item.get("rule_version") or "missing"),
-            "class": "",
+            "domain": "",
+            "settlement": "",
             "settlement_source": "",
             "ambiguity": "",
             "rationale": "",
@@ -315,25 +471,58 @@ class LocalClassifier:
             return record
 
         if self.refused_paid_host:
-            return finish("refused_paid_host")
+            return finish("refused_paid_host", retry_outcome="refused_paid_host")
         if not self.base_url or not self.model_id:
-            return finish("unconfigured")
+            return finish("unconfigured", retry_outcome="unconfigured")
         if self._down:
-            return finish("endpoint_unavailable")
+            return finish("endpoint_unavailable", retry_outcome="endpoint_unavailable")
         last_hash = ""
+        failure = ""
         for attempt in (0, 1):
             try:
-                raw = self._post(prompt, schema=attempt == 0)
+                status, raw = self._exchange(self.schema_mode, _SYSTEM, prompt)
             except TimeoutError:
-                return finish("timeout", response_hash=last_hash, retries=attempt)
+                return finish(
+                    "timeout",
+                    response_hash=last_hash,
+                    retries=attempt,
+                    retry_outcome="timeout",
+                    parser_failure=failure or "timeout",
+                )
             except EndpointDown as exc:
                 if exc.fatal:
                     self._down = True
-                return finish("endpoint_unavailable", response_hash=last_hash, retries=attempt)
+                return finish(
+                    "endpoint_unavailable",
+                    response_hash=last_hash,
+                    retries=attempt,
+                    retry_outcome="endpoint_unavailable",
+                    http_status=exc.status,
+                    parser_failure="endpoint_unavailable",
+                )
             except MalformedBody as exc:
-                raw = str(exc)
+                raw = exc.text
+                status = exc.status
             last_hash = _sha256(raw)
-            parsed = parse_classification(raw)
+            parsed, category = parse_classification_detail(raw)
             if parsed is not None:
-                return finish("ok", response_hash=last_hash, retries=attempt, **parsed)
-        return finish("malformed", response_hash=last_hash, retries=1)
+                retry_outcome = "ok_on_first" if attempt == 0 else "ok_on_retry"
+                return finish(
+                    "ok",
+                    response_hash=last_hash,
+                    retries=attempt,
+                    retry_outcome=retry_outcome,
+                    http_status=status,
+                    parser_failure=failure,
+                    **parsed,
+                )
+            failure = category or "malformed"
+            record["http_status"] = status
+            record["parser_failure"] = failure
+        return finish(
+            "malformed",
+            response_hash=last_hash,
+            retries=1,
+            retry_outcome="malformed",
+            parser_failure=failure,
+        )

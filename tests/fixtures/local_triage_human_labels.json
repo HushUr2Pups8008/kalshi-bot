@@ -1,0 +1,66 @@
+{
+  "schema": "local_triage_human_labels_v1",
+  "labeled_before_model": true,
+  "rows": [
+    {
+      "series_prefix": "KXAAAGAS",
+      "human_domain": "macro",
+      "human_settlement": "lookup",
+      "why": "AAA publishes the United States average regular gas price. Settlement is a lookup of that published number. The keyword screen misses it and leaves settlement other."
+    },
+    {
+      "series_prefix": "KXAPRPOTUS",
+      "human_domain": "politics",
+      "human_settlement": "opinion",
+      "why": "The market settles on the RealClearPolitics presidential approval rating. The publisher is a source, and the settlement is still a poll."
+    },
+    {
+      "series_prefix": "KXTRUMPAPPROVE",
+      "human_domain": "politics",
+      "human_settlement": "opinion",
+      "why": "The market settles on Trump's RCP approval average. That is a poll even when the rule says approval average rather than approval rating."
+    },
+    {
+      "series_prefix": "KXCPICORE",
+      "human_domain": "macro",
+      "human_settlement": "lookup",
+      "why": "BLS seasonally adjusted CPI core is a published statistic."
+    },
+    {
+      "series_prefix": "KXU3",
+      "human_domain": "macro",
+      "human_settlement": "lookup",
+      "why": "BLS U-3 unemployment is a published statistic."
+    },
+    {
+      "series_prefix": "KXHIGHTOKC",
+      "human_domain": "weather",
+      "human_settlement": "lookup",
+      "why": "The market settles on the maximum temperature at Oklahoma City according to The Weather Company."
+    },
+    {
+      "series_prefix": "KXRAIN",
+      "human_domain": "weather",
+      "human_settlement": "lookup",
+      "why": "Rainfall at a named station is a published weather observation."
+    },
+    {
+      "series_prefix": "KXTRUMPACT",
+      "human_domain": "politics",
+      "human_settlement": "ambiguous",
+      "why": "The rule counts presidential actions and also checks the Presidential Actions page at whitehouse.gov. Both a count and an official-page lookup fit."
+    },
+    {
+      "series_prefix": "KXLASTWORDMENTION",
+      "human_domain": "politics",
+      "human_settlement": "countable",
+      "why": "The market counts whether Chuck Schumer says China on The Last Word. Category Mentions does not map to politics, so the deterministic domain can be other."
+    },
+    {
+      "series_prefix": "KXNFLRSH",
+      "human_domain": "sports",
+      "human_settlement": "countable",
+      "why": "An NFL rushing-attempt prop is sports-domain with countable settlement. It is excluded from the main classifier."
+    }
+  ]
+}
