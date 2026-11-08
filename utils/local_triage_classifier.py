@@ -26,6 +26,7 @@ from typing import Any, Callable, Mapping
 from urllib.parse import urlparse
 
 from utils.local_triage import DOMAINS, SETTLEMENTS
+from utils.series_settlement_registry import MECHANISMS
 
 _AMBIGUITY = ("none", "ambiguous", "insufficient_evidence")
 _ALLOWED_KEYS = {"domain", "settlement", "settlement_source", "rationale", "ambiguity"}
@@ -219,6 +220,103 @@ def parse_classification(raw: str) -> dict[str, str] | None:
     return parsed
 
 
+_PROPOSAL_KEYS = {"domain", "settlement_mechanism", "source_candidate", "rules_summary", "rationale", "ambiguity"}
+_PROPOSAL_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "domain",
+        "settlement_mechanism",
+        "source_candidate",
+        "rules_summary",
+        "rationale",
+        "ambiguity",
+    ],
+    "properties": {
+        "domain": {"type": "string", "enum": list(DOMAINS)},
+        "settlement_mechanism": {"type": "string", "enum": list(MECHANISMS)},
+        "source_candidate": {"type": "string"},
+        "rules_summary": {"type": "string"},
+        "rationale": {"type": "string"},
+        "ambiguity": {"type": "string", "enum": list(_AMBIGUITY)},
+    },
+}
+_PROPOSAL_SYSTEM = (
+    "Propose an unpromoted registry row. "
+    "domain is sports, politics, macro, weather, other, or ambiguous. "
+    "settlement_mechanism is event_occurrence_count, published_value_lookup, "
+    "market_price, opinion, other, or ambiguous. "
+    "A published number, rain total, temperature, or PortWatch total is "
+    "published_value_lookup, not event_occurrence_count. "
+    "event_occurrence_count is a sum of discrete actions such as posts or official actions. "
+    "This proposal cannot admit a candidate, set a probability, or place an order. "
+    "Do not return a probability, a side, or an order."
+)
+
+
+def build_proposal_prompt(item: Mapping[str, Any]) -> str:
+    """Ask the local model for a draft row. The draft is not eligibility."""
+    sources = item.get("settlement_sources") or ()
+    if isinstance(sources, str):
+        source_text = sources
+    else:
+        source_text = ", ".join(str(label) for label in sources)
+    return "\n".join(
+        (
+            "Propose a draft registry row. This is not a probability and not a trade.",
+            f"ticker: {item.get('ticker') or ''}",
+            f"series: {item.get('series_ticker') or ''}",
+            f"title: {item.get('title') or ''}",
+            f"rules_primary: {item.get('rules_primary') or ''}",
+            f"rules_secondary: {item.get('rules_secondary') or ''}",
+            f"settlement_sources: {source_text}",
+            "The proposal stays unpromoted.",
+            "Do not return p_raw, p_final, probability, trade, side, or order.",
+        )
+    )
+
+
+def parse_registry_proposal(raw: str) -> tuple[dict[str, str] | None, str]:
+    """Proposal schema. Probability and order fields are malformed."""
+    payload = _load_object(raw)
+    if payload is None:
+        return None, "not_json"
+    lowered = {str(key).lower() for key in payload}
+    if lowered & _PROBABILITY_KEYS:
+        return None, "probability_field"
+    if lowered & _ORDER_KEYS:
+        return None, "order_field"
+    if set(payload) != _PROPOSAL_KEYS:
+        return None, "extra_or_missing_keys"
+    domain = payload.get("domain")
+    mechanism = payload.get("settlement_mechanism")
+    source = payload.get("source_candidate")
+    summary = payload.get("rules_summary")
+    rationale = payload.get("rationale")
+    ambiguity = payload.get("ambiguity")
+    if not isinstance(domain, str) or domain not in DOMAINS:
+        return None, "bad_domain"
+    if not isinstance(mechanism, str) or mechanism not in MECHANISMS:
+        return None, "bad_settlement"
+    if not isinstance(source, str) or not isinstance(summary, str) or not isinstance(rationale, str):
+        return None, "bad_text"
+    if not isinstance(ambiguity, str) or ambiguity not in _AMBIGUITY:
+        return None, "bad_ambiguity"
+    axes_ambiguous = domain == "ambiguous" or mechanism == "ambiguous"
+    if ambiguity == "none" and axes_ambiguous:
+        return None, "ambiguity_conflict"
+    if ambiguity in {"ambiguous", "insufficient_evidence"} and not axes_ambiguous:
+        return None, "ambiguity_conflict"
+    return {
+        "domain": domain,
+        "settlement_mechanism": mechanism,
+        "source_candidate": " ".join(source.split())[:300],
+        "rules_summary": " ".join(summary.split())[:400],
+        "rationale": " ".join(rationale.split())[:400],
+        "ambiguity": ambiguity,
+    }, ""
+
+
 def _timeout_seconds(env: Mapping[str, str]) -> float:
     raw = env.get("LOCAL_TRIAGE_TIMEOUT_SECONDS")
     if raw is None or not str(raw).strip():
@@ -295,7 +393,15 @@ class LocalClassifier:
             return self.base_url
         return self.base_url + "/chat/completions"
 
-    def _body(self, mode: str, system: str, user: str) -> dict[str, Any]:
+    def _body(
+        self,
+        mode: str,
+        system: str,
+        user: str,
+        schema: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        chosen = _SCHEMA if schema is None else schema
+        schema_name = "settlement_axes" if schema is None else "registry_proposal"
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -305,7 +411,7 @@ class LocalClassifier:
                 "model": self.model_id,
                 "stream": False,
                 "messages": messages,
-                "format": _SCHEMA,
+                "format": chosen,
             }
             if "qwen3" in self.model_id.lower():
                 body["think"] = False
@@ -315,7 +421,7 @@ class LocalClassifier:
         else:
             response_format = {
                 "type": "json_schema",
-                "json_schema": {"name": "settlement_axes", "strict": True, "schema": _SCHEMA},
+                "json_schema": {"name": schema_name, "strict": True, "schema": chosen},
             }
         return {
             "model": self.model_id,
@@ -336,11 +442,17 @@ class LocalClassifier:
             return message["content"]
         return raw
 
-    def _exchange(self, mode: str, system: str, user: str) -> tuple[int | None, str]:
+    def _exchange(
+        self,
+        mode: str,
+        system: str,
+        user: str,
+        schema: Mapping[str, Any] | None = None,
+    ) -> tuple[int | None, str]:
         url = self._request_url(mode)
         if self.refused_paid_host or is_paid_research_host(url):
             raise EndpointDown
-        encoded = json.dumps(self._body(mode, system, user)).encode("utf-8")
+        encoded = json.dumps(self._body(mode, system, user, schema)).encode("utf-8")
         request = urllib.request.Request(
             url,
             data=encoded,
@@ -514,6 +626,103 @@ class LocalClassifier:
                     retry_outcome=retry_outcome,
                     http_status=status,
                     parser_failure=failure,
+                    **parsed,
+                )
+            failure = category or "malformed"
+            record["http_status"] = status
+            record["parser_failure"] = failure
+        return finish(
+            "malformed",
+            response_hash=last_hash,
+            retries=1,
+            retry_outcome="malformed",
+            parser_failure=failure,
+        )
+
+    def propose(self, item: Mapping[str, Any]) -> dict[str, Any]:
+        """Draft one registry row. The result is unpromoted and cannot admit.
+
+        Schema enforcement uses the same probe mode as classification. A
+        prompt is not enforcement. json_object is not selected.
+        """
+        started = time.perf_counter()
+        prompt = build_proposal_prompt(item)
+        record: dict[str, Any] = {
+            "ts": self._stamp(),
+            "ticker": str(item.get("ticker") or ""),
+            "series_ticker": str(item.get("series_ticker") or ""),
+            "model_id": self.model_id,
+            "runtime": self.runtime,
+            "schema_mode": self.schema_mode,
+            "schema_enforced": self.schema_enforced,
+            "http_status": None,
+            "parser_failure": "",
+            "retry_outcome": "",
+            "prompt_hash": _sha256(prompt),
+            "response_hash": "",
+            "latency_ms": 0,
+            "outcome": "",
+            "retries": 0,
+            "status": "unpromoted",
+            "advisory_only": True,
+            "estimable": False,
+        }
+
+        def finish(outcome: str, **updates: Any) -> dict[str, Any]:
+            record["outcome"] = outcome
+            record["status"] = "unpromoted"
+            record["advisory_only"] = True
+            record["estimable"] = False
+            record["latency_ms"] = int((time.perf_counter() - started) * 1000)
+            record.update(updates)
+            record["status"] = "unpromoted"
+            record["advisory_only"] = True
+            record["estimable"] = False
+            return record
+
+        if self.refused_paid_host:
+            return finish("refused_paid_host", retry_outcome="refused_paid_host")
+        if not self.base_url or not self.model_id:
+            return finish("unconfigured", retry_outcome="unconfigured")
+        if self._down:
+            return finish("endpoint_unavailable", retry_outcome="endpoint_unavailable")
+        last_hash = ""
+        failure = ""
+        status: int | None = None
+        for attempt in (0, 1):
+            try:
+                status, raw = self._exchange(
+                    self.schema_mode,
+                    _PROPOSAL_SYSTEM,
+                    prompt,
+                    _PROPOSAL_SCHEMA,
+                )
+            except TimeoutError:
+                return finish("timeout", response_hash=last_hash, retries=attempt, retry_outcome="timeout")
+            except EndpointDown as exc:
+                if exc.fatal:
+                    self._down = True
+                return finish(
+                    "endpoint_unavailable",
+                    response_hash=last_hash,
+                    retries=attempt,
+                    retry_outcome="endpoint_unavailable",
+                    http_status=exc.status,
+                    parser_failure="endpoint_unavailable",
+                )
+            except MalformedBody as exc:
+                raw = exc.text
+                status = exc.status
+            last_hash = _sha256(raw)
+            parsed, category = parse_registry_proposal(raw)
+            if parsed is not None:
+                retry_outcome = "ok_on_first" if attempt == 0 else "ok_on_retry"
+                return finish(
+                    "ok",
+                    response_hash=last_hash,
+                    retries=attempt,
+                    retry_outcome=retry_outcome,
+                    http_status=status,
                     **parsed,
                 )
             failure = category or "malformed"

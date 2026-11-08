@@ -502,6 +502,60 @@ def deterministic_axes(
     return domain, settlement, ambiguity
 
 
+_PRECIP_COUNT_BOILERPLATE = re.compile(
+    r"missing daily precipitation values are counted as 0 inches\.?",
+    re.IGNORECASE,
+)
+
+
+def shadow_mechanism_guess(rules_primary: str, rules_secondary: str = "") -> str:
+    """Advisory keyword guess. It cannot admit an estimator candidate.
+
+    Weather boilerplate that says missing precipitation values are counted as
+    zero is removed before the guess. The word counted is not an event count.
+    A published rain total or temperature observation stays a published value.
+    """
+    text = _PRECIP_COUNT_BOILERPLATE.sub(" ", f"{rules_primary} {rules_secondary}").lower()
+    hits: list[str] = []
+    published = (
+        "as published by",
+        "according to aaa",
+        "according to the weather company",
+        "as reported by the weather company",
+        "imf portwatch",
+        "bureau of labor",
+        "chart published",
+        "tomatometer",
+        "fear & greed",
+        "fear and greed",
+        "according to the tsa",
+        "total precipitation",
+        "maximum temperature",
+        "diesel price",
+    )
+    events = (
+        "presidential actions",
+        "number of posts",
+        "number of tweets",
+        "qualifying mentions",
+    )
+    prices = ("settlement price", "closing price", "candlestick", "market price")
+    opinions = ("approval rating", "poll", "survey")
+    if any(phrase in text for phrase in published):
+        hits.append("published_value_lookup")
+    if any(phrase in text for phrase in events):
+        hits.append("event_occurrence_count")
+    if any(phrase in text for phrase in prices):
+        hits.append("market_price")
+    if any(phrase in text for phrase in opinions):
+        hits.append("opinion")
+    if len(hits) == 1:
+        return hits[0]
+    if len(hits) > 1:
+        return "ambiguous"
+    return "other"
+
+
 def apply_deterministic_axes(rows: list[dict[str, Any]], *, sports_prefixes: tuple[str, ...]) -> None:
     for row in rows:
         if row["rejection_reason"]:
