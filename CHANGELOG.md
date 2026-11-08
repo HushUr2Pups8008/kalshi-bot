@@ -19,6 +19,10 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.67] - 2026-11-08
+### Added
+- A paper-only IMF PortWatch snapshot for the weekly transit-call sum. It stores the official FeatureServer response, its hash, the retrieval time, and the table edit time. Publication time stays unknown. The baseline is the previous complete aligned week, with the sample dispersion of the last eight aligned weeks in that vintage. A same-vintage holdout is not evaluable. Registry promotion does not mark the source or the estimator supported. No order path and no Grok call.
+
 ## [0.37.66] - 2026-11-08
 ### Added
 - A reviewed series settlement registry. Estimator eligibility reads promoted rows only. A local-model proposal and a keyword settlement cannot admit a candidate.
