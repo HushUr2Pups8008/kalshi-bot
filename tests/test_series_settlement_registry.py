@@ -109,6 +109,20 @@ def test_only_promoted_registry_rows_are_estimator_eligible() -> None:
     assert disposition("KXCLAUDE", ["Anthropic"]) == "registry_hit"
     assert estimator_eligible("KXAAAGASW", market_sources=[]) is False
     assert disposition("KXAAAGASW", []) == "ambiguous"
+    assert estimator_eligible("KXWTI", market_sources=["ICE"]) is True
+    assert estimator_eligible("KXWTI", market_sources=["price"]) is False
+    assert estimator_eligible("KXWTI", market_sources=["notice"]) is False
+    assert disposition("KXWTI", ["price"]) == "ambiguous"
+    assert estimator_eligible("KXRAIN", market_sources=["Company"]) is False
+    assert disposition("KXRAIN", ["Company"]) == "ambiguous"
+    assert estimator_eligible(
+        "KXECONSTATCPI",
+        market_sources=[
+            "Bureau of Labor Statistics- Employment Situation",
+            "Bureau of Labor Statistics- Consumer Price Index",
+        ],
+    ) is True
+    assert estimator_eligible("KXECONSTATCPI", market_sources=["Bureau of Labor Statistics"]) is False
     stale = registry_rows()
     stale["KXAAAGASW"] = {**stale["KXAAAGASW"], "stale": True}
     assert disposition("KXAAAGASW", ["AAA"], registry=stale) == "ambiguous"

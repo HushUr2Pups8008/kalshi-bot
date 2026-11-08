@@ -25,6 +25,7 @@ request-vs-response status contract that the P-7 author misread.
 - Operational settlement mechanisms. A published value, including rain, temperature, and a PortWatch total, is not an event count. Weather boilerplate that says values are counted is not an event count.
 ### Changed
 - The local model may write unpromoted registry proposals to a separate shadow file. Those proposals stay advisory.
+- Registry source overlap is an exact label match. A fragment of the official source name does not make a row eligible.
 
 ## [0.37.65] - 2026-11-06
 ### Changed

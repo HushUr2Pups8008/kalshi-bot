@@ -64,18 +64,19 @@ def _norm(label: object) -> str:
 
 
 def sources_overlap(registry_labels: object, market_labels: object) -> bool:
-    """True when a registry label and a market label name the same source."""
-    reg = [_norm(label) for label in _labels(registry_labels)]
-    market = [_norm(label) for label in _labels(market_labels)]
-    reg = [label for label in reg if label]
-    market = [label for label in market if label]
+    """True when one full registry label equals one full market label.
+
+    Comparison is case-folded with collapsed whitespace. A fragment is not
+    a match: ``price`` does not name ``ICE``, and ``Company`` does not name
+    ``The Weather Company``. A missing label fails closed.
+    """
+    reg = {_norm(label) for label in _labels(registry_labels)}
+    market = {_norm(label) for label in _labels(market_labels)}
+    reg.discard("")
+    market.discard("")
     if not reg or not market:
         return False
-    for left in reg:
-        for right in market:
-            if left == right or left in right or right in left:
-                return True
-    return False
+    return bool(reg & market)
 
 
 def _labels(raw: object) -> tuple[str, ...]:
