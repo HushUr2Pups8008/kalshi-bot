@@ -19,6 +19,13 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.66] - 2026-11-08
+### Added
+- A reviewed series settlement registry. Estimator eligibility reads promoted rows only. A local-model proposal and a keyword settlement cannot admit a candidate.
+- Operational settlement mechanisms. A published value, including rain, temperature, and a PortWatch total, is not an event count. Weather boilerplate that says values are counted is not an event count.
+### Changed
+- The local model may write unpromoted registry proposals to a separate shadow file. Those proposals stay advisory.
+
 ## [0.37.65] - 2026-11-06
 ### Changed
 - Local triage classifies domain and settlement as separate axes. A sports countable prop stays sports and countable. Deterministic sports-domain markets are written to a sports shadow file and are not sent to the local classifier.

@@ -1,0 +1,224 @@
+{
+  "schema": "curated_source_mechanic_fixtures_v1",
+  "label": "curated source-mechanic fixtures",
+  "not_independent_human_gold": true,
+  "note": "The same pass wrote these expected mechanisms and the registry. They check fixture consistency. They are not an independent grade of all shortlist markets.",
+  "rows": [
+    {
+      "series_ticker": "KXAAAGASW",
+      "domain": "macro",
+      "expected_mechanism": "published_value_lookup",
+      "expected_status": "promoted",
+      "source_labels": ["AAA"],
+      "official_mechanic": "AAA United States average regular gas price.",
+      "rationale": "The rule reads one published AAA price."
+    },
+    {
+      "series_ticker": "KXDIESELW",
+      "domain": "macro",
+      "expected_mechanism": "published_value_lookup",
+      "expected_status": "promoted",
+      "source_labels": ["AAA"],
+      "official_mechanic": "AAA diesel price for the named date.",
+      "rationale": "The series source is AAA and the rule reads that price."
+    },
+    {
+      "series_ticker": "KXCPI",
+      "domain": "macro",
+      "expected_mechanism": "published_value_lookup",
+      "expected_status": "promoted",
+      "source_labels": ["Bureau of Labor Statistics"],
+      "official_mechanic": "BLS CPI month-over-month print.",
+      "rationale": "The rule reads the published CPI change."
+    },
+    {
+      "series_ticker": "KXCPICORE",
+      "domain": "macro",
+      "expected_mechanism": "published_value_lookup",
+      "expected_status": "promoted",
+      "source_labels": ["Bureau of Labor Statistics"],
+      "official_mechanic": "BLS CPI less food and energy, as published.",
+      "rationale": "The rule reads one published BLS index change."
+    },
+    {
+      "series_ticker": "KXHIGHNY",
+      "domain": "weather",
+      "expected_mechanism": "published_value_lookup",
+      "expected_status": "promoted",
+      "source_labels": ["The Weather Company"],
+      "official_mechanic": "Maximum temperature at New York City CLINYC.",
+      "rationale": "A station temperature observation is a published value, not an event count."
+    },
+    {
+      "series_ticker": "KXHIGHTOKC",
+      "domain": "weather",
+      "expected_mechanism": "published_value_lookup",
+      "expected_status": "promoted",
+      "source_labels": ["The Weather Company"],
+      "official_mechanic": "Maximum temperature at Oklahoma City CLIOKC.",
+      "rationale": "A station temperature observation is a published value, not an event count."
+    },
+    {
+      "series_ticker": "KXRAIN",
+      "domain": "weather",
+      "expected_mechanism": "published_value_lookup",
+      "expected_status": "promoted",
+      "source_labels": ["The Weather Company"],
+      "official_mechanic": "Daily precipitation total at the named station.",
+      "rationale": "Published rain accumulation is a lookup. The counted-as-zero sentence is boilerplate."
+    },
+    {
+      "series_ticker": "KXRAINWKND",
+      "domain": "weather",
+      "expected_mechanism": "published_value_lookup",
+      "expected_status": "promoted",
+      "source_labels": ["The Weather Company"],
+      "official_mechanic": "Precipitation total on any named weekend day.",
+      "rationale": "Published rain accumulation is a lookup. The counted-as-zero sentence is boilerplate."
+    },
+    {
+      "series_ticker": "KXBABELMANDEBWEEKLY",
+      "domain": "politics",
+      "expected_mechanism": "published_value_lookup",
+      "expected_status": "promoted",
+      "source_labels": ["IMF PortWatch"],
+      "official_mechanic": "IMF PortWatch transit-call total for Bab el-Mandeb.",
+      "rationale": "A PortWatch transit total is a published report value."
+    },
+    {
+      "series_ticker": "KXHORMUZWEEKLY",
+      "domain": "politics",
+      "expected_mechanism": "published_value_lookup",
+      "expected_status": "promoted",
+      "source_labels": ["IMF PortWatch"],
+      "official_mechanic": "IMF PortWatch transit-call total for Hormuz.",
+      "rationale": "A PortWatch transit total is a published report value."
+    },
+    {
+      "series_ticker": "KXHORMUZMAX",
+      "domain": "politics",
+      "expected_mechanism": "published_value_lookup",
+      "expected_status": "promoted",
+      "source_labels": ["IMF PortWatch"],
+      "official_mechanic": "Day with the highest IMF PortWatch Hormuz transit total.",
+      "rationale": "The argmax is taken over published daily totals."
+    },
+    {
+      "series_ticker": "KXSUEZWEEKLY",
+      "domain": "politics",
+      "expected_mechanism": "published_value_lookup",
+      "expected_status": "promoted",
+      "source_labels": ["IMF PortWatch"],
+      "official_mechanic": "IMF PortWatch transit-call total for the Suez Canal.",
+      "rationale": "A PortWatch transit total is a published report value."
+    },
+    {
+      "series_ticker": "KXWTI",
+      "domain": "other",
+      "expected_mechanism": "market_price",
+      "expected_status": "promoted",
+      "source_labels": ["ICE"],
+      "official_mechanic": "ICE daily WTI settlement price.",
+      "rationale": "The rule names a settlement price."
+    },
+    {
+      "series_ticker": "KXWTIW",
+      "domain": "other",
+      "expected_mechanism": "market_price",
+      "expected_status": "promoted",
+      "source_labels": ["ICE"],
+      "official_mechanic": "ICE daily WTI settlement price.",
+      "rationale": "The rule names a settlement price."
+    },
+    {
+      "series_ticker": "KXGOLDW",
+      "domain": "other",
+      "expected_mechanism": "market_price",
+      "expected_status": "promoted",
+      "source_labels": ["Pyth - Gold"],
+      "official_mechanic": "Pyth gold 1-minute candlestick close.",
+      "rationale": "The rule names a candlestick close price."
+    },
+    {
+      "series_ticker": "KXSILVERW",
+      "domain": "other",
+      "expected_mechanism": "market_price",
+      "expected_status": "promoted",
+      "source_labels": ["Pyth - Silver"],
+      "official_mechanic": "Pyth silver 1-minute candlestick close.",
+      "rationale": "The rule names a candlestick close price."
+    },
+    {
+      "series_ticker": "KXTRUMPACT",
+      "domain": "politics",
+      "expected_mechanism": "event_occurrence_count",
+      "expected_status": "promoted",
+      "source_labels": ["the White House"],
+      "official_mechanic": "Count of presidential actions on the Presidential Actions page.",
+      "rationale": "The rule sums discrete official actions. It is not a single published scalar."
+    },
+    {
+      "series_ticker": "KXTSAW",
+      "domain": "macro",
+      "expected_mechanism": "published_value_lookup",
+      "expected_status": "promoted",
+      "source_labels": ["Transportation Security Administration"],
+      "official_mechanic": "TSA published weekly average airport screenings.",
+      "rationale": "The weekly average is a published aggregate, not an event-by-event count."
+    },
+    {
+      "series_ticker": "KXRT",
+      "domain": "other",
+      "expected_mechanism": "published_value_lookup",
+      "expected_status": "promoted",
+      "source_labels": ["Rotten Tomatoes"],
+      "official_mechanic": "Rotten Tomatoes Tomatometer score.",
+      "rationale": "The rule reads one published score."
+    },
+    {
+      "series_ticker": "KXNETFLIXTOPVIEWSTV",
+      "domain": "other",
+      "expected_mechanism": "published_value_lookup",
+      "expected_status": "promoted",
+      "source_labels": ["Netflix"],
+      "official_mechanic": "View total on the published Netflix chart.",
+      "rationale": "The chart value is published. It is not a count of discrete events observed here."
+    },
+    {
+      "series_ticker": "KXFEAR",
+      "domain": "macro",
+      "expected_mechanism": "published_value_lookup",
+      "expected_status": "promoted",
+      "source_labels": ["CNN Fear & Greed Index"],
+      "official_mechanic": "CNN Fear and Greed Index label at the named time.",
+      "rationale": "The rule reads one published index label."
+    },
+    {
+      "series_ticker": "KXCLAUDE",
+      "domain": "other",
+      "expected_mechanism": "other",
+      "expected_status": "promoted",
+      "source_labels": ["Anthropic"],
+      "official_mechanic": "Whether Anthropic has released the named model.",
+      "rationale": "One product release is not an estimable count or a published numeric series."
+    },
+    {
+      "series_ticker": "KXHEGSETHOUT",
+      "domain": "politics",
+      "expected_mechanism": "other",
+      "expected_status": "unpromoted",
+      "source_labels": ["official government records and registries"],
+      "official_mechanic": "Role departure reported through a hierarchy of outlets.",
+      "rationale": "No single official series value was reviewed, so the row stays unpromoted."
+    },
+    {
+      "series_ticker": "KXDWTSELIMINATION",
+      "domain": "other",
+      "expected_mechanism": "ambiguous",
+      "expected_status": "unpromoted",
+      "source_labels": [],
+      "official_mechanic": "Elimination announcement with garbled source labels.",
+      "rationale": "The captured source list is not usable, so the row stays ambiguous and unpromoted."
+    }
+  ]
+}

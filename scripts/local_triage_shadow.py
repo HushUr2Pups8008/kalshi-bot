@@ -47,6 +47,7 @@ from utils.local_triage import (
     touch_depth,
 )
 from utils.local_triage_classifier import LocalClassifier
+from utils.series_settlement_registry import coverage as registry_coverage
 
 _NOT_SPORTS = frozenset({"KXAPRPOTUS", "KXPOLLPOTUS", "KXCBDECISION"})
 _FORBIDDEN_OUTPUT_NAMES = frozenset(
@@ -413,6 +414,9 @@ def build_funnel(
         "malformed": outcomes.get("malformed", 0),
         "malformed_rate": (outcomes.get("malformed", 0) / attempted) if attempted else None,
         "attempted": attempted,
+        "registry": registry_coverage(main_rows),
+        "llm_settlement_is_shadow_only": True,
+        "keyword_settlement_cannot_admit": True,
         "missing": {
             "volume": reasons.get("volume_missing", 0),
             "open_interest": reasons.get("open_interest_missing", 0),
@@ -442,6 +446,7 @@ def run_shadow(
     probe: bool = False,
     compare_model: str = "",
     labels_path: Path | None = None,
+    write_proposals: bool = False,
 ) -> dict[str, Any]:
     """Page the public books, screen them, and write shadow evidence only."""
     destination = assert_shadow_dir(out_dir)
@@ -556,6 +561,14 @@ def run_shadow(
         if compare_client is not None:
             for row in pilot:
                 compare_records.append(_classify_row(compare_client, row, mutate=False))
+    proposals: list[dict[str, Any]] = []
+    if write_proposals and send_to_model:
+        for row in pilot:
+            proposal = classifier.propose(row)
+            proposal["status"] = "unpromoted"
+            proposal["advisory_only"] = True
+            proposal["estimable"] = False
+            proposals.append(proposal)
     discovery_rows = [public_row(row, ts=ts) for row in rows]
     review_rows = build_review_sample(rows)
     funnel = build_funnel(
@@ -584,6 +597,8 @@ def run_shadow(
     if compare_records:
         slug = _model_slug(compare_model)
         paths["classification_compare"] = destination / f"classification-{stamp}-{slug}.jsonl"
+    if proposals:
+        paths["registry_proposals"] = destination / f"registry-proposals-{stamp}.jsonl"
     pilot_payload = [public_row(row, ts=ts) for row in pilot]
     evaluation = {
         "ts": ts,
@@ -626,6 +641,8 @@ def run_shadow(
     )
     if compare_records:
         _write_jsonl(paths["classification_compare"], compare_records)
+    if proposals:
+        _write_jsonl(paths["registry_proposals"], proposals)
     funnel["paths"] = {name: str(path) for name, path in paths.items()}
     funnel["schema_probe"] = probe_report
     return funnel
@@ -761,6 +778,18 @@ def _print_funnel(funnel: Mapping[str, Any]) -> None:
     print(f"shortlist={funnel.get('shortlist')}", flush=True)
     print(f"pilot={funnel.get('pilot')}", flush=True)
     print(f"schema_enforced={funnel.get('schema_enforced')}", flush=True)
+    registry = funnel.get("registry") or {}
+    print(
+        "registry_hit={hit} registry_miss={miss} unpromoted={unpromoted} "
+        "ambiguous={ambiguous} estimator_eligible={eligible}".format(
+            hit=registry.get("registry_hit"),
+            miss=registry.get("registry_miss"),
+            unpromoted=registry.get("unpromoted"),
+            ambiguous=registry.get("ambiguous"),
+            eligible=registry.get("estimator_eligible"),
+        ),
+        flush=True,
+    )
     paths = funnel.get("paths") or {}
     for name in ("funnel", "discovery", "classification", "sports", "pilot", "evaluation", "review"):
         if name in paths:
