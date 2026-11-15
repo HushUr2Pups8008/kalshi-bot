@@ -19,6 +19,10 @@ request-vs-response status contract that the P-7 author misread.
 
 ---
 
+## [0.37.68] - 2026-11-15
+### Added
+- A maker-versus-taker paper log. After an explicit Grok yes, and before the order is sent, one JSONL row is appended at `logs/state/maker_taker_paper.jsonl`. The row records the book already fetched: best ask, ask minus one cent, resting size at that bid, and the queue ahead. Taker and maker fees come from the published Kalshi schedule and the series fee type. The offline scorer reads that file, or a candidate file, against the public trades tape. A resting NO bid can use the Scout rule that a print at the bid does not fill. No order payload changes. `EVENT_NEWS_MAKER_FIRST` stays off. Rows accumulate only once politics runs again.
+
 ## [0.37.67] - 2026-11-08
 ### Added
 - A paper-only IMF PortWatch snapshot for the weekly transit-call sum. It stores the official FeatureServer response, its hash, the retrieval time, and the table edit time. Publication time stays unknown. The baseline is the previous complete aligned week, with the sample dispersion of the last eight aligned weeks in that vintage. A same-vintage holdout is not evaluable. Registry promotion does not mark the source or the estimator supported. No order path and no Grok call.
