@@ -41,6 +41,11 @@ async def fetch_kalshi_execution_liquidity(
     book = await asyncio.to_thread(reader.get_market_orderbook, ticker, depth=100)
     if book.venue is not Venue.KALSHI or book.venue_market_id != ticker:
         raise ValueError("orderbook does not match the Kalshi market")
+    try:
+        # The paper log reads this same book. It does not fetch another one.
+        object.__setattr__(analysis, "_maker_taker_orderbook", book)
+    except Exception:
+        pass
     return executable_buy_liquidity(
         book,
         side=cast(Literal["yes", "no"], side),

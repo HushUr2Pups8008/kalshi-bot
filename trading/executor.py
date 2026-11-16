@@ -2468,6 +2468,15 @@ class TradeExecutor:
             )
             return None
 
+        # Paper comparison only. The order below still takes this ask.
+        if not post_only:
+            try:
+                from trading.maker_taker_paper import record_veto_allowed_attempt
+
+                record_veto_allowed_attempt(analysis, contracts=contracts)
+            except Exception:
+                pass
+
         client_order_id = uuid.uuid4().hex
         submission_summary = {
             "submission_id": uuid.uuid4().hex,
