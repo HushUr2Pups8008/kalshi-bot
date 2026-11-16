@@ -1,6 +1,6 @@
 # kalshi-bot
 
-[![Version](https://img.shields.io/badge/version-0.37.67-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.37.68-blue)](CHANGELOG.md)
 [![Mode](https://img.shields.io/badge/default-paper%20trading-orange)](.env.example)
 
 Paper research for Kalshi event markets, plus a small live politics desk.
@@ -33,7 +33,7 @@ Signing is RSA-PSS with the digest salt length. Open-market requests use `status
 | `utils/event_news_grok_veto.py` | Live yes/no veto |
 | `utils/countable_series_shadow.py` | Free count probability |
 | `utils/event_news_maker_shadow.py` | Hypothetical resting bid |
-| `trading/` | Orders, fees, paper books |
+| `trading/` | Orders, fees, paper books, maker-taker paper log |
 | `kalshi/` | REST client |
 | `config/series_universe.yaml` | Series modes |
 | `governance/` | Review agent, separate from the desks |
